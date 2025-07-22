@@ -7,7 +7,10 @@
     "start": "deno run -A --watch=static/,routes/ dev.ts",
     "build": "deno run -A dev.ts build",
     "preview": "deno run -A main.ts",
-    "update": "deno run -A -r https://fresh.deno.dev/update ."
+    "update": "deno run -A -r https://fresh.deno.dev/update .",
+    "deploy": "wrangler deploy",
+    "dev:worker": "wrangler dev",
+    "build:worker": "deno task build && wrangler deploy --dry-run"
   },
   "lint": {
     "rules": {
@@ -29,11 +32,20 @@
     "tailwindcss": "npm:tailwindcss@3.4.1",
     "tailwindcss/": "npm:/tailwindcss@3.4.1/",
     "tailwindcss/plugin": "npm:/tailwindcss@3.4.1/plugin.js",
-    "$std/": "https://deno.land/std@0.216.0/"
+    "$std/": "https://deno.land/std@0.216.0/",
+    "pixi.js": "https://esm.sh/pixi.js@8.0.0",
+    "@types/pixi.js": "https://esm.sh/@types/pixi.js@8.0.0"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
-    "jsxImportSource": "preact"
+    "jsxImportSource": "preact",
+    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "webworker"],
+    "types": ["@types/pixi.js"],
+    "strict": true,
+    "allowJs": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
   },
   "nodeModulesDir": true
 }

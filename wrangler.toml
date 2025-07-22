@@ -1,0 +1,43 @@
+name = "multiplayer-drawing-game"
+main = "./main.ts"
+compatibility_date = "2024-01-15"
+compatibility_flags = ["nodejs_compat"]
+
+[env.development]
+name = "multiplayer-drawing-game-dev"
+
+[env.production]
+name = "multiplayer-drawing-game-prod"
+
+# D1 Database bindings
+[[d1_databases]]
+binding = "DB"
+database_name = "drawing-game-db"
+database_id = "your-database-id-here"
+
+[[env.development.d1_databases]]
+binding = "DB"
+database_name = "drawing-game-db-dev"
+database_id = "your-dev-database-id-here"
+
+# KV Storage bindings
+[[kv_namespaces]]
+binding = "GAME_STATE"
+id = "your-kv-namespace-id-here"
+
+[[env.development.kv_namespaces]]
+binding = "GAME_STATE"
+id = "your-dev-kv-namespace-id-here"
+
+# WebSocket support
+[durable_objects]
+bindings = [
+  { name = "WEBSOCKET_HANDLER", class_name = "WebSocketHandler" }
+]
+
+# Environment variables
+[vars]
+ENVIRONMENT = "production"
+
+[env.development.vars]
+ENVIRONMENT = "development"
