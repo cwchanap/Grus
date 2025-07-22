@@ -15,6 +15,14 @@ export interface GameState {
 export interface Player {
   id: string;
   name: string;
+  roomId?: string;
+  isHost: boolean;
+  joinedAt: string;
+}
+
+export interface PlayerState {
+  id: string;
+  name: string;
   isHost: boolean;
   isConnected: boolean;
   lastActivity: number;

@@ -7,7 +7,7 @@
   - Create environment configuration for development and production
   - _Requirements: 5.1, 5.2, 5.3_
 
-- [ ] 2. Implement database schema and data access layer
+- [x] 2. Implement database schema and data access layer
   - Create D1 database migration scripts for rooms, players, game_sessions, and scores tables
   - Implement database connection utilities and query helpers
   - Create data access objects (DAOs) for room and player management
