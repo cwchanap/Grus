@@ -14,7 +14,7 @@
   - Write unit tests for database operations
   - _Requirements: 5.1, 5.2_
 
-- [ ] 3. Build WebSocket infrastructure for real-time communication
+- [x] 3. Build WebSocket infrastructure for real-time communication
   - Implement WebSocket handler in Cloudflare Worker
   - Create WebSocketPair management for client-server connections
   - Build message routing system for room-based broadcasting

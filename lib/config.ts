@@ -30,7 +30,12 @@ export interface AppConfig {
 }
 
 export function getConfig(env?: string): AppConfig {
-  const environment = (env || Deno.env.get('ENVIRONMENT') || 'development') as 'development' | 'production';
+  let environment: 'development' | 'production';
+  try {
+    environment = (env || Deno.env.get('ENVIRONMENT') || 'development') as 'development' | 'production';
+  } catch {
+    environment = 'development';
+  }
   
   const baseConfig: AppConfig = {
     environment,
