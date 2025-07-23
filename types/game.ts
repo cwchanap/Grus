@@ -7,7 +7,7 @@ export interface GameState {
   roundNumber: number;
   timeRemaining: number;
   phase: 'waiting' | 'drawing' | 'guessing' | 'results';
-  players: Player[];
+  players: PlayerState[];
   scores: Record<string, number>;
   drawingData: DrawingCommand[];
 }

@@ -38,7 +38,7 @@ export class KVStorageService {
     for (const key of listResult.keys) {
       const data = await this.kv.get(key.name, { type: "json" });
       if (data) {
-        messages.push(data as ChatMessage);
+        messages.push(data as unknown as ChatMessage);
       }
     }
 
@@ -64,7 +64,7 @@ export class KVStorageService {
   // Room connection tracking
   async addPlayerToRoom(roomId: string, playerId: string): Promise<void> {
     const key = `room:${roomId}:players`;
-    const existingData = await this.kv.get(key, { type: "json" }) as string[] || [];
+    const existingData = (await this.kv.get(key, { type: "json" }) as unknown as string[]) || [];
     
     if (!existingData.includes(playerId)) {
       existingData.push(playerId);
@@ -76,7 +76,7 @@ export class KVStorageService {
 
   async removePlayerFromRoom(roomId: string, playerId: string): Promise<void> {
     const key = `room:${roomId}:players`;
-    const existingData = await this.kv.get(key, { type: "json" }) as string[] || [];
+    const existingData = (await this.kv.get(key, { type: "json" }) as unknown as string[]) || [];
     
     const updatedData = existingData.filter(id => id !== playerId);
     if (updatedData.length > 0) {
@@ -90,7 +90,7 @@ export class KVStorageService {
 
   async getRoomPlayers(roomId: string): Promise<string[]> {
     const data = await this.kv.get(`room:${roomId}:players`, { type: "json" });
-    return (data as string[]) || [];
+    return (data as unknown as string[]) || [];
   }
 
   // Drawing data operations
@@ -102,7 +102,7 @@ export class KVStorageService {
 
   async getDrawingData(roomId: string): Promise<any[]> {
     const data = await this.kv.get(`drawing:${roomId}`, { type: "json" });
-    return (data as any[]) || [];
+    return (data as unknown as any[]) || [];
   }
 
   async clearDrawingData(roomId: string): Promise<void> {
