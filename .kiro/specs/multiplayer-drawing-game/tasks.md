@@ -30,7 +30,7 @@
   - Write unit tests for game logic functions
   - _Requirements: 3.1, 3.2, 3.3, 4.1, 4.2_
 
-- [ ] 5. Develop room management functionality
+- [x] 5. Develop room management functionality
   - Create room creation and joining logic
   - Implement player management (join, leave, host privileges)
   - Build room listing and filtering capabilities
