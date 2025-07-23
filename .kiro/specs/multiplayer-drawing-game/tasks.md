@@ -38,7 +38,7 @@
   - Write integration tests for room operations
   - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5_
 
-- [ ] 6. Build game lobby interface
+- [x] 6. Build game lobby interface
   - Create main lobby route (`/`) with room listing
   - Implement room creation modal with form validation
   - Build join room functionality with player name input

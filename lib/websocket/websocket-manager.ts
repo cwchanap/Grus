@@ -38,8 +38,9 @@ export class WebSocketManager {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("roomId");
     
+    // Handle lobby connections (no roomId)
     if (!roomId) {
-      return new Response("Room ID required", { status: 400 });
+      return this.handleLobbyWebSocket(request);
     }
 
     // Get or create handler for this room
@@ -151,5 +152,131 @@ export class WebSocketManager {
 
   getActiveRoomCount(): number {
     return this.handlers.size;
+  }
+
+  // Lobby WebSocket connections
+  private lobbyConnections: Set<WebSocket> = new Set();
+
+  private async handleLobbyWebSocket(request: Request): Promise<Response> {
+    const upgradeHeader = request.headers.get("Upgrade");
+    if (upgradeHeader !== "websocket") {
+      return new Response("Expected Upgrade: websocket", { status: 426 });
+    }
+
+    // Check if we're in Cloudflare Workers environment
+    if (typeof WebSocketPair !== 'undefined') {
+      // Cloudflare Workers environment
+      const webSocketPair = new WebSocketPair();
+      const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
+
+      // Accept the WebSocket connection
+      server.accept();
+
+      // Add to lobby connections
+      this.lobbyConnections.add(server);
+
+      // Handle WebSocket events
+      server.addEventListener("message", (event: MessageEvent) => {
+        this.handleLobbyMessage(server, event.data);
+      });
+
+      server.addEventListener("close", () => {
+        this.lobbyConnections.delete(server);
+      });
+
+      server.addEventListener("error", (error: Event) => {
+        console.error("Lobby WebSocket error:", error);
+        this.lobbyConnections.delete(server);
+      });
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      } as ResponseInit & { webSocket: WebSocket });
+    } else {
+      // Deno environment - WebSocket upgrade is handled differently
+      // For development, we'll return a placeholder response
+      // In production with Cloudflare Workers, the WebSocketPair will be available
+      console.log("WebSocket connection attempted in Deno environment - not fully supported in development");
+      return new Response("WebSocket not supported in development environment", { 
+        status: 501,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
+  }
+
+  private async handleLobbyMessage(ws: WebSocket, data: string) {
+    try {
+      const message = JSON.parse(data);
+      
+      if (message.type === "subscribe-lobby") {
+        // Client wants to subscribe to lobby updates
+        // Send current room list
+        const rooms = await this.getLobbyRooms();
+        this.sendLobbyMessage(ws, {
+          type: "lobby-update",
+          data: { rooms }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling lobby message:", error);
+    }
+  }
+
+  private async getLobbyRooms() {
+    try {
+      // Get active rooms from database
+      const stmt = this.env.DB.prepare(`
+        SELECT r.*, COUNT(p.id) as player_count
+        FROM rooms r
+        LEFT JOIN players p ON r.id = p.room_id
+        WHERE r.is_active = 1
+        GROUP BY r.id
+        ORDER BY r.created_at DESC
+        LIMIT 20
+      `);
+      
+      const result = await stmt.all();
+      return result.results || [];
+    } catch (error) {
+      console.error("Error getting lobby rooms:", error);
+      return [];
+    }
+  }
+
+  private sendLobbyMessage(ws: WebSocket, message: any) {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(JSON.stringify(message));
+      } catch (error) {
+        console.error("Error sending lobby message:", error);
+        this.lobbyConnections.delete(ws);
+      }
+    }
+  }
+
+  // Broadcast lobby updates to all lobby connections
+  async broadcastLobbyUpdate(): Promise<void> {
+    const rooms = await this.getLobbyRooms();
+    const message = {
+      type: "lobby-update",
+      data: { rooms }
+    };
+
+    const messageStr = JSON.stringify(message);
+    
+    // Send to all lobby connections
+    for (const ws of this.lobbyConnections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(messageStr);
+        } catch (error) {
+          console.error("Error broadcasting lobby update:", error);
+          this.lobbyConnections.delete(ws);
+        }
+      } else {
+        this.lobbyConnections.delete(ws);
+      }
+    }
   }
 }

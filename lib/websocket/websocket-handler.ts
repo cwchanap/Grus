@@ -21,30 +21,42 @@ export class WebSocketHandler {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
 
-    const webSocketPair = new WebSocketPair();
-    const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
+    // Check if we're in Cloudflare Workers environment
+    if (typeof WebSocketPair !== 'undefined') {
+      // Cloudflare Workers environment
+      const webSocketPair = new WebSocketPair();
+      const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
 
-    // Accept the WebSocket connection
-    server.accept();
+      // Accept the WebSocket connection
+      server.accept();
 
-    // Handle WebSocket events
-    server.addEventListener("message", (event: MessageEvent) => {
-      this.handleMessage(server, event.data);
-    });
+      // Handle WebSocket events
+      server.addEventListener("message", (event: MessageEvent) => {
+        this.handleMessage(server, event.data);
+      });
 
-    server.addEventListener("close", () => {
-      this.handleDisconnection(server);
-    });
+      server.addEventListener("close", () => {
+        this.handleDisconnection(server);
+      });
 
-    server.addEventListener("error", (error: Event) => {
-      console.error("WebSocket error:", error);
-      this.handleDisconnection(server);
-    });
+      server.addEventListener("error", (error: Event) => {
+        console.error("WebSocket error:", error);
+        this.handleDisconnection(server);
+      });
 
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    } as ResponseInit & { webSocket: WebSocket });
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      } as ResponseInit & { webSocket: WebSocket });
+    } else {
+      // Deno environment - WebSocket upgrade is handled differently
+      // For development, we'll return a placeholder response
+      console.log("WebSocket connection attempted in Deno environment - not fully supported in development");
+      return new Response("WebSocket not supported in development environment", { 
+        status: 501,
+        headers: { "Content-Type": "text/plain" }
+      });
+    }
   }
 
   private async handleMessage(ws: WebSocket, data: string) {

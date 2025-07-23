@@ -1,0 +1,312 @@
+import { useEffect, useState } from "preact/hooks";
+import { signal } from "@preact/signals";
+import type { RoomSummary } from "../lib/room-manager.ts";
+import CreateRoomModal from "./CreateRoomModal.tsx";
+import JoinRoomModal from "./JoinRoomModal.tsx";
+
+interface GameLobbyProps {
+  initialRooms: RoomSummary[];
+  error?: string;
+}
+
+// Global signals for modals
+const showCreateModal = signal(false);
+const showJoinModal = signal(false);
+const selectedRoom = signal<RoomSummary | null>(null);
+
+export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
+  const [rooms, setRooms] = useState<RoomSummary[]>(initialRooms);
+  const [loading, setLoading] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
+
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    // Skip WebSocket in development environment
+    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+      console.log('WebSocket disabled in development environment');
+      setWsConnected(false);
+      return;
+    }
+
+    let ws: WebSocket | null = null;
+    let reconnectTimeout: number | null = null;
+
+    const connectWebSocket = () => {
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/api/websocket`;
+        
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log('WebSocket connected');
+          setWsConnected(true);
+          
+          // Subscribe to lobby updates
+          ws?.send(JSON.stringify({
+            type: 'subscribe-lobby',
+            data: {}
+          }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            
+            if (message.type === 'lobby-update') {
+              // Refresh room list when lobby updates
+              refreshRooms();
+            }
+          } catch (error) {
+            console.error('Error parsing WebSocket message:', error);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log('WebSocket disconnected');
+          setWsConnected(false);
+          
+          // Don't attempt to reconnect in development if WebSocket is not supported
+          if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            console.log('WebSocket not supported in development environment');
+            return;
+          }
+          
+          // Attempt to reconnect after 3 seconds in production
+          reconnectTimeout = setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          setWsConnected(false);
+        };
+      } catch (error) {
+        console.error('Failed to connect WebSocket:', error);
+        setWsConnected(false);
+        
+        // Don't retry in development environment
+        if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+          // Retry connection after 5 seconds in production
+          reconnectTimeout = setTimeout(connectWebSocket, 5000);
+        }
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+      if (ws) {
+        ws.close();
+      }
+    };
+  }, []);
+
+  const refreshRooms = async () => {
+    try {
+      setLoading(true);
+      const response = await fetch('/api/rooms');
+      
+      if (response.ok) {
+        const data = await response.json();
+        setRooms(data.rooms || []);
+      } else {
+        console.error('Failed to refresh rooms');
+      }
+    } catch (error) {
+      console.error('Error refreshing rooms:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateRoom = () => {
+    showCreateModal.value = true;
+  };
+
+  const handleJoinRoom = (room: RoomSummary) => {
+    selectedRoom.value = room;
+    showJoinModal.value = true;
+  };
+
+  const handleRoomCreated = () => {
+    refreshRooms();
+    showCreateModal.value = false;
+  };
+
+  const handleRoomJoined = (roomId: string, playerId: string) => {
+    // Navigate to game room
+    window.location.href = `/room/${roomId}?playerId=${playerId}`;
+  };
+
+  if (error) {
+    return (
+      <div class="max-w-4xl mx-auto">
+        <div class="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
+          <div class="text-red-600 text-lg font-semibold mb-2">
+            ⚠️ Error Loading Lobby
+          </div>
+          <p class="text-red-700">{error}</p>
+          <button
+            onClick={refreshRooms}
+            class="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div class="max-w-6xl mx-auto">
+      {/* Header with connection status and create button */}
+      <div class="flex justify-between items-center mb-6">
+        <div class="flex items-center space-x-4">
+          <button
+            onClick={refreshRooms}
+            disabled={loading}
+            class="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+          >
+            <span class={`text-sm ${loading ? 'animate-spin' : ''}`}>
+              {loading ? '⟳' : '↻'}
+            </span>
+            <span>Refresh</span>
+          </button>
+          
+          <div class="flex items-center space-x-2">
+            <div class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+            <span class="text-sm text-gray-600">
+              {wsConnected ? 'Connected' : 'Dev Mode'}
+            </span>
+          </div>
+        </div>
+
+        <button
+          onClick={handleCreateRoom}
+          class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+        >
+          + Create Room
+        </button>
+      </div>
+
+      {/* Room list */}
+      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {rooms.length === 0 ? (
+          <div class="col-span-full text-center py-12">
+            <div class="text-gray-400 text-6xl mb-4">🎨</div>
+            <h3 class="text-xl font-semibold text-gray-600 mb-2">
+              No active rooms
+            </h3>
+            <p class="text-gray-500 mb-4">
+              Be the first to create a room and start playing!
+            </p>
+            <button
+              onClick={handleCreateRoom}
+              class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Create First Room
+            </button>
+          </div>
+        ) : (
+          rooms.map((roomSummary) => (
+            <RoomCard
+              key={roomSummary.room.id}
+              roomSummary={roomSummary}
+              onJoin={() => handleJoinRoom(roomSummary)}
+            />
+          ))
+        )}
+      </div>
+
+      {/* Modals */}
+      <CreateRoomModal
+        show={showCreateModal.value}
+        onClose={() => showCreateModal.value = false}
+        onSuccess={handleRoomCreated}
+      />
+      
+      <JoinRoomModal
+        show={showJoinModal.value}
+        room={selectedRoom.value}
+        onClose={() => {
+          showJoinModal.value = false;
+          selectedRoom.value = null;
+        }}
+        onSuccess={handleRoomJoined}
+      />
+    </div>
+  );
+}
+
+interface RoomCardProps {
+  roomSummary: RoomSummary;
+  onJoin: () => void;
+}
+
+function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
+  const { room, playerCount, canJoin, host } = roomSummary;
+
+  return (
+    <div class="bg-white rounded-lg shadow-md border border-gray-200 p-6 hover:shadow-lg transition-shadow">
+      <div class="flex justify-between items-start mb-4">
+        <div>
+          <h3 class="text-lg font-semibold text-gray-800 mb-1">
+            {room.name}
+          </h3>
+          <p class="text-sm text-gray-600">
+            Host: {host?.name || 'Unknown'}
+          </p>
+        </div>
+        <div class="text-right">
+          <div class="text-sm text-gray-500">
+            {playerCount}/{room.maxPlayers}
+          </div>
+          <div class={`text-xs px-2 py-1 rounded-full ${
+            canJoin ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+          }`}>
+            {canJoin ? 'Open' : 'Full'}
+          </div>
+        </div>
+      </div>
+
+      <div class="mb-4">
+        <div class="text-sm text-gray-600 mb-2">Players:</div>
+        <div class="flex flex-wrap gap-1">
+          {roomSummary.players.slice(0, 6).map((player) => (
+            <span
+              key={player.id}
+              class={`text-xs px-2 py-1 rounded-full ${
+                player.isHost 
+                  ? 'bg-yellow-100 text-yellow-800' 
+                  : 'bg-gray-100 text-gray-700'
+              }`}
+            >
+              {player.name}
+              {player.isHost && ' 👑'}
+            </span>
+          ))}
+          {roomSummary.players.length > 6 && (
+            <span class="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+              +{roomSummary.players.length - 6} more
+            </span>
+          )}
+        </div>
+      </div>
+
+      <button
+        onClick={onJoin}
+        disabled={!canJoin}
+        class={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
+          canJoin
+            ? 'bg-blue-600 text-white hover:bg-blue-700'
+            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+        }`}
+      >
+        {canJoin ? 'Join Room' : 'Room Full'}
+      </button>
+    </div>
+  );
+}

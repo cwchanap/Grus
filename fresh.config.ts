@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [tailwind()],
   server: {
     // Configure for Cloudflare Workers compatibility
-    port: 8000,
+    port: 3000,
   },
   build: {
     target: ["chrome99", "firefox99", "safari15"],
