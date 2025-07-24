@@ -3,16 +3,20 @@ import "../../types/websocket.ts";
 import { Env } from "../../types/cloudflare.ts";
 import { ClientMessage, ServerMessage, GameState, PlayerState } from "../../types/game.ts";
 import { getConfig, validateChatMessage, validatePlayerName } from "../config.ts";
+import { GameStateManager } from "../game-state-manager.ts";
 
 export class WebSocketHandler {
   private env: Env;
+  private gameStateManager: GameStateManager;
   private connections: Map<string, WebSocket> = new Map();
   private playerRooms: Map<string, string> = new Map(); // playerId -> roomId
   private roomConnections: Map<string, Set<string>> = new Map(); // roomId -> Set<playerId>
   private rateLimits: Map<string, { messages: number; drawing: number; lastReset: number }> = new Map();
+  private roundTimers: Map<string, NodeJS.Timeout> = new Map(); // roomId -> timer
 
   constructor(env: Env) {
     this.env = env;
+    this.gameStateManager = new GameStateManager(env.DB, env.GAME_STATE);
   }
 
   async handleWebSocketUpgrade(request: Request): Promise<Response> {
@@ -94,6 +98,12 @@ export class WebSocketHandler {
           break;
         case "start-game":
           await this.handleStartGame(ws, message);
+          break;
+        case "next-round":
+          await this.handleNextRound(ws, message);
+          break;
+        case "end-game":
+          await this.handleEndGame(ws, message);
           break;
         default:
           this.sendError(ws, "Unknown message type");
@@ -229,6 +239,13 @@ export class WebSocketHandler {
       return;
     }
 
+    // Get current game state
+    const gameState = await this.getGameState(roomId);
+    if (!gameState) {
+      this.sendError(ws, "Game not found");
+      return;
+    }
+
     // Create chat message
     const chatMessage = {
       id: crypto.randomUUID(),
@@ -236,19 +253,90 @@ export class WebSocketHandler {
       playerName: playerState.name,
       message: text,
       timestamp: Date.now(),
-      isGuess: true, // All chat messages are potential guesses
+      isGuess: gameState.phase === 'drawing', // Only guesses during drawing phase
       isCorrect: false
     };
 
-    // Check if it's a correct guess (this would integrate with game logic)
-    const gameState = await this.getGameState(roomId);
-    if (gameState && gameState.currentWord && 
+    // Check if it's a correct guess
+    if (gameState.phase === 'drawing' && 
+        gameState.currentWord && 
+        playerId !== gameState.currentDrawer &&
         text.toLowerCase().trim() === gameState.currentWord.toLowerCase()) {
+      
       chatMessage.isCorrect = true;
-      // Handle scoring logic here
+      
+      try {
+        // Process correct guess and update scores
+        const updatedGameState = await this.gameStateManager.processCorrectGuess(
+          roomId, 
+          playerId, 
+          Date.now()
+        );
+
+        // Clear round timer since round is ending
+        this.clearRoundTimer(roomId);
+
+        // Broadcast correct guess and score update
+        await this.broadcastToRoom(roomId, {
+          type: "game-state",
+          roomId,
+          data: {
+            type: "correct-guess",
+            playerId,
+            playerName: playerState.name,
+            word: gameState.currentWord,
+            scores: updatedGameState.scores,
+            gameState: updatedGameState
+          }
+        });
+
+        // Broadcast chat message with correct flag
+        await this.broadcastToRoom(roomId, {
+          type: "chat-message",
+          roomId,
+          data: chatMessage
+        });
+
+        // Auto-advance to results phase after a short delay
+        setTimeout(async () => {
+          try {
+            const finalRoundState = await this.gameStateManager.endRound(roomId);
+            
+            await this.broadcastToRoom(roomId, {
+              type: "game-state",
+              roomId,
+              data: {
+                type: "round-ended",
+                reason: "correct-guess",
+                gameState: finalRoundState,
+                scores: finalRoundState.scores
+              }
+            });
+
+            // Check if game is complete
+            if (finalRoundState.roundNumber >= 5) { // Assuming 5 rounds max
+              await this.broadcastToRoom(roomId, {
+                type: "game-state",
+                roomId,
+                data: {
+                  type: "game-completed",
+                  finalScores: finalRoundState.scores
+                }
+              });
+            }
+          } catch (error) {
+            console.error("Error ending round after correct guess:", error);
+          }
+        }, 2000); // 2 second delay to show the correct answer
+
+        return; // Don't send regular chat message since we handled it above
+      } catch (error) {
+        console.error("Error processing correct guess:", error);
+        // Continue to send as regular chat message
+      }
     }
 
-    // Broadcast chat message to room
+    // Broadcast regular chat message to room
     await this.broadcastToRoom(roomId, {
       type: "chat-message",
       roomId,
@@ -310,16 +398,156 @@ export class WebSocketHandler {
       return;
     }
 
-    // Start game logic would go here
-    // For now, just broadcast game start
-    await this.broadcastToRoom(roomId, {
-      type: "game-state",
-      roomId,
-      data: {
-        type: "game-started",
-        startedBy: playerId
+    try {
+      // Initialize or get game state
+      let gameState = await this.gameStateManager.getGameState(roomId);
+      if (!gameState) {
+        gameState = await this.gameStateManager.initializeGameState(roomId, playerId);
       }
-    });
+
+      // Check if game can be started
+      const activePlayers = gameState.players.filter(p => p.isConnected);
+      if (activePlayers.length < 2) {
+        this.sendError(ws, "Need at least 2 players to start game");
+        return;
+      }
+
+      // Start the game
+      const updatedGameState = await this.gameStateManager.startGame(roomId);
+      
+      // Start round timer
+      this.startRoundTimer(roomId);
+
+      // Broadcast game state to all players
+      await this.broadcastToRoom(roomId, {
+        type: "game-state",
+        roomId,
+        data: {
+          type: "game-started",
+          gameState: updatedGameState,
+          currentDrawer: updatedGameState.currentDrawer,
+          currentWord: updatedGameState.currentWord,
+          roundNumber: updatedGameState.roundNumber,
+          timeRemaining: updatedGameState.timeRemaining
+        }
+      });
+
+      // Send word to drawer only
+      const drawerWs = this.connections.get(updatedGameState.currentDrawer);
+      if (drawerWs) {
+        this.sendMessage(drawerWs, {
+          type: "game-state",
+          roomId,
+          data: {
+            type: "drawing-word",
+            word: updatedGameState.currentWord
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error starting game:", error);
+      this.sendError(ws, "Failed to start game");
+    }
+  }
+
+  private async handleNextRound(ws: WebSocket, message: ClientMessage) {
+    const { roomId, playerId } = message;
+    
+    // Verify player is host
+    const playerState = await this.getPlayerState(playerId);
+    if (!playerState || !playerState.isHost) {
+      this.sendError(ws, "Only host can start next round");
+      return;
+    }
+
+    try {
+      const gameState = await this.gameStateManager.getGameState(roomId);
+      if (!gameState) {
+        this.sendError(ws, "Game not found");
+        return;
+      }
+
+      // Check if we can start next round
+      if (gameState.phase !== 'results' && gameState.phase !== 'waiting') {
+        this.sendError(ws, "Cannot start next round during current phase");
+        return;
+      }
+
+      // Start new round
+      const updatedGameState = await this.gameStateManager.startNewRound(gameState);
+      
+      // Clear existing timer and start new one
+      this.clearRoundTimer(roomId);
+      this.startRoundTimer(roomId);
+
+      // Broadcast new round state
+      await this.broadcastToRoom(roomId, {
+        type: "game-state",
+        roomId,
+        data: {
+          type: "round-started",
+          gameState: updatedGameState,
+          currentDrawer: updatedGameState.currentDrawer,
+          roundNumber: updatedGameState.roundNumber,
+          timeRemaining: updatedGameState.timeRemaining
+        }
+      });
+
+      // Send word to new drawer
+      const drawerWs = this.connections.get(updatedGameState.currentDrawer);
+      if (drawerWs) {
+        this.sendMessage(drawerWs, {
+          type: "game-state",
+          roomId,
+          data: {
+            type: "drawing-word",
+            word: updatedGameState.currentWord
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error starting next round:", error);
+      this.sendError(ws, "Failed to start next round");
+    }
+  }
+
+  private async handleEndGame(ws: WebSocket, message: ClientMessage) {
+    const { roomId, playerId } = message;
+    
+    // Verify player is host
+    const playerState = await this.getPlayerState(playerId);
+    if (!playerState || !playerState.isHost) {
+      this.sendError(ws, "Only host can end game");
+      return;
+    }
+
+    try {
+      const gameState = await this.gameStateManager.getGameState(roomId);
+      if (!gameState) {
+        this.sendError(ws, "Game not found");
+        return;
+      }
+
+      // End the game
+      const finalGameState = await this.gameStateManager.endGame(gameState);
+      
+      // Clear round timer
+      this.clearRoundTimer(roomId);
+
+      // Broadcast final results
+      await this.broadcastToRoom(roomId, {
+        type: "game-state",
+        roomId,
+        data: {
+          type: "game-ended",
+          gameState: finalGameState,
+          finalScores: finalGameState.scores
+        }
+      });
+    } catch (error) {
+      console.error("Error ending game:", error);
+      this.sendError(ws, "Failed to end game");
+    }
   }
 
   private validateDrawingCommand(data: any): boolean {
@@ -518,8 +746,97 @@ export class WebSocketHandler {
     await this.broadcastToRoom(roomId, message);
   }
 
+  private startRoundTimer(roomId: string) {
+    // Clear existing timer if any
+    this.clearRoundTimer(roomId);
+
+    const timer = setInterval(async () => {
+      try {
+        const gameState = await this.gameStateManager.getGameState(roomId);
+        if (!gameState || gameState.phase !== 'drawing') {
+          this.clearRoundTimer(roomId);
+          return;
+        }
+
+        // Update time remaining
+        const newTimeRemaining = Math.max(0, gameState.timeRemaining - 1000);
+        gameState.timeRemaining = newTimeRemaining;
+        
+        await this.updateGameState(roomId, gameState);
+
+        // Broadcast time update
+        await this.broadcastToRoom(roomId, {
+          type: "game-state",
+          roomId,
+          data: {
+            type: "time-update",
+            timeRemaining: newTimeRemaining
+          }
+        });
+
+        // End round if time is up
+        if (newTimeRemaining <= 0) {
+          await this.handleRoundTimeout(roomId);
+        }
+      } catch (error) {
+        console.error("Error in round timer:", error);
+        this.clearRoundTimer(roomId);
+      }
+    }, 1000); // Update every second
+
+    this.roundTimers.set(roomId, timer);
+  }
+
+  private clearRoundTimer(roomId: string) {
+    const timer = this.roundTimers.get(roomId);
+    if (timer) {
+      clearInterval(timer);
+      this.roundTimers.delete(roomId);
+    }
+  }
+
+  private async handleRoundTimeout(roomId: string) {
+    try {
+      this.clearRoundTimer(roomId);
+      
+      const updatedGameState = await this.gameStateManager.endRound(roomId);
+      
+      // Broadcast round ended
+      await this.broadcastToRoom(roomId, {
+        type: "game-state",
+        roomId,
+        data: {
+          type: "round-ended",
+          reason: "timeout",
+          gameState: updatedGameState,
+          scores: updatedGameState.scores
+        }
+      });
+
+      // If game is complete, broadcast final results
+      if (updatedGameState.phase === 'results' && updatedGameState.roundNumber >= 5) {
+        await this.broadcastToRoom(roomId, {
+          type: "game-state",
+          roomId,
+          data: {
+            type: "game-completed",
+            finalScores: updatedGameState.scores
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling round timeout:", error);
+    }
+  }
+
   // Cleanup method for graceful shutdown
   async cleanup(): Promise<void> {
+    // Clear all round timers
+    for (const [roomId, timer] of this.roundTimers.entries()) {
+      clearInterval(timer);
+    }
+    this.roundTimers.clear();
+
     // Close all connections
     for (const [playerId, ws] of this.connections.entries()) {
       try {

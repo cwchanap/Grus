@@ -144,7 +144,7 @@ export class GameStateManager {
       throw new Error('Game state not found');
     }
 
-    if (gameState.phase !== 'drawing' && gameState.phase !== 'guessing') {
+    if (gameState.phase !== 'drawing') {
       throw new Error('Cannot guess during this phase');
     }
 

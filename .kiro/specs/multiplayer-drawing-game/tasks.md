@@ -119,7 +119,7 @@
   - _Requirements: 2.1, 2.2, 6.1, 6.5_
 
 -
-  14. [ ] Develop game flow and turn management
+  14. [x] Develop game flow and turn management
   - Implement turn rotation logic with player selection
   - Build game phase transitions (waiting, drawing, guessing, results)
   - Add round timer with automatic progression

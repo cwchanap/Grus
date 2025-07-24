@@ -76,7 +76,7 @@ export interface Score {
 
 // WebSocket message types
 export interface ClientMessage {
-  type: 'join-room' | 'leave-room' | 'chat' | 'draw' | 'guess' | 'start-game';
+  type: 'join-room' | 'leave-room' | 'chat' | 'draw' | 'guess' | 'start-game' | 'next-round' | 'end-game';
   roomId: string;
   playerId: string;
   data: any;
