@@ -82,7 +82,7 @@
   - _Requirements: 2.3, 4.1, 4.2, 6.2_
 
 -
-  10. [ ] Build scoreboard Fresh Island component
+  10. [x] Build scoreboard Fresh Island component
   - Create Scoreboard island displaying current scores
   - Implement real-time score updates via WebSocket
   - Add turn indicator showing current drawer
@@ -91,7 +91,7 @@
   - _Requirements: 2.3, 4.3, 4.4_
 
 -
-  11. [ ] Create game room route and layout
+  11. [x] Create game room route and layout
   - Build dynamic route `/room/[id]` for game rooms
   - Implement game room layout with drawing board, chat, and scoreboard
   - Add game controls for host (start game, end round)
@@ -100,7 +100,7 @@
   - _Requirements: 2.1, 2.2, 2.3, 3.4_
 
 -
-  12. [ ] Implement real-time drawing synchronization
+  12. [x] Implement real-time drawing synchronization
   - Build drawing command broadcasting system
   - Implement drawing data compression and optimization
   - Add conflict resolution for simultaneous drawing attempts
@@ -110,7 +110,16 @@
   - _Requirements: 6.1, 6.5_
 
 -
-  13. [ ] Develop game flow and turn management
+  13. [x] Integrate DrawingBoard island into game room layout
+  - Replace drawing board placeholder in room route with actual DrawingBoard
+    island
+  - Connect DrawingBoard to game state and WebSocket communication
+  - Ensure proper game state initialization and management
+  - Test drawing synchronization in the full game context
+  - _Requirements: 2.1, 2.2, 6.1, 6.5_
+
+-
+  14. [ ] Develop game flow and turn management
   - Implement turn rotation logic with player selection
   - Build game phase transitions (waiting, drawing, guessing, results)
   - Add round timer with automatic progression
@@ -119,7 +128,7 @@
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
 -
-  14. [ ] Build scoring and guess validation system
+  15. [ ] Build scoring and guess validation system
   - Implement real-time guess checking against current word
   - Create time-based scoring algorithm for correct guesses
   - Build score persistence and session tracking
@@ -129,7 +138,7 @@
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
 -
-  15. [ ] Add error handling and connection management
+  16. [ ] Add error handling and connection management
   - Implement WebSocket reconnection with exponential backoff
   - Add connection status indicators in UI
   - Build graceful handling of player disconnections
@@ -139,7 +148,7 @@
   - _Requirements: 6.4_
 
 -
-  16. [ ] Optimize performance and add monitoring
+  17. [ ] Optimize performance and add monitoring
   - Implement Pixi.js rendering optimizations (sprite batching, texture
     management)
   - Add drawing performance optimizations (path simplification, throttling)
@@ -150,7 +159,7 @@
   - _Requirements: 5.4, 6.5_
 
 -
-  17. [ ] Implement security measures and validation
+  18. [ ] Implement security measures and validation
   - Add input sanitization for chat messages and player names
   - Implement rate limiting for drawing actions and messages
   - Build server-side game state validation
@@ -160,7 +169,7 @@
   - _Requirements: 5.5, 6.3_
 
 -
-  18. [ ] Add mobile support and responsive design
+  19. [ ] Add mobile support and responsive design
   - Optimize touch drawing for mobile devices
   - Implement responsive UI layouts for different screen sizes
   - Add mobile-specific drawing tools and gestures
@@ -169,7 +178,7 @@
   - _Requirements: 2.1, 2.2, 6.1_
 
 -
-  19. [ ] Create deployment configuration and CI/CD
+  20. [ ] Create deployment configuration and CI/CD
   - Set up Cloudflare Workers deployment configuration
   - Create database migration and seeding scripts
   - Build automated testing pipeline
@@ -179,7 +188,7 @@
   - _Requirements: 5.1, 5.2, 5.3_
 
 -
-  20. [ ] Integrate all components and perform end-to-end testing
+  21. [ ] Integrate all components and perform end-to-end testing
   - Connect all Fresh Islands with WebSocket communication
   - Test complete game flow from lobby to game completion
   - Verify real-time synchronization across multiple clients

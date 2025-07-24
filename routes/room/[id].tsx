@@ -2,12 +2,39 @@ import { Handlers, PageProps } from "$fresh/server.ts";
 import { RoomManager } from "../../lib/room-manager.ts";
 import { Env } from "../../types/cloudflare.ts";
 import type { RoomSummary } from "../../lib/room-manager.ts";
+import type { GameState } from "../../types/game.ts";
 import ChatRoom from "../../islands/ChatRoom.tsx";
+import DrawingBoard from "../../islands/DrawingBoard.tsx";
+import Scoreboard from "../../islands/Scoreboard.tsx";
 
 interface GameRoomData {
   room: RoomSummary | null;
   playerId: string | null;
   error?: string;
+}
+
+// Helper function to create initial game state from room data
+function createInitialGameState(room: RoomSummary): GameState {
+  return {
+    roomId: room.room.id,
+    currentDrawer: '', // No drawer initially
+    currentWord: '', // No word initially
+    roundNumber: 0, // Game hasn't started
+    timeRemaining: 120000, // 2 minutes default
+    phase: 'waiting', // Waiting for game to start
+    players: room.players.map(player => ({
+      id: player.id,
+      name: player.name,
+      isHost: player.isHost,
+      isConnected: true, // Assume all players in room are connected
+      lastActivity: Date.now()
+    })),
+    scores: room.players.reduce((acc, player) => {
+      acc[player.id] = 0; // Initialize all scores to 0
+      return acc;
+    }, {} as Record<string, number>),
+    drawingData: [] // No drawing data initially
+  };
 }
 
 export const handler: Handlers<GameRoomData> = {
@@ -77,6 +104,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   }
 
   const { room, playerId } = data;
+  const gameState = createInitialGameState(room);
 
   return (
     <div class="min-h-screen bg-gradient-to-br from-purple-50 to-pink-100">
@@ -100,59 +128,43 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
         </div>
 
-        {/* Game area placeholder */}
+        {/* Game area */}
         <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Drawing board area */}
           <div class="lg:col-span-3">
-            <div class="bg-white rounded-lg shadow-md p-6 h-96">
-              <h2 class="text-lg font-semibold text-gray-800 mb-4">Drawing Board</h2>
-              <div class="bg-gray-100 rounded-lg h-full flex items-center justify-center">
-                <p class="text-gray-500">Drawing board will be implemented in task 7-8</p>
-              </div>
+            <div class="bg-white rounded-lg shadow-md p-6">
+              <DrawingBoard
+                roomId={room.room.id}
+                playerId={playerId || ''}
+                gameState={gameState}
+                width={800}
+                height={500}
+                className="w-full"
+              />
             </div>
           </div>
 
           {/* Sidebar */}
           <div class="space-y-6">
-            {/* Players list */}
-            <div class="bg-white rounded-lg shadow-md p-6">
-              <h2 class="text-lg font-semibold text-gray-800 mb-4">Players</h2>
-              <div class="space-y-2">
-                {room.players.map((player) => (
-                  <div
-                    key={player.id}
-                    class={`flex items-center justify-between p-2 rounded-lg ${
-                      player.id === playerId ? 'bg-blue-50 border border-blue-200' : 'bg-gray-50'
-                    }`}
-                  >
-                    <span class="font-medium">
-                      {player.name}
-                      {player.isHost && ' 👑'}
-                      {player.id === playerId && ' (You)'}
-                    </span>
-                    <div class="w-2 h-2 bg-green-500 rounded-full"></div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
             {/* Chat area */}
             <div class="bg-white rounded-lg shadow-md p-6 h-80">
               <ChatRoom
                 roomId={room.room.id}
                 playerId={playerId || ''}
                 playerName={room.players.find(p => p.id === playerId)?.name || 'Unknown'}
-                currentWord={undefined} // Will be populated when game logic is implemented
-                isCurrentDrawer={false} // Will be determined by game state
+                currentWord={gameState.currentWord}
+                isCurrentDrawer={gameState.currentDrawer === playerId}
               />
             </div>
 
             {/* Scoreboard */}
             <div class="bg-white rounded-lg shadow-md p-6">
-              <h2 class="text-lg font-semibold text-gray-800 mb-4">Scoreboard</h2>
-              <div class="bg-gray-100 rounded-lg h-32 flex items-center justify-center">
-                <p class="text-gray-500">Scoreboard will be implemented in task 10</p>
-              </div>
+              <Scoreboard
+                roomId={room.room.id}
+                playerId={playerId || ''}
+                gameState={gameState}
+                className="h-full"
+              />
             </div>
           </div>
         </div>

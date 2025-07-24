@@ -150,7 +150,7 @@ export default function DrawingBoard({
       });
       
       // Update local drawing history
-      setDrawingHistory(prev => [...prev, ...data.commands]);
+      setDrawingHistory(prev => [...prev, ...(data.commands || [])]);
     }
   }, []);
 
@@ -347,7 +347,7 @@ export default function DrawingBoard({
       )}
 
       {/* Debug Info (only in development) */}
-      {process.env.NODE_ENV === 'development' && (
+      {false && ( // Debug info disabled in production
         <div class="drawing-board-debug mt-4 p-2 bg-gray-100 rounded text-xs text-gray-600">
           <div>Room: {roomId}</div>
           <div>Player: {playerId}</div>
