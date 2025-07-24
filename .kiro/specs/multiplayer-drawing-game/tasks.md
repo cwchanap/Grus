@@ -128,7 +128,7 @@
   - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
 
 -
-  15. [ ] Build scoring and guess validation system
+  15. [x] Build scoring and guess validation system
   - Implement real-time guess checking against current word
   - Create time-based scoring algorithm for correct guesses
   - Build score persistence and session tracking
@@ -138,7 +138,7 @@
   - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5_
 
 -
-  16. [ ] Add error handling and connection management
+  16. [x] Add error handling and connection management
   - Implement WebSocket reconnection with exponential backoff
   - Add connection status indicators in UI
   - Build graceful handling of player disconnections
@@ -148,7 +148,7 @@
   - _Requirements: 6.4_
 
 -
-  17. [ ] Optimize performance and add monitoring
+  17. [x] Optimize performance and add monitoring
   - Implement Pixi.js rendering optimizations (sprite batching, texture
     management)
   - Add drawing performance optimizations (path simplification, throttling)
@@ -159,7 +159,7 @@
   - _Requirements: 5.4, 6.5_
 
 -
-  18. [ ] Implement security measures and validation
+  18. [x] Implement security measures and validation
   - Add input sanitization for chat messages and player names
   - Implement rate limiting for drawing actions and messages
   - Build server-side game state validation
@@ -196,3 +196,39 @@
   - Perform cross-browser compatibility testing
   - Conduct user acceptance testing with multiple players
   - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.1, 6.1_
+
+-
+  22. [ ] Implement WebSocket reconnection and connection status
+  - Add WebSocket reconnection logic with exponential backoff
+  - Implement connection status indicators in UI components
+  - Handle graceful reconnection and state synchronization
+  - Add offline mode detection and user notifications
+  - Test connection recovery scenarios
+  - _Requirements: 6.4_
+
+-
+  23. [ ] Add game controls and host management features
+  - Implement start game button for hosts in lobby
+  - Add end game functionality for hosts
+  - Create next round controls after round completion
+  - Add kick player functionality for hosts
+  - Implement game settings configuration (round time, max rounds)
+  - _Requirements: 3.1, 3.4, 3.5_
+
+-
+  24. [ ] Enhance mobile touch support and accessibility
+  - Optimize touch drawing performance for mobile devices
+  - Add touch gesture support (pinch to zoom, pan)
+  - Implement mobile-specific UI adjustments
+  - Add accessibility features (keyboard navigation, screen reader support)
+  - Test and optimize for various mobile screen sizes
+  - _Requirements: 2.1, 2.2, 6.1_
+
+-
+  25. [ ] Add game timer and round management UI
+  - Implement visible countdown timer in game room
+  - Add round progress indicators
+  - Create automatic round transitions with visual feedback
+  - Add sound notifications for round events
+  - Implement pause/resume functionality for hosts
+  - _Requirements: 3.2, 3.3, 4.4_

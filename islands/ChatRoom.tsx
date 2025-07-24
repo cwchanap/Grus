@@ -1,6 +1,15 @@
 import { useEffect, useState, useRef } from "preact/hooks";
-import { signal } from "@preact/signals";
+import { useComputed } from "@preact/signals";
 import type { ChatMessage } from "../types/game.ts";
+
+// Extend ChatMessage type for offline support
+interface ExtendedChatMessage extends ChatMessage {
+  isOffline?: boolean;
+}
+import { WebSocketConnectionManager, connectionState } from "../lib/websocket/connection-manager.ts";
+import { OfflineManager, offlineState } from "../lib/offline-manager.ts";
+import { ErrorBoundary } from "../components/ErrorBoundary.tsx";
+import ConnectionStatus from "../components/ConnectionStatus.tsx";
 
 interface ChatRoomProps {
   roomId: string;
@@ -10,119 +19,56 @@ interface ChatRoomProps {
   isCurrentDrawer?: boolean;
 }
 
-// Global signal for WebSocket connection
-const wsConnection = signal<WebSocket | null>(null);
-const connectionStatus = signal<'connecting' | 'connected' | 'disconnected'>('disconnected');
-
-export default function ChatRoom({ 
+function ChatRoomComponent({ 
   roomId, 
   playerId, 
   playerName, 
   currentWord, 
   isCurrentDrawer = false 
 }: ChatRoomProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ExtendedChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const connectionManagerRef = useRef<WebSocketConnectionManager | null>(null);
+  const offlineManagerRef = useRef<OfflineManager | null>(null);
+  
+  const connectionStatus = useComputed(() => connectionState.value);
+  const offlineStatus = useComputed(() => offlineState.value);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // WebSocket connection management
+  // Connection and offline management
   useEffect(() => {
-    // Skip WebSocket in development environment
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      console.log('WebSocket disabled in development environment');
-      connectionStatus.value = 'disconnected';
-      return;
-    }
+    // Initialize connection manager
+    connectionManagerRef.current = new WebSocketConnectionManager(
+      roomId,
+      playerId,
+      playerName
+    );
 
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: number | null = null;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
+    // Initialize offline manager
+    offlineManagerRef.current = new OfflineManager(roomId);
 
-    const connectWebSocket = () => {
-      try {
-        connectionStatus.value = 'connecting';
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/websocket?roomId=${roomId}`;
-        
-        ws = new WebSocket(wsUrl);
-        wsConnection.value = ws;
+    // Set up message handlers
+    connectionManagerRef.current.onMessage('chat-message', (message) => {
+      const chatMessage: ChatMessage = message.data;
+      setMessages(prev => [...prev, chatMessage]);
+    });
 
-        ws.onopen = () => {
-          console.log('Chat WebSocket connected');
-          connectionStatus.value = 'connected';
-          reconnectAttempts = 0;
-          
-          // Join room
-          ws?.send(JSON.stringify({
-            type: 'join-room',
-            roomId,
-            playerId,
-            data: { playerName }
-          }));
-        };
-
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            
-            if (message.type === 'chat-message') {
-              const chatMessage: ChatMessage = message.data;
-              setMessages(prev => [...prev, chatMessage]);
-            } else if (message.type === 'room-update' && message.data?.type === 'error') {
-              console.error('Chat error:', message.data.message);
-            }
-          } catch (error) {
-            console.error('Error parsing chat message:', error);
-          }
-        };
-
-        ws.onclose = () => {
-          console.log('Chat WebSocket disconnected');
-          connectionStatus.value = 'disconnected';
-          wsConnection.value = null;
-          
-          // Don't attempt to reconnect in development
-          if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-            return;
-          }
-          
-          // Attempt to reconnect with exponential backoff
-          if (reconnectAttempts < maxReconnectAttempts) {
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            reconnectTimeout = setTimeout(() => {
-              reconnectAttempts++;
-              connectWebSocket();
-            }, delay);
-          }
-        };
-
-        ws.onerror = (error) => {
-          console.error('Chat WebSocket error:', error);
-          connectionStatus.value = 'disconnected';
-        };
-      } catch (error) {
-        console.error('Failed to connect chat WebSocket:', error);
-        connectionStatus.value = 'disconnected';
+    connectionManagerRef.current.onMessage('room-update', (message) => {
+      if (message.data?.type === 'error') {
+        console.error('Chat error:', message.data.message);
       }
-    };
-
-    connectWebSocket();
+    });
 
     return () => {
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
-      if (ws) {
-        ws.close();
-      }
+      connectionManagerRef.current?.destroy();
+      offlineManagerRef.current?.destroy();
     };
   }, [roomId, playerId, playerName]);
 
@@ -132,25 +78,38 @@ export default function ChatRoom({
     const message = inputMessage.trim();
     if (!message || message.length > 200) return;
     
-    const ws = wsConnection.value;
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.error('WebSocket not connected');
-      return;
-    }
+    const connectionManager = connectionManagerRef.current;
+    const offlineManager = offlineManagerRef.current;
+    
+    if (!connectionManager) return;
 
-    try {
-      ws.send(JSON.stringify({
-        type: 'chat',
-        roomId,
-        playerId,
-        data: { text: message }
-      }));
+    const chatMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      playerId,
+      playerName,
+      message,
+      timestamp: Date.now(),
+      isCorrect: false
+    };
+
+    // Try to send message
+    const sent = connectionManager.sendMessage({
+      type: 'chat',
+      roomId,
+      playerId,
+      data: { text: message }
+    });
+
+    if (!sent && offlineManager) {
+      // Queue message for offline mode
+      offlineManager.queueChatMessage(chatMessage);
       
-      setInputMessage('');
-      inputRef.current?.focus();
-    } catch (error) {
-      console.error('Error sending message:', error);
+      // Add to local messages with offline indicator
+      setMessages(prev => [...prev, { ...chatMessage, isOffline: true }]);
     }
+    
+    setInputMessage('');
+    inputRef.current?.focus();
   };
 
   const handleInputChange = (e: Event) => {
@@ -181,18 +140,16 @@ export default function ChatRoom({
 
   return (
     <div class="flex flex-col h-full">
-      {/* Connection status */}
+      {/* Header with connection status */}
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-lg font-semibold text-gray-800">Chat</h2>
-        <div class="flex items-center space-x-2">
-          <div class={`w-2 h-2 rounded-full ${
-            connectionStatus.value === 'connected' ? 'bg-green-500' : 
-            connectionStatus.value === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
-          }`}></div>
-          <span class="text-xs text-gray-500">
-            {connectionStatus.value === 'connected' ? 'Connected' : 
-             connectionStatus.value === 'connecting' ? 'Connecting...' : 'Offline'}
-          </span>
+        <div class="flex items-center space-x-3">
+          <ConnectionStatus size="sm" />
+          {offlineStatus.value.isOffline && offlineStatus.value.pendingMessages.length > 0 && (
+            <div class="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
+              {offlineStatus.value.pendingMessages.length} pending
+            </div>
+          )}
         </div>
       </div>
 
@@ -282,19 +239,15 @@ export default function ChatRoom({
               : "Type your guess here..."
           }
           maxLength={200}
-          disabled={connectionStatus.value !== 'connected'}
-          class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:text-gray-500 text-sm"
+          disabled={false} // Allow typing in offline mode
+          class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
         />
         <button
           type="submit"
-          disabled={
-            !inputMessage.trim() || 
-            inputMessage.length > 200 || 
-            connectionStatus.value !== 'connected'
-          }
+          disabled={!inputMessage.trim() || inputMessage.length > 200}
           class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
         >
-          Send
+          {offlineStatus.value.isOffline ? 'Queue' : 'Send'}
         </button>
       </form>
 
@@ -303,5 +256,29 @@ export default function ChatRoom({
         {inputMessage.length}/200
       </div>
     </div>
+  );
+}
+
+// Export with error boundary
+export default function ChatRoom(props: ChatRoomProps) {
+  return (
+    <ErrorBoundary
+      fallback={(error, retry) => (
+        <div class="bg-red-50 border border-red-200 rounded-lg p-4">
+          <div class="text-red-800 font-medium mb-2">Chat Error</div>
+          <div class="text-red-600 text-sm mb-3">
+            Failed to load chat: {error.message}
+          </div>
+          <button
+            onClick={retry}
+            class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    >
+      <ChatRoomComponent {...props} />
+    </ErrorBoundary>
   );
 }

@@ -76,14 +76,14 @@ export interface Score {
 
 // WebSocket message types
 export interface ClientMessage {
-  type: 'join-room' | 'leave-room' | 'chat' | 'draw' | 'guess' | 'start-game' | 'next-round' | 'end-game';
+  type: 'join-room' | 'leave-room' | 'chat' | 'draw' | 'guess' | 'start-game' | 'next-round' | 'end-game' | 'ping';
   roomId: string;
   playerId: string;
   data: any;
 }
 
 export interface ServerMessage {
-  type: 'room-update' | 'chat-message' | 'draw-update' | 'game-state' | 'score-update';
+  type: 'room-update' | 'chat-message' | 'draw-update' | 'game-state' | 'score-update' | 'error' | 'pong';
   roomId: string;
   data: any;
 }
