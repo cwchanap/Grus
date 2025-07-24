@@ -15,6 +15,8 @@ import * as $index from "./routes/index.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
+import * as $DrawingBoard_example from "./islands/DrawingBoard.example.tsx";
+import * as $DrawingBoard from "./islands/DrawingBoard.tsx";
 import * as $DrawingEngine from "./islands/DrawingEngine.tsx";
 import * as $GameLobby from "./islands/GameLobby.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
@@ -37,6 +39,8 @@ const manifest = {
   islands: {
     "./islands/Counter.tsx": $Counter,
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
+    "./islands/DrawingBoard.example.tsx": $DrawingBoard_example,
+    "./islands/DrawingBoard.tsx": $DrawingBoard,
     "./islands/DrawingEngine.tsx": $DrawingEngine,
     "./islands/GameLobby.tsx": $GameLobby,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
