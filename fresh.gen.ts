@@ -13,6 +13,7 @@ import * as $drawing_demo from "./routes/drawing-demo.tsx";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
+import * as $ChatRoom from "./islands/ChatRoom.tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
 import * as $DrawingBoard_example from "./islands/DrawingBoard.example.tsx";
@@ -37,6 +38,7 @@ const manifest = {
     "./routes/room/[id].tsx": $room_id_,
   },
   islands: {
+    "./islands/ChatRoom.tsx": $ChatRoom,
     "./islands/Counter.tsx": $Counter,
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
     "./islands/DrawingBoard.example.tsx": $DrawingBoard_example,

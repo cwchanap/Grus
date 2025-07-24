@@ -2,6 +2,7 @@ import { Handlers, PageProps } from "$fresh/server.ts";
 import { RoomManager } from "../../lib/room-manager.ts";
 import { Env } from "../../types/cloudflare.ts";
 import type { RoomSummary } from "../../lib/room-manager.ts";
+import ChatRoom from "../../islands/ChatRoom.tsx";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -136,11 +137,14 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
             </div>
 
             {/* Chat area */}
-            <div class="bg-white rounded-lg shadow-md p-6">
-              <h2 class="text-lg font-semibold text-gray-800 mb-4">Chat</h2>
-              <div class="bg-gray-100 rounded-lg h-48 flex items-center justify-center">
-                <p class="text-gray-500">Chat will be implemented in task 9</p>
-              </div>
+            <div class="bg-white rounded-lg shadow-md p-6 h-80">
+              <ChatRoom
+                roomId={room.room.id}
+                playerId={playerId || ''}
+                playerName={room.players.find(p => p.id === playerId)?.name || 'Unknown'}
+                currentWord={undefined} // Will be populated when game logic is implemented
+                isCurrentDrawer={false} // Will be determined by game state
+              />
             </div>
 
             {/* Scoreboard */}
