@@ -1,0 +1,156 @@
+{
+  "environments": {
+    "development": {
+      "name": "multiplayer-drawing-game-dev",
+      "database": {
+        "name": "drawing-game-db-dev",
+        "migrations": true,
+        "seeding": true
+      },
+      "kv": {
+        "namespace": "GAME_STATE_DEV"
+      },
+      "monitoring": {
+        "healthCheck": true,
+        "alerting": false,
+        "logLevel": "info"
+      },
+      "performance": {
+        "responseTimeThreshold": 2000,
+        "errorRateThreshold": 10
+      }
+    },
+    "staging": {
+      "name": "multiplayer-drawing-game-staging",
+      "database": {
+        "name": "drawing-game-db-staging",
+        "migrations": true,
+        "seeding": false
+      },
+      "kv": {
+        "namespace": "GAME_STATE_STAGING"
+      },
+      "monitoring": {
+        "healthCheck": true,
+        "alerting": true,
+        "logLevel": "warn"
+      },
+      "performance": {
+        "responseTimeThreshold": 1500,
+        "errorRateThreshold": 5
+      }
+    },
+    "production": {
+      "name": "multiplayer-drawing-game-prod",
+      "database": {
+        "name": "drawing-game-db-prod",
+        "migrations": true,
+        "seeding": false
+      },
+      "kv": {
+        "namespace": "GAME_STATE_PROD"
+      },
+      "monitoring": {
+        "healthCheck": true,
+        "alerting": true,
+        "logLevel": "error"
+      },
+      "performance": {
+        "responseTimeThreshold": 1000,
+        "errorRateThreshold": 2
+      }
+    }
+  },
+  "deployment": {
+    "preChecks": [
+      "required-files",
+      "wrangler-config",
+      "environment-variables",
+      "database-migrations",
+      "typescript-check",
+      "wrangler-auth"
+    ],
+    "postChecks": [
+      "health-check",
+      "smoke-tests",
+      "performance-validation"
+    ],
+    "rollback": {
+      "enabled": true,
+      "autoRollbackOnFailure": true,
+      "environments": ["production"]
+    },
+    "notifications": {
+      "slack": {
+        "enabled": true,
+        "webhook": "${SLACK_WEBHOOK_URL}",
+        "channels": {
+          "success": "#deployments",
+          "failure": "#alerts"
+        }
+      },
+      "email": {
+        "enabled": false,
+        "recipients": []
+      }
+    }
+  },
+  "security": {
+    "secretScanning": true,
+    "dependencyAudit": true,
+    "vulnerabilityScanning": true
+  },
+  "testing": {
+    "unit": {
+      "required": true,
+      "coverage": {
+        "minimum": 80,
+        "enforced": false
+      }
+    },
+    "integration": {
+      "required": true,
+      "timeout": 300
+    },
+    "smoke": {
+      "required": true,
+      "timeout": 120,
+      "endpoints": [
+        "/api/health",
+        "/",
+        "/api/rooms"
+      ]
+    },
+    "performance": {
+      "required": false,
+      "schedule": "weekly",
+      "thresholds": {
+        "responseTime": 1000,
+        "errorRate": 5,
+        "throughput": 100
+      }
+    }
+  },
+  "maintenance": {
+    "dependencyUpdates": {
+      "schedule": "weekly",
+      "autoMerge": false,
+      "testRequired": true
+    },
+    "securityUpdates": {
+      "schedule": "daily",
+      "autoMerge": true,
+      "testRequired": true
+    },
+    "backups": {
+      "database": {
+        "schedule": "daily",
+        "retention": 30
+      },
+      "configuration": {
+        "schedule": "weekly",
+        "retention": 12
+      }
+    }
+  }
+}

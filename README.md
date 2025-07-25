@@ -88,15 +88,43 @@ A real-time multiplayer drawing and guessing game built with Deno Fresh and depl
 
 ### Deployment
 
-1. Build and deploy:
-   ```bash
-   deno run -A scripts/deploy.ts
-   ```
+This project includes a comprehensive CI/CD pipeline with automated testing, security scanning, and deployment.
 
-2. For development environment:
-   ```bash
-   deno run -A scripts/deploy.ts --dev
-   ```
+#### Quick Deployment
+```bash
+# Setup environment (first time only)
+deno task setup:env
+
+# Deploy to development
+deno task deploy:dev
+
+# Deploy to production
+deno task deploy
+```
+
+#### CI/CD Pipeline Features
+- **Automated Testing**: Runs on every push and PR
+- **Security Scanning**: Daily vulnerability scans
+- **Performance Testing**: Weekly load testing
+- **Dependency Updates**: Automated weekly updates
+- **Staging Deployment**: Auto-deploy from `develop` branch
+- **Production Deployment**: Auto-deploy from `main` branch
+- **Rollback Support**: Automatic rollback on deployment failures
+- **Health Checks**: Post-deployment validation
+- **Monitoring**: Comprehensive alerting and dashboards
+
+#### Manual Deployment Options
+```bash
+# Run pre-deployment checks
+deno task pre-deploy
+
+# Deploy with options
+deno run -A scripts/deploy.ts --dry-run    # Test deployment
+deno run -A scripts/deploy.ts --skip-tests # Skip tests (not recommended)
+deno run -A scripts/deploy.ts --dev        # Deploy to development
+```
+
+See the [deployment guide](docs/deployment.md) for detailed instructions.
 
 ## Project Structure
 
@@ -125,12 +153,29 @@ The application uses environment-based configuration:
 
 ## Available Scripts
 
+### Development
 - `deno task start` - Start development server
 - `deno task build` - Build for production
-- `deno task deploy` - Deploy to Cloudflare Workers
-- `deno task dev:worker` - Start Cloudflare Workers development
-- `deno run -A scripts/setup-db.ts` - Set up database
-- `deno run -A scripts/deploy.ts` - Deploy application
+- `deno task test` - Run tests
+- `deno task test:watch` - Run tests in watch mode
+- `deno task check` - Run linting and type checking
+
+### Deployment
+- `deno task deploy` - Deploy to production
+- `deno task deploy:dev` - Deploy to development
+- `deno task pre-deploy` - Run pre-deployment checks
+- `deno task smoke-tests` - Run smoke tests
+- `deno task health-check` - Check application health
+
+### Setup
+- `deno task setup:env` - Setup environment
+- `deno task setup:db` - Setup database
+- `deno task setup:monitoring` - Setup monitoring
+- `deno task setup:alerts` - Setup alerting
+
+### Monitoring
+- `deno task worker:tail` - View live logs
+- `deno task worker:rollback` - Rollback deployment
 
 ## Environment Variables
 
