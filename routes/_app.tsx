@@ -1,5 +1,4 @@
 import { type PageProps } from "$fresh/server.ts";
-import { ErrorNotifications } from "../components/ErrorBoundary.tsx";
 
 export default function App({ Component }: PageProps) {
   return (

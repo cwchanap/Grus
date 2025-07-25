@@ -279,4 +279,16 @@ export class WebSocketManager {
       }
     }
   }
+
+  // Broadcast message to specific room
+  async broadcastToRoomPublic(roomId: string, message: any): Promise<void> {
+    const handler = this.handlers.get(roomId);
+    if (handler) {
+      try {
+        await (handler as any).broadcastToRoomPublic(roomId, message);
+      } catch (error) {
+        console.error(`Error broadcasting to room ${roomId}:`, error);
+      }
+    }
+  }
 }

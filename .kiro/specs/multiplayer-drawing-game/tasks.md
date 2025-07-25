@@ -198,7 +198,7 @@
   - _Requirements: 1.1, 2.1, 3.1, 4.1, 5.1, 6.1_
 
 -
-  22. [ ] Implement WebSocket reconnection and connection status
+  22. [x] Implement WebSocket reconnection and connection status
   - Add WebSocket reconnection logic with exponential backoff
   - Implement connection status indicators in UI components
   - Handle graceful reconnection and state synchronization
@@ -207,16 +207,7 @@
   - _Requirements: 6.4_
 
 -
-  23. [ ] Add game controls and host management features
-  - Implement start game button for hosts in lobby
-  - Add end game functionality for hosts
-  - Create next round controls after round completion
-  - Add kick player functionality for hosts
-  - Implement game settings configuration (round time, max rounds)
-  - _Requirements: 3.1, 3.4, 3.5_
-
--
-  24. [ ] Enhance mobile touch support and accessibility
+  23. [x] Enhance mobile touch support and accessibility
   - Optimize touch drawing performance for mobile devices
   - Add touch gesture support (pinch to zoom, pan)
   - Implement mobile-specific UI adjustments
@@ -225,10 +216,28 @@
   - _Requirements: 2.1, 2.2, 6.1_
 
 -
-  25. [ ] Add game timer and round management UI
-  - Implement visible countdown timer in game room
-  - Add round progress indicators
-  - Create automatic round transitions with visual feedback
-  - Add sound notifications for round events
-  - Implement pause/resume functionality for hosts
+  24. [ ] Create missing API route for leaving rooms
+  - Implement POST /api/rooms/[id]/leave endpoint
+  - Add proper error handling and validation
+  - Update WebSocket manager to handle player leaving
+  - Broadcast room updates when players leave
+  - Test leave room functionality
+  - _Requirements: 1.2, 1.5_
+
+-
+  25. [ ] Implement host game control UI elements
+  - Add functional start game button in Scoreboard component
+  - Implement end round button for hosts during drawing phase
+  - Create next round button for hosts in results phase
+  - Add game settings modal for hosts (round time, max rounds)
+  - Connect UI controls to existing WebSocket game management
+  - _Requirements: 3.1, 3.4, 3.5_
+
+-
+  26. [ ] Enhance game timer and round progress UI
+  - Improve timer display visibility in Scoreboard component
+  - Add round progress indicators showing current/total rounds
+  - Implement visual feedback for round transitions
+  - Add timer warning states (e.g., last 30 seconds)
+  - Ensure timer synchronization across all clients
   - _Requirements: 3.2, 3.3, 4.4_

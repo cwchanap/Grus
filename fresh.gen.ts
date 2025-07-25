@@ -5,9 +5,11 @@
 import * as $_404 from "./routes/_404.tsx";
 import * as $_app from "./routes/_app.tsx";
 import * as $_middleware from "./routes/_middleware.ts";
+import * as $api_health from "./routes/api/health.ts";
 import * as $api_joke from "./routes/api/joke.ts";
 import * as $api_rooms from "./routes/api/rooms.ts";
 import * as $api_rooms_id_join from "./routes/api/rooms/[id]/join.ts";
+import * as $api_rooms_id_leave from "./routes/api/rooms/[id]/leave.ts";
 import * as $api_websocket from "./routes/api/websocket.ts";
 import * as $drawing_demo from "./routes/drawing-demo.tsx";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
@@ -29,9 +31,11 @@ const manifest = {
     "./routes/_404.tsx": $_404,
     "./routes/_app.tsx": $_app,
     "./routes/_middleware.ts": $_middleware,
+    "./routes/api/health.ts": $api_health,
     "./routes/api/joke.ts": $api_joke,
     "./routes/api/rooms.ts": $api_rooms,
     "./routes/api/rooms/[id]/join.ts": $api_rooms_id_join,
+    "./routes/api/rooms/[id]/leave.ts": $api_rooms_id_leave,
     "./routes/api/websocket.ts": $api_websocket,
     "./routes/drawing-demo.tsx": $drawing_demo,
     "./routes/greet/[name].tsx": $greet_name_,
