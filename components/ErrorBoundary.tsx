@@ -1,144 +1,95 @@
-/**
- * Error boundary component for graceful error handling
- */
-
 import { Component, ComponentChildren } from "preact";
-import { signal } from "@preact/signals";
+import { TouchButton } from "./MobileOptimized.tsx";
 
 interface ErrorBoundaryState {
   hasError: boolean;
-  error: Error | null;
-  errorInfo: string | null;
+  error?: Error;
+  errorInfo?: any;
 }
 
 interface ErrorBoundaryProps {
   children: ComponentChildren;
   fallback?: (error: Error, retry: () => void) => ComponentChildren;
-  onError?: (error: Error, errorInfo: string) => void;
-  showDetails?: boolean;
+  onError?: (error: Error, errorInfo: any) => void;
 }
 
-// Global error tracking
-export const globalErrorState = signal<{
-  errors: Array<{ id: string; error: Error; timestamp: number; component?: string }>;
-  count: number;
-}>({
-  errors: [],
-  count: 0
-});
-
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
-  private errorId: string;
-
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = {
-      hasError: false,
-      error: null,
-      errorInfo: null
-    };
-    this.errorId = crypto.randomUUID();
+    this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return {
       hasError: true,
-      error
+      error,
     };
   }
 
   componentDidCatch(error: Error, errorInfo: any) {
-    const errorDetails = errorInfo?.componentStack || error.stack || 'No stack trace available';
+    console.error('ErrorBoundary caught an error:', error, errorInfo);
     
     this.setState({
-      errorInfo: errorDetails
+      error,
+      errorInfo,
     });
 
-    // Track error globally
-    const errorEntry = {
-      id: this.errorId,
-      error,
-      timestamp: Date.now(),
-      component: this.constructor.name
-    };
-
-    globalErrorState.value = {
-      errors: [...globalErrorState.value.errors.slice(-9), errorEntry], // Keep last 10 errors
-      count: globalErrorState.value.count + 1
-    };
-
-    // Call custom error handler
+    // Call the onError callback if provided
     if (this.props.onError) {
-      this.props.onError(error, errorDetails);
+      this.props.onError(error, errorInfo);
     }
-
-    // Log error for debugging
-    console.error('ErrorBoundary caught an error:', error);
-    console.error('Error details:', errorDetails);
   }
 
-  retry = () => {
-    this.setState({
-      hasError: false,
-      error: null,
-      errorInfo: null
-    });
+  handleRetry = () => {
+    this.setState({ hasError: false, error: undefined, errorInfo: undefined });
   };
 
   render() {
-    if (this.state.hasError && this.state.error) {
+    if (this.state.hasError) {
       // Use custom fallback if provided
-      if (this.props.fallback) {
-        return this.props.fallback(this.state.error, this.retry);
+      if (this.props.fallback && this.state.error) {
+        return this.props.fallback(this.state.error, this.handleRetry);
       }
 
-      // Default error UI
+      // Default mobile-friendly error UI
       return (
-        <div class="bg-red-50 border border-red-200 rounded-lg p-6 m-4">
-          <div class="flex items-start space-x-3">
-            <div class="text-red-600 text-2xl">⚠️</div>
-            <div class="flex-1">
-              <h3 class="text-lg font-semibold text-red-800 mb-2">
-                Something went wrong
-              </h3>
-              <p class="text-red-700 mb-4">
-                An error occurred while rendering this component. This might be a temporary issue.
-              </p>
-              
-              <div class="flex space-x-3 mb-4">
-                <button
-                  onClick={this.retry}
-                  class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-medium"
-                >
-                  Try Again
-                </button>
-                <button
-                  onClick={() => window.location.reload()}
-                  class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium"
-                >
-                  Reload Page
-                </button>
-              </div>
-
-              {this.props.showDetails && (
-                <details class="mt-4">
-                  <summary class="cursor-pointer text-sm font-medium text-red-800 hover:text-red-900">
-                    Technical Details
-                  </summary>
-                  <div class="mt-2 p-3 bg-red-100 rounded border text-xs font-mono text-red-800 overflow-auto max-h-40">
-                    <div class="mb-2">
-                      <strong>Error:</strong> {this.state.error.message}
-                    </div>
-                    {this.state.errorInfo && (
-                      <div>
-                        <strong>Stack Trace:</strong>
-                        <pre class="whitespace-pre-wrap mt-1">{this.state.errorInfo}</pre>
-                      </div>
-                    )}
-                  </div>
-                </details>
-              )}
-            </div>
+        <div class="error-boundary bg-red-50 border border-red-200 rounded-lg p-4 sm:p-6 text-center">
+          <div class="text-red-600 text-4xl sm:text-6xl mb-4">⚠️</div>
+          <h2 class="text-lg sm:text-xl font-bold text-red-800 mb-2">
+            Something went wrong
+          </h2>
+          <p class="text-sm sm:text-base text-red-700 mb-4 max-w-md mx-auto">
+            We encountered an unexpected error. Please try refreshing the page or contact support if the problem persists.
+          </p>
+          
+          {/* Error details (only in development) */}
+          {process.env.NODE_ENV === 'development' && this.state.error && (
+            <details class="text-left bg-red-100 border border-red-300 rounded p-3 mb-4 text-xs sm:text-sm">
+              <summary class="cursor-pointer font-medium text-red-800 mb-2">
+                Error Details (Development)
+              </summary>
+              <pre class="whitespace-pre-wrap text-red-700 overflow-auto">
+                {this.state.error.toString()}
+                {this.state.errorInfo?.componentStack}
+              </pre>
+            </details>
+          )}
+          
+          <div class="flex flex-col sm:flex-row gap-3 justify-center">
+            <TouchButton
+              onClick={this.handleRetry}
+              variant="primary"
+              size="md"
+            >
+              Try Again
+            </TouchButton>
+            <TouchButton
+              onClick={() => window.location.reload()}
+              variant="secondary"
+              size="md"
+            >
+              Refresh Page
+            </TouchButton>
           </div>
         </div>
       );
@@ -148,59 +99,61 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 }
 
-// Higher-order component for easy wrapping
+// Hook version for functional components
+export function useErrorHandler() {
+  const handleError = (error: Error, errorInfo?: any) => {
+    console.error('Error caught by error handler:', error, errorInfo);
+    
+    // In a real app, you might want to send this to an error reporting service
+    // like Sentry, LogRocket, etc.
+  };
+
+  return handleError;
+}
+
+// Higher-order component for wrapping components with error boundary
 export function withErrorBoundary<P extends object>(
   WrappedComponent: (props: P) => ComponentChildren,
-  errorBoundaryProps?: Omit<ErrorBoundaryProps, 'children'>
+  fallback?: (error: Error, retry: () => void) => ComponentChildren
 ) {
   return function WithErrorBoundaryComponent(props: P) {
     return (
-      <ErrorBoundary {...errorBoundaryProps}>
+      <ErrorBoundary fallback={fallback}>
         <WrappedComponent {...props} />
       </ErrorBoundary>
     );
   };
 }
 
-// Error notification component for global error display
-export function ErrorNotifications() {
-  const errors = globalErrorState.value.errors;
-  const recentErrors = errors.filter(e => Date.now() - e.timestamp < 10000); // Last 10 seconds
-
-  if (recentErrors.length === 0) {
-    return null;
-  }
-
+// Mobile-specific error fallback
+export function MobileErrorFallback(error: Error, retry: () => void) {
   return (
-    <div class="fixed top-4 right-4 z-50 space-y-2">
-      {recentErrors.map((errorEntry) => (
-        <div
-          key={errorEntry.id}
-          class="bg-red-100 border border-red-300 rounded-lg p-3 shadow-lg max-w-sm animate-slide-in"
+    <div class="mobile-error-fallback bg-red-50 border border-red-200 rounded-lg p-3 sm:p-4 text-center">
+      <div class="text-red-600 text-2xl sm:text-4xl mb-2">⚠️</div>
+      <h3 class="text-sm sm:text-base font-bold text-red-800 mb-2">
+        Oops! Something went wrong
+      </h3>
+      <p class="text-xs sm:text-sm text-red-700 mb-3">
+        Please try again or refresh the page.
+      </p>
+      <div class="flex gap-2">
+        <TouchButton
+          onClick={retry}
+          variant="primary"
+          size="sm"
+          className="flex-1"
         >
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <div class="text-sm font-medium text-red-800">
-                Component Error
-              </div>
-              <div class="text-xs text-red-600 mt-1">
-                {errorEntry.error.message}
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                globalErrorState.value = {
-                  ...globalErrorState.value,
-                  errors: globalErrorState.value.errors.filter(e => e.id !== errorEntry.id)
-                };
-              }}
-              class="text-red-400 hover:text-red-600 ml-2"
-            >
-              ✕
-            </button>
-          </div>
-        </div>
-      ))}
+          Retry
+        </TouchButton>
+        <TouchButton
+          onClick={() => window.location.reload()}
+          variant="secondary"
+          size="sm"
+          className="flex-1"
+        >
+          Refresh
+        </TouchButton>
+      </div>
     </div>
   );
 }

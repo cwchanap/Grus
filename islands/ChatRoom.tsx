@@ -140,14 +140,15 @@ function ChatRoomComponent({
 
   return (
     <div class="flex flex-col h-full">
-      {/* Header with connection status */}
+      {/* Header with connection status - Mobile responsive */}
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-lg font-semibold text-gray-800">Chat</h2>
-        <div class="flex items-center space-x-3">
+        <h2 class="text-base sm:text-lg font-semibold text-gray-800">Chat</h2>
+        <div class="flex items-center space-x-2 sm:space-x-3">
           <ConnectionStatus size="sm" />
           {offlineStatus.value.isOffline && offlineStatus.value.pendingMessages.length > 0 && (
             <div class="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
-              {offlineStatus.value.pendingMessages.length} pending
+              <span class="hidden sm:inline">{offlineStatus.value.pendingMessages.length} pending</span>
+              <span class="sm:hidden">{offlineStatus.value.pendingMessages.length}</span>
             </div>
           )}
         </div>
@@ -174,7 +175,7 @@ function ChatRoomComponent({
                 }`}
               >
                 <div
-                  class={`max-w-xs px-3 py-2 rounded-lg text-sm ${
+                  class={`max-w-xs sm:max-w-sm px-3 py-2 rounded-lg text-sm ${
                     isCorrectGuess(message)
                       ? 'bg-green-100 border border-green-300 text-green-800'
                       : isOwnMessage(message)
@@ -226,7 +227,7 @@ function ChatRoomComponent({
         </div>
       )}
 
-      {/* Message input */}
+      {/* Message input - Mobile optimized */}
       <form onSubmit={sendMessage} class="flex space-x-2">
         <input
           ref={inputRef}
@@ -240,14 +241,15 @@ function ChatRoomComponent({
           }
           maxLength={200}
           disabled={false} // Allow typing in offline mode
-          class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
+          class="flex-1 px-3 py-2 sm:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm touch-manipulation"
         />
         <button
           type="submit"
           disabled={!inputMessage.trim() || inputMessage.length > 200}
-          class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+          class="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium touch-manipulation"
         >
-          {offlineStatus.value.isOffline ? 'Queue' : 'Send'}
+          <span class="hidden sm:inline">{offlineStatus.value.isOffline ? 'Queue' : 'Send'}</span>
+          <span class="sm:hidden">→</span>
         </button>
       </form>
 

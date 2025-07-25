@@ -10,6 +10,7 @@ export interface DrawingBoardProps {
   width?: number;
   height?: number;
   className?: string;
+  responsive?: boolean;
 }
 
 export default function DrawingBoard({
@@ -20,6 +21,7 @@ export default function DrawingBoard({
   width = 800,
   height = 600,
   className = "",
+  responsive = true,
 }: DrawingBoardProps) {
   const drawingEngineRef = useRef<DrawingEngineRef>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -257,10 +259,10 @@ export default function DrawingBoard({
 
   return (
     <div class={`drawing-board ${className}`}>
-      {/* Header with status and controls */}
+      {/* Header with status and controls - Mobile responsive */}
       <div class="drawing-board-header mb-4 p-3 bg-gray-50 rounded-lg border">
-        <div class="flex justify-between items-center">
-          <div class="flex items-center gap-4">
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2 sm:gap-4">
+          <div class="flex items-center gap-2 sm:gap-4">
             <h3 class="text-lg font-semibold">Drawing Board</h3>
             <div class={`text-sm ${getConnectionStatusColor()}`}>
               <span class="inline-block w-2 h-2 rounded-full bg-current mr-2"></span>
@@ -271,7 +273,8 @@ export default function DrawingBoard({
           <div class="flex items-center gap-2 text-sm">
             {gameState.phase === 'drawing' && (
               <>
-                <span class="text-gray-600">Current drawer:</span>
+                <span class="text-gray-600 hidden sm:inline">Current drawer:</span>
+                <span class="text-gray-600 sm:hidden">Drawer:</span>
                 <span class="font-medium">
                   {gameState.currentDrawer === playerId ? 'You' : 
                    gameState.players.find(p => p.id === gameState.currentDrawer)?.name || 'Unknown'}
@@ -288,29 +291,31 @@ export default function DrawingBoard({
         isDrawer={isDrawer}
         onDrawingCommand={handleDrawingCommand}
         onDrawingCommands={handleDrawingCommands}
-        width={width}
-        height={height}
+        width={responsive ? Math.min(width, window.innerWidth - 40) : width}
+        height={responsive ? Math.min(height, window.innerHeight * 0.6) : height}
         disabled={isDrawingDisabled}
       />
 
-      {/* Additional Controls */}
+      {/* Additional Controls - Mobile responsive */}
       {isDrawer && gameState.phase === 'drawing' && (
         <div class="drawing-board-controls mt-4 p-3 bg-blue-50 rounded-lg border">
-          <div class="flex items-center justify-between">
-            <div class="text-sm text-blue-800">
-              <strong>Your turn to draw!</strong> Others are trying to guess your drawing.
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
+            <div class="text-sm text-blue-800 text-center sm:text-left">
+              <strong>Your turn to draw!</strong> 
+              <span class="hidden sm:inline"> Others are trying to guess your drawing.</span>
+              <div class="sm:hidden text-xs mt-1">Others are guessing your drawing.</div>
             </div>
-            <div class="flex gap-2">
+            <div class="flex gap-2 justify-center sm:justify-end">
               <button
                 onClick={handleClearCanvas}
-                class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
+                class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium touch-manipulation"
                 disabled={connectionStatus !== 'connected'}
               >
                 Clear All
               </button>
               <button
                 onClick={handleUndo}
-                class="px-3 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm"
+                class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm font-medium touch-manipulation"
                 disabled={connectionStatus !== 'connected'}
               >
                 Undo

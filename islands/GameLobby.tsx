@@ -161,24 +161,24 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
   }
 
   return (
-    <div class="max-w-6xl mx-auto">
-      {/* Header with connection status and create button */}
-      <div class="flex justify-between items-center mb-6">
-        <div class="flex items-center space-x-4">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* Header with connection status and create button - Mobile responsive */}
+      <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+        <div class="flex items-center justify-between sm:justify-start sm:space-x-4">
           <button
             onClick={refreshRooms}
             disabled={loading}
-            class="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50"
+            class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
           >
             <span class={`text-sm ${loading ? 'animate-spin' : ''}`}>
               {loading ? '⟳' : '↻'}
             </span>
-            <span>Refresh</span>
+            <span class="hidden xs:inline">Refresh</span>
           </button>
           
           <div class="flex items-center space-x-2">
             <div class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
-            <span class="text-sm text-gray-600">
+            <span class="text-xs sm:text-sm text-gray-600">
               {wsConnected ? 'Connected' : 'Dev Mode'}
             </span>
           </div>
@@ -186,26 +186,27 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
 
         <button
           onClick={handleCreateRoom}
-          class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+          class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
         >
-          + Create Room
+          <span class="sm:hidden">+ New Room</span>
+          <span class="hidden sm:inline">+ Create Room</span>
         </button>
       </div>
 
-      {/* Room list */}
-      <div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+      {/* Room list - Enhanced mobile grid */}
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {rooms.length === 0 ? (
-          <div class="col-span-full text-center py-12">
-            <div class="text-gray-400 text-6xl mb-4">🎨</div>
-            <h3 class="text-xl font-semibold text-gray-600 mb-2">
+          <div class="col-span-full text-center py-12 px-4">
+            <div class="text-gray-400 text-4xl sm:text-6xl mb-4">🎨</div>
+            <h3 class="text-lg sm:text-xl font-semibold text-gray-600 mb-2">
               No active rooms
             </h3>
-            <p class="text-gray-500 mb-4">
+            <p class="text-sm sm:text-base text-gray-500 mb-6 max-w-md mx-auto">
               Be the first to create a room and start playing!
             </p>
             <button
               onClick={handleCreateRoom}
-              class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation no-tap-highlight"
             >
               Create First Room
             </button>
@@ -250,21 +251,21 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
   const { room, playerCount, canJoin, host } = roomSummary;
 
   return (
-    <div class="bg-white rounded-lg shadow-md border border-gray-200 p-6 hover:shadow-lg transition-shadow">
-      <div class="flex justify-between items-start mb-4">
-        <div>
-          <h3 class="text-lg font-semibold text-gray-800 mb-1">
+    <div class="bg-white rounded-lg shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg active:shadow-xl transition-all duration-200 touch-manipulation">
+      <div class="flex justify-between items-start mb-3 sm:mb-4">
+        <div class="min-w-0 flex-1 mr-3">
+          <h3 class="text-base sm:text-lg font-semibold text-gray-800 mb-1 truncate">
             {room.name}
           </h3>
-          <p class="text-sm text-gray-600">
+          <p class="text-xs sm:text-sm text-gray-600 truncate">
             Host: {host?.name || 'Unknown'}
           </p>
         </div>
-        <div class="text-right">
-          <div class="text-sm text-gray-500">
+        <div class="text-right flex-shrink-0">
+          <div class="text-sm text-gray-500 mb-1">
             {playerCount}/{room.maxPlayers}
           </div>
-          <div class={`text-xs px-2 py-1 rounded-full ${
+          <div class={`text-xs px-2 py-1 rounded-full font-medium ${
             canJoin ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
           }`}>
             {canJoin ? 'Open' : 'Full'}
@@ -273,24 +274,27 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
       </div>
 
       <div class="mb-4">
-        <div class="text-sm text-gray-600 mb-2">Players:</div>
+        <div class="text-xs sm:text-sm text-gray-600 mb-2">Players:</div>
         <div class="flex flex-wrap gap-1">
-          {roomSummary.players.slice(0, 6).map((player) => (
+          {roomSummary.players.slice(0, 4).map((player) => (
             <span
               key={player.id}
-              class={`text-xs px-2 py-1 rounded-full ${
+              class={`text-xs px-2 py-1 rounded-full truncate max-w-20 sm:max-w-none ${
                 player.isHost 
                   ? 'bg-yellow-100 text-yellow-800' 
                   : 'bg-gray-100 text-gray-700'
               }`}
+              title={`${player.name}${player.isHost ? ' (Host)' : ''}`}
             >
-              {player.name}
+              <span class="truncate">
+                {player.name.length > 8 ? `${player.name.slice(0, 8)}...` : player.name}
+              </span>
               {player.isHost && ' 👑'}
             </span>
           ))}
-          {roomSummary.players.length > 6 && (
+          {roomSummary.players.length > 4 && (
             <span class="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
-              +{roomSummary.players.length - 6} more
+              +{roomSummary.players.length - 4}
             </span>
           )}
         </div>
@@ -299,9 +303,9 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
       <button
         onClick={onJoin}
         disabled={!canJoin}
-        class={`w-full py-2 px-4 rounded-lg font-medium transition-colors ${
+        class={`w-full py-3 px-4 rounded-lg font-medium transition-all duration-200 touch-manipulation no-tap-highlight text-touch ${
           canJoin
-            ? 'bg-blue-600 text-white hover:bg-blue-700'
+            ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 active:scale-95'
             : 'bg-gray-300 text-gray-500 cursor-not-allowed'
         }`}
       >

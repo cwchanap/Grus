@@ -46,14 +46,14 @@ export const handler: Handlers<LobbyData> = {
 
 export default function Home({ data }: PageProps<LobbyData>) {
   return (
-    <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div class="container mx-auto px-4 py-8">
-        <div class="text-center mb-8">
-          <h1 class="text-4xl font-bold text-gray-800 mb-2">
-            🎨 Drawing Game Lobby
+    <div class="min-h-screen-safe bg-gradient-to-br from-blue-50 to-indigo-100 safe-area-inset">
+      <div class="container mx-auto px-3 sm:px-4 lg:px-8 py-4 sm:py-6 lg:py-8 max-w-7xl">
+        <div class="text-center mb-6 sm:mb-8">
+          <h1 class="text-2xl xs:text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-800 mb-2 sm:mb-4">
+            🎨 Drawing Game
           </h1>
-          <p class="text-lg text-gray-600">
-            Join a room or create your own to start playing!
+          <p class="text-sm sm:text-base lg:text-lg text-gray-600 max-w-2xl mx-auto px-4">
+            Join a room or create your own to start playing with friends!
           </p>
         </div>
         

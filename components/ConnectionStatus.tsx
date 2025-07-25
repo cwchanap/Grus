@@ -1,72 +1,87 @@
-/**
- * Connection status indicator component
- */
-
-import { useComputed } from "@preact/signals";
-import { connectionState } from "../lib/websocket/connection-manager.ts";
+import { useEffect, useState } from "preact/hooks";
 
 interface ConnectionStatusProps {
-  showText?: boolean;
   size?: 'sm' | 'md' | 'lg';
+  showText?: boolean;
   className?: string;
 }
 
 export default function ConnectionStatus({ 
+  size = 'md', 
   showText = true, 
-  size = 'md',
-  className = '' 
+  className = "" 
 }: ConnectionStatusProps) {
-  const state = useComputed(() => connectionState.value);
+  const [status, setStatus] = useState<'online' | 'offline' | 'slow'>('online');
+  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
 
-  const getStatusConfig = () => {
-    const status = state.value.status;
-    const isOnline = state.value.isOnline;
+  useEffect(() => {
+    const updateConnectionStatus = () => {
+      if (!navigator.onLine) {
+        setStatus('offline');
+      } else {
+        // Check connection speed/quality
+        const connection = (navigator as any).connection;
+        if (connection) {
+          const { effectiveType, downlink } = connection;
+          if (effectiveType === 'slow-2g' || effectiveType === '2g' || downlink < 0.5) {
+            setStatus('slow');
+          } else {
+            setStatus('online');
+          }
+        } else {
+          setStatus('online');
+        }
+      }
+      setLastUpdate(Date.now());
+    };
 
-    if (!isOnline) {
-      return {
-        color: 'bg-gray-500',
-        text: 'Offline',
-        icon: '📡',
-        description: 'No internet connection'
-      };
+    // Initial check
+    updateConnectionStatus();
+
+    // Listen for online/offline events
+    window.addEventListener('online', updateConnectionStatus);
+    window.addEventListener('offline', updateConnectionStatus);
+
+    // Listen for connection changes (if supported)
+    if ((navigator as any).connection) {
+      (navigator as any).connection.addEventListener('change', updateConnectionStatus);
     }
 
+    // Periodic check
+    const interval = setInterval(updateConnectionStatus, 30000); // Check every 30 seconds
+
+    return () => {
+      window.removeEventListener('online', updateConnectionStatus);
+      window.removeEventListener('offline', updateConnectionStatus);
+      if ((navigator as any).connection) {
+        (navigator as any).connection.removeEventListener('change', updateConnectionStatus);
+      }
+      clearInterval(interval);
+    };
+  }, []);
+
+  const getStatusConfig = () => {
     switch (status) {
-      case 'connected':
+      case 'online':
         return {
           color: 'bg-green-500',
-          text: 'Connected',
+          text: 'Online',
           icon: '🟢',
-          description: 'Connected to game server'
+          pulse: false
         };
-      case 'connecting':
+      case 'slow':
         return {
           color: 'bg-yellow-500',
-          text: 'Connecting...',
+          text: 'Slow',
           icon: '🟡',
-          description: 'Connecting to game server'
-        };
-      case 'reconnecting':
-        return {
-          color: 'bg-orange-500',
-          text: `Reconnecting... (${state.value.reconnectAttempts})`,
-          icon: '🔄',
-          description: 'Attempting to reconnect'
+          pulse: true
         };
       case 'offline':
         return {
-          color: 'bg-gray-500',
-          text: 'Offline',
-          icon: '📡',
-          description: 'No internet connection'
-        };
-      case 'disconnected':
-      default:
-        return {
           color: 'bg-red-500',
-          text: 'Disconnected',
+          text: 'Offline',
           icon: '🔴',
-          description: state.value.error || 'Disconnected from server'
+          pulse: true
         };
     }
   };
@@ -77,49 +92,92 @@ export default function ConnectionStatus({
         return {
           dot: 'w-2 h-2',
           text: 'text-xs',
-          container: 'space-x-1'
+          container: 'gap-1'
+        };
+      case 'md':
+        return {
+          dot: 'w-3 h-3',
+          text: 'text-sm',
+          container: 'gap-2'
         };
       case 'lg':
         return {
           dot: 'w-4 h-4',
           text: 'text-base',
-          container: 'space-x-3'
-        };
-      case 'md':
-      default:
-        return {
-          dot: 'w-3 h-3',
-          text: 'text-sm',
-          container: 'space-x-2'
+          container: 'gap-2'
         };
     }
   };
 
-  const statusConfig = getStatusConfig();
+  const config = getStatusConfig();
   const sizeClasses = getSizeClasses();
 
   return (
-    <div 
-      class={`flex items-center ${sizeClasses.container} ${className}`}
-      title={statusConfig.description}
-    >
-      <div class={`${sizeClasses.dot} rounded-full ${statusConfig.color} ${
-        state.value.status === 'connecting' || state.value.status === 'reconnecting' 
-          ? 'animate-pulse' 
-          : ''
-      }`}></div>
-      
+    <div class={`flex items-center ${sizeClasses.container} ${className}`}>
+      <div 
+        class={`
+          ${sizeClasses.dot} 
+          ${config.color} 
+          rounded-full 
+          ${config.pulse ? 'animate-pulse' : ''}
+        `}
+        title={`Connection: ${config.text}`}
+      />
       {showText && (
         <span class={`${sizeClasses.text} text-gray-600 font-medium`}>
-          {statusConfig.text}
-        </span>
-      )}
-      
-      {state.value.error && size === 'lg' && (
-        <span class="text-xs text-red-600 ml-2">
-          {state.value.error}
+          {config.text}
         </span>
       )}
     </div>
   );
+}
+
+// Hook for connection status
+export function useConnectionStatus() {
+  const [status, setStatus] = useState<'online' | 'offline' | 'slow'>('online');
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const updateStatus = () => {
+      const online = navigator.onLine;
+      setIsOnline(online);
+      
+      if (!online) {
+        setStatus('offline');
+        return;
+      }
+
+      // Check connection quality if available
+      const connection = (navigator as any).connection;
+      if (connection) {
+        const { effectiveType, downlink } = connection;
+        if (effectiveType === 'slow-2g' || effectiveType === '2g' || downlink < 0.5) {
+          setStatus('slow');
+        } else {
+          setStatus('online');
+        }
+      } else {
+        setStatus('online');
+      }
+    };
+
+    updateStatus();
+
+    window.addEventListener('online', updateStatus);
+    window.addEventListener('offline', updateStatus);
+
+    if ((navigator as any).connection) {
+      (navigator as any).connection.addEventListener('change', updateStatus);
+    }
+
+    return () => {
+      window.removeEventListener('online', updateStatus);
+      window.removeEventListener('offline', updateStatus);
+      if ((navigator as any).connection) {
+        (navigator as any).connection.removeEventListener('change', updateStatus);
+      }
+    };
+  }, []);
+
+  return { status, isOnline };
 }

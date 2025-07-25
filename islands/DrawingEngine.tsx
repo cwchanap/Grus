@@ -7,6 +7,7 @@ import {
   DrawingCommandBuffer,
   validateDrawingCommand 
 } from "../lib/drawing-utils.ts";
+import MobileDrawingTools from "../components/MobileDrawingTools.tsx";
 
 export interface DrawingEngineProps {
   isDrawer: boolean;
@@ -132,26 +133,207 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   }, [isDrawer, disabled]);
 
   const setupDrawingEvents = (app: PIXI.Application, container: PIXI.Container) => {
+    // Enhanced mobile touch support
+    let lastTouchTime = 0;
+    let touchStartPoint: { x: number; y: number } | null = null;
+    
+    // Prevent default touch behaviors to avoid scrolling/zooming while drawing
+    const preventDefaultTouch = (e: TouchEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+    };
+
+    // Enhanced pointer down with mobile optimizations
     const onPointerDown = (event: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled) return;
       
+      // Prevent default touch behavior
+      if (event.nativeEvent) {
+        event.nativeEvent.preventDefault();
+        event.nativeEvent.stopPropagation();
+      }
+      
       const point = event.global;
+      touchStartPoint = { x: point.x, y: point.y };
+      lastTouchTime = Date.now();
+      
       startDrawing(point.x, point.y);
     };
 
+    // Enhanced pointer move with mobile optimizations
     const onPointerMove = (event: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled || !isDrawingRef.current) return;
       
+      // Prevent default touch behavior
+      if (event.nativeEvent) {
+        event.nativeEvent.preventDefault();
+        event.nativeEvent.stopPropagation();
+      }
+      
       const point = event.global;
+      
+      // Mobile optimization: throttle move events for better performance
+      const now = Date.now();
+      if (now - lastTouchTime < 16) return; // ~60fps throttling
+      lastTouchTime = now;
+      
       continueDrawing(point.x, point.y);
     };
 
-    const onPointerUp = () => {
+    // Enhanced pointer up with mobile optimizations
+    const onPointerUp = (event?: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled) return;
       
+      // Prevent default touch behavior
+      if (event?.nativeEvent) {
+        event.nativeEvent.preventDefault();
+        event.nativeEvent.stopPropagation();
+      }
+      
+      // Mobile optimization: detect tap vs draw
+      if (touchStartPoint && event) {
+        const point = event.global;
+        const distance = Math.sqrt(
+          Math.pow(point.x - touchStartPoint.x, 2) + 
+          Math.pow(point.y - touchStartPoint.y, 2)
+        );
+        
+        // If it's a very short tap (< 5px movement), treat as a dot
+        if (distance < 5) {
+          // Create a small dot at the touch point
+          const dotCommand: DrawingCommand = {
+            type: 'start',
+            x: touchStartPoint.x,
+            y: touchStartPoint.y,
+            color: currentTool.color,
+            size: Math.max(currentTool.size, 3), // Minimum size for visibility
+            timestamp: Date.now(),
+          };
+          
+          if (validateDrawingCommand(dotCommand)) {
+            setDrawingHistory(prev => [...prev, dotCommand]);
+            if (throttlerRef.current) {
+              throttlerRef.current.throttle(dotCommand, onDrawingCommand);
+            } else {
+              onDrawingCommand(dotCommand);
+            }
+          }
+        }
+      }
+      
+      touchStartPoint = null;
       endDrawing();
     };
 
+    // Mobile-specific touch event handlers
+    const onTouchStart = (e: TouchEvent) => {
+      if (!isDrawer || disabled) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Handle multi-touch gestures
+      if (e.touches.length > 1) {
+        // Multi-touch detected - could implement zoom/pan here
+        return;
+      }
+      
+      const touch = e.touches[0];
+      const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+      const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
+      const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
+      
+      touchStartPoint = { x, y };
+      lastTouchTime = Date.now();
+      startDrawing(x, y);
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (!isDrawer || disabled || !isDrawingRef.current) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      if (e.touches.length > 1) return; // Ignore multi-touch
+      
+      const now = Date.now();
+      if (now - lastTouchTime < 16) return; // Throttle for performance
+      lastTouchTime = now;
+      
+      const touch = e.touches[0];
+      const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+      const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
+      const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
+      
+      continueDrawing(x, y);
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (!isDrawer || disabled) return;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      
+      // Handle tap vs draw detection
+      if (touchStartPoint && e.changedTouches.length > 0) {
+        const touch = e.changedTouches[0];
+        const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+        const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
+        const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
+        
+        const distance = Math.sqrt(
+          Math.pow(x - touchStartPoint.x, 2) + 
+          Math.pow(y - touchStartPoint.y, 2)
+        );
+        
+        // Create dot for short taps
+        if (distance < 5) {
+          const dotCommand: DrawingCommand = {
+            type: 'start',
+            x: touchStartPoint.x,
+            y: touchStartPoint.y,
+            color: currentTool.color,
+            size: Math.max(currentTool.size, 3),
+            timestamp: Date.now(),
+          };
+          
+          if (validateDrawingCommand(dotCommand)) {
+            setDrawingHistory(prev => [...prev, dotCommand]);
+            if (throttlerRef.current) {
+              throttlerRef.current.throttle(dotCommand, onDrawingCommand);
+            } else {
+              onDrawingCommand(dotCommand);
+            }
+          }
+        }
+      }
+      
+      touchStartPoint = null;
+      endDrawing();
+    };
+
+    // Add enhanced touch event prevention to canvas
+    const canvas = app.canvas;
+    if (canvas) {
+      // Standard touch events with enhanced mobile support
+      canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+      canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+      canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+      canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+      
+      // Prevent context menu on long press
+      canvas.addEventListener('contextmenu', preventDefaultTouch, { passive: false });
+      
+      // Prevent selection
+      canvas.style.userSelect = 'none';
+      canvas.style.webkitUserSelect = 'none';
+      canvas.style.webkitTouchCallout = 'none';
+      
+      // Optimize for touch
+      canvas.style.touchAction = 'none';
+    }
+
+    // Standard pointer events (fallback for non-touch devices)
     app.stage.on('pointerdown', onPointerDown);
     app.stage.on('pointermove', onPointerMove);
     app.stage.on('pointerup', onPointerUp);
@@ -159,6 +341,14 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   };
 
   const removeDrawingEvents = (app: PIXI.Application) => {
+    // Remove touch event prevention from canvas
+    const canvas = app.canvas;
+    if (canvas) {
+      canvas.removeEventListener('touchstart', () => {});
+      canvas.removeEventListener('touchmove', () => {});
+      canvas.removeEventListener('touchend', () => {});
+    }
+
     app.stage.off('pointerdown');
     app.stage.off('pointermove');
     app.stage.off('pointerup');
@@ -400,65 +590,30 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     <div class="drawing-engine">
       {/* Drawing Tools */}
       {isDrawer && !disabled && (
-        <div class="drawing-tools mb-4 p-4 bg-gray-100 rounded-lg">
-          <div class="flex items-center gap-4 flex-wrap">
-            {/* Color Picker */}
-            <div class="flex items-center gap-2">
-              <label class="text-sm font-medium">Color:</label>
-              <input
-                type="color"
-                value={currentTool.color}
-                onChange={(e) => setCurrentTool(prev => ({ 
-                  ...prev, 
-                  color: (e.target as HTMLInputElement).value 
-                }))}
-                class="w-8 h-8 rounded border cursor-pointer"
-              />
-            </div>
-
-            {/* Brush Size */}
-            <div class="flex items-center gap-2">
-              <label class="text-sm font-medium">Size:</label>
-              <input
-                type="range"
-                min="1"
-                max="20"
-                value={currentTool.size}
-                onChange={(e) => setCurrentTool(prev => ({ 
-                  ...prev, 
-                  size: parseInt((e.target as HTMLInputElement).value) 
-                }))}
-                class="w-20"
-              />
-              <span class="text-sm w-6">{currentTool.size}</span>
-            </div>
-
-            {/* Action Buttons */}
-            <div class="flex gap-2">
-              <button
-                onClick={clearCanvas}
-                class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm"
-              >
-                Clear
-              </button>
-              <button
-                onClick={undo}
-                disabled={undoStack.length === 0}
-                class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 text-sm"
-              >
-                Undo
-              </button>
-            </div>
-          </div>
+        <div class="drawing-tools mb-4">
+          <MobileDrawingTools
+            currentTool={currentTool}
+            onToolChange={setCurrentTool}
+            onClear={clearCanvas}
+            onUndo={undo}
+            canUndo={undoStack.length > 0}
+            disabled={disabled}
+          />
         </div>
       )}
 
       {/* Canvas */}
-      <div class="drawing-canvas border-2 border-gray-300 rounded-lg overflow-hidden">
+      <div class="drawing-canvas border-2 border-gray-300 rounded-lg overflow-hidden bg-white">
         <canvas
           ref={canvasRef}
-          class={`block ${!isDrawer || disabled ? 'cursor-not-allowed' : 'cursor-crosshair'}`}
-          style={{ touchAction: 'none' }}
+          class={`block w-full h-auto max-w-full ${
+            !isDrawer || disabled ? 'cursor-not-allowed' : 'cursor-crosshair'
+          }`}
+          style={{ 
+            touchAction: 'none',
+            maxWidth: '100%',
+            height: 'auto'
+          }}
         />
       </div>
 

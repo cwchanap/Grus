@@ -184,36 +184,42 @@ export default function Scoreboard({
 
   return (
     <div class={`scoreboard ${className}`}>
-      {/* Header with connection status */}
-      <div class="scoreboard-header mb-4">
+      {/* Header with connection status - Mobile responsive */}
+      <div class="scoreboard-header mb-3 sm:mb-4">
         <div class="flex justify-between items-center mb-2">
-          <h3 class="text-lg font-semibold text-gray-800">Scoreboard</h3>
-          <div class="flex items-center space-x-2">
+          <h3 class="text-base sm:text-lg font-semibold text-gray-800">Scoreboard</h3>
+          <div class="flex items-center space-x-1 sm:space-x-2">
             <div class={`w-2 h-2 rounded-full ${
               connectionStatus.value === 'connected' ? 'bg-green-500' : 
               connectionStatus.value === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
             }`}></div>
             <span class="text-xs text-gray-500">
-              {connectionStatus.value === 'connected' ? 'Live' : 
-               connectionStatus.value === 'connecting' ? 'Connecting...' : 'Offline'}
+              <span class="hidden sm:inline">
+                {connectionStatus.value === 'connected' ? 'Live' : 
+                 connectionStatus.value === 'connecting' ? 'Connecting...' : 'Offline'}
+              </span>
+              <span class="sm:hidden">
+                {connectionStatus.value === 'connected' ? '●' : 
+                 connectionStatus.value === 'connecting' ? '○' : '×'}
+              </span>
             </span>
           </div>
         </div>
       </div>
 
-      {/* Game Status */}
-      <div class="game-status mb-4 p-3 rounded-lg border">
-        <div class={`text-sm font-medium px-2 py-1 rounded-full inline-block mb-2 ${getPhaseColor()}`}>
+      {/* Game Status - Mobile responsive */}
+      <div class="game-status mb-3 sm:mb-4 p-2 sm:p-3 rounded-lg border">
+        <div class={`text-xs sm:text-sm font-medium px-2 py-1 rounded-full inline-block mb-2 ${getPhaseColor()}`}>
           {getPhaseText()}
         </div>
         
         {/* Round and Timer */}
-        <div class="flex justify-between items-center text-sm text-gray-600">
+        <div class="flex justify-between items-center text-xs sm:text-sm text-gray-600">
           <span>Round {localGameState.roundNumber}</span>
           {localGameState.phase === 'drawing' && (
-            <div class="flex items-center space-x-2">
+            <div class="flex items-center space-x-1 sm:space-x-2">
               <span class="text-xs">⏱️</span>
-              <span class="font-mono font-medium">
+              <span class="font-mono font-medium text-xs sm:text-sm">
                 {formatTime(localGameState.timeRemaining)}
               </span>
             </div>
@@ -222,10 +228,12 @@ export default function Scoreboard({
 
         {/* Current Drawer */}
         {currentDrawer && localGameState.phase === 'drawing' && (
-          <div class="mt-2 text-sm">
-            <span class="text-gray-600">Current drawer: </span>
+          <div class="mt-2 text-xs sm:text-sm">
+            <span class="text-gray-600 hidden sm:inline">Current drawer: </span>
+            <span class="text-gray-600 sm:hidden">Drawing: </span>
             <span class="font-medium text-blue-600">
-              {currentDrawer.id === playerId ? 'You' : currentDrawer.name}
+              {currentDrawer.id === playerId ? 'You' : 
+               (currentDrawer.name.length > 10 ? `${currentDrawer.name.slice(0, 10)}...` : currentDrawer.name)}
               {currentDrawer.isHost && ' 👑'}
             </span>
           </div>
@@ -235,27 +243,27 @@ export default function Scoreboard({
         {localGameState.currentWord && localGameState.currentDrawer === playerId && localGameState.phase === 'drawing' && (
           <div class="mt-2 p-2 bg-blue-100 rounded border-l-4 border-blue-500">
             <div class="text-xs text-blue-700 font-medium">Your word:</div>
-            <div class="text-lg font-bold text-blue-800">{localGameState.currentWord}</div>
+            <div class="text-base sm:text-lg font-bold text-blue-800">{localGameState.currentWord}</div>
           </div>
         )}
       </div>
 
-      {/* Player Scores */}
+      {/* Player Scores - Mobile responsive */}
       <div class="player-scores">
-        <h4 class="text-sm font-medium text-gray-700 mb-3">Players & Scores</h4>
-        <div class="space-y-2">
+        <h4 class="text-xs sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">Players & Scores</h4>
+        <div class="space-y-1 sm:space-y-2">
           {sortedPlayers.map((player, index) => (
             <div
               key={player.id}
-              class={`flex items-center justify-between p-3 rounded-lg border transition-colors ${
+              class={`flex items-center justify-between p-2 sm:p-3 rounded-lg border transition-colors ${
                 player.id === playerId 
                   ? 'bg-blue-50 border-blue-200' 
                   : 'bg-white border-gray-200 hover:bg-gray-50'
               }`}
             >
-              <div class="flex items-center space-x-3">
+              <div class="flex items-center space-x-2 sm:space-x-3 min-w-0 flex-1">
                 {/* Rank */}
-                <div class={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
+                <div class={`w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
                   index === 0 ? 'bg-yellow-400 text-yellow-900' :
                   index === 1 ? 'bg-gray-300 text-gray-700' :
                   index === 2 ? 'bg-orange-300 text-orange-800' :
@@ -265,17 +273,21 @@ export default function Scoreboard({
                 </div>
 
                 {/* Player Info */}
-                <div class="flex flex-col">
-                  <div class="flex items-center space-x-2">
-                    <span class={`font-medium ${
+                <div class="flex flex-col min-w-0 flex-1">
+                  <div class="flex items-center space-x-1 sm:space-x-2">
+                    <span class={`font-medium text-xs sm:text-sm truncate ${
                       player.id === playerId ? 'text-blue-800' : 'text-gray-800'
                     }`}>
-                      {player.name}
-                      {player.id === playerId && ' (You)'}
+                      {player.name.length > 12 ? `${player.name.slice(0, 12)}...` : player.name}
+                      {player.id === playerId && (
+                        <span class="hidden xs:inline"> (You)</span>
+                        <span class="xs:hidden"> (You)</span>
+                      )}
                     </span>
-                    {player.isHost && <span class="text-xs">👑</span>}
+                    {player.isHost && <span class="text-xs flex-shrink-0">👑</span>}
                     {player.id === localGameState.currentDrawer && localGameState.phase === 'drawing' && (
-                      <span class="text-xs bg-blue-100 text-blue-700 px-1 rounded">Drawing</span>
+                      <span class="text-xs bg-blue-100 text-blue-700 px-1 rounded flex-shrink-0 hidden sm:inline">Drawing</span>
+                      <span class="text-xs bg-blue-100 text-blue-700 px-1 rounded flex-shrink-0 sm:hidden">🎨</span>
                     )}
                   </div>
                   
@@ -284,33 +296,35 @@ export default function Scoreboard({
                     <div class={`w-1.5 h-1.5 rounded-full ${
                       player.isConnected ? 'bg-green-500' : 'bg-red-500'
                     }`}></div>
-                    <span class={player.isConnected ? 'text-green-600' : 'text-red-600'}>
-                      {player.isConnected ? 'Online' : 'Offline'}
+                    <span class={`${player.isConnected ? 'text-green-600' : 'text-red-600'}`}>
+                      <span class="hidden sm:inline">{player.isConnected ? 'Online' : 'Offline'}</span>
+                      <span class="sm:hidden">{player.isConnected ? '●' : '○'}</span>
                     </span>
                   </div>
                 </div>
               </div>
 
               {/* Score */}
-              <div class="text-right">
-                <div class="text-lg font-bold text-gray-800">
+              <div class="text-right flex-shrink-0">
+                <div class="text-sm sm:text-lg font-bold text-gray-800">
                   {player.score}
                 </div>
-                <div class="text-xs text-gray-500">points</div>
+                <div class="text-xs text-gray-500 hidden sm:block">points</div>
+                <div class="text-xs text-gray-500 sm:hidden">pts</div>
               </div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Game Controls (for host) */}
+      {/* Game Controls (for host) - Mobile responsive */}
       {localGameState.players.find(p => p.id === playerId)?.isHost && (
-        <div class="game-controls mt-4 p-3 bg-gray-50 rounded-lg border">
-          <h4 class="text-sm font-medium text-gray-700 mb-2">Host Controls</h4>
+        <div class="game-controls mt-3 sm:mt-4 p-2 sm:p-3 bg-gray-50 rounded-lg border">
+          <h4 class="text-xs sm:text-sm font-medium text-gray-700 mb-2">Host Controls</h4>
           <div class="flex flex-col space-y-2">
             {localGameState.phase === 'waiting' && (
               <button
-                class="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-sm font-medium"
+                class="px-3 py-2 sm:py-3 bg-green-600 text-white rounded hover:bg-green-700 active:bg-green-800 transition-colors text-sm font-medium touch-manipulation no-tap-highlight"
                 disabled={connectionStatus.value !== 'connected' || sortedPlayers.length < 2}
               >
                 Start Game
@@ -319,7 +333,7 @@ export default function Scoreboard({
             
             {localGameState.phase === 'drawing' && (
               <button
-                class="px-3 py-2 bg-orange-600 text-white rounded hover:bg-orange-700 transition-colors text-sm font-medium"
+                class="px-3 py-2 sm:py-3 bg-orange-600 text-white rounded hover:bg-orange-700 active:bg-orange-800 transition-colors text-sm font-medium touch-manipulation no-tap-highlight"
                 disabled={connectionStatus.value !== 'connected'}
               >
                 End Round
@@ -328,7 +342,7 @@ export default function Scoreboard({
 
             {localGameState.phase === 'results' && (
               <button
-                class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm font-medium"
+                class="px-3 py-2 sm:py-3 bg-blue-600 text-white rounded hover:bg-blue-700 active:bg-blue-800 transition-colors text-sm font-medium touch-manipulation no-tap-highlight"
                 disabled={connectionStatus.value !== 'connected'}
               >
                 Next Round
@@ -337,7 +351,7 @@ export default function Scoreboard({
           </div>
           
           {sortedPlayers.length < 2 && localGameState.phase === 'waiting' && (
-            <div class="text-xs text-gray-500 mt-2">
+            <div class="text-xs text-gray-500 mt-2 text-center">
               Need at least 2 players to start
             </div>
           )}
