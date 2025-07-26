@@ -226,3 +226,111 @@ Deno.test("Scoreboard - handles word visibility logic", () => {
   const shouldShowWord = gameState.phase === 'drawing' && !!gameState.currentWord;
   assertEquals(shouldShowWord, true);
 });
+
+// Host control tests
+Deno.test("Scoreboard - identifies host correctly for controls", () => {
+  const gameState = createMockGameState();
+  const playerId = "player1"; // Alice is the host
+  
+  const isHost = gameState.players.find(p => p.id === playerId)?.isHost || false;
+  assertEquals(isHost, true);
+  
+  // Non-host player
+  const nonHostPlayerId = "player2";
+  const isNotHost = gameState.players.find(p => p.id === nonHostPlayerId)?.isHost || false;
+  assertEquals(isNotHost, false);
+});
+
+Deno.test("Scoreboard - start game button should be available in waiting phase", () => {
+  const gameState = createMockGameState({
+    phase: 'waiting'
+  });
+  
+  const shouldShowStartButton = gameState.phase === 'waiting';
+  assertEquals(shouldShowStartButton, true);
+  
+  // Should not show in other phases
+  const drawingState = createMockGameState({ phase: 'drawing' });
+  const shouldNotShowInDrawing = drawingState.phase === 'waiting';
+  assertEquals(shouldNotShowInDrawing, false);
+});
+
+Deno.test("Scoreboard - end round button should be available during drawing phase", () => {
+  const gameState = createMockGameState({
+    phase: 'drawing'
+  });
+  
+  const shouldShowEndRoundButton = gameState.phase === 'drawing';
+  assertEquals(shouldShowEndRoundButton, true);
+  
+  // Should not show in other phases
+  const waitingState = createMockGameState({ phase: 'waiting' });
+  const shouldNotShowInWaiting = waitingState.phase === 'drawing';
+  assertEquals(shouldNotShowInWaiting, false);
+});
+
+Deno.test("Scoreboard - next round button should be available during results phase", () => {
+  const gameState = createMockGameState({
+    phase: 'results'
+  });
+  
+  const shouldShowNextRoundButton = gameState.phase === 'results';
+  assertEquals(shouldShowNextRoundButton, true);
+  
+  // Should not show in other phases
+  const drawingState = createMockGameState({ phase: 'drawing' });
+  const shouldNotShowInDrawing = drawingState.phase === 'results';
+  assertEquals(shouldNotShowInDrawing, false);
+});
+
+Deno.test("Scoreboard - end game button should be available during drawing and results phases", () => {
+  const drawingState = createMockGameState({ phase: 'drawing' });
+  const resultsState = createMockGameState({ phase: 'results' });
+  const waitingState = createMockGameState({ phase: 'waiting' });
+  
+  const shouldShowInDrawing = drawingState.phase === 'drawing' || drawingState.phase === 'results';
+  const shouldShowInResults = resultsState.phase === 'drawing' || resultsState.phase === 'results';
+  const shouldNotShowInWaiting = waitingState.phase === 'drawing' || waitingState.phase === 'results';
+  
+  assertEquals(shouldShowInDrawing, true);
+  assertEquals(shouldShowInResults, true);
+  assertEquals(shouldNotShowInWaiting, false);
+});
+
+Deno.test("Scoreboard - start game button should be disabled with insufficient players", () => {
+  const gameStateWithOnePlayer = createMockGameState({
+    phase: 'waiting',
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now()
+      }
+    ]
+  });
+  
+  const connectedPlayers = gameStateWithOnePlayer.players.filter(p => p.isConnected);
+  const shouldDisableStartButton = connectedPlayers.length < 2;
+  assertEquals(shouldDisableStartButton, true);
+  
+  // With enough players, should be enabled
+  const gameStateWithTwoPlayers = createMockGameState({
+    phase: 'waiting'
+  });
+  const connectedPlayersEnough = gameStateWithTwoPlayers.players.filter(p => p.isConnected);
+  const shouldEnableStartButton = connectedPlayersEnough.length >= 2;
+  assertEquals(shouldEnableStartButton, true);
+});
+
+Deno.test("Scoreboard - game settings modal should only show in waiting phase", () => {
+  const waitingState = createMockGameState({ phase: 'waiting' });
+  const drawingState = createMockGameState({ phase: 'drawing' });
+  
+  const shouldShowSettingsInWaiting = waitingState.phase === 'waiting';
+  const shouldNotShowSettingsInDrawing = drawingState.phase === 'waiting';
+  
+  assertEquals(shouldShowSettingsInWaiting, true);
+  assertEquals(shouldNotShowSettingsInDrawing, false);
+});

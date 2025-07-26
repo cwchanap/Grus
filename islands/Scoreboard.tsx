@@ -2,6 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import type { GameState, PlayerState } from "../types/game.ts";
 import type { JSX } from "preact";
+import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
 interface ScoreboardProps {
   roomId: string;
@@ -23,6 +24,12 @@ export default function Scoreboard({
   className = ""
 }: ScoreboardProps) {
   const [localGameState, setLocalGameState] = useState<GameState>(gameState);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
+  const [gameSettings, setGameSettings] = useState<GameSettings>({
+    maxRounds: 5,
+    roundTimeMinutes: 1,
+    roundTimeSeconds: 30
+  });
 
   // Update local state when props change
   useEffect(() => {
@@ -183,7 +190,178 @@ export default function Scoreboard({
   const sortedPlayers = getSortedPlayers();
   const currentDrawer = getCurrentDrawer();
 
+  // Check if current player is host
+  const isHost = localGameState.players.find(p => p.id === playerId)?.isHost || false;
+
+  // Send WebSocket message
+  const sendGameControlMessage = (type: 'start-game' | 'next-round' | 'end-game', data: any = {}) => {
+    const ws = wsConnection.value;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type,
+        roomId,
+        playerId,
+        data
+      }));
+    }
+  };
+
+  // Handle start game
+  const handleStartGame = () => {
+    sendGameControlMessage('start-game');
+  };
+
+  // Handle next round
+  const handleNextRound = () => {
+    sendGameControlMessage('next-round');
+  };
+
+  // Handle end game
+  const handleEndGame = () => {
+    sendGameControlMessage('end-game');
+  };
+
+  // Handle settings save
+  const handleSettingsSave = (newSettings: GameSettings) => {
+    setGameSettings(newSettings);
+    // In a real implementation, you might want to send these settings to the server
+    // For now, they're just stored locally for display purposes
+  };
+
   return (
-    <div>Scoreboard temporarily disabled for testing</div>
+    <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+      {/* Connection Status */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold text-gray-800">Scoreboard</h2>
+        <div className="flex items-center space-x-2">
+          <div className={`w-2 h-2 rounded-full ${
+            connectionStatus.value === 'connected' ? 'bg-green-500' : 
+            connectionStatus.value === 'connecting' ? 'bg-yellow-500' : 'bg-red-500'
+          }`}></div>
+          <span className="text-xs text-gray-600 capitalize">
+            {connectionStatus.value}
+          </span>
+        </div>
+      </div>
+
+      {/* Game Status */}
+      <div className="mb-4">
+        <div className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPhaseColor()}`}>
+          {getPhaseText()}
+        </div>
+        {localGameState.phase === 'drawing' && (
+          <div className="mt-2 text-sm text-gray-600">
+            Time: {formatTime(localGameState.timeRemaining)}
+          </div>
+        )}
+        <div className="text-sm text-gray-600 mt-1">
+          Round {localGameState.roundNumber}
+        </div>
+      </div>
+
+      {/* Current Drawer */}
+      {currentDrawer && localGameState.phase === 'drawing' && (
+        <div className="mb-4 p-2 bg-blue-50 rounded-lg">
+          <div className="text-sm font-medium text-blue-800">
+            {currentDrawer.name} is drawing
+          </div>
+        </div>
+      )}
+
+      {/* Player Scores */}
+      <div className="space-y-2 mb-4">
+        <h3 className="text-sm font-medium text-gray-700">Players</h3>
+        {sortedPlayers.map((player, index) => (
+          <div key={player.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
+              <span className="text-sm font-medium text-gray-800">{player.name}</span>
+              {player.isHost && (
+                <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">Host</span>
+              )}
+              {player.id === localGameState.currentDrawer && (
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">Drawing</span>
+              )}
+              <div className={`w-2 h-2 rounded-full ${
+                player.isConnected ? 'bg-green-500' : 'bg-gray-400'
+              }`}></div>
+            </div>
+            <span className="text-sm font-semibold text-gray-800">{player.score} pts</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Host Controls */}
+      {isHost && (
+        <div className="border-t pt-4">
+          <h3 className="text-sm font-medium text-gray-700 mb-3">Host Controls</h3>
+          
+          {/* Start Game Button */}
+          {localGameState.phase === 'waiting' && (
+            <button
+              onClick={handleStartGame}
+              className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
+              disabled={sortedPlayers.filter(p => p.isConnected).length < 2}
+            >
+              Start Game
+            </button>
+          )}
+
+          {/* End Round Button (during drawing phase) */}
+          {localGameState.phase === 'drawing' && (
+            <button
+              onClick={handleNextRound}
+              className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
+            >
+              End Round Early
+            </button>
+          )}
+
+          {/* Next Round Button (during results phase) */}
+          {localGameState.phase === 'results' && (
+            <button
+              onClick={handleNextRound}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
+            >
+              Start Next Round
+            </button>
+          )}
+
+          {/* End Game Button */}
+          {(localGameState.phase === 'drawing' || localGameState.phase === 'results') && (
+            <button
+              onClick={handleEndGame}
+              className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+            >
+              End Game
+            </button>
+          )}
+
+          {/* Game Settings Button */}
+          {localGameState.phase === 'waiting' && (
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
+            >
+              Game Settings
+            </button>
+          )}
+
+          {/* Game Settings Info */}
+          <div className="mt-3 text-xs text-gray-500">
+            <div>Max Rounds: {gameSettings.maxRounds}</div>
+            <div>Round Time: {gameSettings.roundTimeMinutes}:{gameSettings.roundTimeSeconds.toString().padStart(2, '0')}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Game Settings Modal */}
+      <GameSettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+        onSave={handleSettingsSave}
+        currentSettings={gameSettings}
+      />
+    </div>
   );
 }

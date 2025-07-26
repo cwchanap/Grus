@@ -225,7 +225,7 @@
   - _Requirements: 1.2, 1.5_
 
 -
-  25. [ ] Implement host game control UI elements
+  25. [x] Implement host game control UI elements
   - Add functional start game button in Scoreboard component
   - Implement end round button for hosts during drawing phase
   - Create next round button for hosts in results phase
