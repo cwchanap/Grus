@@ -144,7 +144,7 @@ export class DatabaseService {
   async getPlayersByRoom(roomId: string): Promise<DatabaseResult<Player[]>> {
     return this.executeQuery(async () => {
       const stmt = this.db.prepare("SELECT * FROM players WHERE room_id = ? ORDER BY joined_at");
-      const result = await stmt.all<Player>();
+      const result = await stmt.bind(roomId).all<Player>();
       return result.results || [];
     }, `Failed to get players for room: ${roomId}`);
   }

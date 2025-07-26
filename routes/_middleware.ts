@@ -86,13 +86,33 @@ class MockD1PreparedStatement {
       
       // Handle UPDATE operations
       if (this.query.includes('UPDATE')) {
-        if (this.query.includes('players') && this.query.includes('room_id')) {
-          const playerId = this.params[this.params.length - 1]; // Last param is usually the ID
-          const roomId = this.params[0]; // First param is usually the new room_id
+        if (this.query.includes('players')) {
+          const playerId = this.params[this.params.length - 1]; // Last param is the WHERE id
           const players = this.data.get('players') || [];
           const player = players.find(p => p.id === playerId);
           if (player) {
-            player.room_id = roomId;
+            console.log('Mock DB: Updating player:', playerId, 'with query:', this.query, 'params:', this.params);
+            
+            // Parse the SET clause to understand what fields are being updated
+            const setClause = this.query.match(/SET\s+(.+?)\s+WHERE/i)?.[1] || '';
+            const fields = setClause.split(',').map(f => f.trim().split('=')[0].trim());
+            
+            // Update fields based on the parsed SET clause
+            fields.forEach((field, index) => {
+              const value = this.params[index];
+              if (field === 'roomId' || field === 'room_id') {
+                player.room_id = value;
+                console.log('Mock DB: Updated player room_id:', playerId, 'to room:', value);
+              } else if (field === 'isHost' || field === 'is_host') {
+                player.is_host = value;
+                console.log('Mock DB: Updated player is_host:', playerId, 'to:', value);
+              } else if (field === 'name') {
+                player.name = value;
+                console.log('Mock DB: Updated player name:', playerId, 'to:', value);
+              }
+            });
+          } else {
+            console.log('Mock DB: Player not found for update:', playerId);
           }
         }
       }
@@ -258,6 +278,9 @@ class MockD1PreparedStatement {
             // Players by room
             const roomId = this.params[0];
             const filteredPlayers = players.filter(p => p.room_id === roomId);
+            console.log('Mock DB: Finding players for room:', roomId);
+            console.log('Mock DB: All players:', players.map(p => ({ id: p.id, name: p.name, room_id: p.room_id, is_host: p.is_host })));
+            console.log('Mock DB: Filtered players:', filteredPlayers.map(p => ({ id: p.id, name: p.name, room_id: p.room_id, is_host: p.is_host })));
             results = filteredPlayers.map(player => ({
               id: player.id,
               name: player.name,
