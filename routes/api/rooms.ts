@@ -87,9 +87,13 @@ export const handler: Handlers = {
         });
       }
 
-      // Broadcast lobby update
-      const wsManager = getWebSocketManager(env);
-      await wsManager.broadcastLobbyUpdate();
+      // Broadcast lobby update (ignore errors in development)
+      try {
+        const wsManager = getWebSocketManager(env);
+        await wsManager.broadcastLobbyUpdate();
+      } catch (error) {
+        console.warn("Failed to broadcast lobby update (this is normal in development):", error);
+      }
 
       return new Response(JSON.stringify({ 
         roomId: result.data?.roomId,

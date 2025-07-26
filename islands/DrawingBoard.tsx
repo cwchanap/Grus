@@ -291,8 +291,8 @@ export default function DrawingBoard({
         isDrawer={isDrawer}
         onDrawingCommand={handleDrawingCommand}
         onDrawingCommands={handleDrawingCommands}
-        width={responsive ? Math.min(width, window.innerWidth - 40) : width}
-        height={responsive ? Math.min(height, window.innerHeight * 0.6) : height}
+        width={responsive ? Math.min(width, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 40) : width}
+        height={responsive ? Math.min(height, (typeof window !== 'undefined' ? window.innerHeight : 720) * 0.6) : height}
         disabled={isDrawingDisabled}
       />
 
