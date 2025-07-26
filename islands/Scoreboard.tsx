@@ -30,11 +30,85 @@ export default function Scoreboard({
     roundTimeMinutes: 1,
     roundTimeSeconds: 30
   });
+  const [phaseTransition, setPhaseTransition] = useState<string | null>(null);
+  const [previousRound, setPreviousRound] = useState<number>(gameState.roundNumber);
+  const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
+  const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
 
-  // Update local state when props change
+  // Update local state when props change and detect transitions
   useEffect(() => {
+    // Detect round transitions
+    if (gameState.roundNumber !== previousRound) {
+      setPhaseTransition(`Round ${gameState.roundNumber} starting!`);
+      setPreviousRound(gameState.roundNumber);
+      
+      // Clear transition message after 3 seconds
+      setTimeout(() => setPhaseTransition(null), 3000);
+    }
+    
+    // Detect phase transitions
+    if (gameState.phase !== localGameState.phase) {
+      let transitionMessage = '';
+      switch (gameState.phase) {
+        case 'drawing':
+          transitionMessage = 'Drawing phase started!';
+          break;
+        case 'guessing':
+          transitionMessage = 'Guessing time!';
+          break;
+        case 'results':
+          transitionMessage = 'Round complete!';
+          break;
+        case 'waiting':
+          transitionMessage = 'Waiting for next round...';
+          break;
+      }
+      
+      if (transitionMessage && localGameState.phase !== 'waiting') {
+        setPhaseTransition(transitionMessage);
+        setTimeout(() => setPhaseTransition(null), 2500);
+      }
+    }
+    
     setLocalGameState(gameState);
-  }, [gameState]);
+    setClientTimeRemaining(gameState.timeRemaining);
+    setLastServerUpdate(Date.now());
+  }, [gameState, localGameState.phase, previousRound]);
+
+  // Client-side timer countdown for smooth updates
+  useEffect(() => {
+    if (localGameState.phase !== 'drawing' && localGameState.phase !== 'guessing') {
+      return;
+    }
+
+    let hasPlayedWarning = false;
+    let hasPlayedCritical = false;
+
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const elapsed = now - lastServerUpdate;
+      const newTime = Math.max(0, localGameState.timeRemaining - elapsed);
+      const seconds = Math.floor(newTime / 1000);
+      
+      // Play notification sounds at specific thresholds
+      if (seconds === 30 && !hasPlayedWarning) {
+        playNotificationSound('warning');
+        hasPlayedWarning = true;
+      } else if (seconds === 10 && !hasPlayedCritical) {
+        playNotificationSound('critical');
+        hasPlayedCritical = true;
+      }
+      
+      setClientTimeRemaining(newTime);
+      
+      // Stop countdown when time reaches 0
+      if (newTime <= 0) {
+        clearInterval(interval);
+      }
+    }, 100); // Update every 100ms for smooth countdown
+
+    return () => clearInterval(interval);
+  }, [localGameState.phase, localGameState.timeRemaining, lastServerUpdate]);
 
   // WebSocket connection management
   useEffect(() => {
@@ -94,6 +168,17 @@ export default function Scoreboard({
                   [scoredPlayerId]: newScore
                 }
               }));
+            } else if (message.type === 'timer-sync') {
+              // Handle timer synchronization
+              const { timeRemaining, serverTimestamp } = message.data;
+              const clientTimestamp = Date.now();
+              const latency = clientTimestamp - serverTimestamp;
+              const adjustedTime = Math.max(0, timeRemaining - latency);
+              
+              setLocalGameState(prev => ({
+                ...prev,
+                timeRemaining: adjustedTime
+              }));
             }
           } catch (error) {
             console.error('Error parsing scoreboard message:', error);
@@ -148,6 +233,54 @@ export default function Scoreboard({
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Get timer warning state
+  const getTimerWarningState = (timeRemaining: number): 'normal' | 'warning' | 'critical' => {
+    const seconds = Math.floor(timeRemaining / 1000);
+    if (seconds <= 10) return 'critical';
+    if (seconds <= 30) return 'warning';
+    return 'normal';
+  };
+
+  // Get timer color classes
+  const getTimerColorClasses = (warningState: 'normal' | 'warning' | 'critical'): string => {
+    switch (warningState) {
+      case 'critical': return 'text-red-600 bg-red-100 border-red-300 animate-pulse';
+      case 'warning': return 'text-orange-600 bg-orange-100 border-orange-300';
+      case 'normal': return 'text-blue-600 bg-blue-100 border-blue-300';
+    }
+  };
+
+  // Calculate round progress percentage
+  const getRoundProgress = (): number => {
+    if (!gameSettings.maxRounds) return 0;
+    return Math.min((localGameState.roundNumber / gameSettings.maxRounds) * 100, 100);
+  };
+
+  // Play notification sound (optional)
+  const playNotificationSound = (type: 'warning' | 'critical') => {
+    try {
+      // Create a simple beep sound using Web Audio API
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      
+      oscillator.frequency.value = type === 'critical' ? 800 : 600;
+      oscillator.type = 'sine';
+      
+      gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.2);
+      
+      oscillator.start(audioContext.currentTime);
+      oscillator.stop(audioContext.currentTime + 0.2);
+    } catch (error) {
+      // Silently fail if audio is not supported
+      console.log('Audio notification not supported');
+    }
   };
 
   // Get sorted players by score
@@ -230,6 +363,13 @@ export default function Scoreboard({
 
   return (
     <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+      {/* Phase Transition Notification */}
+      {phaseTransition && (
+        <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition">
+          {phaseTransition}
+        </div>
+      )}
+
       {/* Connection Status */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-gray-800">Scoreboard</h2>
@@ -249,13 +389,61 @@ export default function Scoreboard({
         <div className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPhaseColor()}`}>
           {getPhaseText()}
         </div>
-        {localGameState.phase === 'drawing' && (
-          <div className="mt-2 text-sm text-gray-600">
-            Time: {formatTime(localGameState.timeRemaining)}
+        
+        {/* Enhanced Timer Display */}
+        {(localGameState.phase === 'drawing' || localGameState.phase === 'guessing') && (
+          <div className="mt-3">
+            <div className={`inline-flex items-center px-4 py-2 rounded-lg border-2 font-mono text-lg font-bold ${
+              getTimerColorClasses(getTimerWarningState(clientTimeRemaining))
+            } ${getTimerWarningState(clientTimeRemaining) === 'critical' ? 'timer-pulse' : ''}`}>
+              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              {formatTime(clientTimeRemaining)}
+            </div>
+            {getTimerWarningState(clientTimeRemaining) === 'critical' && (
+              <div className="text-xs text-red-600 mt-1 font-medium animate-pulse">
+                Time's almost up!
+              </div>
+            )}
+            {getTimerWarningState(clientTimeRemaining) === 'warning' && (
+              <div className="text-xs text-orange-600 mt-1 font-medium">
+                Hurry up!
+              </div>
+            )}
+            
+            {/* Timer Progress Bar */}
+            <div className="mt-2 w-full bg-gray-200 rounded-full h-1">
+              <div 
+                className={`h-1 rounded-full transition-all duration-100 ${
+                  getTimerWarningState(clientTimeRemaining) === 'critical' ? 'bg-red-500' :
+                  getTimerWarningState(clientTimeRemaining) === 'warning' ? 'bg-orange-500' : 'bg-blue-500'
+                }`}
+                style={{ 
+                  width: `${Math.max(0, (clientTimeRemaining / (gameSettings.roundTimeMinutes * 60 * 1000 + gameSettings.roundTimeSeconds * 1000)) * 100)}%` 
+                }}
+              ></div>
+            </div>
           </div>
         )}
-        <div className="text-sm text-gray-600 mt-1">
-          Round {localGameState.roundNumber}
+        
+        {/* Round Progress */}
+        <div className="mt-3">
+          <div className="flex items-center justify-between text-sm text-gray-600 mb-1">
+            <span>Round Progress</span>
+            <span>{localGameState.roundNumber} / {gameSettings.maxRounds}</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-blue-600 h-2 rounded-full round-progress-fill"
+              style={{ width: `${getRoundProgress()}%` }}
+            ></div>
+          </div>
+          {localGameState.roundNumber === gameSettings.maxRounds && (
+            <div className="text-xs text-orange-600 mt-1 font-medium">
+              Final round!
+            </div>
+          )}
         </div>
       </div>
 

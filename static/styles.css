@@ -82,12 +82,53 @@
     outline-offset: 2px;
   }
   
+  /* Timer and game progress animations */
+  .timer-pulse {
+    animation: timer-pulse 1s ease-in-out infinite;
+  }
+  
+  .round-progress-fill {
+    transition: width 0.5s ease-out;
+  }
+  
+  .phase-transition {
+    animation: phase-transition 0.5s ease-out;
+  }
+  
+  @keyframes timer-pulse {
+    0%, 100% {
+      transform: scale(1);
+      opacity: 1;
+    }
+    50% {
+      transform: scale(1.05);
+      opacity: 0.9;
+    }
+  }
+  
+  @keyframes phase-transition {
+    0% {
+      transform: translateY(-10px);
+      opacity: 0;
+    }
+    100% {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+  
   /* Mobile-optimized animations */
   @media (prefers-reduced-motion: reduce) {
     .animate-bounce,
     .animate-pulse,
-    .animate-spin {
+    .animate-spin,
+    .timer-pulse,
+    .phase-transition {
       animation: none;
+    }
+    
+    .round-progress-fill {
+      transition: none;
     }
   }
   
