@@ -37,27 +37,7 @@ export const handler: Handlers = {
         });
       }
 
-      // Validate that the room exists
       const roomManager = new RoomManager(env.DB);
-      const roomSummary = await roomManager.getRoomSummary(roomId);
-      
-      if (!roomSummary.success || !roomSummary.data) {
-        return new Response(JSON.stringify({ error: "Room not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
-      // Validate that the player is in the room
-      const playerInRoom = roomSummary.data.players.find(p => p.id === playerId);
-      if (!playerInRoom) {
-        return new Response(JSON.stringify({ error: "Player not found in room" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
-      // Remove player from room
       const result = await roomManager.leaveRoom(playerId);
 
       if (!result.success) {
@@ -67,33 +47,31 @@ export const handler: Handlers = {
         });
       }
 
-      // Get WebSocket manager and broadcast updates
+      // Broadcast lobby update and room update
       const wsManager = getWebSocketManager(env);
-      
-      // Broadcast room update to remaining players in the room
-      try {
+      await wsManager.broadcastLobbyUpdate();
+
+      // If there was a host transfer, broadcast room update
+      if (result.data?.newHostId) {
         await wsManager.broadcastToRoomPublic(roomId, {
           type: "room-update",
           roomId,
           data: {
-            type: "player-left",
-            playerId,
-            playerName: playerInRoom.name,
-            wasHost: result.data?.wasHost || false,
-            newHostId: result.data?.newHostId
+            type: "host-transferred",
+            newHostId: result.data.newHostId,
+            leftPlayerId: playerId
           }
         });
-      } catch (error) {
-        console.error("Error broadcasting player left:", error);
-        // Don't fail the request if broadcast fails
-      }
-
-      // Broadcast lobby update for room list changes
-      try {
-        await wsManager.broadcastLobbyUpdate();
-      } catch (error) {
-        console.error("Error broadcasting lobby update:", error);
-        // Don't fail the request if broadcast fails
+      } else {
+        // Broadcast player left
+        await wsManager.broadcastToRoomPublic(roomId, {
+          type: "room-update", 
+          roomId,
+          data: {
+            type: "player-left",
+            playerId
+          }
+        });
       }
 
       return new Response(JSON.stringify({ 

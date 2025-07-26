@@ -12,7 +12,7 @@ export class WebSocketHandler {
   private playerRooms: Map<string, string> = new Map(); // playerId -> roomId
   private roomConnections: Map<string, Set<string>> = new Map(); // roomId -> Set<playerId>
   private rateLimits: Map<string, { messages: number; drawing: number; lastReset: number }> = new Map();
-  private roundTimers: Map<string, NodeJS.Timeout> = new Map(); // roomId -> timer
+  private roundTimers: Map<string, number> = new Map(); // roomId -> timer
 
   constructor(env: Env) {
     this.env = env;

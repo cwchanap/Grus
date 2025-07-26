@@ -23,6 +23,7 @@ import * as $DrawingBoard from "./islands/DrawingBoard.tsx";
 import * as $DrawingEngine from "./islands/DrawingEngine.tsx";
 import * as $GameLobby from "./islands/GameLobby.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
+import * as $LeaveRoomButton from "./islands/LeaveRoomButton.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
 import type { Manifest } from "$fresh/server.ts";
 
@@ -51,6 +52,7 @@ const manifest = {
     "./islands/DrawingEngine.tsx": $DrawingEngine,
     "./islands/GameLobby.tsx": $GameLobby,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
+    "./islands/LeaveRoomButton.tsx": $LeaveRoomButton,
     "./islands/Scoreboard.tsx": $Scoreboard,
   },
   baseUrl: import.meta.url,

@@ -1,0 +1,102 @@
+import { useState } from "preact/hooks";
+
+interface LeaveRoomButtonProps {
+  roomId: string;
+  playerId: string;
+  className?: string;
+  children?: any;
+}
+
+export default function LeaveRoomButton({ 
+  roomId, 
+  playerId, 
+  className = "",
+  children 
+}: LeaveRoomButtonProps) {
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLeaveRoom = async () => {
+    if (isLeaving || !playerId) return;
+
+    setIsLeaving(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`/api/rooms/${roomId}/leave`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ playerId }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to leave room');
+      }
+
+      // Successfully left room - redirect to lobby
+      window.location.href = '/';
+    } catch (error) {
+      console.error('Error leaving room:', error);
+      setError(error instanceof Error ? error.message : 'Failed to leave room');
+      setIsLeaving(false);
+    }
+  };
+
+  const handleClick = (e: Event) => {
+    e.preventDefault();
+    
+    // Show confirmation dialog for better UX
+    const confirmed = confirm('Are you sure you want to leave this room?');
+    if (confirmed) {
+      handleLeaveRoom();
+    }
+  };
+
+  return (
+    <>
+      <button
+        onClick={handleClick}
+        disabled={isLeaving}
+        class={`${className} ${isLeaving ? 'opacity-50 cursor-not-allowed' : ''}`}
+        title={error || (isLeaving ? 'Leaving room...' : 'Leave room')}
+      >
+        {isLeaving ? (
+          <>
+            <span class="xs:hidden">Leaving...</span>
+            <span class="hidden xs:inline">← Leaving...</span>
+          </>
+        ) : (
+          children || (
+            <>
+              <span class="xs:hidden">← Lobby</span>
+              <span class="hidden xs:inline">← Back to Lobby</span>
+            </>
+          )
+        )}
+      </button>
+      
+      {/* Error message */}
+      {error && (
+        <div class="fixed top-4 right-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded z-50 max-w-sm">
+          <div class="flex items-center">
+            <span class="text-red-500 mr-2">⚠️</span>
+            <div>
+              <strong class="font-bold">Error:</strong>
+              <span class="block sm:inline"> {error}</span>
+            </div>
+            <button
+              onClick={() => setError(null)}
+              class="ml-2 text-red-500 hover:text-red-700"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}

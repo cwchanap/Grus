@@ -26,7 +26,6 @@ export default function App({ Component }: PageProps) {
       </head>
       <body>
         <Component />
-        <ErrorNotifications />
       </body>
     </html>
   );

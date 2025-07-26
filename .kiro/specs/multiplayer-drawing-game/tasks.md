@@ -216,7 +216,7 @@
   - _Requirements: 2.1, 2.2, 6.1_
 
 -
-  24. [ ] Create missing API route for leaving rooms
+  24. [x] Create missing API route for leaving rooms
   - Implement POST /api/rooms/[id]/leave endpoint
   - Add proper error handling and validation
   - Update WebSocket manager to handle player leaving

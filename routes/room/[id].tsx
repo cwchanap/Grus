@@ -6,6 +6,7 @@ import type { GameState } from "../../types/game.ts";
 import ChatRoom from "../../islands/ChatRoom.tsx";
 import DrawingBoard from "../../islands/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
+import LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -121,13 +122,14 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 <span>{room.playerCount}/{room.room.maxPlayers} players</span>
               </p>
             </div>
-            <a
-              href="/"
-              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+            <LeaveRoomButton
+              roomId={room.room.id}
+              playerId={playerId || ''}
+              className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
             >
               <span class="xs:hidden">← Lobby</span>
               <span class="hidden xs:inline">← Back to Lobby</span>
-            </a>
+            </LeaveRoomButton>
           </div>
         </div>
 
