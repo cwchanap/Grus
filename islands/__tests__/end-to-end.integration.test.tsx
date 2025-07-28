@@ -126,6 +126,8 @@ function createMockGameState(overrides: Partial<GameState> = {}): GameState {
       "player3": 0
     },
     drawingData: [],
+    correctGuesses: [],
+    chatMessages: [],
     ...overrides
   };
 }

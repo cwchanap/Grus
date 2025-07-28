@@ -81,14 +81,17 @@ const mockEnv: Env = {
           phase: "drawing",
           players: [],
           scores: {},
-          drawingData: []
+          drawingData: [],
+          correctGuesses: [],
+          chatMessages: []
         });
       }
       if (key.startsWith("player:")) {
+        const playerId = key.split(":")[1];
         return JSON.stringify({
-          id: "player1",
-          name: "Test Player",
-          isHost: true,
+          id: playerId,
+          name: playerId === "player1" ? "Test Player 1" : "Test Player 2",
+          isHost: playerId === "player1",
           isConnected: true,
           lastActivity: Date.now()
         });
@@ -457,12 +460,12 @@ Deno.test({
     const chatMessage: ClientMessage = {
       type: "chat",
       roomId: "test-room",
-      playerId: "player1",
+      playerId: "player2", // Different from currentDrawer (player1)
       data: { text: "test" } // This matches the mock game state's currentWord
     };
 
     ws.simulateMessage(JSON.stringify(chatMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise(resolve => setTimeout(resolve, 2100)); // Wait for the 2 second delay in correct guess handling
     
     const messages = ws.getSentMessages();
     const hasChatMessage = messages.some(msg => {

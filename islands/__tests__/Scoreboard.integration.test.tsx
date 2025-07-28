@@ -31,6 +31,8 @@ const createMockGameState = (overrides: Partial<GameState> = {}): GameState => (
     "player2": 50
   },
   drawingData: [],
+  correctGuesses: [],
+  chatMessages: [],
   ...overrides
 });
 

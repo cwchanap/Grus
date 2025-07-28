@@ -89,6 +89,7 @@ function ChatRoomComponent({
       playerName,
       message,
       timestamp: Date.now(),
+      isGuess: false,
       isCorrect: false
     };
 

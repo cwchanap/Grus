@@ -3,11 +3,10 @@ import "../../types/websocket.ts";
 import { Env } from "../../types/cloudflare.ts";
 import { ClientMessage, ServerMessage, GameState, PlayerState } from "../../types/game.ts";
 import { getConfig, validateChatMessage, validatePlayerName } from "../config.ts";
-import { GameStateManager } from "../game-state-manager.ts";
+
 
 export class WebSocketHandler {
   private env: Env;
-  private gameStateManager: GameStateManager;
   private connections: Map<string, WebSocket> = new Map();
   private playerRooms: Map<string, string> = new Map(); // playerId -> roomId
   private roomConnections: Map<string, Set<string>> = new Map(); // roomId -> Set<playerId>
@@ -16,10 +15,9 @@ export class WebSocketHandler {
 
   constructor(env: Env) {
     this.env = env;
-    this.gameStateManager = new GameStateManager(env.DB, env.GAME_STATE);
   }
 
-  async handleWebSocketUpgrade(request: Request): Promise<Response> {
+  handleWebSocketUpgrade(request: Request): Response {
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
@@ -114,13 +112,18 @@ export class WebSocketHandler {
     }
   }
 
-  private validateClientMessage(message: any): message is ClientMessage {
+  private validateClientMessage(message: unknown): message is ClientMessage {
     return (
+      message !== null &&
       typeof message === "object" &&
-      typeof message.type === "string" &&
-      typeof message.roomId === "string" &&
-      typeof message.playerId === "string" &&
-      message.data !== undefined
+      "type" in message &&
+      "roomId" in message &&
+      "playerId" in message &&
+      "data" in message &&
+      typeof (message as any).type === "string" &&
+      typeof (message as any).roomId === "string" &&
+      typeof (message as any).playerId === "string" &&
+      (message as any).data !== undefined
     );
   }
 
@@ -266,12 +269,35 @@ export class WebSocketHandler {
       chatMessage.isCorrect = true;
       
       try {
-        // Process correct guess and update scores
-        const updatedGameState = await this.gameStateManager.processCorrectGuess(
-          roomId, 
-          playerId, 
-          Date.now()
-        );
+        // Update game state for correct guess
+        gameState.phase = 'results';
+        if (!gameState.correctGuesses) {
+          gameState.correctGuesses = [];
+        }
+        gameState.correctGuesses.push({
+          playerId,
+          timestamp: Date.now()
+        });
+        
+        // Update scores
+        const basePoints = 100;
+        const timeBonus = Math.floor((gameState.timeRemaining / 1000) * 2);
+        const totalPoints = basePoints + timeBonus;
+        
+        if (!gameState.scores[playerId]) {
+          gameState.scores[playerId] = 0;
+        }
+        gameState.scores[playerId] += totalPoints;
+        
+        // Award points to drawer too
+        if (gameState.currentDrawer && !gameState.scores[gameState.currentDrawer]) {
+          gameState.scores[gameState.currentDrawer] = 0;
+        }
+        if (gameState.currentDrawer) {
+          gameState.scores[gameState.currentDrawer] += 50; // Drawer bonus
+        }
+        
+        await this.updateGameState(roomId, gameState);
 
         // Clear round timer since round is ending
         this.clearRoundTimer(roomId);
@@ -285,8 +311,8 @@ export class WebSocketHandler {
             playerId,
             playerName: playerState.name,
             word: gameState.currentWord,
-            scores: updatedGameState.scores,
-            gameState: updatedGameState
+            scores: gameState.scores,
+            gameState: gameState
           }
         });
 
@@ -300,7 +326,11 @@ export class WebSocketHandler {
         // Auto-advance to results phase after a short delay
         setTimeout(async () => {
           try {
-            const finalRoundState = await this.gameStateManager.endRound(roomId);
+            const currentGameState = await this.getGameState(roomId);
+            if (!currentGameState) return;
+            
+            currentGameState.phase = 'results';
+            await this.updateGameState(roomId, currentGameState);
             
             await this.broadcastToRoom(roomId, {
               type: "game-state",
@@ -308,19 +338,19 @@ export class WebSocketHandler {
               data: {
                 type: "round-ended",
                 reason: "correct-guess",
-                gameState: finalRoundState,
-                scores: finalRoundState.scores
+                gameState: currentGameState,
+                scores: currentGameState.scores
               }
             });
 
             // Check if game is complete
-            if (finalRoundState.roundNumber >= 5) { // Assuming 5 rounds max
+            if (currentGameState.roundNumber >= 5) { // Assuming 5 rounds max
               await this.broadcastToRoom(roomId, {
                 type: "game-state",
                 roomId,
                 data: {
                   type: "game-completed",
-                  finalScores: finalRoundState.scores
+                  finalScores: currentGameState.scores
                 }
               });
             }
@@ -383,9 +413,9 @@ export class WebSocketHandler {
     }, playerId);
   }
 
-  private async handleGuessMessage(ws: WebSocket, message: ClientMessage) {
+  private async handleGuessMessage(_ws: WebSocket, message: ClientMessage) {
     // This is handled in chat message for now
-    await this.handleChatMessage(ws, message);
+    await this.handleChatMessage(_ws, message);
   }
 
   private async handleStartGame(ws: WebSocket, message: ClientMessage) {
@@ -399,21 +429,57 @@ export class WebSocketHandler {
     }
 
     try {
-      // Initialize or get game state
-      let gameState = await this.gameStateManager.getGameState(roomId);
+      // Get or initialize game state
+      let gameState = await this.getGameState(roomId);
       if (!gameState) {
-        gameState = await this.gameStateManager.initializeGameState(roomId, playerId);
+        // Initialize new game state
+        const roomConnections = this.roomConnections.get(roomId);
+        if (!roomConnections || roomConnections.size < 2) {
+          this.sendError(ws, "Need at least 2 players to start game");
+          return;
+        }
+
+        const playerIds = Array.from(roomConnections);
+        const players: PlayerState[] = [];
+        
+        for (const pid of playerIds) {
+          const playerState = await this.getPlayerState(pid);
+          if (playerState) {
+            players.push(playerState);
+          }
+        }
+
+        gameState = {
+          roomId,
+          phase: 'drawing',
+          roundNumber: 1,
+          currentDrawer: playerIds[0],
+          currentWord: this.getRandomWord(),
+          timeRemaining: 90000, // 90 seconds
+          players,
+          scores: {},
+          drawingData: [],
+          correctGuesses: [],
+          chatMessages: []
+        };
+      }
+
+      if (!gameState) {
+        this.sendError(ws, "Failed to initialize game state");
+        return;
       }
 
       // Check if game can be started
-      const activePlayers = gameState.players.filter(p => p.isConnected);
+      const activePlayers = gameState.players.filter((p: PlayerState) => p.isConnected);
       if (activePlayers.length < 2) {
         this.sendError(ws, "Need at least 2 players to start game");
         return;
       }
 
       // Start the game
-      const updatedGameState = await this.gameStateManager.startGame(roomId);
+      gameState.phase = 'drawing';
+      gameState.timeRemaining = 90000;
+      await this.updateGameState(roomId, gameState);
       
       // Start round timer
       this.startRoundTimer(roomId);
@@ -424,23 +490,23 @@ export class WebSocketHandler {
         roomId,
         data: {
           type: "game-started",
-          gameState: updatedGameState,
-          currentDrawer: updatedGameState.currentDrawer,
-          currentWord: updatedGameState.currentWord,
-          roundNumber: updatedGameState.roundNumber,
-          timeRemaining: updatedGameState.timeRemaining
+          gameState: gameState,
+          currentDrawer: gameState.currentDrawer,
+          currentWord: gameState.currentWord,
+          roundNumber: gameState.roundNumber,
+          timeRemaining: gameState.timeRemaining
         }
       });
 
       // Send word to drawer only
-      const drawerWs = this.connections.get(updatedGameState.currentDrawer);
+      const drawerWs = this.connections.get(gameState.currentDrawer);
       if (drawerWs) {
         this.sendMessage(drawerWs, {
           type: "game-state",
           roomId,
           data: {
             type: "drawing-word",
-            word: updatedGameState.currentWord
+            word: gameState.currentWord
           }
         });
       }
@@ -461,7 +527,7 @@ export class WebSocketHandler {
     }
 
     try {
-      const gameState = await this.gameStateManager.getGameState(roomId);
+      const gameState = await this.getGameState(roomId);
       if (!gameState) {
         this.sendError(ws, "Game not found");
         return;
@@ -474,7 +540,20 @@ export class WebSocketHandler {
       }
 
       // Start new round
-      const updatedGameState = await this.gameStateManager.startNewRound(gameState);
+      gameState.roundNumber += 1;
+      gameState.phase = 'drawing';
+      gameState.timeRemaining = 90000;
+      gameState.drawingData = [];
+      gameState.correctGuesses = [];
+      
+      // Get next drawer
+      const activePlayers = gameState.players.filter((p: PlayerState) => p.isConnected);
+      const currentDrawerIndex = activePlayers.findIndex((p: PlayerState) => p.id === gameState.currentDrawer);
+      const nextDrawerIndex = (currentDrawerIndex + 1) % activePlayers.length;
+      gameState.currentDrawer = activePlayers[nextDrawerIndex].id;
+      gameState.currentWord = this.getRandomWord();
+      
+      await this.updateGameState(roomId, gameState);
       
       // Clear existing timer and start new one
       this.clearRoundTimer(roomId);
@@ -486,22 +565,22 @@ export class WebSocketHandler {
         roomId,
         data: {
           type: "round-started",
-          gameState: updatedGameState,
-          currentDrawer: updatedGameState.currentDrawer,
-          roundNumber: updatedGameState.roundNumber,
-          timeRemaining: updatedGameState.timeRemaining
+          gameState: gameState,
+          currentDrawer: gameState.currentDrawer,
+          roundNumber: gameState.roundNumber,
+          timeRemaining: gameState.timeRemaining
         }
       });
 
       // Send word to new drawer
-      const drawerWs = this.connections.get(updatedGameState.currentDrawer);
+      const drawerWs = this.connections.get(gameState.currentDrawer);
       if (drawerWs) {
         this.sendMessage(drawerWs, {
           type: "game-state",
           roomId,
           data: {
             type: "drawing-word",
-            word: updatedGameState.currentWord
+            word: gameState.currentWord
           }
         });
       }
@@ -522,14 +601,15 @@ export class WebSocketHandler {
     }
 
     try {
-      const gameState = await this.gameStateManager.getGameState(roomId);
+      const gameState = await this.getGameState(roomId);
       if (!gameState) {
         this.sendError(ws, "Game not found");
         return;
       }
 
       // End the game
-      const finalGameState = await this.gameStateManager.endGame(gameState);
+      gameState.phase = 'finished';
+      await this.updateGameState(roomId, gameState);
       
       // Clear round timer
       this.clearRoundTimer(roomId);
@@ -540,8 +620,8 @@ export class WebSocketHandler {
         roomId,
         data: {
           type: "game-ended",
-          gameState: finalGameState,
-          finalScores: finalGameState.scores
+          gameState: gameState,
+          finalScores: gameState.scores
         }
       });
     } catch (error) {
@@ -550,16 +630,28 @@ export class WebSocketHandler {
     }
   }
 
-  private validateDrawingCommand(data: any): boolean {
+  private getRandomWord(): string {
+    const words = [
+      "cat", "dog", "house", "tree", "car", "sun", "moon", "star", "flower", "bird",
+      "fish", "book", "chair", "table", "phone", "computer", "pizza", "apple", "banana", "orange"
+    ];
+    return words[Math.floor(Math.random() * words.length)];
+  }
+
+  private validateDrawingCommand(data: unknown): boolean {
     return (
+      data !== null &&
       typeof data === "object" &&
-      typeof data.type === "string" &&
-      ["start", "move", "end", "clear"].includes(data.type) &&
-      (data.type === "clear" || (
-        typeof data.x === "number" &&
-        typeof data.y === "number" &&
-        data.x >= 0 && data.x <= 1920 && // Max canvas width
-        data.y >= 0 && data.y <= 1080   // Max canvas height
+      "type" in data &&
+      typeof (data as any).type === "string" &&
+      ["start", "move", "end", "clear"].includes((data as any).type) &&
+      ((data as any).type === "clear" || (
+        "x" in data &&
+        "y" in data &&
+        typeof (data as any).x === "number" &&
+        typeof (data as any).y === "number" &&
+        (data as any).x >= 0 && (data as any).x <= 1920 && // Max canvas width
+        (data as any).y >= 0 && (data as any).y <= 1080   // Max canvas height
       ))
     );
   }
@@ -742,8 +834,8 @@ export class WebSocketHandler {
   }
 
   // Public method to allow manager to broadcast to specific room
-  async broadcastToRoomPublic(roomId: string, message: any): Promise<void> {
-    await this.broadcastToRoom(roomId, message);
+  async broadcastToRoomPublic(_roomId: string, message: ServerMessage): Promise<void> {
+    await this.broadcastToRoom(_roomId, message);
   }
 
   private startRoundTimer(roomId: string) {
@@ -752,7 +844,7 @@ export class WebSocketHandler {
 
     const timer = setInterval(async () => {
       try {
-        const gameState = await this.gameStateManager.getGameState(roomId);
+        const gameState = await this.getGameState(roomId);
         if (!gameState || gameState.phase !== 'drawing') {
           this.clearRoundTimer(roomId);
           return;
@@ -799,7 +891,11 @@ export class WebSocketHandler {
     try {
       this.clearRoundTimer(roomId);
       
-      const updatedGameState = await this.gameStateManager.endRound(roomId);
+      const gameState = await this.getGameState(roomId);
+      if (!gameState) return;
+      
+      gameState.phase = 'results';
+      await this.updateGameState(roomId, gameState);
       
       // Broadcast round ended
       await this.broadcastToRoom(roomId, {
@@ -808,19 +904,19 @@ export class WebSocketHandler {
         data: {
           type: "round-ended",
           reason: "timeout",
-          gameState: updatedGameState,
-          scores: updatedGameState.scores
+          gameState: gameState,
+          scores: gameState.scores
         }
       });
 
       // If game is complete, broadcast final results
-      if (updatedGameState.phase === 'results' && updatedGameState.roundNumber >= 5) {
+      if (gameState.phase === 'results' && gameState.roundNumber >= 5) {
         await this.broadcastToRoom(roomId, {
           type: "game-state",
           roomId,
           data: {
             type: "game-completed",
-            finalScores: updatedGameState.scores
+            finalScores: gameState.scores
           }
         });
       }
@@ -830,7 +926,7 @@ export class WebSocketHandler {
   }
 
   // Cleanup method for graceful shutdown
-  async cleanup(): Promise<void> {
+  cleanup(): void {
     // Clear all round timers
     for (const [roomId, timer] of this.roundTimers.entries()) {
       clearInterval(timer);

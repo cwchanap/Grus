@@ -24,7 +24,9 @@ function createGameRoomScenario() {
     phase: 'drawing',
     players,
     scores: { player1: 0, player2: 0, player3: 0 },
-    drawingData: []
+    drawingData: [],
+    correctGuesses: [],
+    chatMessages: []
   };
   
   return { roomId, players, gameState };

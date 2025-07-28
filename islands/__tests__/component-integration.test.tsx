@@ -38,6 +38,8 @@ function createTestGameState(overrides: Partial<GameState> = {}): GameState {
       "player2": 0
     },
     drawingData: [],
+    correctGuesses: [],
+    chatMessages: [],
     ...overrides
   };
 }

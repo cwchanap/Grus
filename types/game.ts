@@ -6,10 +6,12 @@ export interface GameState {
   currentWord: string;
   roundNumber: number;
   timeRemaining: number;
-  phase: 'waiting' | 'drawing' | 'guessing' | 'results';
+  phase: 'waiting' | 'drawing' | 'guessing' | 'results' | 'finished';
   players: PlayerState[];
   scores: Record<string, number>;
   drawingData: DrawingCommand[];
+  correctGuesses: Array<{ playerId: string; timestamp: number }>;
+  chatMessages: ChatMessage[];
 }
 
 export interface Player {
