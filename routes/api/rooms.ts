@@ -1,37 +1,17 @@
 // API routes for room operations
 import { Handlers } from "$fresh/server.ts";
-import { RoomManager } from "../../lib/room-manager.ts";
-import { WebSocketManager } from "../../lib/websocket/websocket-manager.ts";
-import { Env } from "../../types/cloudflare.ts";
-
-// Global WebSocket manager instance
-let wsManager: WebSocketManager | null = null;
-
-function getWebSocketManager(env: Env): WebSocketManager {
-  if (!wsManager) {
-    wsManager = new WebSocketManager(env);
-  }
-  return wsManager;
-}
+import { getDatabaseService } from "../../lib/database-service.ts";
+import { getKVService } from "../../lib/kv-service.ts";
 
 export const handler: Handlers = {
   // GET /api/rooms - List active rooms
-  async GET(req, ctx) {
+  async GET(req, _ctx) {
     try {
-      const env = (ctx.state as any).env as Env;
-      if (!env?.DB) {
-        return new Response(JSON.stringify({ error: "Database not available" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
       const url = new URL(req.url);
       const limit = parseInt(url.searchParams.get("limit") || "20");
-      const offset = parseInt(url.searchParams.get("offset") || "0");
 
-      const roomManager = new RoomManager(env.DB);
-      const result = await roomManager.listRooms({ limit, offset });
+      const dbService = getDatabaseService();
+      const result = await dbService.getActiveRooms(limit);
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
@@ -53,16 +33,8 @@ export const handler: Handlers = {
   },
 
   // POST /api/rooms - Create a new room
-  async POST(req, ctx) {
+  async POST(req, _ctx) {
     try {
-      const env = (ctx.state as any).env as Env;
-      if (!env?.DB) {
-        return new Response(JSON.stringify({ error: "Database not available" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" }
-        });
-      }
-
       const body = await req.json();
       const { name, hostName, maxPlayers } = body;
 
@@ -73,31 +45,33 @@ export const handler: Handlers = {
         });
       }
 
-      const roomManager = new RoomManager(env.DB);
-      const result = await roomManager.createRoom({
-        name: name.trim(),
-        hostName: hostName.trim(),
-        maxPlayers: maxPlayers || 8
-      });
-
-      if (!result.success) {
-        return new Response(JSON.stringify({ error: result.error }), {
+      const dbService = getDatabaseService();
+      
+      // Create room
+      const roomResult = await dbService.createRoom(name.trim(), "system", maxPlayers || 8);
+      if (!roomResult.success) {
+        return new Response(JSON.stringify({ error: roomResult.error }), {
           status: 400,
           headers: { "Content-Type": "application/json" }
         });
       }
 
-      // Broadcast lobby update (ignore errors in development)
-      try {
-        const wsManager = getWebSocketManager(env);
-        await wsManager.broadcastLobbyUpdate();
-      } catch (error) {
-        console.warn("Failed to broadcast lobby update (this is normal in development):", error);
+      // Create host player
+      const playerResult = await dbService.createPlayer(hostName.trim(), roomResult.data!, true);
+      if (!playerResult.success) {
+        return new Response(JSON.stringify({ error: playerResult.error }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" }
+        });
       }
 
+      // Generate room code (simple implementation)
+      const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+
       return new Response(JSON.stringify({ 
-        roomId: result.data?.roomId,
-        playerId: result.data?.playerId
+        roomId: roomResult.data,
+        playerId: playerResult.data,
+        code: roomCode
       }), {
         status: 201,
         headers: { "Content-Type": "application/json" }

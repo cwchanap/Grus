@@ -1,4 +1,5 @@
-// Cloudflare Workers types for D1 and KV bindings
+// Cloudflare types for reference (not used with REST API approach)
+// These types are kept for compatibility with existing code that might reference them
 
 export interface Env {
   DB: D1Database;

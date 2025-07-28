@@ -11,25 +11,8 @@
     "test": "deno test --allow-all",
     "test:watch": "deno test --allow-all --watch",
     "test:coverage": "deno test --allow-all --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
-    "deploy": "deno run -A scripts/deploy.ts",
-    "deploy:dev": "deno run -A scripts/deploy.ts --dev",
-    "deploy:dry-run": "deno run -A scripts/deploy.ts --dry-run",
-    "setup:env": "deno run -A scripts/setup-environment.ts",
-    "setup:env:prod": "deno run -A scripts/setup-environment.ts --prod",
-    "setup:db": "deno run -A scripts/setup-db.ts",
-    "setup:db:prod": "deno run -A scripts/setup-db.ts --prod",
-    "setup:monitoring": "deno run -A scripts/monitoring-setup.ts",
-    "setup:monitoring:prod": "deno run -A scripts/monitoring-setup.ts --prod",
-    "setup:alerts": "deno run -A scripts/setup-alerts.ts",
-    "setup:alerts:prod": "deno run -A scripts/setup-alerts.ts --prod",
-    "pre-deploy": "deno run -A scripts/pre-deploy-checks.ts",
-    "health-check": "deno run -A scripts/health-check.ts",
-    "smoke-tests": "deno run -A scripts/smoke-tests.ts",
-    "smoke-tests:staging": "deno run -A scripts/smoke-tests.ts --env=staging",
-    "smoke-tests:prod": "deno run -A scripts/smoke-tests.ts --env=production",
-    "dev:worker": "wrangler dev",
-    "worker:tail": "wrangler tail",
-    "worker:rollback": "wrangler rollback"
+    "deploy": "bash scripts/deploy-deno.sh",
+    "health-check": "curl http://localhost:8000/api/health"
   },
   "lint": {
     "rules": {
@@ -58,12 +41,7 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "webworker"],
-
-    "strict": true,
-    "allowJs": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "strict": true
   },
   "nodeModulesDir": "auto"
 }

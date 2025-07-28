@@ -1,186 +1,200 @@
-# Multiplayer Drawing Game
+# 🎨 Grus - Multiplayer Drawing Game
 
-A real-time multiplayer drawing and guessing game built with Deno Fresh and deployed to Cloudflare Workers.
+A real-time multiplayer drawing and guessing game built with Fresh (Deno), featuring WebSocket communication, persistent game state, and responsive design.
 
-## Features
+## ✨ Features
 
-- Real-time multiplayer drawing with Pixi.js
-- WebSocket-based communication
-- Room-based gameplay
-- Scoring system based on guess timing
-- Cloudflare D1 database for persistence
-- Cloudflare KV for session storage
+- **Real-time multiplayer gameplay** with WebSocket communication
+- **Room-based sessions** supporting up to 8 players per room
+- **Drawing canvas** powered by Pixi.js for smooth drawing experience
+- **Scoring system** based on guess timing and accuracy
+- **Chat functionality** for guessing and communication
+- **Persistent game state** with room management and player tracking
+- **Mobile-optimized** interface with touch support
 
-## Tech Stack
+## 🛠️ Tech Stack
 
-- **Frontend**: Deno Fresh with TypeScript
+- **Runtime**: Deno with TypeScript
+- **Framework**: Fresh (Deno's full-stack web framework)
+- **Frontend**: Preact with JSX
+- **Styling**: Tailwind CSS
 - **Drawing Engine**: Pixi.js v8
 - **Real-time Communication**: WebSockets
-- **Database**: Cloudflare D1 (SQLite)
-- **Cache/Session**: Cloudflare KV
-- **Deployment**: Cloudflare Workers
+- **Database**: Cloudflare D1 (via REST API)
+- **Cache/Session Storage**: Cloudflare KV (via REST API)
+- **Deployment**: Deno Deploy
 
-## Setup
+## 🚀 Getting Started
 
 ### Prerequisites
 
-- [Deno](https://deno.land/) installed
-- [Node.js](https://nodejs.org/) for Wrangler CLI
-- Cloudflare account
+- [Deno](https://deno.land/) (v2.1+)
+- Cloudflare account with D1 and KV access
+- Cloudflare API token with appropriate permissions
 
 ### Installation
 
-1. Clone the repository
-2. Install Wrangler CLI:
-   ```bash
-   npm install -g wrangler
-   ```
+1. Clone the repository:
+```bash
+git clone <repository-url>
+cd grus
+```
 
-3. Login to Cloudflare:
-   ```bash
-   wrangler login
-   ```
+2. Set up environment variables:
+```bash
+cp .env.example .env
+# Edit .env with your Cloudflare credentials
+```
 
-4. Set up environment variables:
-   ```bash
-   cp .env.example .env
-   # Edit .env with your values
-   ```
-
-### Database Setup
-
-1. Create and set up the database:
-   ```bash
-   deno run -A scripts/setup-db.ts
-   ```
-
-2. For production database:
-   ```bash
-   deno run -A scripts/setup-db.ts --prod
-   ```
-
-3. Update `wrangler.toml` with your database IDs from:
-   ```bash
-   wrangler d1 list
-   ```
-
-### KV Namespace Setup
-
-1. Create KV namespaces:
-   ```bash
-   wrangler kv:namespace create "GAME_STATE"
-   wrangler kv:namespace create "GAME_STATE" --preview
-   ```
-
-2. Update `wrangler.toml` with the namespace IDs
+3. Install dependencies (Deno handles this automatically):
+```bash
+deno task check
+```
 
 ### Development
 
-1. Start the development server:
-   ```bash
-   deno task start
-   ```
-
-2. For Cloudflare Workers development:
-   ```bash
-   deno task dev:worker
-   ```
-
-### Deployment
-
-This project includes a comprehensive CI/CD pipeline with automated testing, security scanning, and deployment.
-
-#### Quick Deployment
+Start the development server:
 ```bash
-# Setup environment (first time only)
-deno task setup:env
-
-# Deploy to development
-deno task deploy:dev
-
-# Deploy to production
-deno task deploy
+deno task start
 ```
 
-#### CI/CD Pipeline Features
-- **Automated Testing**: Runs on every push and PR
-- **Security Scanning**: Daily vulnerability scans
-- **Performance Testing**: Weekly load testing
-- **Dependency Updates**: Automated weekly updates
-- **Staging Deployment**: Auto-deploy from `develop` branch
-- **Production Deployment**: Auto-deploy from `main` branch
-- **Rollback Support**: Automatic rollback on deployment failures
-- **Health Checks**: Post-deployment validation
-- **Monitoring**: Comprehensive alerting and dashboards
+The application will be available at `http://localhost:8000`.
 
-#### Manual Deployment Options
+### Environment Variables
+
+Required environment variables:
+
 ```bash
-# Run pre-deployment checks
-deno task pre-deploy
+# Cloudflare API Configuration
+CLOUDFLARE_ACCOUNT_ID=your-account-id-here
+CLOUDFLARE_API_TOKEN=your-api-token-here
 
-# Deploy with options
-deno run -A scripts/deploy.ts --dry-run    # Test deployment
-deno run -A scripts/deploy.ts --skip-tests # Skip tests (not recommended)
-deno run -A scripts/deploy.ts --dev        # Deploy to development
+# Cloudflare Resources (already created)
+DATABASE_ID=d616e1fe-17e6-4320-aba2-393a60167603
+KV_NAMESPACE_ID=bea0c6d861e7477fae40b0e9c126ed30
 ```
 
-See the [deployment guide](docs/deployment.md) for detailed instructions.
+## 🚀 Deployment
 
-## Project Structure
+### Deno Deploy (Recommended)
+
+1. Build the application:
+```bash
+deno task build
+```
+
+2. Deploy to Deno Deploy:
+```bash
+bash scripts/deploy-deno.sh
+```
+
+3. Set environment variables in the Deno Deploy dashboard:
+   - `CLOUDFLARE_ACCOUNT_ID`
+   - `CLOUDFLARE_API_TOKEN`
+   - `DATABASE_ID`
+   - `KV_NAMESPACE_ID`
+
+### Manual Deployment
+
+You can also deploy manually using `deployctl`:
+
+```bash
+deployctl deploy --project=grus-multiplayer-drawing-game ./main.ts
+```
+
+## 🏗️ Infrastructure
+
+The application uses existing Cloudflare resources:
+
+- **D1 Database**: `grus` (ID: `d616e1fe-17e6-4320-aba2-393a60167603`)
+- **KV Namespace**: `grus` (ID: `bea0c6d861e7477fae40b0e9c126ed30`)
+
+These resources are accessed via Cloudflare's REST API, not Workers bindings.
+
+## 📁 Project Structure
 
 ```
-├── components/          # Reusable UI components
-├── db/                 # Database schema and migrations
-├── islands/            # Fresh Islands (client-side components)
-├── lib/                # Utility libraries and services
-├── routes/             # Fresh routes
-├── scripts/            # Deployment and setup scripts
-├── static/             # Static assets
+├── components/          # Reusable UI components (server-side)
+├── islands/            # Fresh Islands (client-side interactive components)
+├── routes/             # Fresh file-based routing
+├── lib/                # Core business logic and utilities
+│   ├── cloudflare-api.ts    # Cloudflare REST API client
+│   ├── database-service.ts  # Database operations
+│   ├── kv-service.ts        # KV storage operations
+│   └── websocket/           # WebSocket handling
 ├── types/              # TypeScript type definitions
-├── fresh.config.ts     # Fresh configuration
-├── main.ts             # Application entry point
-├── wrangler.toml       # Cloudflare Workers configuration
-└── deno.json           # Deno configuration
+├── db/                 # Database schema and seeds
+├── static/             # Static assets
+└── scripts/            # Deployment scripts
 ```
 
-## Configuration
+## 🔧 API Endpoints
 
-The application uses environment-based configuration:
+- `GET /api/health` - Health check endpoint
+- `GET /api/rooms` - List active game rooms
+- `POST /api/rooms` - Create a new game room
+- `WebSocket /ws` - Real-time game communication
 
-- `lib/config.ts` - Main configuration file
-- `.env` - Environment variables
-- `wrangler.toml` - Cloudflare Workers configuration
+## 🎮 Game Flow
 
-## Available Scripts
+1. **Lobby**: Players can create or join game rooms
+2. **Room Setup**: Host configures game settings
+3. **Gameplay**: Players take turns drawing while others guess
+4. **Scoring**: Points awarded based on correct guesses and timing
+5. **Results**: Final scores and winner announcement
 
-### Development
-- `deno task start` - Start development server
-- `deno task build` - Build for production
-- `deno task test` - Run tests
-- `deno task test:watch` - Run tests in watch mode
-- `deno task check` - Run linting and type checking
+## 🧪 Testing
 
-### Deployment
-- `deno task deploy` - Deploy to production
-- `deno task deploy:dev` - Deploy to development
-- `deno task pre-deploy` - Run pre-deployment checks
-- `deno task smoke-tests` - Run smoke tests
-- `deno task health-check` - Check application health
+Run tests:
+```bash
+deno task test
+```
 
-### Setup
-- `deno task setup:env` - Setup environment
-- `deno task setup:db` - Setup database
-- `deno task setup:monitoring` - Setup monitoring
-- `deno task setup:alerts` - Setup alerting
+Run tests with coverage:
+```bash
+deno task test:coverage
+```
 
-### Monitoring
-- `deno task worker:tail` - View live logs
-- `deno task worker:rollback` - Rollback deployment
+## 🔍 Health Check
 
-## Environment Variables
+After deployment, verify the application is working:
 
-See `.env.example` for all available environment variables.
+```bash
+curl https://your-app.deno.dev/api/health
+```
 
-## License
+Expected response:
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-01T00:00:00.000Z",
+  "environment": "production",
+  "checks": {
+    "database": { "status": "ok", "latency": 123 },
+    "kv_storage": { "status": "ok", "latency": 45 },
+    "websocket": { "status": "ok" }
+  }
+}
+```
 
-MIT License
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and add tests
+4. Run tests: `deno task test`
+5. Commit your changes: `git commit -am 'Add feature'`
+6. Push to the branch: `git push origin feature-name`
+7. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🆘 Support
+
+For support, please open an issue on GitHub or contact the development team.
+
+---
+
+**Live Demo**: [https://grus-multiplayer-drawing-game.deno.dev](https://grus-multiplayer-drawing-game.deno.dev) (after deployment)

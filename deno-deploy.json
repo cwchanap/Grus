@@ -1,0 +1,24 @@
+{
+  "name": "grus-multiplayer-drawing-game",
+  "description": "A real-time multiplayer drawing and guessing game built with Fresh",
+  "entrypoint": "./main.ts",
+  "env": {
+    "ENVIRONMENT": "production",
+    "MAX_PLAYERS_PER_ROOM": "8",
+    "ROUND_TIME_LIMIT": "120",
+    "MAX_ROOMS": "10",
+    "RATE_LIMIT_MESSAGES": "30",
+    "RATE_LIMIT_DRAWING": "60",
+    "MAX_MESSAGE_LENGTH": "200",
+    "MAX_PLAYER_NAME_LENGTH": "20",
+    "MAX_CONNECTIONS": "100",
+    "HEARTBEAT_INTERVAL": "30000",
+    "CONNECTION_TIMEOUT": "60000"
+  },
+  "secrets": [
+    "CLOUDFLARE_ACCOUNT_ID",
+    "CLOUDFLARE_API_TOKEN",
+    "DATABASE_ID",
+    "KV_NAMESPACE_ID"
+  ]
+}

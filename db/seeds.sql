@@ -1,41 +1,38 @@
--- Database seed data for development and testing
+-- Seed data for development environment
+-- This file contains sample data for testing the multiplayer drawing game
 
--- Insert sample words for drawing prompts
-INSERT OR IGNORE INTO drawing_words (word, difficulty, category) VALUES
-  ('cat', 'easy', 'animals'),
-  ('dog', 'easy', 'animals'),
-  ('house', 'easy', 'objects'),
-  ('car', 'easy', 'objects'),
-  ('tree', 'easy', 'nature'),
-  ('sun', 'easy', 'nature'),
-  ('elephant', 'medium', 'animals'),
-  ('bicycle', 'medium', 'objects'),
-  ('mountain', 'medium', 'nature'),
-  ('airplane', 'medium', 'objects'),
-  ('butterfly', 'medium', 'animals'),
-  ('guitar', 'medium', 'objects'),
-  ('octopus', 'hard', 'animals'),
-  ('telescope', 'hard', 'objects'),
-  ('volcano', 'hard', 'nature'),
-  ('microscope', 'hard', 'objects'),
-  ('chameleon', 'hard', 'animals'),
-  ('lighthouse', 'hard', 'objects');
+-- Insert sample rooms
+INSERT OR IGNORE INTO rooms (id, name, host_id, max_players, is_active, created_at) VALUES
+('room_001', 'Test Room 1', 'player_001', 8, true, datetime('now', '-1 hour')),
+('room_002', 'Art Studio', 'player_002', 6, true, datetime('now', '-30 minutes')),
+('room_003', 'Quick Draw', 'player_003', 4, false, datetime('now', '-2 hours'));
 
--- Insert default game settings
-INSERT OR IGNORE INTO game_settings (key, value, description) VALUES
-  ('default_round_time', '60', 'Default time per round in seconds'),
-  ('max_players_per_room', '8', 'Maximum number of players allowed in a room'),
-  ('points_correct_guess', '100', 'Base points for a correct guess'),
-  ('points_time_bonus', '50', 'Maximum bonus points for fast guessing'),
-  ('min_players_to_start', '2', 'Minimum players required to start a game');
+-- Insert sample players
+INSERT OR IGNORE INTO players (id, name, room_id, is_host, joined_at) VALUES
+('player_001', 'Alice', 'room_001', true, datetime('now', '-1 hour')),
+('player_002', 'Bob', 'room_002', true, datetime('now', '-30 minutes')),
+('player_003', 'Charlie', 'room_003', true, datetime('now', '-2 hours')),
+('player_004', 'Diana', 'room_001', false, datetime('now', '-45 minutes')),
+('player_005', 'Eve', 'room_001', false, datetime('now', '-40 minutes')),
+('player_006', 'Frank', 'room_002', false, datetime('now', '-25 minutes'));
 
--- Create a test room for development (only in development environment)
--- This will be filtered out in production deployments
-INSERT OR IGNORE INTO rooms (id, name, host_id, max_players, is_active) VALUES
-  ('test-room-dev', 'Development Test Room', 'dev-host', 4, true);
+-- Insert sample game sessions
+INSERT OR IGNORE INTO game_sessions (id, room_id, winner_id, total_rounds, started_at, ended_at) VALUES
+('session_001', 'room_003', 'player_003', 3, datetime('now', '-2 hours'), datetime('now', '-1 hour 30 minutes')),
+('session_002', 'room_001', 'player_001', 5, datetime('now', '-1 hour'), NULL);
 
--- Create test players for development
-INSERT OR IGNORE INTO players (id, name, room_id, is_host) VALUES
-  ('dev-host', 'Dev Host', 'test-room-dev', true),
-  ('dev-player-1', 'Test Player 1', 'test-room-dev', false),
-  ('dev-player-2', 'Test Player 2', 'test-room-dev', false);
+-- Insert sample scores
+INSERT OR IGNORE INTO scores (id, session_id, player_id, points, correct_guesses) VALUES
+('score_001', 'session_001', 'player_003', 150, 2),
+('score_002', 'session_002', 'player_001', 200, 3),
+('score_003', 'session_002', 'player_004', 120, 2),
+('score_004', 'session_002', 'player_005', 80, 1);
+
+-- Verify seed data
+SELECT 'Rooms created:' as info, COUNT(*) as count FROM rooms
+UNION ALL
+SELECT 'Players created:', COUNT(*) FROM players
+UNION ALL
+SELECT 'Game sessions created:', COUNT(*) FROM game_sessions
+UNION ALL
+SELECT 'Scores created:', COUNT(*) FROM scores;

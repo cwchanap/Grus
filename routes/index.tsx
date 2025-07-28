@@ -1,28 +1,17 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
 import GameLobby from "../islands/GameLobby.tsx";
-import { RoomManager } from "../lib/room-manager.ts";
-import { Env } from "../types/cloudflare.ts";
-import type { RoomSummary } from "../lib/room-manager.ts";
+import { getDatabaseService } from "../lib/database-service.ts";
 
 interface LobbyData {
-  rooms: RoomSummary[];
+  rooms: any[];
   error?: string;
 }
 
 export const handler: Handlers<LobbyData> = {
-  async GET(req, ctx) {
+  async GET(_req, ctx) {
     try {
-      const env = (ctx.state as any).env as Env;
-      
-      if (!env?.DB) {
-        return ctx.render({ 
-          rooms: [], 
-          error: "Database not available" 
-        });
-      }
-
-      const roomManager = new RoomManager(env.DB);
-      const result = await roomManager.listRooms({ limit: 20 });
+      const dbService = getDatabaseService();
+      const result = await dbService.getActiveRooms(20);
 
       if (!result.success) {
         return ctx.render({ 

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎨 Grus - Multiplayer Drawing Game</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .safe-area-inset {
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+        .min-h-screen-safe {
+            min-height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+        }
+    </style>
+</head>
+<body class="min-h-screen-safe bg-gradient-to-br from-blue-50 to-indigo-100 safe-area-inset">
+    <div class="container mx-auto px-3 sm:px-4 lg:px-8 py-4 sm:py-6 lg:py-8 max-w-7xl">
+        <div class="text-center mb-6 sm:mb-8">
+            <h1 class="text-2xl xs:text-3xl sm:text-4xl lg:text-5xl font-bold text-gray-800 mb-2 sm:mb-4">
+                🎨 Grus Drawing Game
+            </h1>
+            <p class="text-sm sm:text-base lg:text-lg text-gray-600 max-w-2xl mx-auto px-4">
+                Join a room or create your own to start playing with friends!
+            </p>
+        </div>
+        
+        <!-- Game Lobby -->
+        <div id="game-lobby" class="max-w-4xl mx-auto">
+            <!-- Create Room Section -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Create New Room</h2>
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input 
+                        type="text" 
+                        id="room-name" 
+                        placeholder="Room name..." 
+                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        maxlength="50"
+                    >
+                    <button 
+                        id="create-room-btn"
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                    >
+                        Create Room
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Join Room Section -->
+            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Join Existing Room</h2>
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input 
+                        type="text" 
+                        id="room-code" 
+                        placeholder="Enter room code..." 
+                        class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                        maxlength="6"
+                    >
+                    <button 
+                        id="join-room-btn"
+                        class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-medium"
+                    >
+                        Join Room
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Active Rooms -->
+            <div class="bg-white rounded-lg shadow-md p-6">
+                <h2 class="text-xl font-semibold text-gray-800 mb-4">Active Rooms</h2>
+                <div id="rooms-list" class="space-y-3">
+                    <div class="text-center text-gray-500 py-8">
+                        Loading rooms...
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Status Messages -->
+            <div id="status-message" class="mt-4 p-4 rounded-lg hidden">
+                <p id="status-text"></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Game lobby functionality
+        class GameLobby {
+            constructor() {
+                this.apiBase = '';
+                this.init();
+            }
+            
+            init() {
+                this.bindEvents();
+                this.loadRooms();
+                
+                // Refresh rooms every 10 seconds
+                setInterval(() => this.loadRooms(), 10000);
+            }
+            
+            bindEvents() {
+                document.getElementById('create-room-btn').addEventListener('click', () => this.createRoom());
+                document.getElementById('join-room-btn').addEventListener('click', () => this.joinRoom());
+                
+                // Enter key support
+                document.getElementById('room-name').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.createRoom();
+                });
+                document.getElementById('room-code').addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') this.joinRoom();
+                });
+            }
+            
+            async loadRooms() {
+                try {
+                    const response = await fetch(`${this.apiBase}/api/rooms`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.displayRooms(data.rooms || []);
+                    } else {
+                        this.displayRooms([]);
+                    }
+                } catch (error) {
+                    console.error('Error loading rooms:', error);
+                    this.displayRooms([]);
+                }
+            }
+            
+            displayRooms(rooms) {
+                const roomsList = document.getElementById('rooms-list');
+                
+                if (rooms.length === 0) {
+                    roomsList.innerHTML = `
+                        <div class="text-center text-gray-500 py-8">
+                            No active rooms. Create one to get started!
+                        </div>
+                    `;
+                    return;
+                }
+                
+                roomsList.innerHTML = rooms.map(room => `
+                    <div class="flex items-center justify-between p-4 border border-gray-200 rounded-lg hover:bg-gray-50">
+                        <div>
+                            <h3 class="font-medium text-gray-800">${this.escapeHtml(room.name)}</h3>
+                            <p class="text-sm text-gray-600">${room.playerCount}/${room.maxPlayers} players</p>
+                        </div>
+                        <button 
+                            onclick="gameLobby.joinRoomById('${room.id}')"
+                            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                        >
+                            Join
+                        </button>
+                    </div>
+                `).join('');
+            }
+            
+            async createRoom() {
+                const roomName = document.getElementById('room-name').value.trim();
+                if (!roomName) {
+                    this.showStatus('Please enter a room name', 'error');
+                    return;
+                }
+                
+                try {
+                    const response = await fetch(`${this.apiBase}/api/rooms`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: roomName })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.showStatus(`Room created! Code: ${data.code}`, 'success');
+                        document.getElementById('room-name').value = '';
+                        this.loadRooms();
+                    } else {
+                        const error = await response.json();
+                        this.showStatus(error.message || 'Failed to create room', 'error');
+                    }
+                } catch (error) {
+                    this.showStatus('Network error. Please try again.', 'error');
+                }
+            }
+            
+            async joinRoom() {
+                const roomCode = document.getElementById('room-code').value.trim().toUpperCase();
+                if (!roomCode) {
+                    this.showStatus('Please enter a room code', 'error');
+                    return;
+                }
+                
+                this.joinRoomByCode(roomCode);
+            }
+            
+            async joinRoomByCode(code) {
+                try {
+                    const response = await fetch(`${this.apiBase}/api/rooms/${code}/join`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ playerName: 'Player' + Math.floor(Math.random() * 1000) })
+                    });
+                    
+                    if (response.ok) {
+                        const data = await response.json();
+                        this.showStatus('Joined room successfully!', 'success');
+                        // In a real implementation, redirect to game room
+                        setTimeout(() => {
+                            window.location.href = `/room/${code}`;
+                        }, 1000);
+                    } else {
+                        const error = await response.json();
+                        this.showStatus(error.message || 'Failed to join room', 'error');
+                    }
+                } catch (error) {
+                    this.showStatus('Network error. Please try again.', 'error');
+                }
+            }
+            
+            async joinRoomById(roomId) {
+                // For now, just show a message
+                this.showStatus('Room joining feature coming soon!', 'info');
+            }
+            
+            showStatus(message, type = 'info') {
+                const statusDiv = document.getElementById('status-message');
+                const statusText = document.getElementById('status-text');
+                
+                statusDiv.className = `mt-4 p-4 rounded-lg ${
+                    type === 'error' ? 'bg-red-100 text-red-700' :
+                    type === 'success' ? 'bg-green-100 text-green-700' :
+                    'bg-blue-100 text-blue-700'
+                }`;
+                
+                statusText.textContent = message;
+                statusDiv.classList.remove('hidden');
+                
+                setTimeout(() => {
+                    statusDiv.classList.add('hidden');
+                }, 5000);
+            }
+            
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+        
+        // Initialize the game lobby
+        const gameLobby = new GameLobby();
+    </script>
+</body>
+</html>
