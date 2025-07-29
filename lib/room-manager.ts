@@ -1,4 +1,4 @@
-import { DatabaseService } from "./database-service.ts";
+import { getDatabaseService, IDatabaseService } from "./database-factory.ts";
 import { GameState, Player, Room } from "../types/game.ts";
 
 export interface RoomSummary {
@@ -39,10 +39,10 @@ export interface CreateRoomResult {
 }
 
 export class RoomManager {
-  private db: DatabaseService;
+  private db: IDatabaseService;
 
   constructor() {
-    this.db = new DatabaseService();
+    this.db = getDatabaseService();
   }
 
   async createRoom(params: CreateRoomParams): Promise<CreateRoomResult> {
@@ -170,7 +170,7 @@ export class RoomManager {
     roomId: string,
     playerId: string,
   ): Promise<
-    { success: boolean; data?: { wasHost: boolean; newHostId?: string }; error?: string }
+    { success: boolean; data?: { wasHost: boolean; newHostId?: string; roomDeleted?: boolean }; error?: string }
   > {
     try {
       const roomSummary = await this.getRoomSummary(roomId);
@@ -186,6 +186,7 @@ export class RoomManager {
 
       const wasHost = player.isHost;
       let newHostId: string | undefined;
+      let roomDeleted = false;
 
       // If host is leaving and there are other players, transfer host
       if (wasHost && players.length > 1) {
@@ -200,9 +201,17 @@ export class RoomManager {
       // Remove player from room
       await this.db.removePlayer(playerId);
 
-      // If no players left, deactivate room
+      // If no players left, delete the room entirely
       if (players.length === 1) { // Only the leaving player
-        await this.db.updateRoom(roomId, { isActive: false });
+        const deleteResult = await this.db.deleteRoom(roomId);
+        if (deleteResult.success) {
+          roomDeleted = true;
+          console.log(`Room ${roomId} deleted - no players remaining`);
+        } else {
+          console.error(`Failed to delete empty room ${roomId}:`, deleteResult.error);
+          // Fallback to deactivating the room
+          await this.db.updateRoom(roomId, { isActive: false });
+        }
       }
 
       return {
@@ -210,6 +219,7 @@ export class RoomManager {
         data: {
           wasHost,
           newHostId,
+          roomDeleted,
         },
       };
     } catch (error) {
@@ -280,6 +290,91 @@ export class RoomManager {
     } catch (error) {
       console.error("Error setting player disconnected:", error);
       return false;
+    }
+  }
+
+  /**
+   * Clean up rooms that have no players
+   * @param limit Maximum number of rooms to check (default: 50)
+   * @returns Number of rooms cleaned up
+   */
+  async cleanupEmptyRooms(limit = 50): Promise<{ success: boolean; cleanedCount: number; error?: string }> {
+    try {
+      // Get active rooms
+      const roomsResult = await this.db.getActiveRooms(limit);
+      if (!roomsResult.success) {
+        return { success: false, cleanedCount: 0, error: roomsResult.error };
+      }
+
+      const rooms = roomsResult.data || [];
+      let cleanedCount = 0;
+
+      // Check each room for players
+      for (const room of rooms) {
+        const playersResult = await this.db.getPlayersByRoom(room.id);
+        if (playersResult.success) {
+          const players = playersResult.data || [];
+          
+          // If room has no players, delete it
+          if (players.length === 0) {
+            const deleteResult = await this.db.deleteRoom(room.id);
+            if (deleteResult.success) {
+              cleanedCount++;
+              console.log(`Cleaned up empty room: ${room.id} (${room.name})`);
+            } else {
+              console.error(`Failed to delete empty room ${room.id}:`, deleteResult.error);
+            }
+          }
+        }
+      }
+
+      return { success: true, cleanedCount };
+    } catch (error) {
+      console.error("Error cleaning up empty rooms:", error);
+      return { success: false, cleanedCount: 0, error: "Internal server error" };
+    }
+  }
+
+  /**
+   * Get active rooms with automatic cleanup of empty rooms
+   * @param limit Maximum number of rooms to return
+   * @returns Array of RoomSummary objects for rooms with players
+   */
+  async getActiveRoomsWithCleanup(limit = 20): Promise<{ success: boolean; data?: RoomSummary[]; error?: string }> {
+    try {
+      // First, clean up empty rooms
+      await this.cleanupEmptyRooms(limit * 2); // Check more rooms than we need to return
+
+      // Get active rooms from database
+      const roomsResult = await this.db.getActiveRooms(limit);
+      if (!roomsResult.success) {
+        return { success: false, error: roomsResult.error };
+      }
+
+      const rooms = roomsResult.data || [];
+      const roomSummaries: RoomSummary[] = [];
+
+      // Convert each room to RoomSummary and filter out empty ones
+      for (const room of rooms) {
+        const summaryResult = await this.getRoomSummary(room.id);
+        if (summaryResult.success && summaryResult.data) {
+          const summary = summaryResult.data;
+          
+          // Only include rooms with players
+          if (summary.playerCount > 0) {
+            roomSummaries.push(summary);
+          } else {
+            // Clean up this empty room
+            console.log(`Found empty room during fetch, cleaning up: ${room.id}`);
+            await this.db.deleteRoom(room.id);
+          }
+        }
+      }
+
+      return { success: true, data: roomSummaries };
+    } catch (error) {
+      console.error("Error getting active rooms with cleanup:", error);
+      return { success: false, error: "Internal server error" };
     }
   }
 

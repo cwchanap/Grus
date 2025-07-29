@@ -1,17 +1,20 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
 import GameLobby from "../islands/GameLobby.tsx";
-import { getDatabaseService } from "../lib/database-service.ts";
+import { getDatabaseService } from "../lib/database-factory.ts";
+import { RoomManager, RoomSummary } from "../lib/room-manager.ts";
 
 interface LobbyData {
-  rooms: any[];
+  rooms: RoomSummary[];
   error?: string;
 }
 
 export const handler: Handlers<LobbyData> = {
   async GET(_req, ctx) {
     try {
-      const dbService = getDatabaseService();
-      const result = await dbService.getActiveRooms(20);
+      const roomManager = new RoomManager();
+      
+      // Get active rooms with automatic cleanup
+      const result = await roomManager.getActiveRoomsWithCleanup(20);
 
       if (!result.success) {
         return ctx.render({

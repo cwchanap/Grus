@@ -18,8 +18,11 @@ export const handler: Handlers = {
   // POST /api/rooms/[id]/join - Join a room
   async POST(req, ctx) {
     try {
+      // In development, we don't have Cloudflare env, so we skip the DB check
       const env = (ctx.state as any).env as Env;
-      if (!env?.DB) {
+      const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
+
+      if (!isDevelopment && !env?.DB) {
         return new Response(JSON.stringify({ error: "Database not available" }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
@@ -50,9 +53,16 @@ export const handler: Handlers = {
         });
       }
 
-      // Broadcast lobby update
-      const wsManager = getWebSocketManager(env);
-      await wsManager.broadcastLobbyUpdate();
+      // Only broadcast WebSocket updates in production with proper env
+      if (!isDevelopment && env?.DB) {
+        try {
+          const wsManager = getWebSocketManager(env);
+          await wsManager.broadcastLobbyUpdate();
+        } catch (wsError) {
+          console.error("WebSocket broadcast error:", wsError);
+          // Don't fail the request if WebSocket fails
+        }
+      }
 
       return new Response(
         JSON.stringify({

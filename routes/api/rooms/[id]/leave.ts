@@ -18,8 +18,11 @@ export const handler: Handlers = {
   // POST /api/rooms/[id]/leave - Leave a room
   async POST(req, ctx) {
     try {
+      // In development, we don't have Cloudflare env, so we skip the DB check
       const env = (ctx.state as any).env as Env;
-      if (!env?.DB) {
+      const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
+
+      if (!isDevelopment && !env?.DB) {
         return new Response(JSON.stringify({ error: "Database not available" }), {
           status: 500,
           headers: { "Content-Type": "application/json" },
@@ -47,31 +50,41 @@ export const handler: Handlers = {
         });
       }
 
-      // Broadcast lobby update and room update
-      const wsManager = getWebSocketManager(env);
-      await wsManager.broadcastLobbyUpdate();
+      // Only broadcast WebSocket updates in production with proper env
+      if (!isDevelopment && env?.DB) {
+        try {
+          const wsManager = getWebSocketManager(env);
+          await wsManager.broadcastLobbyUpdate();
 
-      // If there was a host transfer, broadcast room update
-      if (result.data?.newHostId) {
-        await wsManager.broadcastToRoomPublic(roomId, {
-          type: "room-update",
-          roomId,
-          data: {
-            type: "host-transferred",
-            newHostId: result.data.newHostId,
-            leftPlayerId: playerId,
-          },
-        });
-      } else {
-        // Broadcast player left
-        await wsManager.broadcastToRoomPublic(roomId, {
-          type: "room-update",
-          roomId,
-          data: {
-            type: "player-left",
-            playerId,
-          },
-        });
+          // If room was deleted, no need to broadcast room updates
+          if (!result.data?.roomDeleted) {
+            // If there was a host transfer, broadcast room update
+            if (result.data?.newHostId) {
+              await wsManager.broadcastToRoomPublic(roomId, {
+                type: "room-update",
+                roomId,
+                data: {
+                  type: "host-transferred",
+                  newHostId: result.data.newHostId,
+                  leftPlayerId: playerId,
+                },
+              });
+            } else {
+              // Broadcast player left
+              await wsManager.broadcastToRoomPublic(roomId, {
+                type: "room-update",
+                roomId,
+                data: {
+                  type: "player-left",
+                  playerId,
+                },
+              });
+            }
+          }
+        } catch (wsError) {
+          console.error("WebSocket broadcast error:", wsError);
+          // Don't fail the request if WebSocket fails
+        }
       }
 
       return new Response(
@@ -79,6 +92,7 @@ export const handler: Handlers = {
           success: true,
           wasHost: result.data?.wasHost || false,
           newHostId: result.data?.newHostId,
+          roomDeleted: result.data?.roomDeleted || false,
         }),
         {
           headers: { "Content-Type": "application/json" },

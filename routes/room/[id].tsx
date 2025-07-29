@@ -47,9 +47,11 @@ export const handler: Handlers<GameRoomData> = {
       const url = new URL(req.url);
       const playerId = url.searchParams.get("playerId");
 
+      // In development, we don't have Cloudflare env, so we skip the DB check
       const env = (ctx.state as any).env as Env;
+      const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
 
-      if (!env?.DB) {
+      if (!isDevelopment && !env?.DB) {
         return ctx.render({
           room: null,
           playerId,

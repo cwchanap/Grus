@@ -1,7 +1,8 @@
 // API routes for room operations
 import { Handlers } from "$fresh/server.ts";
-import { getDatabaseService } from "../../lib/database-service.ts";
+import { getDatabaseService } from "../../lib/database-factory.ts";
 import { getKVService } from "../../lib/kv-service.ts";
+import { RoomManager, RoomSummary } from "../../lib/room-manager.ts";
 
 export const handler: Handlers = {
   // GET /api/rooms - List active rooms
@@ -10,8 +11,10 @@ export const handler: Handlers = {
       const url = new URL(req.url);
       const limit = parseInt(url.searchParams.get("limit") || "20");
 
-      const dbService = getDatabaseService();
-      const result = await dbService.getActiveRooms(limit);
+      const roomManager = new RoomManager();
+      
+      // Get active rooms with automatic cleanup
+      const result = await roomManager.getActiveRoomsWithCleanup(limit);
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
@@ -20,7 +23,7 @@ export const handler: Handlers = {
         });
       }
 
-      return new Response(JSON.stringify({ rooms: result.data }), {
+      return new Response(JSON.stringify({ rooms: result.data || [] }), {
         headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
