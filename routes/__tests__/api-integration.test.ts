@@ -8,7 +8,7 @@ const mockEnv = {
   CLOUDFLARE_ACCOUNT_ID: "test-account",
   CLOUDFLARE_API_TOKEN: "test-token",
   DATABASE_ID: "test-db-id",
-  KV_NAMESPACE_ID: "test-kv-id",
+
   ENVIRONMENT: "test",
 };
 
@@ -87,18 +87,7 @@ function mockCloudflareAPI() {
       }
     }
 
-    // Mock KV health check
-    if (urlString.includes("/storage/kv/namespaces/")) {
-      if (options?.method === "PUT") {
-        return new Response("", { status: 200 });
-      }
-      if (options?.method === "GET") {
-        return new Response('{"timestamp":1234567890}', { status: 200 });
-      }
-      if (options?.method === "DELETE") {
-        return new Response("", { status: 200 });
-      }
-    }
+    // KV operations now handled by Deno KV - no mocking needed
 
     return new Response("Not Found", { status: 404 });
   };

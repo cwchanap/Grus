@@ -4,13 +4,13 @@
     "check": "deno fmt --check && deno lint && deno check **/*.ts && deno check **/*.tsx",
     "cli": "echo \"import '\\$fresh/src/dev/cli.ts'\" | deno run --unstable -A -",
     "manifest": "deno task cli manifest $(pwd)",
-    "start": "deno run -A --watch=static/,routes/ dev.ts",
-    "build": "deno run -A dev.ts build",
-    "preview": "deno run -A main.ts",
+    "start": "deno run -A --unstable-kv --watch=static/,routes/ dev.ts",
+    "build": "deno run -A --unstable-kv dev.ts build",
+    "preview": "deno run -A --unstable-kv main.ts",
     "update": "deno run -A -r https://fresh.deno.dev/update .",
-    "test": "deno test --allow-all",
-    "test:watch": "deno test --allow-all --watch",
-    "test:coverage": "deno test --allow-all --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
+    "test": "deno test --allow-all --unstable-kv",
+    "test:watch": "deno test --allow-all --unstable-kv --watch",
+    "test:coverage": "deno test --allow-all --unstable-kv --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
     "deploy": "bash scripts/deploy-deno.sh",
     "health-check": "curl http://localhost:8000/api/health",
     "lint": "deno lint",
@@ -104,7 +104,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "webworker"],
+    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
     "strict": true
   },
   "nodeModulesDir": "auto"

@@ -1,6 +1,6 @@
-// KV service for game state management using Cloudflare REST API
-import { getCloudflareAPI } from "./cloudflare-api.ts";
+/// <reference lib="deno.unstable" />
 
+// KV service for game state management using Deno KV
 export interface KVResult<T> {
   success: boolean;
   data?: T;
@@ -8,7 +8,14 @@ export interface KVResult<T> {
 }
 
 export class KVService {
-  private api = getCloudflareAPI();
+  private kv: Deno.Kv | null = null;
+
+  private async getKv(): Promise<Deno.Kv> {
+    if (!this.kv) {
+      this.kv = await Deno.openKv();
+    }
+    return this.kv;
+  }
 
   private async executeOperation<T>(
     operation: () => Promise<T>,
@@ -29,155 +36,178 @@ export class KVService {
   // Game state operations
   async setGameState(roomId: string, state: any, ttl?: number): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `game_state:${roomId}`;
-      const value = JSON.stringify(state);
-      const options = ttl ? { expirationTtl: ttl } : {};
-      await this.api.kvPut(key, value, options);
+      const kv = await this.getKv();
+      const key = ["game_state", roomId];
+      const options = ttl ? { expireIn: ttl * 1000 } : {};
+      await kv.set(key, state, options);
     }, `Failed to set game state for room: ${roomId}`);
   }
 
   async getGameState(roomId: string): Promise<KVResult<any | null>> {
     return this.executeOperation(async () => {
-      const key = `game_state:${roomId}`;
-      const value = await this.api.kvGet(key);
-      return value ? JSON.parse(value) : null;
+      const kv = await this.getKv();
+      const key = ["game_state", roomId];
+      const result = await kv.get(key);
+      return result.value;
     }, `Failed to get game state for room: ${roomId}`);
   }
 
   async deleteGameState(roomId: string): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `game_state:${roomId}`;
-      await this.api.kvDelete(key);
+      const kv = await this.getKv();
+      const key = ["game_state", roomId];
+      await kv.delete(key);
     }, `Failed to delete game state for room: ${roomId}`);
   }
 
   // Player session operations
   async setPlayerSession(playerId: string, session: any, ttl = 3600): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `player_session:${playerId}`;
-      const value = JSON.stringify(session);
-      await this.api.kvPut(key, value, { expirationTtl: ttl });
+      const kv = await this.getKv();
+      const key = ["player_session", playerId];
+      await kv.set(key, session, { expireIn: ttl * 1000 });
     }, `Failed to set player session for: ${playerId}`);
   }
 
   async getPlayerSession(playerId: string): Promise<KVResult<any | null>> {
     return this.executeOperation(async () => {
-      const key = `player_session:${playerId}`;
-      const value = await this.api.kvGet(key);
-      return value ? JSON.parse(value) : null;
+      const kv = await this.getKv();
+      const key = ["player_session", playerId];
+      const result = await kv.get(key);
+      return result.value;
     }, `Failed to get player session for: ${playerId}`);
   }
 
   async deletePlayerSession(playerId: string): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `player_session:${playerId}`;
-      await this.api.kvDelete(key);
+      const kv = await this.getKv();
+      const key = ["player_session", playerId];
+      await kv.delete(key);
     }, `Failed to delete player session for: ${playerId}`);
   }
 
   // Room cache operations
   async cacheRoomData(roomId: string, data: any, ttl = 300): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `room_cache:${roomId}`;
-      const value = JSON.stringify(data);
-      await this.api.kvPut(key, value, { expirationTtl: ttl });
+      const kv = await this.getKv();
+      const key = ["room_cache", roomId];
+      await kv.set(key, data, { expireIn: ttl * 1000 });
     }, `Failed to cache room data for: ${roomId}`);
   }
 
   async getCachedRoomData(roomId: string): Promise<KVResult<any | null>> {
     return this.executeOperation(async () => {
-      const key = `room_cache:${roomId}`;
-      const value = await this.api.kvGet(key);
-      return value ? JSON.parse(value) : null;
+      const kv = await this.getKv();
+      const key = ["room_cache", roomId];
+      const result = await kv.get(key);
+      return result.value;
     }, `Failed to get cached room data for: ${roomId}`);
   }
 
   // Drawing data operations
   async saveDrawingData(roomId: string, drawingData: any, ttl = 1800): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `drawing:${roomId}:${Date.now()}`;
-      const value = JSON.stringify(drawingData);
-      await this.api.kvPut(key, value, { expirationTtl: ttl });
+      const kv = await this.getKv();
+      const timestamp = Date.now();
+      const key = ["drawing", roomId, timestamp];
+      await kv.set(key, { ...drawingData, timestamp }, { expireIn: ttl * 1000 });
     }, `Failed to save drawing data for room: ${roomId}`);
   }
 
   async getDrawingHistory(roomId: string): Promise<KVResult<any[]>> {
     return this.executeOperation(async () => {
-      const prefix = `drawing:${roomId}:`;
-      const result = await this.api.kvList({ prefix, limit: 100 });
+      const kv = await this.getKv();
+      const prefix = ["drawing", roomId];
+      const entries = kv.list({ prefix });
 
-      const drawings = [];
-      for (const key of result.keys || []) {
-        const value = await this.api.kvGet(key.name);
-        if (value) {
-          drawings.push(JSON.parse(value));
+      const drawings: any[] = [];
+      for await (const entry of entries) {
+        if (entry.value) {
+          drawings.push(entry.value);
         }
       }
 
-      return drawings.sort((a, b) => b.timestamp - a.timestamp);
+      return drawings.sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
     }, `Failed to get drawing history for room: ${roomId}`);
   }
 
   // Chat message cache
   async cacheMessage(roomId: string, message: any, ttl = 3600): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const key = `message:${roomId}:${Date.now()}`;
-      const value = JSON.stringify(message);
-      await this.api.kvPut(key, value, { expirationTtl: ttl });
+      const kv = await this.getKv();
+      const timestamp = Date.now();
+      const key = ["message", roomId, timestamp];
+      await kv.set(key, { ...message, timestamp }, { expireIn: ttl * 1000 });
     }, `Failed to cache message for room: ${roomId}`);
   }
 
   async getRecentMessages(roomId: string, limit = 50): Promise<KVResult<any[]>> {
     return this.executeOperation(async () => {
-      const prefix = `message:${roomId}:`;
-      const result = await this.api.kvList({ prefix, limit });
+      const kv = await this.getKv();
+      const prefix = ["message", roomId];
+      const entries = kv.list({ prefix });
 
-      const messages = [];
-      for (const key of result.keys || []) {
-        const value = await this.api.kvGet(key.name);
-        if (value) {
-          messages.push(JSON.parse(value));
+      const messages: any[] = [];
+      for await (const entry of entries) {
+        if (entry.value) {
+          messages.push(entry.value);
         }
       }
 
-      return messages.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
+      return messages
+        .sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, limit);
     }, `Failed to get recent messages for room: ${roomId}`);
   }
 
   // Generic operations
   async set(key: string, value: any, ttl?: number): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      const jsonValue = JSON.stringify(value);
-      const options = ttl ? { expirationTtl: ttl } : {};
-      await this.api.kvPut(key, jsonValue, options);
+      const kv = await this.getKv();
+      const kvKey = ["generic", key];
+      const options = ttl ? { expireIn: ttl * 1000 } : {};
+      await kv.set(kvKey, value, options);
     }, `Failed to set key: ${key}`);
   }
 
   async get(key: string): Promise<KVResult<any | null>> {
     return this.executeOperation(async () => {
-      const value = await this.api.kvGet(key);
-      return value ? JSON.parse(value) : null;
+      const kv = await this.getKv();
+      const kvKey = ["generic", key];
+      const result = await kv.get(kvKey);
+      return result.value;
     }, `Failed to get key: ${key}`);
   }
 
   async delete(key: string): Promise<KVResult<void>> {
     return this.executeOperation(async () => {
-      await this.api.kvDelete(key);
+      const kv = await this.getKv();
+      const kvKey = ["generic", key];
+      await kv.delete(kvKey);
     }, `Failed to delete key: ${key}`);
   }
 
   // Health check
   async healthCheck(): Promise<KVResult<boolean>> {
     return this.executeOperation(async () => {
-      const testKey = "health_check";
+      const kv = await this.getKv();
+      const testKey = ["health_check"];
       const testValue = { timestamp: Date.now() };
 
-      await this.api.kvPut(testKey, JSON.stringify(testValue), { expirationTtl: 60 });
-      const retrieved = await this.api.kvGet(testKey);
-      await this.api.kvDelete(testKey);
+      await kv.set(testKey, testValue, { expireIn: 60000 });
+      const result = await kv.get(testKey);
+      await kv.delete(testKey);
 
-      return retrieved !== null;
+      return result.value !== null;
     }, "KV health check failed");
+  }
+
+  // Cleanup method for graceful shutdown
+  async close(): Promise<void> {
+    if (this.kv) {
+      this.kv.close();
+      this.kv = null;
+    }
   }
 }
 

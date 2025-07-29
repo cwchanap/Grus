@@ -1,6 +1,7 @@
 # This file is kept for reference but not used with Deno Deploy
-# The D1 and KV resources are accessed via Cloudflare REST API
+# The D1 database is accessed via Cloudflare REST API
+# KV storage is now handled by Deno KV
 
 # Cloudflare Resources (for reference):
 # D1 Database: grus (d616e1fe-17e6-4320-aba2-393a60167603)
-# KV Namespace: grus (bea0c6d861e7477fae40b0e9c126ed30)
+# Note: KV Namespace no longer needed - using Deno KV instead

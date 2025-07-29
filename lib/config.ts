@@ -7,7 +7,6 @@ export interface AppConfig {
     migrationPath: string;
   };
   kv: {
-    namespace: string;
     defaultTtl: number;
   };
   game: {
@@ -60,7 +59,6 @@ export function getConfig(env?: string): AppConfig {
       migrationPath: "./db/migrations",
     },
     kv: {
-      namespace: environment === "production" ? "GAME_STATE" : "GAME_STATE_DEV",
       defaultTtl: 3600, // 1 hour
     },
     game: {
