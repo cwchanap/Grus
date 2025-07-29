@@ -1,40 +1,40 @@
-import { assertEquals, assertExists, assert } from "$std/assert/mod.ts";
+import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
 import { DrawingCommand } from "../../types/game.ts";
-import { 
-  validateDrawingCommand,
+import {
+  deserializeDrawingCommand,
   serializeDrawingCommand,
-  deserializeDrawingCommand 
+  validateDrawingCommand,
 } from "../../lib/drawing-utils.ts";
 
 Deno.test("DrawingEngine Integration - Drawing command flow", () => {
   // Test the complete flow of drawing commands
   const commands: DrawingCommand[] = [];
-  
+
   const mockOnDrawingCommand = (command: DrawingCommand) => {
     commands.push(command);
   };
 
   // Simulate a drawing sequence
   const startCommand: DrawingCommand = {
-    type: 'start',
+    type: "start",
     x: 100,
     y: 150,
-    color: '#ff0000',
+    color: "#ff0000",
     size: 5,
     timestamp: Date.now(),
   };
 
   const moveCommand: DrawingCommand = {
-    type: 'move',
+    type: "move",
     x: 110,
     y: 160,
-    color: '#ff0000',
+    color: "#ff0000",
     size: 5,
     timestamp: Date.now() + 10,
   };
 
   const endCommand: DrawingCommand = {
-    type: 'end',
+    type: "end",
     timestamp: Date.now() + 20,
   };
 
@@ -54,22 +54,22 @@ Deno.test("DrawingEngine Integration - Drawing command flow", () => {
   mockOnDrawingCommand(endCommand);
 
   assertEquals(commands.length, 3);
-  assertEquals(commands[0].type, 'start');
-  assertEquals(commands[1].type, 'move');
-  assertEquals(commands[2].type, 'end');
+  assertEquals(commands[0].type, "start");
+  assertEquals(commands[1].type, "move");
+  assertEquals(commands[2].type, "end");
 });
 
 Deno.test("DrawingEngine Integration - Clear command", () => {
   const clearCommand: DrawingCommand = {
-    type: 'clear',
+    type: "clear",
     timestamp: Date.now(),
   };
 
   assert(validateDrawingCommand(clearCommand));
-  
+
   const serialized = serializeDrawingCommand(clearCommand);
   const deserialized = deserializeDrawingCommand(serialized);
-  
+
   // Check essential properties
   assertEquals(deserialized.type, clearCommand.type);
   assertEquals(deserialized.timestamp, clearCommand.timestamp);
@@ -79,10 +79,18 @@ Deno.test("DrawingEngine Integration - Invalid commands are rejected", () => {
   // Test various invalid commands
   assert(!validateDrawingCommand(null));
   assert(!validateDrawingCommand({}));
-  assert(!validateDrawingCommand({ type: 'invalid', timestamp: Date.now() }));
-  assert(!validateDrawingCommand({ type: 'start', timestamp: Date.now() })); // Missing x, y
-  assert(!validateDrawingCommand({ type: 'start', x: -10, y: 20, timestamp: Date.now() })); // Out of bounds
-  assert(!validateDrawingCommand({ type: 'start', x: 10, y: 20, color: 'invalid', timestamp: Date.now() })); // Invalid color
+  assert(!validateDrawingCommand({ type: "invalid", timestamp: Date.now() }));
+  assert(!validateDrawingCommand({ type: "start", timestamp: Date.now() })); // Missing x, y
+  assert(!validateDrawingCommand({ type: "start", x: -10, y: 20, timestamp: Date.now() })); // Out of bounds
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 10,
+      y: 20,
+      color: "invalid",
+      timestamp: Date.now(),
+    }),
+  ); // Invalid color
 });
 
 Deno.test("DrawingEngine Integration - Drawing tool interface", () => {
@@ -90,24 +98,24 @@ Deno.test("DrawingEngine Integration - Drawing tool interface", () => {
   interface DrawingTool {
     color: string;
     size: number;
-    type: 'brush';
+    type: "brush";
   }
 
   const defaultTool: DrawingTool = {
-    color: '#000000',
+    color: "#000000",
     size: 5,
-    type: 'brush'
+    type: "brush",
   };
 
   // Test tool validation
   assert(defaultTool.color.match(/^#[0-9A-Fa-f]{6}$/));
   assert(defaultTool.size >= 1 && defaultTool.size <= 50);
-  assertEquals(defaultTool.type, 'brush');
+  assertEquals(defaultTool.type, "brush");
 
   // Test different tool configurations
-  const redTool: DrawingTool = { ...defaultTool, color: '#ff0000' };
+  const redTool: DrawingTool = { ...defaultTool, color: "#ff0000" };
   const largeBrush: DrawingTool = { ...defaultTool, size: 20 };
 
-  assert(redTool.color === '#ff0000');
+  assert(redTool.color === "#ff0000");
   assert(largeBrush.size === 20);
 });

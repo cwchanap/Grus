@@ -9,45 +9,45 @@ interface JoinRoomModalProps {
 }
 
 export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRoomModalProps) {
-  const [playerName, setPlayerName] = useState('');
+  const [playerName, setPlayerName] = useState("");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    
+
     if (!playerName.trim()) {
-      setError('Player name is required');
+      setError("Player name is required");
       return;
     }
 
     if (!room) {
-      setError('No room selected');
+      setError("No room selected");
       return;
     }
 
     // Check if name already exists in room
     const existingPlayer = room.players.find(
-      player => player.name.toLowerCase() === playerName.trim().toLowerCase()
+      (player: any) => player.name.toLowerCase() === playerName.trim().toLowerCase(),
     );
-    
+
     if (existingPlayer) {
-      setError('A player with this name already exists in the room');
+      setError("A player with this name already exists in the room");
       return;
     }
 
     try {
       setLoading(true);
-      setError('');
+      setError("");
 
       const response = await fetch(`/api/rooms/${room.room.id}/join`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json'
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          playerName: playerName.trim()
-        })
+          playerName: playerName.trim(),
+        }),
       });
 
       const data = await response.json();
@@ -55,11 +55,11 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
       if (response.ok) {
         onSuccess(data.roomId, data.playerId);
       } else {
-        setError(data.error || 'Failed to join room');
+        setError(data.error || "Failed to join room");
       }
     } catch (error) {
-      console.error('Error joining room:', error);
-      setError('Failed to join room. Please try again.');
+      console.error("Error joining room:", error);
+      setError("Failed to join room. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -67,8 +67,8 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
 
   const handleClose = () => {
     if (!loading) {
-      setPlayerName('');
-      setError('');
+      setPlayerName("");
+      setError("");
       onClose();
     }
   };
@@ -94,25 +94,25 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
           <div class="mb-6 p-4 bg-gray-50 rounded-lg">
             <h3 class="font-semibold text-gray-800 mb-2">{room.room.name}</h3>
             <div class="text-sm text-gray-600 space-y-1">
-              <div>Host: {room.host?.name || 'Unknown'}</div>
+              <div>Host: {room.host?.name || "Unknown"}</div>
               <div>Players: {room.playerCount}/{room.room.maxPlayers}</div>
             </div>
-            
+
             {room.players.length > 0 && (
               <div class="mt-3">
                 <div class="text-sm text-gray-600 mb-2">Current players:</div>
                 <div class="flex flex-wrap gap-1">
-                  {room.players.map((player) => (
+                  {room.players.map((player: any) => (
                     <span
                       key={player.id}
                       class={`text-xs px-2 py-1 rounded-full ${
-                        player.isHost 
-                          ? 'bg-yellow-100 text-yellow-800' 
-                          : 'bg-gray-100 text-gray-700'
+                        player.isHost
+                          ? "bg-yellow-100 text-yellow-800"
+                          : "bg-gray-100 text-gray-700"
                       }`}
                     >
                       {player.name}
-                      {player.isHost && ' 👑'}
+                      {player.isHost && " 👑"}
                     </span>
                   ))}
                 </div>
@@ -161,14 +161,16 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
                 disabled={loading || !playerName.trim() || !room.canJoin}
                 class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {loading ? (
-                  <span class="flex items-center justify-center">
-                    <span class="animate-spin mr-2">⟳</span>
-                    Joining...
-                  </span>
-                ) : (
-                  'Join Room'
-                )}
+                {loading
+                  ? (
+                    <span class="flex items-center justify-center">
+                      <span class="animate-spin mr-2">⟳</span>
+                      Joining...
+                    </span>
+                  )
+                  : (
+                    "Join Room"
+                  )}
               </button>
             </div>
           </form>

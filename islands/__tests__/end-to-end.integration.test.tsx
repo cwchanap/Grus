@@ -1,18 +1,18 @@
 /**
  * End-to-End Integration Tests for Multiplayer Drawing Game
- * 
+ *
  * This test suite validates the complete game flow from lobby to game completion,
  * testing the integration of all Fresh Islands with WebSocket communication.
  */
 
-import { assertEquals, assertExists, assert } from "$std/assert/mod.ts";
-import type { 
-  GameState, 
-  PlayerState, 
-  ChatMessage, 
+import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
+import type {
+  ChatMessage,
+  ClientMessage,
   DrawingCommand,
-  ClientMessage, 
-  ServerMessage 
+  GameState,
+  PlayerState,
+  ServerMessage,
 } from "../../types/game.ts";
 
 // Mock WebSocket implementation for testing
@@ -35,30 +35,30 @@ class MockWebSocket {
     // Simulate connection opening
     setTimeout(() => {
       this.readyState = MockWebSocket.OPEN;
-      this.onopen?.(new Event('open'));
+      this.onopen?.(new Event("open"));
     }, 10);
   }
 
   send(data: string) {
     this.sentMessages.push(data);
-    
+
     // Auto-respond to certain message types for testing
     try {
       const message = JSON.parse(data);
       this.handleAutoResponse(message);
     } catch (error) {
-      console.error('Error parsing sent message:', error);
+      console.error("Error parsing sent message:", error);
     }
   }
 
   close() {
     this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.(new CloseEvent('close'));
+    this.onclose?.(new CloseEvent("close"));
   }
 
   simulateMessage(data: any) {
     if (this.onmessage) {
-      this.onmessage(new MessageEvent('message', { data: JSON.stringify(data) }));
+      this.onmessage(new MessageEvent("message", { data: JSON.stringify(data) }));
     }
   }
 
@@ -72,16 +72,16 @@ class MockWebSocket {
 
   private handleAutoResponse(message: ClientMessage) {
     // Auto-respond to join-room messages
-    if (message.type === 'join-room') {
+    if (message.type === "join-room") {
       setTimeout(() => {
         this.simulateMessage({
-          type: 'room-update',
+          type: "room-update",
           roomId: message.roomId,
           data: {
-            type: 'player-joined',
+            type: "player-joined",
             playerId: message.playerId,
-            playerName: message.data.playerName
-          }
+            playerName: message.data.playerName,
+          },
         });
       }, 5);
     }
@@ -96,39 +96,39 @@ function createMockGameState(overrides: Partial<GameState> = {}): GameState {
     currentWord: "house",
     roundNumber: 1,
     timeRemaining: 120000,
-    phase: 'waiting',
+    phase: "waiting",
     players: [
       {
         id: "player1",
         name: "Alice",
         isHost: true,
         isConnected: true,
-        lastActivity: Date.now()
+        lastActivity: Date.now(),
       },
       {
         id: "player2",
         name: "Bob",
         isHost: false,
         isConnected: true,
-        lastActivity: Date.now()
+        lastActivity: Date.now(),
       },
       {
         id: "player3",
         name: "Charlie",
         isHost: false,
         isConnected: true,
-        lastActivity: Date.now()
-      }
+        lastActivity: Date.now(),
+      },
     ],
     scores: {
       "player1": 0,
       "player2": 0,
-      "player3": 0
+      "player3": 0,
     },
     drawingData: [],
     correctGuesses: [],
     chatMessages: [],
-    ...overrides
+    ...overrides,
   };
 }
 
@@ -160,17 +160,17 @@ class GameSessionSimulator {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
-    await new Promise(resolve => setTimeout(resolve, 20)); // Wait for connection
+    await new Promise((resolve) => setTimeout(resolve, 20)); // Wait for connection
 
     const joinMessage: ClientMessage = {
-      type: 'join-room',
+      type: "join-room",
       roomId: this.gameState.roomId,
       playerId,
-      data: { playerName }
+      data: { playerName },
     };
 
     ws.send(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10)); // Wait for response
+    await new Promise((resolve) => setTimeout(resolve, 10)); // Wait for response
   }
 
   async startGame(hostPlayerId: string): Promise<void> {
@@ -178,10 +178,10 @@ class GameSessionSimulator {
     if (!ws) throw new Error(`Host ${hostPlayerId} not found`);
 
     const startMessage: ClientMessage = {
-      type: 'start-game',
+      type: "start-game",
       roomId: this.gameState.roomId,
       playerId: hostPlayerId,
-      data: {}
+      data: {},
     };
 
     ws.send(JSON.stringify(startMessage));
@@ -189,16 +189,16 @@ class GameSessionSimulator {
     // Simulate game state update
     this.gameState = {
       ...this.gameState,
-      phase: 'drawing',
+      phase: "drawing",
       currentDrawer: this.gameState.players[0].id,
-      timeRemaining: 120000
+      timeRemaining: 120000,
     };
 
     // Broadcast game state to all players
     this.broadcastToAllPlayers({
-      type: 'game-state',
+      type: "game-state",
       roomId: this.gameState.roomId,
-      data: this.gameState
+      data: this.gameState,
     });
   }
 
@@ -207,16 +207,16 @@ class GameSessionSimulator {
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
     const chatMessage: ClientMessage = {
-      type: 'chat',
+      type: "chat",
       roomId: this.gameState.roomId,
       playerId,
-      data: { text: message }
+      data: { text: message },
     };
 
     ws.send(JSON.stringify(chatMessage));
 
     // Simulate chat message broadcast
-    const player = this.gameState.players.find(p => p.id === playerId);
+    const player = this.gameState.players.find((p) => p.id === playerId);
     if (player) {
       const chatMsg: ChatMessage = {
         id: crypto.randomUUID(),
@@ -224,16 +224,16 @@ class GameSessionSimulator {
         playerName: player.name,
         message,
         timestamp: Date.now(),
-        isGuess: this.gameState.phase === 'drawing',
-        isCorrect: message.toLowerCase() === this.gameState.currentWord.toLowerCase()
+        isGuess: this.gameState.phase === "drawing",
+        isCorrect: message.toLowerCase() === this.gameState.currentWord.toLowerCase(),
       };
 
       this.chatMessages.push(chatMsg);
 
       this.broadcastToAllPlayers({
-        type: 'chat-message',
+        type: "chat-message",
         roomId: this.gameState.roomId,
-        data: chatMsg
+        data: chatMsg,
       });
 
       // Handle correct guess
@@ -243,7 +243,10 @@ class GameSessionSimulator {
     }
   }
 
-  async sendDrawingCommand(playerId: string, command: Omit<DrawingCommand, 'timestamp'>): Promise<void> {
+  async sendDrawingCommand(
+    playerId: string,
+    command: Omit<DrawingCommand, "timestamp">,
+  ): Promise<void> {
     if (playerId !== this.gameState.currentDrawer) {
       throw new Error(`Player ${playerId} is not the current drawer`);
     }
@@ -252,10 +255,10 @@ class GameSessionSimulator {
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
     const drawCommand: ClientMessage = {
-      type: 'draw',
+      type: "draw",
       roomId: this.gameState.roomId,
       playerId,
-      data: { command: { ...command, timestamp: Date.now() } }
+      data: { command: { ...command, timestamp: Date.now() } },
     };
 
     ws.send(JSON.stringify(drawCommand));
@@ -267,9 +270,9 @@ class GameSessionSimulator {
 
     // Broadcast to other players
     this.broadcastToAllPlayers({
-      type: 'draw-update',
+      type: "draw-update",
       roomId: this.gameState.roomId,
-      data: { command: fullCommand }
+      data: { command: fullCommand },
     }, playerId);
   }
 
@@ -282,36 +285,36 @@ class GameSessionSimulator {
     this.gameState.scores[playerId] = (this.gameState.scores[playerId] || 0) + totalPoints;
 
     // End round
-    this.gameState.phase = 'results';
+    this.gameState.phase = "results";
 
     // Broadcast score update
     this.broadcastToAllPlayers({
-      type: 'score-update',
+      type: "score-update",
       roomId: this.gameState.roomId,
       data: {
         playerId,
         newScore: this.gameState.scores[playerId],
-        reason: 'correct-guess'
-      }
+        reason: "correct-guess",
+      },
     });
   }
 
   private handleServerMessage(playerId: string, message: ServerMessage): void {
     // Handle server messages that would affect client state
     switch (message.type) {
-      case 'game-state':
+      case "game-state":
         // Update local game state
         if (message.data) {
           this.gameState = { ...this.gameState, ...message.data };
         }
         break;
-      case 'chat-message':
+      case "chat-message":
         // Add to chat history
         if (message.data) {
           this.chatMessages.push(message.data);
         }
         break;
-      case 'draw-update':
+      case "draw-update":
         // Add to drawing history
         if (message.data?.command) {
           this.drawingCommands.push(message.data.command);
@@ -371,35 +374,35 @@ Deno.test("E2E Integration - Complete game flow from lobby to completion", async
   await simulator.startGame("player1");
 
   const currentGameState = simulator.getGameState();
-  assertEquals(currentGameState.phase, 'drawing');
-  assertEquals(currentGameState.currentDrawer, 'player1');
+  assertEquals(currentGameState.phase, "drawing");
+  assertEquals(currentGameState.currentDrawer, "player1");
 
   // Step 3: Current drawer draws something
   await simulator.sendDrawingCommand("player1", {
-    type: 'start',
+    type: "start",
     x: 100,
     y: 100,
-    color: '#000000',
-    size: 5
+    color: "#000000",
+    size: 5,
   });
 
   await simulator.sendDrawingCommand("player1", {
-    type: 'move',
+    type: "move",
     x: 200,
     y: 200,
-    color: '#000000',
-    size: 5
+    color: "#000000",
+    size: 5,
   });
 
   await simulator.sendDrawingCommand("player1", {
-    type: 'end'
+    type: "end",
   });
 
   const drawingCommands = simulator.getDrawingCommands();
   assertEquals(drawingCommands.length, 3);
-  assertEquals(drawingCommands[0].type, 'start');
-  assertEquals(drawingCommands[1].type, 'move');
-  assertEquals(drawingCommands[2].type, 'end');
+  assertEquals(drawingCommands[0].type, "start");
+  assertEquals(drawingCommands[1].type, "move");
+  assertEquals(drawingCommands[2].type, "end");
 
   // Step 4: Other players make guesses
   await simulator.sendChatMessage("player2", "cat");
@@ -418,11 +421,11 @@ Deno.test("E2E Integration - Complete game flow from lobby to completion", async
   assertEquals(finalGameState.scores["player3"], 0); // Wrong guess
 
   // Step 6: Verify game phase changed to results
-  assertEquals(finalGameState.phase, 'results');
+  assertEquals(finalGameState.phase, "results");
 });
 
 Deno.test("E2E Integration - Real-time synchronization across multiple clients", async () => {
-  const gameState = createMockGameState({ phase: 'drawing' });
+  const gameState = createMockGameState({ phase: "drawing" });
   const simulator = new GameSessionSimulator(gameState);
 
   // Add multiple players
@@ -430,11 +433,11 @@ Deno.test("E2E Integration - Real-time synchronization across multiple clients",
     { id: "player1", name: "Alice" },
     { id: "player2", name: "Bob" },
     { id: "player3", name: "Charlie" },
-    { id: "player4", name: "Diana" }
+    { id: "player4", name: "Diana" },
   ];
 
   const playerWebSockets: MockWebSocket[] = [];
-  
+
   for (const player of players) {
     const ws = simulator.addPlayer(player.id, player.name);
     playerWebSockets.push(ws);
@@ -446,15 +449,15 @@ Deno.test("E2E Integration - Real-time synchronization across multiple clients",
 
   // Test drawing synchronization
   const drawingSequence = [
-    { type: 'start', x: 50, y: 50, color: '#ff0000', size: 3 },
-    { type: 'move', x: 60, y: 60, color: '#ff0000', size: 3 },
-    { type: 'move', x: 70, y: 70, color: '#ff0000', size: 3 },
-    { type: 'move', x: 80, y: 80, color: '#ff0000', size: 3 },
-    { type: 'end' }
+    { type: "start", x: 50, y: 50, color: "#ff0000", size: 3 },
+    { type: "move", x: 60, y: 60, color: "#ff0000", size: 3 },
+    { type: "move", x: 70, y: 70, color: "#ff0000", size: 3 },
+    { type: "move", x: 80, y: 80, color: "#ff0000", size: 3 },
+    { type: "end" },
   ];
 
   for (const command of drawingSequence) {
-    await simulator.sendDrawingCommand("player1", command as Omit<DrawingCommand, 'timestamp'>);
+    await simulator.sendDrawingCommand("player1", command as Omit<DrawingCommand, "timestamp">);
   }
 
   // Verify all players received the same drawing commands
@@ -466,7 +469,7 @@ Deno.test("E2E Integration - Real-time synchronization across multiple clients",
     { playerId: "player2", message: "Is it a line?" },
     { playerId: "player3", message: "Maybe a snake?" },
     { playerId: "player4", message: "I think it's a path" },
-    { playerId: "player2", message: "house" } // Correct guess
+    { playerId: "player2", message: "house" }, // Correct guess
   ];
 
   for (const chat of chatSequence) {
@@ -480,11 +483,11 @@ Deno.test("E2E Integration - Real-time synchronization across multiple clients",
   // Verify score synchronization
   const finalState = simulator.getGameState();
   assert(finalState.scores["player2"] > 0);
-  assertEquals(finalState.phase, 'results');
+  assertEquals(finalState.phase, "results");
 });
 
 Deno.test("E2E Integration - Error scenarios and recovery mechanisms", async () => {
-  const gameState = createMockGameState({ phase: 'drawing' });
+  const gameState = createMockGameState({ phase: "drawing" });
   const simulator = new GameSessionSimulator(gameState);
 
   // Add players
@@ -498,11 +501,11 @@ Deno.test("E2E Integration - Error scenarios and recovery mechanisms", async () 
   // Test 1: Non-drawer tries to draw (should fail)
   try {
     await simulator.sendDrawingCommand("player2", {
-      type: 'start',
+      type: "start",
       x: 100,
       y: 100,
-      color: '#000000',
-      size: 5
+      color: "#000000",
+      size: 5,
     });
     assert(false, "Should have thrown error for non-drawer trying to draw");
   } catch (error) {
@@ -512,18 +515,21 @@ Deno.test("E2E Integration - Error scenarios and recovery mechanisms", async () 
   // Test 2: Invalid drawing command coordinates
   try {
     await simulator.sendDrawingCommand("player1", {
-      type: 'start',
+      type: "start",
       x: -100, // Invalid coordinate
       y: 100,
-      color: '#000000',
-      size: 5
+      color: "#000000",
+      size: 5,
     });
     // Should still work but coordinates might be clamped
     const commands = simulator.getDrawingCommands();
     assert(commands.length > 0);
   } catch (error) {
     // Expected if validation is strict
-    console.log("Drawing command validation working:", error instanceof Error ? error.message : String(error));
+    console.log(
+      "Drawing command validation working:",
+      error instanceof Error ? error.message : String(error),
+    );
   }
 
   // Test 3: Connection loss simulation
@@ -549,11 +555,11 @@ Deno.test("E2E Integration - Cross-browser compatibility simulation", async () =
     { name: "Chrome", supportsWebSocket: true, touchSupport: false },
     { name: "Firefox", supportsWebSocket: true, touchSupport: false },
     { name: "Safari", supportsWebSocket: true, touchSupport: true },
-    { name: "Mobile Chrome", supportsWebSocket: true, touchSupport: true }
+    { name: "Mobile Chrome", supportsWebSocket: true, touchSupport: true },
   ];
 
   for (const browser of browserConfigs) {
-    const gameState = createMockGameState({ phase: 'drawing' });
+    const gameState = createMockGameState({ phase: "drawing" });
     const simulator = new GameSessionSimulator(gameState);
 
     // Simulate browser-specific behavior
@@ -570,33 +576,33 @@ Deno.test("E2E Integration - Cross-browser compatibility simulation", async () =
     if (browser.touchSupport) {
       // Simulate touch drawing (might have different coordinate handling)
       await simulator.sendDrawingCommand("player1", {
-        type: 'start',
+        type: "start",
         x: 150.5, // Touch might have decimal coordinates
         y: 200.7,
-        color: '#0000ff',
-        size: 8
+        color: "#0000ff",
+        size: 8,
       });
     } else {
       // Simulate mouse drawing
       await simulator.sendDrawingCommand("player1", {
-        type: 'start',
+        type: "start",
         x: 150, // Mouse typically has integer coordinates
         y: 200,
-        color: '#0000ff',
-        size: 5
+        color: "#0000ff",
+        size: 5,
       });
     }
 
     const commands = simulator.getDrawingCommands();
     assert(commands.length > 0);
-    assertEquals(commands[0].type, 'start');
+    assertEquals(commands[0].type, "start");
 
     console.log(`✓ ${browser.name} compatibility test passed`);
   }
 });
 
 Deno.test("E2E Integration - Performance under concurrent load", async () => {
-  const gameState = createMockGameState({ phase: 'drawing' });
+  const gameState = createMockGameState({ phase: "drawing" });
   const simulator = new GameSessionSimulator(gameState);
 
   // Add multiple players
@@ -607,7 +613,7 @@ Deno.test("E2E Integration - Performance under concurrent load", async () => {
     const playerId = `player${i}`;
     const playerName = `Player${i}`;
     players.push(playerId);
-    
+
     simulator.addPlayer(playerId, playerName);
     await simulator.joinRoom(playerId, playerName);
   }
@@ -621,11 +627,11 @@ Deno.test("E2E Integration - Performance under concurrent load", async () => {
   // Player 1 draws rapidly
   for (let i = 0; i < 100; i++) {
     const promise = simulator.sendDrawingCommand("player1", {
-      type: i === 0 ? 'start' : i === 99 ? 'end' : 'move',
+      type: i === 0 ? "start" : i === 99 ? "end" : "move",
       x: i * 2,
       y: i * 2,
-      color: '#000000',
-      size: 5
+      color: "#000000",
+      size: 5,
     });
     drawingPromises.push(promise);
   }
@@ -663,80 +669,80 @@ Deno.test("E2E Integration - Performance under concurrent load", async () => {
 
 Deno.test("E2E Integration - User acceptance testing simulation", async () => {
   // Simulate a complete user journey from different perspectives
-  
+
   // Host perspective
   const hostGameState = createMockGameState();
   const hostSimulator = new GameSessionSimulator(hostGameState);
-  
+
   const hostWs = hostSimulator.addPlayer("host", "GameHost");
   await hostSimulator.joinRoom("host", "GameHost");
-  
+
   // Host creates room and waits for players
   let currentState = hostSimulator.getGameState();
-  assertEquals(currentState.phase, 'waiting');
-  assert(currentState.players.find(p => p.id === "host")?.isHost);
-  
+  assertEquals(currentState.phase, "waiting");
+  assert(currentState.players.find((p) => p.id === "host")?.isHost);
+
   // Players join
   const player1Ws = hostSimulator.addPlayer("player1", "Guesser1");
   const player2Ws = hostSimulator.addPlayer("player2", "Guesser2");
-  
+
   await hostSimulator.joinRoom("player1", "Guesser1");
   await hostSimulator.joinRoom("player2", "Guesser2");
-  
+
   // Host starts game
   await hostSimulator.startGame("host");
   currentState = hostSimulator.getGameState();
-  assertEquals(currentState.phase, 'drawing');
-  
+  assertEquals(currentState.phase, "drawing");
+
   // Drawing phase - host draws
   const drawingSteps = [
-    { type: 'start', x: 100, y: 100, color: '#000000', size: 5 },
-    { type: 'move', x: 200, y: 100, color: '#000000', size: 5 },
-    { type: 'move', x: 200, y: 200, color: '#000000', size: 5 },
-    { type: 'move', x: 100, y: 200, color: '#000000', size: 5 },
-    { type: 'move', x: 100, y: 100, color: '#000000', size: 5 }, // Square
-    { type: 'end' }
+    { type: "start", x: 100, y: 100, color: "#000000", size: 5 },
+    { type: "move", x: 200, y: 100, color: "#000000", size: 5 },
+    { type: "move", x: 200, y: 200, color: "#000000", size: 5 },
+    { type: "move", x: 100, y: 200, color: "#000000", size: 5 },
+    { type: "move", x: 100, y: 100, color: "#000000", size: 5 }, // Square
+    { type: "end" },
   ];
-  
+
   for (const step of drawingSteps) {
-    await hostSimulator.sendDrawingCommand("host", step as Omit<DrawingCommand, 'timestamp'>);
+    await hostSimulator.sendDrawingCommand("host", step as Omit<DrawingCommand, "timestamp">);
   }
-  
+
   // Guessing phase - players make guesses
   await hostSimulator.sendChatMessage("player1", "circle");
   await hostSimulator.sendChatMessage("player2", "triangle");
   await hostSimulator.sendChatMessage("player1", "square"); // Correct!
-  
+
   // Verify game progression
   currentState = hostSimulator.getGameState();
-  assertEquals(currentState.phase, 'results');
+  assertEquals(currentState.phase, "results");
   assert(currentState.scores["player1"] > 0);
   assertEquals(currentState.scores["player2"], 0);
   assertEquals(currentState.scores["host"], 0);
-  
+
   // Verify user experience elements
   const chatMessages = hostSimulator.getChatMessages();
   const drawingCommands = hostSimulator.getDrawingCommands();
-  
+
   // Chat should show progression of guesses
   assertEquals(chatMessages.length, 3);
   assertEquals(chatMessages[2].isCorrect, true);
   assertEquals(chatMessages[2].playerName, "Guesser1");
-  
+
   // Drawing should capture the complete square
   assertEquals(drawingCommands.length, 6);
-  assertEquals(drawingCommands[0].type, 'start');
-  assertEquals(drawingCommands[5].type, 'end');
-  
+  assertEquals(drawingCommands[0].type, "start");
+  assertEquals(drawingCommands[5].type, "end");
+
   // Verify all players received updates
   const hostMessages = hostWs.getSentMessages();
   const player1Messages = player1Ws.getSentMessages();
   const player2Messages = player2Ws.getSentMessages();
-  
+
   assert(hostMessages.length > 0);
   assert(player1Messages.length > 0);
   assert(player2Messages.length > 0);
-  
+
   console.log("✓ User acceptance test completed successfully");
   console.log(`  - Game progressed through all phases: waiting → drawing → results`);
   console.log(`  - ${chatMessages.length} chat interactions processed`);

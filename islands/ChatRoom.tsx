@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { useComputed } from "@preact/signals";
 import type { ChatMessage } from "../types/game.ts";
 
@@ -6,7 +6,10 @@ import type { ChatMessage } from "../types/game.ts";
 interface ExtendedChatMessage extends ChatMessage {
   isOffline?: boolean;
 }
-import { WebSocketConnectionManager, connectionState } from "../lib/websocket/connection-manager.ts";
+import {
+  connectionState,
+  WebSocketConnectionManager,
+} from "../lib/websocket/connection-manager.ts";
 import { OfflineManager, offlineState } from "../lib/offline-manager.ts";
 import { ErrorBoundary } from "../components/ErrorBoundary.tsx";
 import ConnectionStatus from "../components/ConnectionStatus.tsx";
@@ -19,27 +22,27 @@ interface ChatRoomProps {
   isCurrentDrawer?: boolean;
 }
 
-function ChatRoomComponent({ 
-  roomId, 
-  playerId, 
-  playerName, 
-  currentWord, 
-  isCurrentDrawer = false 
+function ChatRoomComponent({
+  roomId,
+  playerId,
+  playerName,
+  currentWord,
+  isCurrentDrawer = false,
 }: ChatRoomProps) {
   const [messages, setMessages] = useState<ExtendedChatMessage[]>([]);
-  const [inputMessage, setInputMessage] = useState('');
+  const [inputMessage, setInputMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const connectionManagerRef = useRef<WebSocketConnectionManager | null>(null);
   const offlineManagerRef = useRef<OfflineManager | null>(null);
-  
+
   const connectionStatus = useComputed(() => connectionState.value);
   const offlineStatus = useComputed(() => offlineState.value);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   // Connection and offline management
@@ -48,21 +51,21 @@ function ChatRoomComponent({
     connectionManagerRef.current = new WebSocketConnectionManager(
       roomId,
       playerId,
-      playerName
+      playerName,
     );
 
     // Initialize offline manager
     offlineManagerRef.current = new OfflineManager(roomId);
 
     // Set up message handlers
-    connectionManagerRef.current.onMessage('chat-message', (message) => {
+    connectionManagerRef.current.onMessage("chat-message", (message) => {
       const chatMessage: ChatMessage = message.data;
-      setMessages(prev => [...prev, chatMessage]);
+      setMessages((prev) => [...prev, chatMessage]);
     });
 
-    connectionManagerRef.current.onMessage('room-update', (message) => {
-      if (message.data?.type === 'error') {
-        console.error('Chat error:', message.data.message);
+    connectionManagerRef.current.onMessage("room-update", (message) => {
+      if (message.data?.type === "error") {
+        console.error("Chat error:", message.data.message);
       }
     });
 
@@ -74,13 +77,13 @@ function ChatRoomComponent({
 
   const sendMessage = (e: Event) => {
     e.preventDefault();
-    
+
     const message = inputMessage.trim();
     if (!message || message.length > 200) return;
-    
+
     const connectionManager = connectionManagerRef.current;
     const offlineManager = offlineManagerRef.current;
-    
+
     if (!connectionManager) return;
 
     const chatMessage: ChatMessage = {
@@ -90,33 +93,33 @@ function ChatRoomComponent({
       message,
       timestamp: Date.now(),
       isGuess: false,
-      isCorrect: false
+      isCorrect: false,
     };
 
     // Try to send message
     const sent = connectionManager.sendMessage({
-      type: 'chat',
+      type: "chat",
       roomId,
       playerId,
-      data: { text: message }
+      data: { text: message },
     });
 
     if (!sent && offlineManager) {
       // Queue message for offline mode
       offlineManager.queueChatMessage(chatMessage);
-      
+
       // Add to local messages with offline indicator
-      setMessages(prev => [...prev, { ...chatMessage, isOffline: true }]);
+      setMessages((prev) => [...prev, { ...chatMessage, isOffline: true }]);
     }
-    
-    setInputMessage('');
+
+    setInputMessage("");
     inputRef.current?.focus();
   };
 
   const handleInputChange = (e: Event) => {
     const value = (e.target as HTMLInputElement).value;
     setInputMessage(value);
-    
+
     // Show typing indicator briefly
     setIsTyping(true);
     setTimeout(() => setIsTyping(false), 1000);
@@ -124,7 +127,7 @@ function ChatRoomComponent({
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   };
 
   const isCorrectGuess = (message: ChatMessage) => {
@@ -148,7 +151,9 @@ function ChatRoomComponent({
           <ConnectionStatus size="sm" />
           {offlineStatus.value.isOffline && offlineStatus.value.pendingMessages.length > 0 && (
             <div class="text-xs text-orange-600 bg-orange-50 px-2 py-1 rounded">
-              <span class="hidden sm:inline">{offlineStatus.value.pendingMessages.length} pending</span>
+              <span class="hidden sm:inline">
+                {offlineStatus.value.pendingMessages.length} pending
+              </span>
               <span class="sm:hidden">{offlineStatus.value.pendingMessages.length}</span>
             </div>
           )}
@@ -158,59 +163,69 @@ function ChatRoomComponent({
       {/* Messages area */}
       <div class="flex-1 bg-gray-50 rounded-lg p-3 mb-3 overflow-y-auto min-h-0">
         <div class="space-y-2">
-          {messages.length === 0 ? (
-            <div class="text-center text-gray-500 py-8">
-              <div class="text-2xl mb-2">💬</div>
-              <p class="text-sm">
-                {isCurrentDrawer 
-                  ? "Others will guess your drawing here!" 
-                  : "Start guessing what's being drawn!"}
-              </p>
-            </div>
-          ) : (
-            messages.map((message) => (
-              <div
-                key={message.id}
-                class={`flex flex-col space-y-1 ${
-                  isOwnMessage(message) ? 'items-end' : 'items-start'
-                }`}
-              >
+          {messages.length === 0
+            ? (
+              <div class="text-center text-gray-500 py-8">
+                <div class="text-2xl mb-2">💬</div>
+                <p class="text-sm">
+                  {isCurrentDrawer
+                    ? "Others will guess your drawing here!"
+                    : "Start guessing what's being drawn!"}
+                </p>
+              </div>
+            )
+            : (
+              messages.map((message) => (
                 <div
-                  class={`max-w-xs sm:max-w-sm px-3 py-2 rounded-lg text-sm ${
-                    isCorrectGuess(message)
-                      ? 'bg-green-100 border border-green-300 text-green-800'
-                      : isOwnMessage(message)
-                      ? 'bg-blue-500 text-white'
-                      : 'bg-white border border-gray-200 text-gray-800'
+                  key={message.id}
+                  class={`flex flex-col space-y-1 ${
+                    isOwnMessage(message) ? "items-end" : "items-start"
                   }`}
                 >
-                  {!isOwnMessage(message) && (
-                    <div class="text-xs font-medium mb-1 opacity-75">
-                      {message.playerName}
-                      {isCorrectGuess(message) && ' 🎉'}
+                  <div
+                    class={`max-w-xs sm:max-w-sm px-3 py-2 rounded-lg text-sm ${
+                      isCorrectGuess(message)
+                        ? "bg-green-100 border border-green-300 text-green-800"
+                        : isOwnMessage(message)
+                        ? "bg-blue-500 text-white"
+                        : "bg-white border border-gray-200 text-gray-800"
+                    }`}
+                  >
+                    {!isOwnMessage(message) && (
+                      <div class="text-xs font-medium mb-1 opacity-75">
+                        {message.playerName}
+                        {isCorrectGuess(message) && " 🎉"}
+                      </div>
+                    )}
+                    <div class="break-words">
+                      {message.message}
                     </div>
-                  )}
-                  <div class="break-words">
-                    {message.message}
+                    {isCorrectGuess(message) && (
+                      <div class="text-xs mt-1 font-medium">
+                        Correct guess!
+                      </div>
+                    )}
                   </div>
-                  {isCorrectGuess(message) && (
-                    <div class="text-xs mt-1 font-medium">
-                      Correct guess!
-                    </div>
-                  )}
+                  <div class="text-xs text-gray-400">
+                    {formatTime(message.timestamp)}
+                  </div>
                 </div>
-                <div class="text-xs text-gray-400">
-                  {formatTime(message.timestamp)}
-                </div>
-              </div>
-            ))
-          )}
+              ))
+            )}
           {isTyping && (
             <div class="flex items-center space-x-2 text-gray-500 text-sm">
               <div class="flex space-x-1">
                 <div class="w-1 h-1 bg-gray-400 rounded-full animate-bounce"></div>
-                <div class="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.1s"></div>
-                <div class="w-1 h-1 bg-gray-400 rounded-full animate-bounce" style="animation-delay: 0.2s"></div>
+                <div
+                  class="w-1 h-1 bg-gray-400 rounded-full animate-bounce"
+                  style="animation-delay: 0.1s"
+                >
+                </div>
+                <div
+                  class="w-1 h-1 bg-gray-400 rounded-full animate-bounce"
+                  style="animation-delay: 0.2s"
+                >
+                </div>
               </div>
               <span>Someone is typing...</span>
             </div>
@@ -235,11 +250,9 @@ function ChatRoomComponent({
           type="text"
           value={inputMessage}
           onInput={handleInputChange}
-          placeholder={
-            isCurrentDrawer 
-              ? "You're drawing! Others will guess..." 
-              : "Type your guess here..."
-          }
+          placeholder={isCurrentDrawer
+            ? "You're drawing! Others will guess..."
+            : "Type your guess here..."}
           maxLength={200}
           disabled={false} // Allow typing in offline mode
           class="flex-1 px-3 py-2 sm:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm touch-manipulation"
@@ -249,7 +262,7 @@ function ChatRoomComponent({
           disabled={!inputMessage.trim() || inputMessage.length > 200}
           class="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium touch-manipulation"
         >
-          <span class="hidden sm:inline">{offlineStatus.value.isOffline ? 'Queue' : 'Send'}</span>
+          <span class="hidden sm:inline">{offlineStatus.value.isOffline ? "Queue" : "Send"}</span>
           <span class="sm:hidden">→</span>
         </button>
       </form>

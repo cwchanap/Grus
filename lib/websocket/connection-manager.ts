@@ -5,7 +5,12 @@
 import { signal } from "@preact/signals";
 import type { ClientMessage, ServerMessage } from "../../types/game.ts";
 
-export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected' | 'reconnecting' | 'offline';
+export type ConnectionStatus =
+  | "connecting"
+  | "connected"
+  | "disconnected"
+  | "reconnecting"
+  | "offline";
 
 export interface ConnectionManagerOptions {
   maxReconnectAttempts?: number;
@@ -25,11 +30,11 @@ export interface ConnectionState {
 
 // Global connection state signals
 export const connectionState = signal<ConnectionState>({
-  status: 'disconnected',
+  status: "disconnected",
   reconnectAttempts: 0,
   lastConnected: null,
   error: null,
-  isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true
+  isOnline: typeof navigator !== "undefined" ? navigator.onLine : true,
 });
 
 export class WebSocketConnectionManager {
@@ -45,28 +50,28 @@ export class WebSocketConnectionManager {
   private isDestroyed = false;
 
   constructor(
-    roomId: string, 
-    playerId: string, 
+    roomId: string,
+    playerId: string,
     playerName: string,
-    options: ConnectionManagerOptions = {}
+    options: ConnectionManagerOptions = {},
   ) {
     this.roomId = roomId;
     this.playerId = playerId;
     this.playerName = playerName;
-    
+
     this.options = {
       maxReconnectAttempts: options.maxReconnectAttempts ?? 10,
       baseReconnectDelay: options.baseReconnectDelay ?? 1000,
       maxReconnectDelay: options.maxReconnectDelay ?? 30000,
       heartbeatInterval: options.heartbeatInterval ?? 30000,
-      offlineThreshold: options.offlineThreshold ?? 5000
+      offlineThreshold: options.offlineThreshold ?? 5000,
     };
 
     // Listen for online/offline events (only in browser)
-    if (typeof window !== 'undefined') {
+    if (typeof window !== "undefined") {
       this.setupOnlineOfflineHandlers();
     }
-    
+
     // Start connection
     this.connect();
   }
@@ -74,29 +79,29 @@ export class WebSocketConnectionManager {
   private setupOnlineOfflineHandlers() {
     const handleOnline = () => {
       connectionState.value = { ...connectionState.value, isOnline: true };
-      if (connectionState.value.status === 'offline') {
+      if (connectionState.value.status === "offline") {
         this.connect();
       }
     };
 
     const handleOffline = () => {
-      connectionState.value = { 
-        ...connectionState.value, 
+      connectionState.value = {
+        ...connectionState.value,
         isOnline: false,
-        status: 'offline'
+        status: "offline",
       };
       this.cleanup();
     };
 
-    if (typeof window !== 'undefined') {
-      window.addEventListener('online', handleOnline);
-      window.addEventListener('offline', handleOffline);
+    if (typeof window !== "undefined") {
+      globalThis.addEventListener("online", handleOnline);
+      globalThis.addEventListener("offline", handleOffline);
 
       // Cleanup listeners when destroyed
       const originalDestroy = this.destroy.bind(this);
       this.destroy = () => {
-        window.removeEventListener('online', handleOnline);
-        window.removeEventListener('offline', handleOffline);
+        globalThis.removeEventListener("online", handleOnline);
+        globalThis.removeEventListener("offline", handleOffline);
         originalDestroy();
       };
     }
@@ -107,34 +112,36 @@ export class WebSocketConnectionManager {
   }
 
   private connect() {
-    if (this.isDestroyed || (typeof navigator !== 'undefined' && !navigator.onLine)) {
-      this.updateConnectionState({ status: 'offline' });
+    if (this.isDestroyed || (typeof navigator !== "undefined" && !navigator.onLine)) {
+      this.updateConnectionState({ status: "offline" });
       return;
     }
 
     // Skip WebSocket in development environment
     if (this.isDevelopmentEnvironment()) {
-      console.log('WebSocket disabled in development environment');
-      this.updateConnectionState({ status: 'disconnected', error: 'Development mode' });
+      console.log("WebSocket disabled in development environment");
+      this.updateConnectionState({ status: "disconnected", error: "Development mode" });
       return;
     }
 
     this.cleanup();
-    this.updateConnectionState({ 
-      status: 'connecting', 
-      error: null 
+    this.updateConnectionState({
+      status: "connecting",
+      error: null,
     });
 
     try {
-      const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = typeof window !== 'undefined' ? window.location.host : 'localhost:8000';
+      const protocol = typeof window !== "undefined" && globalThis.location.protocol === "https:"
+        ? "wss:"
+        : "ws:";
+      const host = typeof window !== "undefined" ? globalThis.location.host : "localhost:8000";
       const wsUrl = `${protocol}//${host}/api/websocket?roomId=${this.roomId}`;
-      
+
       this.ws = new WebSocket(wsUrl);
       this.setupWebSocketHandlers();
     } catch (error) {
-      console.error('Failed to create WebSocket connection:', error);
-      this.handleConnectionError(error instanceof Error ? error.message : 'Connection failed');
+      console.error("Failed to create WebSocket connection:", error);
+      this.handleConnectionError(error instanceof Error ? error.message : "Connection failed");
     }
   }
 
@@ -142,25 +149,25 @@ export class WebSocketConnectionManager {
     if (!this.ws) return;
 
     this.ws.onopen = () => {
-      console.log('WebSocket connected');
+      console.log("WebSocket connected");
       this.updateConnectionState({
-        status: 'connected',
+        status: "connected",
         reconnectAttempts: 0,
         lastConnected: Date.now(),
-        error: null
+        error: null,
       });
 
       // Join room
       this.sendMessage({
-        type: 'join-room',
+        type: "join-room",
         roomId: this.roomId,
         playerId: this.playerId,
-        data: { playerName: this.playerName }
+        data: { playerName: this.playerName },
       });
 
       // Process queued messages
       this.processMessageQueue();
-      
+
       // Start heartbeat
       this.startHeartbeat();
     };
@@ -170,34 +177,34 @@ export class WebSocketConnectionManager {
         const message: ServerMessage = JSON.parse(event.data);
         this.handleMessage(message);
       } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+        console.error("Error parsing WebSocket message:", error);
       }
     };
 
     this.ws.onclose = (event) => {
-      console.log('WebSocket disconnected:', event.code, event.reason);
-      this.updateConnectionState({ status: 'disconnected' });
+      console.log("WebSocket disconnected:", event.code, event.reason);
+      this.updateConnectionState({ status: "disconnected" });
       this.stopHeartbeat();
-      
-      if (!this.isDestroyed && (typeof navigator === 'undefined' || navigator.onLine)) {
+
+      if (!this.isDestroyed && (typeof navigator === "undefined" || navigator.onLine)) {
         this.scheduleReconnect();
       }
     };
 
     this.ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      this.handleConnectionError('Connection error');
+      console.error("WebSocket error:", error);
+      this.handleConnectionError("Connection error");
     };
   }
 
   private handleMessage(message: ServerMessage) {
     // Handle system messages
-    if (message.type === 'error') {
-      this.updateConnectionState({ error: message.data?.message || 'Unknown error' });
+    if (message.type === "error") {
+      this.updateConnectionState({ error: message.data?.message || "Unknown error" });
       return;
     }
 
-    if (message.type === 'pong') {
+    if (message.type === "pong") {
       // Heartbeat response received
       return;
     }
@@ -207,18 +214,18 @@ export class WebSocketConnectionManager {
     if (handler) {
       handler(message);
     } else {
-      console.warn('No handler registered for message type:', message.type);
+      console.warn("No handler registered for message type:", message.type);
     }
   }
 
   private handleConnectionError(error: string) {
-    this.updateConnectionState({ 
-      status: 'disconnected', 
-      error 
+    this.updateConnectionState({
+      status: "disconnected",
+      error,
     });
     this.stopHeartbeat();
-    
-    if (!this.isDestroyed && (typeof navigator === 'undefined' || navigator.onLine)) {
+
+    if (!this.isDestroyed && (typeof navigator === "undefined" || navigator.onLine)) {
       this.scheduleReconnect();
     }
   }
@@ -229,11 +236,11 @@ export class WebSocketConnectionManager {
     }
 
     const currentAttempts = connectionState.value.reconnectAttempts;
-    
+
     if (currentAttempts >= this.options.maxReconnectAttempts) {
-      this.updateConnectionState({ 
-        status: 'disconnected',
-        error: 'Max reconnection attempts reached'
+      this.updateConnectionState({
+        status: "disconnected",
+        error: "Max reconnection attempts reached",
       });
       return;
     }
@@ -242,19 +249,23 @@ export class WebSocketConnectionManager {
     const baseDelay = this.options.baseReconnectDelay;
     const exponentialDelay = Math.min(
       baseDelay * Math.pow(2, currentAttempts),
-      this.options.maxReconnectDelay
+      this.options.maxReconnectDelay,
     );
-    
+
     // Add jitter (±25%)
     const jitter = exponentialDelay * 0.25 * (Math.random() - 0.5);
     const delay = Math.max(1000, exponentialDelay + jitter);
 
-    this.updateConnectionState({ 
-      status: 'reconnecting',
-      reconnectAttempts: currentAttempts + 1
+    this.updateConnectionState({
+      status: "reconnecting",
+      reconnectAttempts: currentAttempts + 1,
     });
 
-    console.log(`Reconnecting in ${Math.round(delay)}ms (attempt ${currentAttempts + 1}/${this.options.maxReconnectAttempts})`);
+    console.log(
+      `Reconnecting in ${Math.round(delay)}ms (attempt ${
+        currentAttempts + 1
+      }/${this.options.maxReconnectAttempts})`,
+    );
 
     this.reconnectTimeout = setTimeout(() => {
       this.connect();
@@ -263,14 +274,14 @@ export class WebSocketConnectionManager {
 
   private startHeartbeat() {
     this.stopHeartbeat();
-    
+
     this.heartbeatInterval = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
         this.sendMessage({
-          type: 'ping',
+          type: "ping",
           roomId: this.roomId,
           playerId: this.playerId,
-          data: { timestamp: Date.now() }
+          data: { timestamp: Date.now() },
         });
       }
     }, this.options.heartbeatInterval);
@@ -294,7 +305,7 @@ export class WebSocketConnectionManager {
 
   private cleanup() {
     this.stopHeartbeat();
-    
+
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
@@ -307,17 +318,17 @@ export class WebSocketConnectionManager {
   }
 
   private isDevelopmentEnvironment(): boolean {
-    return typeof window !== 'undefined' && (
-      window.location.hostname === 'localhost' || 
-      window.location.hostname === '127.0.0.1' ||
-      window.location.hostname.includes('dev')
+    return typeof window !== "undefined" && (
+      globalThis.location.hostname === "localhost" ||
+      globalThis.location.hostname === "127.0.0.1" ||
+      globalThis.location.hostname.includes("dev")
     );
   }
 
   // Public API
   public sendMessage(message: ClientMessage): boolean {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      this.updateConnectionState({ status: 'offline' });
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      this.updateConnectionState({ status: "offline" });
       return false;
     }
 
@@ -326,14 +337,16 @@ export class WebSocketConnectionManager {
         this.ws.send(JSON.stringify(message));
         return true;
       } catch (error) {
-        console.error('Error sending message:', error);
-        this.handleConnectionError('Send failed');
+        console.error("Error sending message:", error);
+        this.handleConnectionError("Send failed");
         return false;
       }
     } else {
       // Queue message for later if we're connecting/reconnecting
-      if (connectionState.value.status === 'connecting' || 
-          connectionState.value.status === 'reconnecting') {
+      if (
+        connectionState.value.status === "connecting" ||
+        connectionState.value.status === "reconnecting"
+      ) {
         this.messageQueue.push(message);
         return true;
       }
@@ -359,7 +372,7 @@ export class WebSocketConnectionManager {
   }
 
   public isConnected(): boolean {
-    return connectionState.value.status === 'connected';
+    return connectionState.value.status === "connected";
   }
 
   public destroy() {

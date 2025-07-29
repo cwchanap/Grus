@@ -22,7 +22,7 @@ export const handler: Handlers = {
       if (!env?.DB) {
         return new Response(JSON.stringify({ error: "Database not available" }), {
           status: 500,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -33,20 +33,20 @@ export const handler: Handlers = {
       if (!playerName) {
         return new Response(JSON.stringify({ error: "Player name is required" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
-      const roomManager = new RoomManager(env.DB);
+      const roomManager = new RoomManager();
       const result = await roomManager.joinRoom({
         roomId,
-        playerName: playerName.trim()
+        playerName: playerName.trim(),
       });
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -54,18 +54,21 @@ export const handler: Handlers = {
       const wsManager = getWebSocketManager(env);
       await wsManager.broadcastLobbyUpdate();
 
-      return new Response(JSON.stringify({ 
-        playerId: result.data?.playerId,
-        roomId
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({
+          playerId: result.data?.playerId,
+          roomId,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (error) {
       console.error("Error joining room:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
-  }
+  },
 };

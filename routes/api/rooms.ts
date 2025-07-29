@@ -16,18 +16,18 @@ export const handler: Handlers = {
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: 500,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
       return new Response(JSON.stringify({ rooms: result.data }), {
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     } catch (error) {
       console.error("Error listing rooms:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
   },
@@ -41,18 +41,18 @@ export const handler: Handlers = {
       if (!name || !hostName) {
         return new Response(JSON.stringify({ error: "Room name and host name are required" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
       const dbService = getDatabaseService();
-      
+
       // Create room
       const roomResult = await dbService.createRoom(name.trim(), "system", maxPlayers || 8);
       if (!roomResult.success) {
         return new Response(JSON.stringify({ error: roomResult.error }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -61,27 +61,30 @@ export const handler: Handlers = {
       if (!playerResult.success) {
         return new Response(JSON.stringify({ error: playerResult.error }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
       // Generate room code (simple implementation)
       const roomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
-      return new Response(JSON.stringify({ 
-        roomId: roomResult.data,
-        playerId: playerResult.data,
-        code: roomCode
-      }), {
-        status: 201,
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({
+          roomId: roomResult.data,
+          playerId: playerResult.data,
+          code: roomCode,
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (error) {
       console.error("Error creating room:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
-  }
+  },
 };

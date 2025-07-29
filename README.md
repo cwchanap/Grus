@@ -35,18 +35,21 @@ A real-time multiplayer drawing and guessing game built with Fresh (Deno), featu
 ### Installation
 
 1. Clone the repository:
+
 ```bash
 git clone <repository-url>
 cd grus
 ```
 
 2. Set up environment variables:
+
 ```bash
 cp .env.example .env
 # Edit .env with your Cloudflare credentials
 ```
 
 3. Install dependencies (Deno handles this automatically):
+
 ```bash
 deno task check
 ```
@@ -54,6 +57,7 @@ deno task check
 ### Development
 
 Start the development server:
+
 ```bash
 deno task start
 ```
@@ -79,11 +83,13 @@ KV_NAMESPACE_ID=bea0c6d861e7477fae40b0e9c126ed30
 ### Deno Deploy (Recommended)
 
 1. Build the application:
+
 ```bash
 deno task build
 ```
 
 2. Deploy to Deno Deploy:
+
 ```bash
 bash scripts/deploy-deno.sh
 ```
@@ -146,11 +152,13 @@ These resources are accessed via Cloudflare's REST API, not Workers bindings.
 ## 🧪 Testing
 
 Run tests:
+
 ```bash
 deno task test
 ```
 
 Run tests with coverage:
+
 ```bash
 deno task test:coverage
 ```
@@ -164,6 +172,7 @@ curl https://your-app.deno.dev/api/health
 ```
 
 Expected response:
+
 ```json
 {
   "status": "ok",

@@ -12,16 +12,16 @@ export class KVService {
 
   private async executeOperation<T>(
     operation: () => Promise<T>,
-    errorMessage: string
+    errorMessage: string,
   ): Promise<KVResult<T>> {
     try {
       const data = await operation();
       return { success: true, data };
     } catch (error) {
       console.error(`KV error: ${errorMessage}`, error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : errorMessage 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : errorMessage,
       };
     }
   }
@@ -105,7 +105,7 @@ export class KVService {
     return this.executeOperation(async () => {
       const prefix = `drawing:${roomId}:`;
       const result = await this.api.kvList({ prefix, limit: 100 });
-      
+
       const drawings = [];
       for (const key of result.keys || []) {
         const value = await this.api.kvGet(key.name);
@@ -113,7 +113,7 @@ export class KVService {
           drawings.push(JSON.parse(value));
         }
       }
-      
+
       return drawings.sort((a, b) => b.timestamp - a.timestamp);
     }, `Failed to get drawing history for room: ${roomId}`);
   }
@@ -131,7 +131,7 @@ export class KVService {
     return this.executeOperation(async () => {
       const prefix = `message:${roomId}:`;
       const result = await this.api.kvList({ prefix, limit });
-      
+
       const messages = [];
       for (const key of result.keys || []) {
         const value = await this.api.kvGet(key.name);
@@ -139,7 +139,7 @@ export class KVService {
           messages.push(JSON.parse(value));
         }
       }
-      
+
       return messages.sort((a, b) => b.timestamp - a.timestamp).slice(0, limit);
     }, `Failed to get recent messages for room: ${roomId}`);
   }
@@ -169,15 +169,15 @@ export class KVService {
   // Health check
   async healthCheck(): Promise<KVResult<boolean>> {
     return this.executeOperation(async () => {
-      const testKey = 'health_check';
+      const testKey = "health_check";
       const testValue = { timestamp: Date.now() };
-      
+
       await this.api.kvPut(testKey, JSON.stringify(testValue), { expirationTtl: 60 });
       const retrieved = await this.api.kvGet(testKey);
       await this.api.kvDelete(testKey);
-      
+
       return retrieved !== null;
-    }, 'KV health check failed');
+    }, "KV health check failed");
   }
 }
 

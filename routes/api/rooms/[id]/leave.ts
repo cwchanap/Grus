@@ -22,7 +22,7 @@ export const handler: Handlers = {
       if (!env?.DB) {
         return new Response(JSON.stringify({ error: "Database not available" }), {
           status: 500,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -33,17 +33,17 @@ export const handler: Handlers = {
       if (!playerId) {
         return new Response(JSON.stringify({ error: "Player ID is required" }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
-      const roomManager = new RoomManager(env.DB);
-      const result = await roomManager.leaveRoom(playerId);
+      const roomManager = new RoomManager();
+      const result = await roomManager.leaveRoom(roomId, playerId);
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
           status: 400,
-          headers: { "Content-Type": "application/json" }
+          headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -59,34 +59,37 @@ export const handler: Handlers = {
           data: {
             type: "host-transferred",
             newHostId: result.data.newHostId,
-            leftPlayerId: playerId
-          }
+            leftPlayerId: playerId,
+          },
         });
       } else {
         // Broadcast player left
         await wsManager.broadcastToRoomPublic(roomId, {
-          type: "room-update", 
+          type: "room-update",
           roomId,
           data: {
             type: "player-left",
-            playerId
-          }
+            playerId,
+          },
         });
       }
 
-      return new Response(JSON.stringify({ 
-        success: true,
-        wasHost: result.data?.wasHost || false,
-        newHostId: result.data?.newHostId
-      }), {
-        headers: { "Content-Type": "application/json" }
-      });
+      return new Response(
+        JSON.stringify({
+          success: true,
+          wasHost: result.data?.wasHost || false,
+          newHostId: result.data?.newHostId,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (error) {
       console.error("Error leaving room:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
-        headers: { "Content-Type": "application/json" }
+        headers: { "Content-Type": "application/json" },
       });
     }
-  }
+  },
 };

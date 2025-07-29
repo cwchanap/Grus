@@ -18,7 +18,7 @@ export default function GameSettingsModal({
   isOpen,
   onClose,
   onSave,
-  currentSettings
+  currentSettings,
 }: GameSettingsModalProps) {
   const [settings, setSettings] = useState<GameSettings>(currentSettings);
 
@@ -44,7 +44,12 @@ export default function GameSettingsModal({
             className="text-gray-400 hover:text-gray-600 transition-colors"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -57,10 +62,11 @@ export default function GameSettingsModal({
             </label>
             <select
               value={settings.maxRounds}
-              onChange={(e) => setSettings(prev => ({ 
-                ...prev, 
-                maxRounds: parseInt((e.target as HTMLSelectElement).value) 
-              }))}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  maxRounds: parseInt((e.target as HTMLSelectElement).value),
+                }))}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             >
               <option value={3}>3 Rounds</option>
@@ -79,10 +85,11 @@ export default function GameSettingsModal({
               <div className="flex-1">
                 <select
                   value={settings.roundTimeMinutes}
-                  onChange={(e) => setSettings(prev => ({ 
-                    ...prev, 
-                    roundTimeMinutes: parseInt((e.target as HTMLSelectElement).value) 
-                  }))}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      roundTimeMinutes: parseInt((e.target as HTMLSelectElement).value),
+                    }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value={0}>0</option>
@@ -97,10 +104,11 @@ export default function GameSettingsModal({
               <div className="flex-1">
                 <select
                   value={settings.roundTimeSeconds}
-                  onChange={(e) => setSettings(prev => ({ 
-                    ...prev, 
-                    roundTimeSeconds: parseInt((e.target as HTMLSelectElement).value) 
-                  }))}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      roundTimeSeconds: parseInt((e.target as HTMLSelectElement).value),
+                    }))}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value={0}>00</option>
@@ -112,7 +120,8 @@ export default function GameSettingsModal({
               </div>
             </div>
             <div className="text-xs text-gray-500 mt-1">
-              Total: {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(2, '0')}
+              Total:{" "}
+              {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(2, "0")}
             </div>
           </div>
 
@@ -121,8 +130,18 @@ export default function GameSettingsModal({
             <h3 className="text-sm font-medium text-gray-700 mb-2">Game Preview</h3>
             <div className="text-sm text-gray-600 space-y-1">
               <div>• {settings.maxRounds} rounds total</div>
-              <div>• {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(2, '0')} per round</div>
-              <div>• Estimated game time: ~{Math.ceil(settings.maxRounds * (settings.roundTimeMinutes + settings.roundTimeSeconds / 60) * 1.5)} minutes</div>
+              <div>
+                •{" "}
+                {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(2, "0")}
+                {" "}
+                per round
+              </div>
+              <div>
+                • Estimated game time: ~{Math.ceil(
+                  settings.maxRounds *
+                    (settings.roundTimeMinutes + settings.roundTimeSeconds / 60) * 1.5,
+                )} minutes
+              </div>
             </div>
           </div>
         </div>

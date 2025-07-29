@@ -38,7 +38,7 @@ export function serializeDrawingCommand(command: DrawingCommand): SerializedDraw
  */
 export function deserializeDrawingCommand(data: SerializedDrawingCommand): DrawingCommand {
   return {
-    type: data.type as DrawingCommand['type'],
+    type: data.type as DrawingCommand["type"],
     x: data.x,
     y: data.y,
     color: data.color,
@@ -52,7 +52,7 @@ export function deserializeDrawingCommand(data: SerializedDrawingCommand): Drawi
  */
 export function batchDrawingCommands(
   commands: DrawingCommand[],
-  batchId?: string
+  batchId?: string,
 ): DrawingCommandBatch {
   return {
     commands: commands.map(serializeDrawingCommand),
@@ -85,8 +85,8 @@ export function optimizeDrawingCommands(commands: DrawingCommand[]): DrawingComm
   for (const command of commands) {
     // Skip duplicate consecutive move commands with same position
     if (
-      command.type === 'move' &&
-      lastCommand?.type === 'move' &&
+      command.type === "move" &&
+      lastCommand?.type === "move" &&
       command.x === lastCommand.x &&
       command.y === lastCommand.y
     ) {
@@ -95,18 +95,18 @@ export function optimizeDrawingCommands(commands: DrawingCommand[]): DrawingComm
 
     // Simplify path by reducing points that are very close together
     if (
-      command.type === 'move' &&
-      lastCommand?.type === 'move' &&
+      command.type === "move" &&
+      lastCommand?.type === "move" &&
       command.x !== undefined &&
       command.y !== undefined &&
       lastCommand.x !== undefined &&
       lastCommand.y !== undefined
     ) {
       const distance = Math.sqrt(
-        Math.pow(command.x - lastCommand.x, 2) + 
-        Math.pow(command.y - lastCommand.y, 2)
+        Math.pow(command.x - lastCommand.x, 2) +
+          Math.pow(command.y - lastCommand.y, 2),
       );
-      
+
       // Skip points that are too close (less than 2 pixels apart)
       if (distance < 2) {
         continue;
@@ -126,9 +126,9 @@ export function optimizeDrawingCommands(commands: DrawingCommand[]): DrawingComm
 export function compressDrawingData(commands: DrawingCommand[]): string {
   const optimized = optimizeDrawingCommands(commands);
   const serialized = optimized.map(serializeDrawingCommand);
-  
+
   // Simple compression: remove redundant properties
-  const compressed = serialized.map(cmd => {
+  const compressed = serialized.map((cmd) => {
     const result: any = { t: cmd.type, ts: cmd.timestamp };
     if (cmd.x !== undefined) result.x = Math.round(cmd.x * 10) / 10; // Round to 1 decimal
     if (cmd.y !== undefined) result.y = Math.round(cmd.y * 10) / 10;
@@ -146,7 +146,7 @@ export function compressDrawingData(commands: DrawingCommand[]): string {
 export function decompressDrawingData(compressedData: string): DrawingCommand[] {
   try {
     const compressed = JSON.parse(compressedData);
-    
+
     return compressed.map((cmd: any) => ({
       type: cmd.t,
       x: cmd.x,
@@ -156,7 +156,7 @@ export function decompressDrawingData(compressedData: string): DrawingCommand[] 
       timestamp: cmd.ts,
     }));
   } catch (error) {
-    console.error('Failed to decompress drawing data:', error);
+    console.error("Failed to decompress drawing data:", error);
     return [];
   }
 }
@@ -165,25 +165,25 @@ export function decompressDrawingData(compressedData: string): DrawingCommand[] 
  * Validate drawing command data
  */
 export function validateDrawingCommand(command: any): command is DrawingCommand {
-  if (!command || typeof command !== 'object') {
+  if (!command || typeof command !== "object") {
     return false;
   }
 
-  const validTypes = ['start', 'move', 'end', 'clear'];
+  const validTypes = ["start", "move", "end", "clear"];
   if (!validTypes.includes(command.type)) {
     return false;
   }
 
-  if (typeof command.timestamp !== 'number') {
+  if (typeof command.timestamp !== "number") {
     return false;
   }
 
   // Validate coordinates for start and move commands
-  if (command.type === 'start' || command.type === 'move') {
-    if (typeof command.x !== 'number' || typeof command.y !== 'number') {
+  if (command.type === "start" || command.type === "move") {
+    if (typeof command.x !== "number" || typeof command.y !== "number") {
       return false;
     }
-    
+
     // Basic bounds checking (assuming reasonable canvas size)
     if (command.x < 0 || command.x > 2000 || command.y < 0 || command.y > 2000) {
       return false;
@@ -192,14 +192,14 @@ export function validateDrawingCommand(command: any): command is DrawingCommand 
 
   // Validate color format
   if (command.color !== undefined) {
-    if (typeof command.color !== 'string' || !command.color.match(/^#[0-9A-Fa-f]{6}$/)) {
+    if (typeof command.color !== "string" || !command.color.match(/^#[0-9A-Fa-f]{6}$/)) {
       return false;
     }
   }
 
   // Validate brush size
   if (command.size !== undefined) {
-    if (typeof command.size !== 'number' || command.size < 1 || command.size > 50) {
+    if (typeof command.size !== "number" || command.size < 1 || command.size > 50) {
       return false;
     }
   }
@@ -222,8 +222,8 @@ export class DrawingCommandThrottler {
 
   throttle(command: DrawingCommand, callback: (command: DrawingCommand) => void): void {
     const now = Date.now();
-    
-    if (command.type === 'start' || command.type === 'end' || command.type === 'clear') {
+
+    if (command.type === "start" || command.type === "end" || command.type === "clear") {
       // Always send these commands immediately
       this.clearPending();
       callback(command);
@@ -239,7 +239,7 @@ export class DrawingCommandThrottler {
     } else {
       // Queue the command to be sent later
       this.pendingCommand = command;
-      
+
       if (this.timeoutId === null) {
         const delay = this.minInterval - (now - this.lastCommandTime);
         this.timeoutId = setTimeout(() => {
@@ -279,7 +279,7 @@ export class DrawingCommandBuffer {
   constructor(
     flushCallback: (commands: DrawingCommand[]) => void,
     maxBufferSize = 50,
-    flushIntervalMs = 100
+    flushIntervalMs = 100,
   ) {
     this.flushCallback = flushCallback;
     this.maxBufferSize = maxBufferSize;
@@ -289,12 +289,12 @@ export class DrawingCommandBuffer {
 
   add(command: DrawingCommand): void {
     this.buffer.push(command);
-    
+
     // Flush immediately for critical commands or when buffer is full
     if (
-      command.type === 'start' || 
-      command.type === 'end' || 
-      command.type === 'clear' ||
+      command.type === "start" ||
+      command.type === "end" ||
+      command.type === "clear" ||
       this.buffer.length >= this.maxBufferSize
     ) {
       this.flush();
@@ -303,7 +303,7 @@ export class DrawingCommandBuffer {
 
   flush(): void {
     if (this.buffer.length === 0) return;
-    
+
     const commands = [...this.buffer];
     this.buffer = [];
     this.flushCallback(commands);

@@ -14,23 +14,23 @@ export const handler: Handlers<LobbyData> = {
       const result = await dbService.getActiveRooms(20);
 
       if (!result.success) {
-        return ctx.render({ 
-          rooms: [], 
-          error: result.error || "Failed to load rooms" 
+        return ctx.render({
+          rooms: [],
+          error: result.error || "Failed to load rooms",
         });
       }
 
-      return ctx.render({ 
-        rooms: result.data || [] 
+      return ctx.render({
+        rooms: result.data || [],
       });
     } catch (error) {
       console.error("Error loading lobby:", error);
-      return ctx.render({ 
-        rooms: [], 
-        error: "Failed to load lobby" 
+      return ctx.render({
+        rooms: [],
+        error: "Failed to load lobby",
       });
     }
-  }
+  },
 };
 
 export default function Home({ data }: PageProps<LobbyData>) {
@@ -45,9 +45,9 @@ export default function Home({ data }: PageProps<LobbyData>) {
             Join a room or create your own to start playing with friends!
           </p>
         </div>
-        
-        <GameLobby 
-          initialRooms={data.rooms} 
+
+        <GameLobby
+          initialRooms={data.rooms}
           error={data.error}
         />
       </div>

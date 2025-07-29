@@ -20,7 +20,7 @@ export class WebSocketManager {
 
   async handleRequest(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    
+
     // Handle WebSocket upgrade requests
     if (request.headers.get("Upgrade") === "websocket") {
       return this.handleWebSocketUpgrade(request);
@@ -37,7 +37,7 @@ export class WebSocketManager {
   private async handleWebSocketUpgrade(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("roomId");
-    
+
     // Handle lobby connections (no roomId)
     if (!roomId) {
       return this.handleLobbyWebSocket(request);
@@ -57,11 +57,11 @@ export class WebSocketManager {
     const info = {
       activeRooms: this.handlers.size,
       timestamp: new Date().toISOString(),
-      status: "healthy"
+      status: "healthy",
     };
 
     return new Response(JSON.stringify(info), {
-      headers: { "Content-Type": "application/json" }
+      headers: { "Content-Type": "application/json" },
     });
   }
 
@@ -84,7 +84,7 @@ export class WebSocketManager {
     // Clean up inactive handlers
     const now = Date.now();
     const config = getConfig();
-    
+
     for (const [roomId, handler] of this.handlers.entries()) {
       // Check if room is still active
       const isActive = await this.isRoomActive(roomId);
@@ -106,7 +106,7 @@ export class WebSocketManager {
         GROUP BY r.id 
         HAVING COUNT(p.id) > 0
       `);
-      
+
       const result = await stmt.bind(roomId).first();
       return result !== null;
     } catch (error) {
@@ -119,7 +119,7 @@ export class WebSocketManager {
   async getRoomConnectionCount(roomId: string): Promise<number> {
     const handler = this.handlers.get(roomId);
     if (!handler) return 0;
-    
+
     // Access the private connections map through a public method
     return (handler as any).getConnectionCount?.() || 0;
   }
@@ -164,7 +164,7 @@ export class WebSocketManager {
     }
 
     // Check if we're in Cloudflare Workers environment
-    if (typeof WebSocketPair !== 'undefined') {
+    if (typeof WebSocketPair !== "undefined") {
       // Cloudflare Workers environment
       const webSocketPair = new WebSocketPair();
       const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
@@ -189,18 +189,23 @@ export class WebSocketManager {
         this.lobbyConnections.delete(server);
       });
 
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-      } as ResponseInit & { webSocket: WebSocket });
+      return new Response(
+        null,
+        {
+          status: 101,
+          webSocket: client,
+        } as ResponseInit & { webSocket: WebSocket },
+      );
     } else {
       // Deno environment - WebSocket upgrade is handled differently
       // For development, we'll return a placeholder response
       // In production with Cloudflare Workers, the WebSocketPair will be available
-      console.log("WebSocket connection attempted in Deno environment - not fully supported in development");
-      return new Response("WebSocket not supported in development environment", { 
+      console.log(
+        "WebSocket connection attempted in Deno environment - not fully supported in development",
+      );
+      return new Response("WebSocket not supported in development environment", {
         status: 501,
-        headers: { "Content-Type": "text/plain" }
+        headers: { "Content-Type": "text/plain" },
       });
     }
   }
@@ -208,14 +213,14 @@ export class WebSocketManager {
   private async handleLobbyMessage(ws: WebSocket, data: string) {
     try {
       const message = JSON.parse(data);
-      
+
       if (message.type === "subscribe-lobby") {
         // Client wants to subscribe to lobby updates
         // Send current room list
         const rooms = await this.getLobbyRooms();
         this.sendLobbyMessage(ws, {
           type: "lobby-update",
-          data: { rooms }
+          data: { rooms },
         });
       }
     } catch (error) {
@@ -235,7 +240,7 @@ export class WebSocketManager {
         ORDER BY r.created_at DESC
         LIMIT 20
       `);
-      
+
       const result = await stmt.all();
       return result.results || [];
     } catch (error) {
@@ -260,11 +265,11 @@ export class WebSocketManager {
     const rooms = await this.getLobbyRooms();
     const message = {
       type: "lobby-update",
-      data: { rooms }
+      data: { rooms },
     };
 
     const messageStr = JSON.stringify(message);
-    
+
     // Send to all lobby connections
     for (const ws of this.lobbyConnections) {
       if (ws.readyState === WebSocket.OPEN) {

@@ -3,7 +3,7 @@
  */
 
 import { signal } from "@preact/signals";
-import type { GameState, ChatMessage, DrawingCommand } from "../types/game.ts";
+import type { ChatMessage, DrawingCommand, GameState } from "../types/game.ts";
 
 export interface OfflineState {
   isOffline: boolean;
@@ -26,7 +26,7 @@ export const offlineState = signal<OfflineState>({
   pendingMessages: [],
   pendingDrawingCommands: [],
   localGameState: null,
-  queuedActions: []
+  queuedActions: [],
 });
 
 export class OfflineManager {
@@ -50,8 +50,8 @@ export class OfflineManager {
       this.startOfflineMode();
     };
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    globalThis.addEventListener("online", handleOnline);
+    globalThis.addEventListener("offline", handleOffline);
 
     // Initial state
     this.setOfflineStatus(!navigator.onLine);
@@ -60,14 +60,14 @@ export class OfflineManager {
   private setOfflineStatus(isOffline: boolean) {
     offlineState.value = {
       ...offlineState.value,
-      isOffline
+      isOffline,
     };
     this.saveOfflineState();
   }
 
   private startOfflineMode() {
-    console.log('Entering offline mode - preserving local state');
-    
+    console.log("Entering offline mode - preserving local state");
+
     // Start periodic state saving
     this.syncInterval = setInterval(() => {
       this.saveOfflineState();
@@ -86,11 +86,11 @@ export class OfflineManager {
     try {
       const stateToSave = {
         ...offlineState.value,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       };
       localStorage.setItem(this.storageKey, JSON.stringify(stateToSave));
     } catch (error) {
-      console.error('Failed to save offline state:', error);
+      console.error("Failed to save offline state:", error);
     }
   }
 
@@ -100,18 +100,18 @@ export class OfflineManager {
       const saved = localStorage.getItem(this.storageKey);
       if (saved) {
         const parsedState = JSON.parse(saved);
-        
+
         // Only restore if saved within last hour
         if (Date.now() - parsedState.timestamp < 3600000) {
           offlineState.value = {
             ...offlineState.value,
             ...parsedState,
-            isOffline: !navigator.onLine
+            isOffline: !navigator.onLine,
           };
         }
       }
     } catch (error) {
-      console.error('Failed to load offline state:', error);
+      console.error("Failed to load offline state:", error);
     }
   }
 
@@ -120,7 +120,7 @@ export class OfflineManager {
     const currentState = offlineState.value;
     offlineState.value = {
       ...currentState,
-      pendingMessages: [...currentState.pendingMessages, message]
+      pendingMessages: [...currentState.pendingMessages, message],
     };
     this.saveOfflineState();
   }
@@ -130,7 +130,7 @@ export class OfflineManager {
     const currentState = offlineState.value;
     offlineState.value = {
       ...currentState,
-      pendingDrawingCommands: [...currentState.pendingDrawingCommands, ...commands]
+      pendingDrawingCommands: [...currentState.pendingDrawingCommands, ...commands],
     };
     this.saveOfflineState();
   }
@@ -141,13 +141,13 @@ export class OfflineManager {
       id: crypto.randomUUID(),
       type,
       data,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
 
     const currentState = offlineState.value;
     offlineState.value = {
       ...currentState,
-      queuedActions: [...currentState.queuedActions, action]
+      queuedActions: [...currentState.queuedActions, action],
     };
     this.saveOfflineState();
   }
@@ -158,8 +158,8 @@ export class OfflineManager {
       ...offlineState.value,
       localGameState: {
         ...offlineState.value.localGameState,
-        ...gameState
-      }
+        ...gameState,
+      },
     };
     this.saveOfflineState();
   }
@@ -167,35 +167,37 @@ export class OfflineManager {
   // Sync pending data when coming back online
   private async syncPendingData() {
     const state = offlineState.value;
-    
-    if (state.pendingMessages.length === 0 && 
-        state.pendingDrawingCommands.length === 0 && 
-        state.queuedActions.length === 0) {
+
+    if (
+      state.pendingMessages.length === 0 &&
+      state.pendingDrawingCommands.length === 0 &&
+      state.queuedActions.length === 0
+    ) {
       return;
     }
 
-    console.log('Syncing pending offline data...');
+    console.log("Syncing pending offline data...");
 
     try {
       // This would typically send data to the server
       // For now, we'll just clear the pending data
       await this.sendPendingData(state);
-      
+
       // Clear pending data after successful sync
       offlineState.value = {
         ...offlineState.value,
         pendingMessages: [],
         pendingDrawingCommands: [],
         queuedActions: [],
-        lastSyncTime: Date.now()
+        lastSyncTime: Date.now(),
       };
-      
+
       this.saveOfflineState();
       this.stopOfflineMode();
-      
-      console.log('Offline data synced successfully');
+
+      console.log("Offline data synced successfully");
     } catch (error) {
-      console.error('Failed to sync offline data:', error);
+      console.error("Failed to sync offline data:", error);
     }
   }
 
@@ -206,7 +208,7 @@ export class OfflineManager {
     // 2. Send pending drawing commands
     // 3. Execute queued actions
     // 4. Reconcile local game state with server state
-    
+
     return new Promise((resolve) => {
       // Simulate network delay
       setTimeout(resolve, 1000);
@@ -224,7 +226,7 @@ export class OfflineManager {
     return {
       messages: state.pendingMessages.length,
       drawings: state.pendingDrawingCommands.length,
-      actions: state.queuedActions.length
+      actions: state.queuedActions.length,
     };
   }
 
@@ -236,20 +238,20 @@ export class OfflineManager {
       pendingMessages: [],
       pendingDrawingCommands: [],
       localGameState: null,
-      queuedActions: []
+      queuedActions: [],
     };
-    
+
     try {
       localStorage.removeItem(this.storageKey);
     } catch (error) {
-      console.error('Failed to clear offline data:', error);
+      console.error("Failed to clear offline data:", error);
     }
   }
 
   // Destroy and cleanup
   public destroy() {
     this.stopOfflineMode();
-    window.removeEventListener('online', this.setupOnlineOfflineHandlers);
-    window.removeEventListener('offline', this.setupOnlineOfflineHandlers);
+    globalThis.removeEventListener("online", this.setupOnlineOfflineHandlers);
+    globalThis.removeEventListener("offline", this.setupOnlineOfflineHandlers);
   }
 }

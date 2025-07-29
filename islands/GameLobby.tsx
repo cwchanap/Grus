@@ -22,8 +22,10 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
   // WebSocket connection for real-time updates
   useEffect(() => {
     // Skip WebSocket in development environment
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-      console.log('WebSocket disabled in development environment');
+    if (
+      globalThis.location.hostname === "localhost" || globalThis.location.hostname === "127.0.0.1"
+    ) {
+      console.log("WebSocket disabled in development environment");
       setWsConnected(false);
       return;
     }
@@ -33,59 +35,65 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
 
     const connectWebSocket = () => {
       try {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/api/websocket`;
-        
+        const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${globalThis.location.host}/api/websocket`;
+
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log('WebSocket connected');
+          console.log("WebSocket connected");
           setWsConnected(true);
-          
+
           // Subscribe to lobby updates
           ws?.send(JSON.stringify({
-            type: 'subscribe-lobby',
-            data: {}
+            type: "subscribe-lobby",
+            data: {},
           }));
         };
 
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-            
-            if (message.type === 'lobby-update') {
+
+            if (message.type === "lobby-update") {
               // Refresh room list when lobby updates
               refreshRooms();
             }
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error("Error parsing WebSocket message:", error);
           }
         };
 
         ws.onclose = () => {
-          console.log('WebSocket disconnected');
+          console.log("WebSocket disconnected");
           setWsConnected(false);
-          
+
           // Don't attempt to reconnect in development if WebSocket is not supported
-          if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-            console.log('WebSocket not supported in development environment');
+          if (
+            globalThis.location.hostname === "localhost" ||
+            globalThis.location.hostname === "127.0.0.1"
+          ) {
+            console.log("WebSocket not supported in development environment");
             return;
           }
-          
+
           // Attempt to reconnect after 3 seconds in production
           reconnectTimeout = setTimeout(connectWebSocket, 3000);
         };
 
         ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
+          console.error("WebSocket error:", error);
           setWsConnected(false);
         };
       } catch (error) {
-        console.error('Failed to connect WebSocket:', error);
+        console.error("Failed to connect WebSocket:", error);
         setWsConnected(false);
-        
+
         // Don't retry in development environment
-        if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+        if (
+          globalThis.location.hostname !== "localhost" &&
+          globalThis.location.hostname !== "127.0.0.1"
+        ) {
           // Retry connection after 5 seconds in production
           reconnectTimeout = setTimeout(connectWebSocket, 5000);
         }
@@ -107,16 +115,16 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
   const refreshRooms = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/rooms');
-      
+      const response = await fetch("/api/rooms");
+
       if (response.ok) {
         const data = await response.json();
         setRooms(data.rooms || []);
       } else {
-        console.error('Failed to refresh rooms');
+        console.error("Failed to refresh rooms");
       }
     } catch (error) {
-      console.error('Error refreshing rooms:', error);
+      console.error("Error refreshing rooms:", error);
     } finally {
       setLoading(false);
     }
@@ -138,7 +146,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
 
   const handleRoomJoined = (roomId: string, playerId: string) => {
     // Navigate to game room
-    window.location.href = `/room/${roomId}?playerId=${playerId}`;
+    globalThis.location.href = `/room/${roomId}?playerId=${playerId}`;
   };
 
   if (error) {
@@ -170,16 +178,17 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
             disabled={loading}
             class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
           >
-            <span class={`text-sm ${loading ? 'animate-spin' : ''}`}>
-              {loading ? '⟳' : '↻'}
+            <span class={`text-sm ${loading ? "animate-spin" : ""}`}>
+              {loading ? "⟳" : "↻"}
             </span>
             <span class="hidden xs:inline">Refresh</span>
           </button>
-          
+
           <div class="flex items-center space-x-2">
-            <div class={`w-2 h-2 rounded-full ${wsConnected ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
+            <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-500" : "bg-yellow-500"}`}>
+            </div>
             <span class="text-xs sm:text-sm text-gray-600">
-              {wsConnected ? 'Connected' : 'Dev Mode'}
+              {wsConnected ? "Connected" : "Dev Mode"}
             </span>
           </div>
         </div>
@@ -195,31 +204,33 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
 
       {/* Room list - Enhanced mobile grid */}
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {rooms.length === 0 ? (
-          <div class="col-span-full text-center py-12 px-4">
-            <div class="text-gray-400 text-4xl sm:text-6xl mb-4">🎨</div>
-            <h3 class="text-lg sm:text-xl font-semibold text-gray-600 mb-2">
-              No active rooms
-            </h3>
-            <p class="text-sm sm:text-base text-gray-500 mb-6 max-w-md mx-auto">
-              Be the first to create a room and start playing!
-            </p>
-            <button
-              onClick={handleCreateRoom}
-              class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation no-tap-highlight"
-            >
-              Create First Room
-            </button>
-          </div>
-        ) : (
-          rooms.map((roomSummary) => (
-            <RoomCard
-              key={roomSummary.room.id}
-              roomSummary={roomSummary}
-              onJoin={() => handleJoinRoom(roomSummary)}
-            />
-          ))
-        )}
+        {rooms.length === 0
+          ? (
+            <div class="col-span-full text-center py-12 px-4">
+              <div class="text-gray-400 text-4xl sm:text-6xl mb-4">🎨</div>
+              <h3 class="text-lg sm:text-xl font-semibold text-gray-600 mb-2">
+                No active rooms
+              </h3>
+              <p class="text-sm sm:text-base text-gray-500 mb-6 max-w-md mx-auto">
+                Be the first to create a room and start playing!
+              </p>
+              <button
+                onClick={handleCreateRoom}
+                class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation no-tap-highlight"
+              >
+                Create First Room
+              </button>
+            </div>
+          )
+          : (
+            rooms.map((roomSummary) => (
+              <RoomCard
+                key={roomSummary.room.id}
+                roomSummary={roomSummary}
+                onJoin={() => handleJoinRoom(roomSummary)}
+              />
+            ))
+          )}
       </div>
 
       {/* Modals */}
@@ -228,7 +239,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
         onClose={() => showCreateModal.value = false}
         onSuccess={handleRoomCreated}
       />
-      
+
       <JoinRoomModal
         show={showJoinModal.value}
         room={selectedRoom.value}
@@ -258,17 +269,19 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
             {room.name}
           </h3>
           <p class="text-xs sm:text-sm text-gray-600 truncate">
-            Host: {host?.name || 'Unknown'}
+            Host: {host?.name || "Unknown"}
           </p>
         </div>
         <div class="text-right flex-shrink-0">
           <div class="text-sm text-gray-500 mb-1">
             {playerCount}/{room.maxPlayers}
           </div>
-          <div class={`text-xs px-2 py-1 rounded-full font-medium ${
-            canJoin ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
-          }`}>
-            {canJoin ? 'Open' : 'Full'}
+          <div
+            class={`text-xs px-2 py-1 rounded-full font-medium ${
+              canJoin ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+            }`}
+          >
+            {canJoin ? "Open" : "Full"}
           </div>
         </div>
       </div>
@@ -276,20 +289,18 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
       <div class="mb-4">
         <div class="text-xs sm:text-sm text-gray-600 mb-2">Players:</div>
         <div class="flex flex-wrap gap-1">
-          {roomSummary.players.slice(0, 4).map((player) => (
+          {roomSummary.players.slice(0, 4).map((player: any) => (
             <span
               key={player.id}
               class={`text-xs px-2 py-1 rounded-full truncate max-w-20 sm:max-w-none ${
-                player.isHost 
-                  ? 'bg-yellow-100 text-yellow-800' 
-                  : 'bg-gray-100 text-gray-700'
+                player.isHost ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"
               }`}
-              title={`${player.name}${player.isHost ? ' (Host)' : ''}`}
+              title={`${player.name}${player.isHost ? " (Host)" : ""}`}
             >
               <span class="truncate">
                 {player.name.length > 8 ? `${player.name.slice(0, 8)}...` : player.name}
               </span>
-              {player.isHost && ' 👑'}
+              {player.isHost && " 👑"}
             </span>
           ))}
           {roomSummary.players.length > 4 && (
@@ -305,11 +316,11 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
         disabled={!canJoin}
         class={`w-full py-3 px-4 rounded-lg font-medium transition-all duration-200 touch-manipulation no-tap-highlight text-touch ${
           canJoin
-            ? 'bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 active:scale-95'
-            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            ? "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 active:scale-95"
+            : "bg-gray-300 text-gray-500 cursor-not-allowed"
         }`}
       >
-        {canJoin ? 'Join Room' : 'Room Full'}
+        {canJoin ? "Join Room" : "Room Full"}
       </button>
     </div>
   );

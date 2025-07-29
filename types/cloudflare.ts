@@ -44,12 +44,12 @@ export interface KVNamespace {
   get(key: string, options?: KVNamespaceGetOptions): Promise<string | null>;
   getWithMetadata<Metadata = unknown>(
     key: string,
-    options?: KVNamespaceGetOptions
+    options?: KVNamespaceGetOptions,
   ): Promise<KVNamespaceGetWithMetadataResult<string, Metadata>>;
   put(
     key: string,
     value: string | ArrayBuffer | ArrayBufferView | ReadableStream,
-    options?: KVNamespacePutOptions
+    options?: KVNamespacePutOptions,
   ): Promise<void>;
   delete(key: string): Promise<void>;
   list(options?: KVNamespaceListOptions): Promise<KVNamespaceListResult>;

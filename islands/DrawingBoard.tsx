@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from "preact/hooks";
-import { DrawingCommand, GameState, ClientMessage, ServerMessage } from "../types/game.ts";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { ClientMessage, DrawingCommand, GameState, ServerMessage } from "../types/game.ts";
 import DrawingEngine, { DrawingEngineRef, DrawingTool } from "./DrawingEngine.tsx";
 
 export interface DrawingBoardProps {
@@ -25,13 +25,15 @@ export default function DrawingBoard({
 }: DrawingBoardProps) {
   const drawingEngineRef = useRef<DrawingEngineRef>(null);
   const wsRef = useRef<WebSocket | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connecting" | "connected" | "disconnected"
+  >("disconnected");
   const [drawingHistory, setDrawingHistory] = useState<DrawingCommand[]>([]);
   const [isDrawer, setIsDrawer] = useState(false);
   const [currentTool, setCurrentTool] = useState<DrawingTool>({
-    color: '#000000',
+    color: "#000000",
     size: 5,
-    type: 'brush'
+    type: "brush",
   });
 
   // Determine if current player is the drawer
@@ -46,25 +48,26 @@ export default function DrawingBoard({
 
     const connectWebSocket = () => {
       try {
-        setConnectionStatus('connecting');
-        
+        setConnectionStatus("connecting");
+
         // Construct WebSocket URL
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws?roomId=${roomId}&playerId=${playerId}`;
-        
+        const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl =
+          `${protocol}//${globalThis.location.host}/ws?roomId=${roomId}&playerId=${playerId}`;
+
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {
-          console.log('DrawingBoard WebSocket connected');
-          setConnectionStatus('connected');
-          
+          console.log("DrawingBoard WebSocket connected");
+          setConnectionStatus("connected");
+
           // Subscribe to drawing updates
           const subscribeMessage: ClientMessage = {
-            type: 'join-room',
+            type: "join-room",
             roomId,
             playerId,
-            data: { subscribeToDrawing: true }
+            data: { subscribeToDrawing: true },
           };
           ws.send(JSON.stringify(subscribeMessage));
         };
@@ -74,15 +77,15 @@ export default function DrawingBoard({
             const message: ServerMessage = JSON.parse(event.data);
             handleWebSocketMessage(message);
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error("Error parsing WebSocket message:", error);
           }
         };
 
         ws.onclose = (event) => {
-          console.log('DrawingBoard WebSocket disconnected:', event.code, event.reason);
-          setConnectionStatus('disconnected');
+          console.log("DrawingBoard WebSocket disconnected:", event.code, event.reason);
+          setConnectionStatus("disconnected");
           wsRef.current = null;
-          
+
           // Attempt to reconnect after a delay
           if (!event.wasClean) {
             setTimeout(connectWebSocket, 2000);
@@ -90,13 +93,12 @@ export default function DrawingBoard({
         };
 
         ws.onerror = (error) => {
-          console.error('DrawingBoard WebSocket error:', error);
-          setConnectionStatus('disconnected');
+          console.error("DrawingBoard WebSocket error:", error);
+          setConnectionStatus("disconnected");
         };
-
       } catch (error) {
-        console.error('Error creating WebSocket connection:', error);
-        setConnectionStatus('disconnected');
+        console.error("Error creating WebSocket connection:", error);
+        setConnectionStatus("disconnected");
       }
     };
 
@@ -113,96 +115,98 @@ export default function DrawingBoard({
   // Handle incoming WebSocket messages
   const handleWebSocketMessage = useCallback((message: ServerMessage) => {
     switch (message.type) {
-      case 'draw-update':
+      case "draw-update":
         handleDrawingUpdate(message.data);
         break;
-      case 'game-state':
+      case "game-state":
         if (onGameStateUpdate) {
           onGameStateUpdate(message.data);
         }
         break;
-      case 'room-update':
+      case "room-update":
         // Handle room updates if needed
         break;
       default:
-        console.log('Unhandled WebSocket message type:', message.type);
+        console.log("Unhandled WebSocket message type:", message.type);
     }
   }, [onGameStateUpdate]);
 
   // Handle drawing updates from other players
-  const handleDrawingUpdate = useCallback((data: { command?: DrawingCommand; commands?: DrawingCommand[] }) => {
-    if (data.command) {
-      // Single command update
-      const command = data.command;
-      
-      // Apply command to drawing engine
-      if (drawingEngineRef.current) {
-        drawingEngineRef.current.applyDrawingCommand(command);
-      }
-      
-      // Update local drawing history
-      setDrawingHistory(prev => [...prev, command]);
-      
-    } else if (data.commands) {
-      // Batch command update
-      data.commands.forEach(command => {
+  const handleDrawingUpdate = useCallback(
+    (data: { command?: DrawingCommand; commands?: DrawingCommand[] }) => {
+      if (data.command) {
+        // Single command update
+        const command = data.command;
+
+        // Apply command to drawing engine
         if (drawingEngineRef.current) {
           drawingEngineRef.current.applyDrawingCommand(command);
         }
-      });
-      
-      // Update local drawing history
-      setDrawingHistory(prev => [...prev, ...(data.commands || [])]);
-    }
-  }, []);
+
+        // Update local drawing history
+        setDrawingHistory((prev) => [...prev, command]);
+      } else if (data.commands) {
+        // Batch command update
+        data.commands.forEach((command) => {
+          if (drawingEngineRef.current) {
+            drawingEngineRef.current.applyDrawingCommand(command);
+          }
+        });
+
+        // Update local drawing history
+        setDrawingHistory((prev) => [...prev, ...(data.commands || [])]);
+      }
+    },
+    [],
+  );
 
   // Send drawing command to other players
   const handleDrawingCommand = useCallback((command: DrawingCommand) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected, cannot send drawing command');
+      console.warn("WebSocket not connected, cannot send drawing command");
       return;
     }
 
     // Add to local history
-    setDrawingHistory(prev => [...prev, command]);
+    setDrawingHistory((prev) => [...prev, command]);
 
     // Send to server
     const message: ClientMessage = {
-      type: 'draw',
+      type: "draw",
       roomId,
       playerId,
-      data: { command }
+      data: { command },
     };
 
     try {
       wsRef.current.send(JSON.stringify(message));
     } catch (error) {
-      console.error('Error sending drawing command:', error);
+      console.error("Error sending drawing command:", error);
     }
   }, [roomId, playerId]);
 
   // Send batch of drawing commands (for optimization)
   const handleDrawingCommands = useCallback((commands: DrawingCommand[]) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected, cannot send drawing commands');
+      console.warn("WebSocket not connected, cannot send drawing commands");
       return;
     }
 
     // Add to local history
-    setDrawingHistory(prev => [...prev, ...commands]);
+    setDrawingHistory((prev) => [...prev, ...commands]);
 
     // Send batch to server
     const message: ClientMessage = {
-      type: 'draw',
+      type: "draw",
       roomId,
       playerId,
-      data: { commands }
+      data: { commands },
     };
 
     try {
       wsRef.current.send(JSON.stringify(message));
     } catch (error) {
-      console.error('Error sending drawing commands:', error);
+      console.error("Error sending drawing commands:", error);
     }
   }, [roomId, playerId]);
 
@@ -211,17 +215,17 @@ export default function DrawingBoard({
     if (!isDrawer) return;
 
     const clearCommand: DrawingCommand = {
-      type: 'clear',
-      timestamp: Date.now()
+      type: "clear",
+      timestamp: Date.now(),
     };
 
     handleDrawingCommand(clearCommand);
-    
+
     // Clear local canvas
     if (drawingEngineRef.current) {
       drawingEngineRef.current.clearCanvas();
     }
-    
+
     // Reset drawing history
     setDrawingHistory([clearCommand]);
   }, [isDrawer, handleDrawingCommand]);
@@ -238,24 +242,33 @@ export default function DrawingBoard({
   // Connection status indicator
   const getConnectionStatusColor = () => {
     switch (connectionStatus) {
-      case 'connected': return 'text-green-600';
-      case 'connecting': return 'text-yellow-600';
-      case 'disconnected': return 'text-red-600';
-      default: return 'text-gray-600';
+      case "connected":
+        return "text-green-600";
+      case "connecting":
+        return "text-yellow-600";
+      case "disconnected":
+        return "text-red-600";
+      default:
+        return "text-gray-600";
     }
   };
 
   const getConnectionStatusText = () => {
     switch (connectionStatus) {
-      case 'connected': return 'Connected';
-      case 'connecting': return 'Connecting...';
-      case 'disconnected': return 'Disconnected';
-      default: return 'Unknown';
+      case "connected":
+        return "Connected";
+      case "connecting":
+        return "Connecting...";
+      case "disconnected":
+        return "Disconnected";
+      default:
+        return "Unknown";
     }
   };
 
   // Determine if drawing should be disabled
-  const isDrawingDisabled = !isDrawer || gameState.phase !== 'drawing' || connectionStatus !== 'connected';
+  const isDrawingDisabled = !isDrawer || gameState.phase !== "drawing" ||
+    connectionStatus !== "connected";
 
   return (
     <div class={`drawing-board ${className}`}>
@@ -269,15 +282,17 @@ export default function DrawingBoard({
               {getConnectionStatusText()}
             </div>
           </div>
-          
+
           <div class="flex items-center gap-2 text-sm">
-            {gameState.phase === 'drawing' && (
+            {gameState.phase === "drawing" && (
               <>
                 <span class="text-gray-600 hidden sm:inline">Current drawer:</span>
                 <span class="text-gray-600 sm:hidden">Drawer:</span>
                 <span class="font-medium">
-                  {gameState.currentDrawer === playerId ? 'You' : 
-                   gameState.players.find(p => p.id === gameState.currentDrawer)?.name || 'Unknown'}
+                  {gameState.currentDrawer === playerId
+                    ? "You"
+                    : gameState.players.find((p) => p.id === gameState.currentDrawer)?.name ||
+                      "Unknown"}
                 </span>
               </>
             )}
@@ -291,32 +306,36 @@ export default function DrawingBoard({
         isDrawer={isDrawer}
         onDrawingCommand={handleDrawingCommand}
         onDrawingCommands={handleDrawingCommands}
-        width={responsive ? Math.min(width, (typeof window !== 'undefined' ? window.innerWidth : 1280) - 40) : width}
-        height={responsive ? Math.min(height, (typeof window !== 'undefined' ? window.innerHeight : 720) * 0.6) : height}
+        width={responsive
+          ? Math.min(width, (typeof window !== "undefined" ? globalThis.innerWidth : 1280) - 40)
+          : width}
+        height={responsive
+          ? Math.min(height, (typeof window !== "undefined" ? globalThis.innerHeight : 720) * 0.6)
+          : height}
         disabled={isDrawingDisabled}
       />
 
       {/* Additional Controls - Mobile responsive */}
-      {isDrawer && gameState.phase === 'drawing' && (
+      {isDrawer && gameState.phase === "drawing" && (
         <div class="drawing-board-controls mt-4 p-3 bg-blue-50 rounded-lg border">
           <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-0">
             <div class="text-sm text-blue-800 text-center sm:text-left">
-              <strong>Your turn to draw!</strong> 
-              <span class="hidden sm:inline"> Others are trying to guess your drawing.</span>
+              <strong>Your turn to draw!</strong>
+              <span class="hidden sm:inline">Others are trying to guess your drawing.</span>
               <div class="sm:hidden text-xs mt-1">Others are guessing your drawing.</div>
             </div>
             <div class="flex gap-2 justify-center sm:justify-end">
               <button
                 onClick={handleClearCanvas}
                 class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium touch-manipulation"
-                disabled={connectionStatus !== 'connected'}
+                disabled={connectionStatus !== "connected"}
               >
                 Clear All
               </button>
               <button
                 onClick={handleUndo}
                 class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm font-medium touch-manipulation"
-                disabled={connectionStatus !== 'connected'}
+                disabled={connectionStatus !== "connected"}
               >
                 Undo
               </button>
@@ -326,16 +345,17 @@ export default function DrawingBoard({
       )}
 
       {/* Status Messages */}
-      {!isDrawer && gameState.phase === 'drawing' && (
+      {!isDrawer && gameState.phase === "drawing" && (
         <div class="drawing-board-status mt-4 p-3 bg-gray-50 rounded-lg border">
           <div class="text-sm text-gray-700">
-            <strong>Watching:</strong> {gameState.players.find(p => p.id === gameState.currentDrawer)?.name || 'Someone'} is drawing. 
-            Try to guess what they're drawing in the chat!
+            <strong>Watching:</strong> {gameState.players.find((p) =>
+              p.id === gameState.currentDrawer
+            )?.name || "Someone"} is drawing. Try to guess what they're drawing in the chat!
           </div>
         </div>
       )}
 
-      {gameState.phase === 'waiting' && (
+      {gameState.phase === "waiting" && (
         <div class="drawing-board-status mt-4 p-3 bg-yellow-50 rounded-lg border">
           <div class="text-sm text-yellow-800">
             <strong>Waiting:</strong> Game hasn't started yet or waiting for next round.
@@ -343,10 +363,11 @@ export default function DrawingBoard({
         </div>
       )}
 
-      {gameState.phase === 'results' && (
+      {gameState.phase === "results" && (
         <div class="drawing-board-status mt-4 p-3 bg-green-50 rounded-lg border">
           <div class="text-sm text-green-800">
-            <strong>Round Complete:</strong> The word was "{gameState.currentWord}". Check the scoreboard for results!
+            <strong>Round Complete:</strong>{" "}
+            The word was "{gameState.currentWord}". Check the scoreboard for results!
           </div>
         </div>
       )}
@@ -356,7 +377,7 @@ export default function DrawingBoard({
         <div class="drawing-board-debug mt-4 p-2 bg-gray-100 rounded text-xs text-gray-600">
           <div>Room: {roomId}</div>
           <div>Player: {playerId}</div>
-          <div>Is Drawer: {isDrawer ? 'Yes' : 'No'}</div>
+          <div>Is Drawer: {isDrawer ? "Yes" : "No"}</div>
           <div>Phase: {gameState.phase}</div>
           <div>Drawing History: {drawingHistory.length} commands</div>
           <div>Connection: {connectionStatus}</div>

@@ -1,16 +1,16 @@
 // WebSocket handler for Cloudflare Workers
 import "../../types/websocket.ts";
 import { Env } from "../../types/cloudflare.ts";
-import { ClientMessage, ServerMessage, GameState, PlayerState } from "../../types/game.ts";
+import { ClientMessage, GameState, PlayerState, ServerMessage } from "../../types/game.ts";
 import { getConfig, validateChatMessage, validatePlayerName } from "../config.ts";
-
 
 export class WebSocketHandler {
   private env: Env;
   private connections: Map<string, WebSocket> = new Map();
   private playerRooms: Map<string, string> = new Map(); // playerId -> roomId
   private roomConnections: Map<string, Set<string>> = new Map(); // roomId -> Set<playerId>
-  private rateLimits: Map<string, { messages: number; drawing: number; lastReset: number }> = new Map();
+  private rateLimits: Map<string, { messages: number; drawing: number; lastReset: number }> =
+    new Map();
   private roundTimers: Map<string, number> = new Map(); // roomId -> timer
 
   constructor(env: Env) {
@@ -24,7 +24,7 @@ export class WebSocketHandler {
     }
 
     // Check if we're in Cloudflare Workers environment
-    if (typeof WebSocketPair !== 'undefined') {
+    if (typeof WebSocketPair !== "undefined") {
       // Cloudflare Workers environment
       const webSocketPair = new WebSocketPair();
       const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
@@ -46,17 +46,22 @@ export class WebSocketHandler {
         this.handleDisconnection(server);
       });
 
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-      } as ResponseInit & { webSocket: WebSocket });
+      return new Response(
+        null,
+        {
+          status: 101,
+          webSocket: client,
+        } as ResponseInit & { webSocket: WebSocket },
+      );
     } else {
       // Deno environment - WebSocket upgrade is handled differently
       // For development, we'll return a placeholder response
-      console.log("WebSocket connection attempted in Deno environment - not fully supported in development");
-      return new Response("WebSocket not supported in development environment", { 
+      console.log(
+        "WebSocket connection attempted in Deno environment - not fully supported in development",
+      );
+      return new Response("WebSocket not supported in development environment", {
         status: 501,
-        headers: { "Content-Type": "text/plain" }
+        headers: { "Content-Type": "text/plain" },
       });
     }
   }
@@ -64,7 +69,7 @@ export class WebSocketHandler {
   private async handleMessage(ws: WebSocket, data: string) {
     try {
       const message: ClientMessage = JSON.parse(data);
-      
+
       // Validate message structure
       if (!this.validateClientMessage(message)) {
         this.sendError(ws, "Invalid message format");
@@ -130,10 +135,10 @@ export class WebSocketHandler {
   private checkRateLimit(playerId: string, messageType: string): boolean {
     const config = getConfig();
     const now = Date.now();
-    const limit = this.rateLimits.get(playerId) || { 
-      messages: 0, 
-      drawing: 0, 
-      lastReset: now 
+    const limit = this.rateLimits.get(playerId) || {
+      messages: 0,
+      drawing: 0,
+      lastReset: now,
     };
 
     // Reset counters every minute
@@ -186,7 +191,7 @@ export class WebSocketHandler {
     // Add connection to room
     this.connections.set(playerId, ws);
     this.playerRooms.set(playerId, roomId);
-    
+
     if (!this.roomConnections.has(roomId)) {
       this.roomConnections.set(roomId, new Set());
     }
@@ -198,7 +203,7 @@ export class WebSocketHandler {
       name: playerName,
       isHost: false, // Will be determined by room logic
       isConnected: true,
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
     });
 
     // Broadcast room update to all players in room
@@ -208,8 +213,8 @@ export class WebSocketHandler {
       data: {
         type: "player-joined",
         playerId,
-        playerName
-      }
+        playerName,
+      },
     });
 
     // Send current game state to new player
@@ -217,7 +222,7 @@ export class WebSocketHandler {
     this.sendMessage(ws, {
       type: "game-state",
       roomId,
-      data: gameState
+      data: gameState,
     });
   }
 
@@ -256,39 +261,40 @@ export class WebSocketHandler {
       playerName: playerState.name,
       message: text,
       timestamp: Date.now(),
-      isGuess: gameState.phase === 'drawing', // Only guesses during drawing phase
-      isCorrect: false
+      isGuess: gameState.phase === "drawing", // Only guesses during drawing phase
+      isCorrect: false,
     };
 
     // Check if it's a correct guess
-    if (gameState.phase === 'drawing' && 
-        gameState.currentWord && 
-        playerId !== gameState.currentDrawer &&
-        text.toLowerCase().trim() === gameState.currentWord.toLowerCase()) {
-      
+    if (
+      gameState.phase === "drawing" &&
+      gameState.currentWord &&
+      playerId !== gameState.currentDrawer &&
+      text.toLowerCase().trim() === gameState.currentWord.toLowerCase()
+    ) {
       chatMessage.isCorrect = true;
-      
+
       try {
         // Update game state for correct guess
-        gameState.phase = 'results';
+        gameState.phase = "results";
         if (!gameState.correctGuesses) {
           gameState.correctGuesses = [];
         }
         gameState.correctGuesses.push({
           playerId,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         });
-        
+
         // Update scores
         const basePoints = 100;
         const timeBonus = Math.floor((gameState.timeRemaining / 1000) * 2);
         const totalPoints = basePoints + timeBonus;
-        
+
         if (!gameState.scores[playerId]) {
           gameState.scores[playerId] = 0;
         }
         gameState.scores[playerId] += totalPoints;
-        
+
         // Award points to drawer too
         if (gameState.currentDrawer && !gameState.scores[gameState.currentDrawer]) {
           gameState.scores[gameState.currentDrawer] = 0;
@@ -296,7 +302,7 @@ export class WebSocketHandler {
         if (gameState.currentDrawer) {
           gameState.scores[gameState.currentDrawer] += 50; // Drawer bonus
         }
-        
+
         await this.updateGameState(roomId, gameState);
 
         // Clear round timer since round is ending
@@ -312,15 +318,15 @@ export class WebSocketHandler {
             playerName: playerState.name,
             word: gameState.currentWord,
             scores: gameState.scores,
-            gameState: gameState
-          }
+            gameState: gameState,
+          },
         });
 
         // Broadcast chat message with correct flag
         await this.broadcastToRoom(roomId, {
           type: "chat-message",
           roomId,
-          data: chatMessage
+          data: chatMessage,
         });
 
         // Auto-advance to results phase after a short delay
@@ -328,10 +334,10 @@ export class WebSocketHandler {
           try {
             const currentGameState = await this.getGameState(roomId);
             if (!currentGameState) return;
-            
-            currentGameState.phase = 'results';
+
+            currentGameState.phase = "results";
             await this.updateGameState(roomId, currentGameState);
-            
+
             await this.broadcastToRoom(roomId, {
               type: "game-state",
               roomId,
@@ -339,8 +345,8 @@ export class WebSocketHandler {
                 type: "round-ended",
                 reason: "correct-guess",
                 gameState: currentGameState,
-                scores: currentGameState.scores
-              }
+                scores: currentGameState.scores,
+              },
             });
 
             // Check if game is complete
@@ -350,8 +356,8 @@ export class WebSocketHandler {
                 roomId,
                 data: {
                   type: "game-completed",
-                  finalScores: currentGameState.scores
-                }
+                  finalScores: currentGameState.scores,
+                },
               });
             }
           } catch (error) {
@@ -370,13 +376,13 @@ export class WebSocketHandler {
     await this.broadcastToRoom(roomId, {
       type: "chat-message",
       roomId,
-      data: chatMessage
+      data: chatMessage,
     });
   }
 
   private async handleDrawMessage(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId, data } = message;
-    
+
     // Verify player is current drawer
     const gameState = await this.getGameState(roomId);
     if (!gameState || gameState.currentDrawer !== playerId) {
@@ -393,7 +399,7 @@ export class WebSocketHandler {
     // Add timestamp to drawing command
     const drawingCommand = {
       ...data,
-      timestamp: Date.now()
+      timestamp: Date.now(),
     };
 
     // Update game state with drawing data
@@ -402,14 +408,14 @@ export class WebSocketHandler {
     } else {
       gameState.drawingData = [drawingCommand];
     }
-    
+
     await this.updateGameState(roomId, gameState);
 
     // Broadcast drawing update to all players except sender
     await this.broadcastToRoom(roomId, {
       type: "draw-update",
       roomId,
-      data: drawingCommand
+      data: drawingCommand,
     }, playerId);
   }
 
@@ -420,7 +426,7 @@ export class WebSocketHandler {
 
   private async handleStartGame(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId } = message;
-    
+
     // Verify player is host
     const playerState = await this.getPlayerState(playerId);
     if (!playerState || !playerState.isHost) {
@@ -441,7 +447,7 @@ export class WebSocketHandler {
 
         const playerIds = Array.from(roomConnections);
         const players: PlayerState[] = [];
-        
+
         for (const pid of playerIds) {
           const playerState = await this.getPlayerState(pid);
           if (playerState) {
@@ -451,7 +457,7 @@ export class WebSocketHandler {
 
         gameState = {
           roomId,
-          phase: 'drawing',
+          phase: "drawing",
           roundNumber: 1,
           currentDrawer: playerIds[0],
           currentWord: this.getRandomWord(),
@@ -460,7 +466,7 @@ export class WebSocketHandler {
           scores: {},
           drawingData: [],
           correctGuesses: [],
-          chatMessages: []
+          chatMessages: [],
         };
       }
 
@@ -477,10 +483,10 @@ export class WebSocketHandler {
       }
 
       // Start the game
-      gameState.phase = 'drawing';
+      gameState.phase = "drawing";
       gameState.timeRemaining = 90000;
       await this.updateGameState(roomId, gameState);
-      
+
       // Start round timer
       this.startRoundTimer(roomId);
 
@@ -494,8 +500,8 @@ export class WebSocketHandler {
           currentDrawer: gameState.currentDrawer,
           currentWord: gameState.currentWord,
           roundNumber: gameState.roundNumber,
-          timeRemaining: gameState.timeRemaining
-        }
+          timeRemaining: gameState.timeRemaining,
+        },
       });
 
       // Send word to drawer only
@@ -506,8 +512,8 @@ export class WebSocketHandler {
           roomId,
           data: {
             type: "drawing-word",
-            word: gameState.currentWord
-          }
+            word: gameState.currentWord,
+          },
         });
       }
     } catch (error) {
@@ -518,7 +524,7 @@ export class WebSocketHandler {
 
   private async handleNextRound(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId } = message;
-    
+
     // Verify player is host
     const playerState = await this.getPlayerState(playerId);
     if (!playerState || !playerState.isHost) {
@@ -534,27 +540,29 @@ export class WebSocketHandler {
       }
 
       // Check if we can start next round
-      if (gameState.phase !== 'results' && gameState.phase !== 'waiting') {
+      if (gameState.phase !== "results" && gameState.phase !== "waiting") {
         this.sendError(ws, "Cannot start next round during current phase");
         return;
       }
 
       // Start new round
       gameState.roundNumber += 1;
-      gameState.phase = 'drawing';
+      gameState.phase = "drawing";
       gameState.timeRemaining = 90000;
       gameState.drawingData = [];
       gameState.correctGuesses = [];
-      
+
       // Get next drawer
       const activePlayers = gameState.players.filter((p: PlayerState) => p.isConnected);
-      const currentDrawerIndex = activePlayers.findIndex((p: PlayerState) => p.id === gameState.currentDrawer);
+      const currentDrawerIndex = activePlayers.findIndex((p: PlayerState) =>
+        p.id === gameState.currentDrawer
+      );
       const nextDrawerIndex = (currentDrawerIndex + 1) % activePlayers.length;
       gameState.currentDrawer = activePlayers[nextDrawerIndex].id;
       gameState.currentWord = this.getRandomWord();
-      
+
       await this.updateGameState(roomId, gameState);
-      
+
       // Clear existing timer and start new one
       this.clearRoundTimer(roomId);
       this.startRoundTimer(roomId);
@@ -568,8 +576,8 @@ export class WebSocketHandler {
           gameState: gameState,
           currentDrawer: gameState.currentDrawer,
           roundNumber: gameState.roundNumber,
-          timeRemaining: gameState.timeRemaining
-        }
+          timeRemaining: gameState.timeRemaining,
+        },
       });
 
       // Send word to new drawer
@@ -580,8 +588,8 @@ export class WebSocketHandler {
           roomId,
           data: {
             type: "drawing-word",
-            word: gameState.currentWord
-          }
+            word: gameState.currentWord,
+          },
         });
       }
     } catch (error) {
@@ -592,7 +600,7 @@ export class WebSocketHandler {
 
   private async handleEndGame(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId } = message;
-    
+
     // Verify player is host
     const playerState = await this.getPlayerState(playerId);
     if (!playerState || !playerState.isHost) {
@@ -608,9 +616,9 @@ export class WebSocketHandler {
       }
 
       // End the game
-      gameState.phase = 'finished';
+      gameState.phase = "finished";
       await this.updateGameState(roomId, gameState);
-      
+
       // Clear round timer
       this.clearRoundTimer(roomId);
 
@@ -621,8 +629,8 @@ export class WebSocketHandler {
         data: {
           type: "game-ended",
           gameState: gameState,
-          finalScores: gameState.scores
-        }
+          finalScores: gameState.scores,
+        },
       });
     } catch (error) {
       console.error("Error ending game:", error);
@@ -632,8 +640,26 @@ export class WebSocketHandler {
 
   private getRandomWord(): string {
     const words = [
-      "cat", "dog", "house", "tree", "car", "sun", "moon", "star", "flower", "bird",
-      "fish", "book", "chair", "table", "phone", "computer", "pizza", "apple", "banana", "orange"
+      "cat",
+      "dog",
+      "house",
+      "tree",
+      "car",
+      "sun",
+      "moon",
+      "star",
+      "flower",
+      "bird",
+      "fish",
+      "book",
+      "chair",
+      "table",
+      "phone",
+      "computer",
+      "pizza",
+      "apple",
+      "banana",
+      "orange",
     ];
     return words[Math.floor(Math.random() * words.length)];
   }
@@ -651,7 +677,7 @@ export class WebSocketHandler {
         typeof (data as any).x === "number" &&
         typeof (data as any).y === "number" &&
         (data as any).x >= 0 && (data as any).x <= 1920 && // Max canvas width
-        (data as any).y >= 0 && (data as any).y <= 1080   // Max canvas height
+        (data as any).y >= 0 && (data as any).y <= 1080 // Max canvas height
       ))
     );
   }
@@ -678,7 +704,7 @@ export class WebSocketHandler {
     // Remove from connection maps
     this.connections.delete(playerId);
     this.playerRooms.delete(playerId);
-    
+
     const roomConnections = this.roomConnections.get(roomId);
     if (roomConnections) {
       roomConnections.delete(playerId);
@@ -700,8 +726,8 @@ export class WebSocketHandler {
       roomId,
       data: {
         type: "player-left",
-        playerId
-      }
+        playerId,
+      },
     });
   }
 
@@ -710,10 +736,10 @@ export class WebSocketHandler {
     if (!roomConnections) return;
 
     const messageStr = JSON.stringify(message);
-    
+
     for (const playerId of roomConnections) {
       if (excludePlayerId && playerId === excludePlayerId) continue;
-      
+
       const ws = this.connections.get(playerId);
       if (ws && ws.readyState === WebSocket.OPEN) {
         try {
@@ -739,8 +765,8 @@ export class WebSocketHandler {
       roomId: "",
       data: {
         type: "error",
-        message: error
-      }
+        message: error,
+      },
     });
   }
 
@@ -760,12 +786,14 @@ export class WebSocketHandler {
     try {
       const roomStmt = this.env.DB.prepare("SELECT max_players FROM rooms WHERE id = ?");
       const room = await roomStmt.bind(roomId).first<{ max_players: number }>();
-      
+
       if (!room) return false;
 
-      const playerStmt = this.env.DB.prepare("SELECT COUNT(*) as count FROM players WHERE room_id = ?");
+      const playerStmt = this.env.DB.prepare(
+        "SELECT COUNT(*) as count FROM players WHERE room_id = ?",
+      );
       const playerCount = await playerStmt.bind(roomId).first<{ count: number }>();
-      
+
       return (playerCount?.count || 0) < room.max_players;
     } catch (error) {
       console.error("Error checking room capacity:", error);
@@ -787,9 +815,9 @@ export class WebSocketHandler {
     try {
       const config = getConfig();
       await this.env.GAME_STATE.put(
-        `game:${roomId}`, 
+        `game:${roomId}`,
         JSON.stringify(gameState),
-        { expirationTtl: config.kv.defaultTtl }
+        { expirationTtl: config.kv.defaultTtl },
       );
     } catch (error) {
       console.error("Error updating game state:", error);
@@ -810,9 +838,9 @@ export class WebSocketHandler {
     try {
       const config = getConfig();
       await this.env.GAME_STATE.put(
-        `player:${playerId}`, 
+        `player:${playerId}`,
         JSON.stringify(playerState),
-        { expirationTtl: config.kv.defaultTtl }
+        { expirationTtl: config.kv.defaultTtl },
       );
     } catch (error) {
       console.error("Error updating player state:", error);
@@ -845,7 +873,7 @@ export class WebSocketHandler {
     const timer = setInterval(async () => {
       try {
         const gameState = await this.getGameState(roomId);
-        if (!gameState || gameState.phase !== 'drawing') {
+        if (!gameState || gameState.phase !== "drawing") {
           this.clearRoundTimer(roomId);
           return;
         }
@@ -853,7 +881,7 @@ export class WebSocketHandler {
         // Update time remaining
         const newTimeRemaining = Math.max(0, gameState.timeRemaining - 1000);
         gameState.timeRemaining = newTimeRemaining;
-        
+
         await this.updateGameState(roomId, gameState);
 
         // Broadcast time update
@@ -862,8 +890,8 @@ export class WebSocketHandler {
           roomId,
           data: {
             type: "time-update",
-            timeRemaining: newTimeRemaining
-          }
+            timeRemaining: newTimeRemaining,
+          },
         });
 
         // End round if time is up
@@ -890,13 +918,13 @@ export class WebSocketHandler {
   private async handleRoundTimeout(roomId: string) {
     try {
       this.clearRoundTimer(roomId);
-      
+
       const gameState = await this.getGameState(roomId);
       if (!gameState) return;
-      
-      gameState.phase = 'results';
+
+      gameState.phase = "results";
       await this.updateGameState(roomId, gameState);
-      
+
       // Broadcast round ended
       await this.broadcastToRoom(roomId, {
         type: "game-state",
@@ -905,19 +933,19 @@ export class WebSocketHandler {
           type: "round-ended",
           reason: "timeout",
           gameState: gameState,
-          scores: gameState.scores
-        }
+          scores: gameState.scores,
+        },
       });
 
       // If game is complete, broadcast final results
-      if (gameState.phase === 'results' && gameState.roundNumber >= 5) {
+      if (gameState.phase === "results" && gameState.roundNumber >= 5) {
         await this.broadcastToRoom(roomId, {
           type: "game-state",
           roomId,
           data: {
             type: "game-completed",
-            finalScores: gameState.scores
-          }
+            finalScores: gameState.scores,
+          },
         });
       }
     } catch (error) {

@@ -18,23 +18,25 @@ interface GameRoomData {
 function createInitialGameState(room: RoomSummary): GameState {
   return {
     roomId: room.room.id,
-    currentDrawer: '', // No drawer initially
-    currentWord: '', // No word initially
+    currentDrawer: "", // No drawer initially
+    currentWord: "", // No word initially
     roundNumber: 0, // Game hasn't started
     timeRemaining: 120000, // 2 minutes default
-    phase: 'waiting', // Waiting for game to start
-    players: room.players.map(player => ({
+    phase: "waiting", // Waiting for game to start
+    players: room.players.map((player: any) => ({
       id: player.id,
       name: player.name,
       isHost: player.isHost,
       isConnected: true, // Assume all players in room are connected
-      lastActivity: Date.now()
+      lastActivity: Date.now(),
     })),
-    scores: room.players.reduce((acc, player) => {
+    scores: room.players.reduce((acc: any, player: any) => {
       acc[player.id] = 0; // Initialize all scores to 0
       return acc;
     }, {} as Record<string, number>),
-    drawingData: [] // No drawing data initially
+    drawingData: [], // No drawing data initially
+    correctGuesses: [], // No correct guesses initially
+    chatMessages: [], // No chat messages initially
   };
 }
 
@@ -44,41 +46,41 @@ export const handler: Handlers<GameRoomData> = {
       const roomId = ctx.params.id;
       const url = new URL(req.url);
       const playerId = url.searchParams.get("playerId");
-      
+
       const env = (ctx.state as any).env as Env;
-      
+
       if (!env?.DB) {
-        return ctx.render({ 
-          room: null, 
+        return ctx.render({
+          room: null,
           playerId,
-          error: "Database not available" 
+          error: "Database not available",
         });
       }
 
-      const roomManager = new RoomManager(env.DB);
+      const roomManager = new RoomManager();
       const result = await roomManager.getRoomSummary(roomId);
 
       if (!result.success || !result.data) {
-        return ctx.render({ 
-          room: null, 
+        return ctx.render({
+          room: null,
           playerId,
-          error: result.error || "Room not found" 
+          error: result.error || "Room not found",
         });
       }
 
-      return ctx.render({ 
+      return ctx.render({
         room: result.data,
-        playerId
+        playerId,
       });
     } catch (error) {
       console.error("Error loading game room:", error);
-      return ctx.render({ 
-        room: null, 
+      return ctx.render({
+        room: null,
         playerId: null,
-        error: "Failed to load game room" 
+        error: "Failed to load game room",
       });
     }
-  }
+  },
 };
 
 export default function GameRoom({ data }: PageProps<GameRoomData>) {
@@ -114,17 +116,22 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
         <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
           <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 xs:gap-3">
             <div class="min-w-0 flex-1">
-              <h1 class="text-lg xs:text-xl sm:text-2xl font-bold text-gray-800 truncate">{room.room.name}</h1>
+              <h1 class="text-lg xs:text-xl sm:text-2xl font-bold text-gray-800 truncate">
+                {room.room.name}
+              </h1>
               <p class="text-xs sm:text-sm lg:text-base text-gray-600">
-                <span class="inline xs:hidden">Host: {(room.host?.name || 'Unknown').slice(0, 10)}{(room.host?.name || '').length > 10 ? '...' : ''}</span>
-                <span class="hidden xs:inline">Host: {room.host?.name || 'Unknown'}</span>
+                <span class="inline xs:hidden">
+                  Host: {(room.host?.name || "Unknown").slice(0, 10)}
+                  {(room.host?.name || "").length > 10 ? "..." : ""}
+                </span>
+                <span class="hidden xs:inline">Host: {room.host?.name || "Unknown"}</span>
                 <span class="mx-1">•</span>
                 <span>{room.playerCount}/{room.room.maxPlayers} players</span>
               </p>
             </div>
             <LeaveRoomButton
               roomId={room.room.id}
-              playerId={playerId || ''}
+              playerId={playerId || ""}
               className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
             >
               <span class="xs:hidden">← Lobby</span>
@@ -140,12 +147,12 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
             <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
               <DrawingBoard
                 roomId={room.room.id}
-                playerId={playerId || ''}
+                playerId={playerId || ""}
                 gameState={gameState}
                 width={800}
                 height={500}
                 className="w-full"
-                responsive={true}
+                responsive
               />
             </div>
           </div>
@@ -159,8 +166,8 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 <div class="h-48 xs:h-56 sm:h-64 lg:h-80">
                   <ChatRoom
                     roomId={room.room.id}
-                    playerId={playerId || ''}
-                    playerName={room.players.find(p => p.id === playerId)?.name || 'Unknown'}
+                    playerId={playerId || ""}
+                    playerName={room.players.find((p: any) => p.id === playerId)?.name || "Unknown"}
                     currentWord={gameState.currentWord}
                     isCurrentDrawer={gameState.currentDrawer === playerId}
                   />
@@ -172,7 +179,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 <div class="h-48 xs:h-56 sm:h-64 lg:h-auto">
                   <Scoreboard
                     roomId={room.room.id}
-                    playerId={playerId || ''}
+                    playerId={playerId || ""}
                     gameState={gameState}
                     className="h-full"
                   />

@@ -17,7 +17,7 @@ export const handler: Handlers = {
   GET(req, ctx) {
     // Get Cloudflare environment from context
     const env = (ctx.state as any).env as Env;
-    
+
     if (!env) {
       return new Response("Environment not available", { status: 500 });
     }
@@ -29,5 +29,5 @@ export const handler: Handlers = {
   POST(req, ctx) {
     // Handle WebSocket-related POST requests (if needed)
     return new Response("Method not allowed", { status: 405 });
-  }
+  },
 };

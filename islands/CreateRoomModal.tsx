@@ -8,53 +8,53 @@ interface CreateRoomModalProps {
 
 export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoomModalProps) {
   const [formData, setFormData] = useState({
-    roomName: '',
-    hostName: '',
-    maxPlayers: 8
+    roomName: "",
+    hostName: "",
+    maxPlayers: 8,
   });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
-    
+
     if (!formData.roomName.trim() || !formData.hostName.trim()) {
-      setError('Room name and host name are required');
+      setError("Room name and host name are required");
       return;
     }
 
     if (formData.maxPlayers < 2 || formData.maxPlayers > 16) {
-      setError('Max players must be between 2 and 16');
+      setError("Max players must be between 2 and 16");
       return;
     }
 
     try {
       setLoading(true);
-      setError('');
+      setError("");
 
-      const response = await fetch('/api/rooms', {
-        method: 'POST',
+      const response = await fetch("/api/rooms", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json'
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           name: formData.roomName.trim(),
           hostName: formData.hostName.trim(),
-          maxPlayers: formData.maxPlayers
-        })
+          maxPlayers: formData.maxPlayers,
+        }),
       });
 
       const data = await response.json();
 
       if (response.ok) {
         // Navigate to the created room
-        window.location.href = `/room/${data.roomId}?playerId=${data.playerId}`;
+        globalThis.location.href = `/room/${data.roomId}?playerId=${data.playerId}`;
       } else {
-        setError(data.error || 'Failed to create room');
+        setError(data.error || "Failed to create room");
       }
     } catch (error) {
-      console.error('Error creating room:', error);
-      setError('Failed to create room. Please try again.');
+      console.error("Error creating room:", error);
+      setError("Failed to create room. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -62,8 +62,8 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
 
   const handleClose = () => {
     if (!loading) {
-      setFormData({ roomName: '', hostName: '', maxPlayers: 8 });
-      setError('');
+      setFormData({ roomName: "", hostName: "", maxPlayers: 8 });
+      setError("");
       onClose();
     }
   };
@@ -98,10 +98,11 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
             <input
               type="text"
               value={formData.roomName}
-              onInput={(e) => setFormData(prev => ({ 
-                ...prev, 
-                roomName: (e.target as HTMLInputElement).value 
-              }))}
+              onInput={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  roomName: (e.target as HTMLInputElement).value,
+                }))}
               placeholder="Enter room name"
               maxLength={50}
               disabled={loading}
@@ -120,10 +121,11 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
             <input
               type="text"
               value={formData.hostName}
-              onInput={(e) => setFormData(prev => ({ 
-                ...prev, 
-                hostName: (e.target as HTMLInputElement).value 
-              }))}
+              onInput={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  hostName: (e.target as HTMLInputElement).value,
+                }))}
               placeholder="Enter your name"
               maxLength={30}
               disabled={loading}
@@ -141,14 +143,15 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
             </label>
             <select
               value={formData.maxPlayers}
-              onChange={(e) => setFormData(prev => ({ 
-                ...prev, 
-                maxPlayers: parseInt((e.target as HTMLSelectElement).value) 
-              }))}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  maxPlayers: parseInt((e.target as HTMLSelectElement).value),
+                }))}
               disabled={loading}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
             >
-              {Array.from({ length: 15 }, (_, i) => i + 2).map(num => (
+              {Array.from({ length: 15 }, (_, i) => i + 2).map((num) => (
                 <option key={num} value={num}>
                   {num} players
                 </option>
@@ -170,14 +173,16 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
               disabled={loading || !formData.roomName.trim() || !formData.hostName.trim()}
               class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? (
-                <span class="flex items-center justify-center">
-                  <span class="animate-spin mr-2">⟳</span>
-                  Creating...
-                </span>
-              ) : (
-                'Create Room'
-              )}
+              {loading
+                ? (
+                  <span class="flex items-center justify-center">
+                    <span class="animate-spin mr-2">⟳</span>
+                    Creating...
+                  </span>
+                )
+                : (
+                  "Create Room"
+                )}
             </button>
           </div>
         </form>

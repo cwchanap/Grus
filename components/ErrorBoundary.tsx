@@ -1,5 +1,6 @@
 import { Component, ComponentChildren } from "preact";
 import { TouchButton } from "./MobileOptimized.tsx";
+import process from "node:process";
 
 interface ErrorBoundaryState {
   hasError: boolean;
@@ -19,16 +20,16 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     this.state = { hasError: false };
   }
 
-  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+  static override getDerivedStateFromError(error: Error): ErrorBoundaryState {
     return {
       hasError: true,
       error,
     };
   }
 
-  componentDidCatch(error: Error, errorInfo: any) {
-    console.error('ErrorBoundary caught an error:', error, errorInfo);
-    
+  override componentDidCatch(error: Error, errorInfo: any) {
+    console.error("ErrorBoundary caught an error:", error, errorInfo);
+
     this.setState({
       error,
       errorInfo,
@@ -59,11 +60,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             Something went wrong
           </h2>
           <p class="text-sm sm:text-base text-red-700 mb-4 max-w-md mx-auto">
-            We encountered an unexpected error. Please try refreshing the page or contact support if the problem persists.
+            We encountered an unexpected error. Please try refreshing the page or contact support if
+            the problem persists.
           </p>
-          
+
           {/* Error details (only in development) */}
-          {process.env.NODE_ENV === 'development' && this.state.error && (
+          {process.env.NODE_ENV === "development" && this.state.error && (
             <details class="text-left bg-red-100 border border-red-300 rounded p-3 mb-4 text-xs sm:text-sm">
               <summary class="cursor-pointer font-medium text-red-800 mb-2">
                 Error Details (Development)
@@ -74,7 +76,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               </pre>
             </details>
           )}
-          
+
           <div class="flex flex-col sm:flex-row gap-3 justify-center">
             <TouchButton
               onClick={this.handleRetry}
@@ -84,7 +86,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               Try Again
             </TouchButton>
             <TouchButton
-              onClick={() => window.location.reload()}
+              onClick={() => globalThis.location.reload()}
               variant="secondary"
               size="md"
             >
@@ -102,8 +104,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 // Hook version for functional components
 export function useErrorHandler() {
   const handleError = (error: Error, errorInfo?: any) => {
-    console.error('Error caught by error handler:', error, errorInfo);
-    
+    console.error("Error caught by error handler:", error, errorInfo);
+
     // In a real app, you might want to send this to an error reporting service
     // like Sentry, LogRocket, etc.
   };
@@ -114,19 +116,20 @@ export function useErrorHandler() {
 // Higher-order component for wrapping components with error boundary
 export function withErrorBoundary<P extends object>(
   WrappedComponent: (props: P) => ComponentChildren,
-  fallback?: (error: Error, retry: () => void) => ComponentChildren
+  fallback?: (error: Error, retry: () => void) => ComponentChildren,
 ) {
   return function WithErrorBoundaryComponent(props: P) {
+    const element = WrappedComponent(props);
     return (
       <ErrorBoundary fallback={fallback}>
-        <WrappedComponent {...props} />
+        {element}
       </ErrorBoundary>
     );
   };
 }
 
 // Mobile-specific error fallback
-export function MobileErrorFallback(error: Error, retry: () => void) {
+export function MobileErrorFallback(_error: Error, retry: () => void) {
   return (
     <div class="mobile-error-fallback bg-red-50 border border-red-200 rounded-lg p-3 sm:p-4 text-center">
       <div class="text-red-600 text-2xl sm:text-4xl mb-2">⚠️</div>
@@ -146,7 +149,7 @@ export function MobileErrorFallback(error: Error, retry: () => void) {
           Retry
         </TouchButton>
         <TouchButton
-          onClick={() => window.location.reload()}
+          onClick={() => globalThis.location.reload()}
           variant="secondary"
           size="sm"
           className="flex-1"

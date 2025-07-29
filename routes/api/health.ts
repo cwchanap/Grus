@@ -11,7 +11,7 @@ interface HealthCheck {
 }
 
 interface HealthResponse {
-  status: 'ok' | 'error';
+  status: "ok" | "error";
   timestamp: string;
   environment: string;
   checks: {
@@ -32,16 +32,16 @@ async function checkDatabase(): Promise<HealthCheck> {
     const dbService = getDatabaseService();
     const result = await dbService.healthCheck();
     const latency = Date.now() - startTime;
-    
-    return { 
-      status: result.success ? 'ok' : 'error', 
+
+    return {
+      status: result.success ? "ok" : "error",
       latency,
-      error: result.error 
+      error: result.error,
     };
   } catch (error) {
-    return { 
-      status: 'error', 
-      error: error instanceof Error ? error.message : 'Unknown error'
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error",
     };
   }
 }
@@ -52,16 +52,16 @@ async function checkKVStorage(): Promise<HealthCheck> {
     const kvService = getKVService();
     const result = await kvService.healthCheck();
     const latency = Date.now() - startTime;
-    
-    return { 
-      status: result.success ? 'ok' : 'error', 
+
+    return {
+      status: result.success ? "ok" : "error",
       latency,
-      error: result.error 
+      error: result.error,
     };
   } catch (error) {
-    return { 
-      status: 'error', 
-      error: error instanceof Error ? error.message : 'Unknown error'
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error",
     };
   }
 }
@@ -72,11 +72,11 @@ function checkWebSocketSupport(): HealthCheck {
     const pair = new WebSocketPair();
     pair[0].close();
     pair[1].close();
-    return { status: 'ok' };
+    return { status: "ok" };
   } catch (error) {
-    return { 
-      status: 'error', 
-      error: error instanceof Error ? error.message : 'Unknown error'
+    return {
+      status: "error",
+      error: error instanceof Error ? error.message : "Unknown error",
     };
   }
 }
@@ -84,7 +84,7 @@ function checkWebSocketSupport(): HealthCheck {
 export const handler: Handlers<HealthResponse> = {
   async GET(_req, _ctx) {
     const startTime = Date.now();
-    
+
     try {
       // Run all health checks in parallel
       const [dbCheck, kvCheck, wsCheck] = await Promise.all([
@@ -92,17 +92,17 @@ export const handler: Handlers<HealthResponse> = {
         checkKVStorage(),
         checkWebSocketSupport(),
       ]);
-      
+
       const responseTime = Date.now() - startTime;
-      
+
       // Determine overall status
       const allChecks = [dbCheck, kvCheck, wsCheck];
-      const hasErrors = allChecks.some(check => check.status === 'error');
-      
+      const hasErrors = allChecks.some((check) => check.status === "error");
+
       const health: HealthResponse = {
-        status: hasErrors ? 'error' : 'ok',
+        status: hasErrors ? "error" : "ok",
         timestamp: new Date().toISOString(),
-        environment: Deno.env.get('ENVIRONMENT') || 'unknown',
+        environment: Deno.env.get("ENVIRONMENT") || "unknown",
         checks: {
           database: dbCheck,
           kv_storage: kvCheck,
@@ -112,43 +112,42 @@ export const handler: Handlers<HealthResponse> = {
           response_time_ms: responseTime,
           uptime_seconds: Math.floor(Date.now() / 1000), // Placeholder for actual uptime
         },
-        version: Deno.env.get('VERSION') || 'unknown',
+        version: Deno.env.get("VERSION") || "unknown",
       };
-      
+
       const statusCode = hasErrors ? 503 : 200;
-      
+
       return new Response(JSON.stringify(health, null, 2), {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
         },
         status: statusCode,
       });
-      
     } catch (error) {
       const responseTime = Date.now() - startTime;
-      
+
       const health: HealthResponse = {
-        status: 'error',
+        status: "error",
         timestamp: new Date().toISOString(),
-        environment: Deno.env.get('ENVIRONMENT') || 'unknown',
+        environment: Deno.env.get("ENVIRONMENT") || "unknown",
         checks: {
-          database: { status: 'error', error: 'Health check failed' },
-          kv_storage: { status: 'error', error: 'Health check failed' },
-          websocket: { status: 'error', error: 'Health check failed' },
+          database: { status: "error", error: "Health check failed" },
+          kv_storage: { status: "error", error: "Health check failed" },
+          websocket: { status: "error", error: "Health check failed" },
         },
         performance: {
           response_time_ms: responseTime,
         },
       };
-      
+
       return new Response(JSON.stringify(health, null, 2), {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Cache-Control': 'no-cache, no-store, must-revalidate',
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-cache, no-store, must-revalidate",
         },
         status: 503,
       });
     }
-  }
+  },
 };

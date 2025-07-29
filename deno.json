@@ -12,14 +12,77 @@
     "test:watch": "deno test --allow-all --watch",
     "test:coverage": "deno test --allow-all --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
     "deploy": "bash scripts/deploy-deno.sh",
-    "health-check": "curl http://localhost:8000/api/health"
+    "health-check": "curl http://localhost:8000/api/health",
+    "lint": "deno lint",
+    "lint:fix": "deno lint --fix",
+    "format": "deno fmt",
+    "format:check": "deno fmt --check",
+    "type-check": "deno check **/*.ts **/*.tsx",
+    "pre-commit": "deno fmt",
+    "ci": "deno task format:check && deno task lint && deno task type-check && deno task test",
+    "setup-hooks": "deno run --allow-read --allow-write scripts/setup-hooks.ts"
   },
   "lint": {
     "rules": {
       "tags": [
         "fresh",
         "recommended"
+      ],
+      "include": [
+        "no-unused-vars",
+        "no-implicit-any",
+        "prefer-const",
+        "no-inferrable-types"
+      ],
+      "exclude": [
+        "no-explicit-any"
       ]
+    },
+    "include": [
+      "components/",
+      "islands/",
+      "lib/",
+      "routes/",
+      "types/",
+      "*.ts",
+      "*.tsx"
+    ],
+    "exclude": [
+      "**/_fresh/*",
+      "**/node_modules/*",
+      "**/.git/*",
+      "**/coverage/*",
+      "fresh.gen.ts"
+    ]
+  },
+  "fmt": {
+    "include": [
+      "components/",
+      "islands/",
+      "lib/",
+      "routes/",
+      "types/",
+      "*.ts",
+      "*.tsx",
+      "*.js",
+      "*.jsx",
+      "*.json",
+      "*.jsonc",
+      "*.md"
+    ],
+    "exclude": [
+      "**/_fresh/*",
+      "**/node_modules/*",
+      "**/.git/*",
+      "**/coverage/*",
+      "fresh.gen.ts"
+    ],
+    "options": {
+      "lineWidth": 100,
+      "indentWidth": 2,
+      "semiColons": true,
+      "singleQuote": false,
+      "proseWrap": "preserve"
     }
   },
   "exclude": [

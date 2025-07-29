@@ -11,7 +11,7 @@ class MockWebSocket extends EventTarget {
   static CONNECTING = 0;
   static CLOSING = 2;
   static CLOSED = 3;
-  
+
   private sentMessages: string[] = [];
 
   send(data: string) {
@@ -62,12 +62,12 @@ const mockEnv: Env = {
       bind: () => ({
         first: async () => ({ id: "test-room", max_players: 8 }),
         run: async () => ({ success: true }),
-        all: async () => ({ results: [] })
-      })
+        all: async () => ({ results: [] }),
+      }),
     }),
     exec: async () => ({ count: 0, duration: 0 }),
     dump: async () => new ArrayBuffer(0),
-    batch: async () => []
+    batch: async () => [],
   } as any,
   GAME_STATE: {
     get: async (key: string) => {
@@ -83,7 +83,7 @@ const mockEnv: Env = {
           scores: {},
           drawingData: [],
           correctGuesses: [],
-          chatMessages: []
+          chatMessages: [],
         });
       }
       if (key.startsWith("player:")) {
@@ -93,17 +93,17 @@ const mockEnv: Env = {
           name: playerId === "player1" ? "Test Player 1" : "Test Player 2",
           isHost: playerId === "player1",
           isConnected: true,
-          lastActivity: Date.now()
+          lastActivity: Date.now(),
         });
       }
       return null;
     },
     put: async () => {},
     delete: async () => {},
-    list: async () => ({ keys: [], list_complete: true })
+    list: async () => ({ keys: [], list_complete: true }),
   } as any,
   WEBSOCKET_HANDLER: {} as any,
-  ENVIRONMENT: "test"
+  ENVIRONMENT: "test",
 };
 
 Deno.test({
@@ -111,45 +111,45 @@ Deno.test({
   fn: () => {
     const handler = new WebSocketHandler(mockEnv);
     assertExists(handler);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - handleWebSocketUpgrade with valid request",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     const response = await handler.handleWebSocketUpgrade(request);
     assertEquals(response.status, 101);
     assertExists(testServerSocket);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - handleWebSocketUpgrade with invalid request",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "http" }
+      headers: { "Upgrade": "http" },
     });
 
     const response = await handler.handleWebSocketUpgrade(request);
     assertEquals(response.status, 426);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - message validation",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -159,13 +159,13 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
 
     ws.simulateMessage(JSON.stringify(validMessage));
-    
+
     const messages = ws.getSentMessages();
-    const hasError = messages.some(msg => {
+    const hasError = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.data?.type === "error";
@@ -173,27 +173,27 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasError, false);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - invalid message format",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
     const ws = testServerSocket!;
 
     ws.simulateMessage("invalid json");
-    
+
     const messages = ws.getSentMessages();
-    const hasError = messages.some(msg => {
+    const hasError = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.data?.type === "error";
@@ -201,18 +201,18 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasError, true);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - join room flow",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -222,16 +222,16 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
 
     // Wait a bit for async operations to complete
     ws.simulateMessage(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     const messages = ws.getSentMessages();
-    
-    const hasGameState = messages.some(msg => {
+
+    const hasGameState = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.type === "game-state";
@@ -239,18 +239,18 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasGameState, true);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - rate limiting",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -261,7 +261,7 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
 
@@ -271,13 +271,13 @@ Deno.test({
         type: "chat",
         roomId: "test-room",
         playerId: "player1",
-        data: { text: `Message ${i}` }
+        data: { text: `Message ${i}` },
       };
       ws.simulateMessage(JSON.stringify(chatMessage));
     }
-    
+
     const messages = ws.getSentMessages();
-    const hasRateLimitError = messages.some(msg => {
+    const hasRateLimitError = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.data?.type === "error" && parsed.data?.message === "Rate limit exceeded";
@@ -285,18 +285,18 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasRateLimitError, true);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - connection cleanup on close",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -307,25 +307,25 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
 
     // Simulate connection close
     ws.simulateClose();
-    
+
     // Connection should be cleaned up (this is tested implicitly)
     assertEquals(true, true); // Placeholder assertion
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - drawing command validation and broadcasting",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -336,10 +336,10 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Send valid drawing command (player1 is the current drawer in mock game state)
     const drawMessage: ClientMessage = {
@@ -351,17 +351,17 @@ Deno.test({
         x: 100,
         y: 200,
         color: "#FF0000",
-        size: 5
-      }
+        size: 5,
+      },
     };
 
     ws.simulateMessage(JSON.stringify(drawMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     // For this test, we'll verify that the drawing command was processed
     // by checking that no error was sent (since drawing updates are only sent to other players)
     const messages = ws.getSentMessages();
-    const hasError = messages.some(msg => {
+    const hasError = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.data?.type === "error";
@@ -369,19 +369,19 @@ Deno.test({
         return false;
       }
     });
-    
+
     // Should not have an error (drawing command was valid and processed)
     assertEquals(hasError, false);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - invalid drawing command rejection",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -392,10 +392,10 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Clear previous messages
     ws.getSentMessages().length = 0;
@@ -410,15 +410,15 @@ Deno.test({
         x: 5000, // Out of bounds
         y: 5000, // Out of bounds
         color: "#FF0000",
-        size: 5
-      }
+        size: 5,
+      },
     };
 
     ws.simulateMessage(JSON.stringify(drawMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
-    
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
     const messages = ws.getSentMessages();
-    const hasError = messages.some(msg => {
+    const hasError = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.data?.type === "error";
@@ -426,18 +426,18 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasError, true);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - chat message with correct guess detection",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -448,10 +448,10 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Clear previous messages
     ws.getSentMessages().length = 0;
@@ -461,14 +461,14 @@ Deno.test({
       type: "chat",
       roomId: "test-room",
       playerId: "player2", // Different from currentDrawer (player1)
-      data: { text: "test" } // This matches the mock game state's currentWord
+      data: { text: "test" }, // This matches the mock game state's currentWord
     };
 
     ws.simulateMessage(JSON.stringify(chatMessage));
-    await new Promise(resolve => setTimeout(resolve, 2100)); // Wait for the 2 second delay in correct guess handling
-    
+    await new Promise((resolve) => setTimeout(resolve, 2100)); // Wait for the 2 second delay in correct guess handling
+
     const messages = ws.getSentMessages();
-    const hasChatMessage = messages.some(msg => {
+    const hasChatMessage = messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.type === "chat-message" && parsed.data?.isCorrect === true;
@@ -476,18 +476,18 @@ Deno.test({
         return false;
       }
     });
-    
+
     assertEquals(hasChatMessage, true);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - connection cleanup removes player from room",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     const request = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request);
@@ -498,10 +498,10 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Test Player" }
+      data: { playerName: "Test Player" },
     };
     ws.simulateMessage(JSON.stringify(joinMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Verify connection count
     const initialCount = handler.getConnectionCount();
@@ -509,30 +509,30 @@ Deno.test({
 
     // Simulate connection close
     ws.simulateClose();
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Connection should be cleaned up
     const finalCount = handler.getConnectionCount();
     assertEquals(finalCount, 0);
-  }
+  },
 });
 
 Deno.test({
   name: "WebSocketHandler - room broadcasting excludes sender",
   fn: async () => {
     const handler = new WebSocketHandler(mockEnv);
-    
+
     // Create two connections to the same room
     const request1 = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
     const request2 = new Request("http://localhost/ws", {
-      headers: { "Upgrade": "websocket" }
+      headers: { "Upgrade": "websocket" },
     });
 
     await handler.handleWebSocketUpgrade(request1);
     const ws1 = testServerSocket!;
-    
+
     await handler.handleWebSocketUpgrade(request2);
     const ws2 = testServerSocket!;
 
@@ -541,20 +541,20 @@ Deno.test({
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
-      data: { playerName: "Player 1" }
+      data: { playerName: "Player 1" },
     };
     ws1.simulateMessage(JSON.stringify(joinMessage1));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Join room with second player
     const joinMessage2: ClientMessage = {
       type: "join-room",
       roomId: "test-room",
       playerId: "player2",
-      data: { playerName: "Player 2" }
+      data: { playerName: "Player 2" },
     };
     ws2.simulateMessage(JSON.stringify(joinMessage2));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Clear messages
     ws1.getSentMessages().length = 0;
@@ -570,16 +570,16 @@ Deno.test({
         x: 100,
         y: 200,
         color: "#FF0000",
-        size: 5
-      }
+        size: 5,
+      },
     };
 
     ws1.simulateMessage(JSON.stringify(drawMessage));
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Player1 should not receive the draw-update (sender excluded)
     const player1Messages = ws1.getSentMessages();
-    const player1HasDrawUpdate = player1Messages.some(msg => {
+    const player1HasDrawUpdate = player1Messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.type === "draw-update";
@@ -590,7 +590,7 @@ Deno.test({
 
     // Player2 should receive the draw-update
     const player2Messages = ws2.getSentMessages();
-    const player2HasDrawUpdate = player2Messages.some(msg => {
+    const player2HasDrawUpdate = player2Messages.some((msg) => {
       try {
         const parsed = JSON.parse(msg);
         return parsed.type === "draw-update";
@@ -601,5 +601,5 @@ Deno.test({
 
     assertEquals(player1HasDrawUpdate, false);
     assertEquals(player2HasDrawUpdate, true);
-  }
+  },
 });

@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, useImperativeHandle } from "preact/hooks";
+import { useEffect, useImperativeHandle, useRef, useState } from "preact/hooks";
 import { forwardRef } from "preact/compat";
 import * as PIXI from "pixi.js";
 import { DrawingCommand } from "../types/game.ts";
-import { 
-  DrawingCommandThrottler, 
+import {
   DrawingCommandBuffer,
-  validateDrawingCommand 
+  DrawingCommandThrottler,
+  validateDrawingCommand,
 } from "../lib/drawing-utils.ts";
 import MobileDrawingTools from "../components/MobileDrawingTools.tsx";
 
@@ -21,7 +21,7 @@ export interface DrawingEngineProps {
 export interface DrawingTool {
   color: string;
   size: number;
-  type: 'brush';
+  type: "brush";
 }
 
 export interface DrawingEngineRef {
@@ -45,16 +45,16 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   const currentPathRef = useRef<PIXI.Graphics | null>(null);
   const isDrawingRef = useRef(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
-  
+
   const [currentTool, setCurrentTool] = useState<DrawingTool>({
-    color: '#000000',
+    color: "#000000",
     size: 5,
-    type: 'brush'
+    type: "brush",
   });
-  
+
   const [drawingHistory, setDrawingHistory] = useState<DrawingCommand[]>([]);
   const [undoStack, setUndoStack] = useState<DrawingCommand[][]>([]);
-  
+
   // Network optimization
   const throttlerRef = useRef<DrawingCommandThrottler | null>(null);
   const bufferRef = useRef<DrawingCommandBuffer | null>(null);
@@ -69,7 +69,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         }
       },
       10, // buffer size
-      50  // flush interval
+      50, // flush interval
     );
 
     return () => {
@@ -83,7 +83,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (!canvasRef.current) return;
 
     const app = new PIXI.Application();
-    
+
     const initPixi = async () => {
       await app.init({
         canvas: canvasRef.current!,
@@ -91,21 +91,21 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         height,
         backgroundColor: 0xffffff,
         antialias: true,
-        resolution: window.devicePixelRatio || 1,
+        resolution: globalThis.devicePixelRatio || 1,
         autoDensity: true,
       });
 
       // Create drawing container
       const drawingContainer = new PIXI.Container();
       app.stage.addChild(drawingContainer);
-      
+
       pixiAppRef.current = app;
       drawingContainerRef.current = drawingContainer;
 
       // Set up interaction
-      app.stage.eventMode = 'static';
+      app.stage.eventMode = "static";
       app.stage.hitArea = new PIXI.Rectangle(0, 0, width, height);
-      
+
       if (isDrawer && !disabled) {
         setupDrawingEvents(app, drawingContainer);
       }
@@ -124,7 +124,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   // Update drawing permissions when isDrawer changes
   useEffect(() => {
     if (!pixiAppRef.current) return;
-    
+
     if (isDrawer && !disabled) {
       setupDrawingEvents(pixiAppRef.current, drawingContainerRef.current!);
     } else {
@@ -136,7 +136,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Enhanced mobile touch support
     let lastTouchTime = 0;
     let touchStartPoint: { x: number; y: number } | null = null;
-    
+
     // Prevent default touch behaviors to avoid scrolling/zooming while drawing
     const preventDefaultTouch = (e: TouchEvent) => {
       e.preventDefault();
@@ -146,72 +146,78 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Enhanced pointer down with mobile optimizations
     const onPointerDown = (event: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled) return;
-      
+
       // Prevent default touch behavior
-      if (event.nativeEvent) {
+      if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
         event.nativeEvent.preventDefault();
+      }
+      if (event.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
       }
-      
+
       const point = event.global;
       touchStartPoint = { x: point.x, y: point.y };
       lastTouchTime = Date.now();
-      
+
       startDrawing(point.x, point.y);
     };
 
     // Enhanced pointer move with mobile optimizations
     const onPointerMove = (event: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled || !isDrawingRef.current) return;
-      
+
       // Prevent default touch behavior
-      if (event.nativeEvent) {
+      if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
         event.nativeEvent.preventDefault();
+      }
+      if (event.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
       }
-      
+
       const point = event.global;
-      
+
       // Mobile optimization: throttle move events for better performance
       const now = Date.now();
       if (now - lastTouchTime < 16) return; // ~60fps throttling
       lastTouchTime = now;
-      
+
       continueDrawing(point.x, point.y);
     };
 
     // Enhanced pointer up with mobile optimizations
     const onPointerUp = (event?: PIXI.FederatedPointerEvent) => {
       if (!isDrawer || disabled) return;
-      
+
       // Prevent default touch behavior
-      if (event?.nativeEvent) {
+      if (event?.nativeEvent && "preventDefault" in event.nativeEvent) {
         event.nativeEvent.preventDefault();
+      }
+      if (event?.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
       }
-      
+
       // Mobile optimization: detect tap vs draw
       if (touchStartPoint && event) {
         const point = event.global;
         const distance = Math.sqrt(
-          Math.pow(point.x - touchStartPoint.x, 2) + 
-          Math.pow(point.y - touchStartPoint.y, 2)
+          Math.pow(point.x - touchStartPoint.x, 2) +
+            Math.pow(point.y - touchStartPoint.y, 2),
         );
-        
+
         // If it's a very short tap (< 5px movement), treat as a dot
         if (distance < 5) {
           // Create a small dot at the touch point
           const dotCommand: DrawingCommand = {
-            type: 'start',
+            type: "start",
             x: touchStartPoint.x,
             y: touchStartPoint.y,
             color: currentTool.color,
             size: Math.max(currentTool.size, 3), // Minimum size for visibility
             timestamp: Date.now(),
           };
-          
+
           if (validateDrawingCommand(dotCommand)) {
-            setDrawingHistory(prev => [...prev, dotCommand]);
+            setDrawingHistory((prev) => [...prev, dotCommand]);
             if (throttlerRef.current) {
               throttlerRef.current.throttle(dotCommand, onDrawingCommand);
             } else {
@@ -220,7 +226,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           }
         }
       }
-      
+
       touchStartPoint = null;
       endDrawing();
     };
@@ -228,21 +234,21 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Mobile-specific touch event handlers
     const onTouchStart = (e: TouchEvent) => {
       if (!isDrawer || disabled) return;
-      
+
       e.preventDefault();
       e.stopPropagation();
-      
+
       // Handle multi-touch gestures
       if (e.touches.length > 1) {
         // Multi-touch detected - could implement zoom/pan here
         return;
       }
-      
+
       const touch = e.touches[0];
       const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
       const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
       const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
-      
+
       touchStartPoint = { x, y };
       lastTouchTime = Date.now();
       startDrawing(x, y);
@@ -250,55 +256,55 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     const onTouchMove = (e: TouchEvent) => {
       if (!isDrawer || disabled || !isDrawingRef.current) return;
-      
+
       e.preventDefault();
       e.stopPropagation();
-      
+
       if (e.touches.length > 1) return; // Ignore multi-touch
-      
+
       const now = Date.now();
       if (now - lastTouchTime < 16) return; // Throttle for performance
       lastTouchTime = now;
-      
+
       const touch = e.touches[0];
       const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
       const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
       const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
-      
+
       continueDrawing(x, y);
     };
 
     const onTouchEnd = (e: TouchEvent) => {
       if (!isDrawer || disabled) return;
-      
+
       e.preventDefault();
       e.stopPropagation();
-      
+
       // Handle tap vs draw detection
       if (touchStartPoint && e.changedTouches.length > 0) {
         const touch = e.changedTouches[0];
         const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
         const x = (touch.clientX - rect.left) * (app.canvas.width / rect.width);
         const y = (touch.clientY - rect.top) * (app.canvas.height / rect.height);
-        
+
         const distance = Math.sqrt(
-          Math.pow(x - touchStartPoint.x, 2) + 
-          Math.pow(y - touchStartPoint.y, 2)
+          Math.pow(x - touchStartPoint.x, 2) +
+            Math.pow(y - touchStartPoint.y, 2),
         );
-        
+
         // Create dot for short taps
         if (distance < 5) {
           const dotCommand: DrawingCommand = {
-            type: 'start',
+            type: "start",
             x: touchStartPoint.x,
             y: touchStartPoint.y,
             color: currentTool.color,
             size: Math.max(currentTool.size, 3),
             timestamp: Date.now(),
           };
-          
+
           if (validateDrawingCommand(dotCommand)) {
-            setDrawingHistory(prev => [...prev, dotCommand]);
+            setDrawingHistory((prev) => [...prev, dotCommand]);
             if (throttlerRef.current) {
               throttlerRef.current.throttle(dotCommand, onDrawingCommand);
             } else {
@@ -307,7 +313,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           }
         }
       }
-      
+
       touchStartPoint = null;
       endDrawing();
     };
@@ -316,43 +322,43 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     const canvas = app.canvas;
     if (canvas) {
       // Standard touch events with enhanced mobile support
-      canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-      canvas.addEventListener('touchmove', onTouchMove, { passive: false });
-      canvas.addEventListener('touchend', onTouchEnd, { passive: false });
-      canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
-      
+      canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+      canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+      canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+      canvas.addEventListener("touchcancel", onTouchEnd, { passive: false });
+
       // Prevent context menu on long press
-      canvas.addEventListener('contextmenu', preventDefaultTouch, { passive: false });
-      
+      canvas.addEventListener("contextmenu", (e: Event) => e.preventDefault(), { passive: false });
+
       // Prevent selection
-      canvas.style.userSelect = 'none';
-      canvas.style.webkitUserSelect = 'none';
-      canvas.style.webkitTouchCallout = 'none';
-      
+      canvas.style.userSelect = "none";
+      (canvas.style as any).webkitUserSelect = "none";
+      (canvas.style as any).webkitTouchCallout = "none";
+
       // Optimize for touch
-      canvas.style.touchAction = 'none';
+      canvas.style.touchAction = "none";
     }
 
     // Standard pointer events (fallback for non-touch devices)
-    app.stage.on('pointerdown', onPointerDown);
-    app.stage.on('pointermove', onPointerMove);
-    app.stage.on('pointerup', onPointerUp);
-    app.stage.on('pointerupoutside', onPointerUp);
+    app.stage.on("pointerdown", onPointerDown);
+    app.stage.on("pointermove", onPointerMove);
+    app.stage.on("pointerup", onPointerUp);
+    app.stage.on("pointerupoutside", onPointerUp);
   };
 
   const removeDrawingEvents = (app: PIXI.Application) => {
     // Remove touch event prevention from canvas
     const canvas = app.canvas;
     if (canvas) {
-      canvas.removeEventListener('touchstart', () => {});
-      canvas.removeEventListener('touchmove', () => {});
-      canvas.removeEventListener('touchend', () => {});
+      canvas.removeEventListener("touchstart", () => {});
+      canvas.removeEventListener("touchmove", () => {});
+      canvas.removeEventListener("touchend", () => {});
     }
 
-    app.stage.off('pointerdown');
-    app.stage.off('pointermove');
-    app.stage.off('pointerup');
-    app.stage.off('pointerupoutside');
+    app.stage.off("pointerdown");
+    app.stage.off("pointermove");
+    app.stage.off("pointerup");
+    app.stage.off("pointerupoutside");
   };
 
   const startDrawing = (x: number, y: number) => {
@@ -369,7 +375,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Create drawing command
     const command: DrawingCommand = {
-      type: 'start',
+      type: "start",
       x,
       y,
       color: currentTool.color,
@@ -379,8 +385,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Validate and add to history
     if (validateDrawingCommand(command)) {
-      setDrawingHistory(prev => [...prev, command]);
-      
+      setDrawingHistory((prev) => [...prev, command]);
+
       // Send via throttler for network optimization
       if (throttlerRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommand);
@@ -397,14 +403,14 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     currentPathRef.current.stroke({
       width: currentTool.size,
       color: currentTool.color,
-      cap: 'round',
-      join: 'round',
+      cap: "round",
+      join: "round",
     });
     currentPathRef.current.lineTo(x, y);
 
     // Create drawing command
     const command: DrawingCommand = {
-      type: 'move',
+      type: "move",
       x,
       y,
       color: currentTool.color,
@@ -414,8 +420,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Validate and add to history
     if (validateDrawingCommand(command)) {
-      setDrawingHistory(prev => [...prev, command]);
-      
+      setDrawingHistory((prev) => [...prev, command]);
+
       // Send via throttler for network optimization
       if (throttlerRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommand);
@@ -436,17 +442,17 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Create end command
     const command: DrawingCommand = {
-      type: 'end',
+      type: "end",
       timestamp: Date.now(),
     };
 
     // Save current state for undo
-    setUndoStack(prev => [...prev, [...drawingHistory]]);
+    setUndoStack((prev) => [...prev, [...drawingHistory]]);
 
     // Validate and add to history
     if (validateDrawingCommand(command)) {
-      setDrawingHistory(prev => [...prev, command]);
-      
+      setDrawingHistory((prev) => [...prev, command]);
+
       // Send via throttler for network optimization
       if (throttlerRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommand);
@@ -460,21 +466,21 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (!drawingContainerRef.current) return;
 
     // Save current state for undo
-    setUndoStack(prev => [...prev, [...drawingHistory]]);
+    setUndoStack((prev) => [...prev, [...drawingHistory]]);
 
     // Clear all graphics
     drawingContainerRef.current.removeChildren();
 
     // Create clear command
     const command: DrawingCommand = {
-      type: 'clear',
+      type: "clear",
       timestamp: Date.now(),
     };
 
     // Validate and reset history
     if (validateDrawingCommand(command)) {
       setDrawingHistory([command]);
-      
+
       // Send via throttler for network optimization
       if (throttlerRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommand);
@@ -488,12 +494,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (undoStack.length === 0) return;
 
     const previousState = undoStack[undoStack.length - 1];
-    setUndoStack(prev => prev.slice(0, -1));
-    
+    setUndoStack((prev) => prev.slice(0, -1));
+
     // Restore previous state
     setDrawingHistory(previousState);
     redrawFromHistory(previousState);
-    
+
     // Notify about the undo operation
     if (onDrawingCommands) {
       onDrawingCommands(previousState);
@@ -508,31 +514,31 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     let currentGraphics: PIXI.Graphics | null = null;
 
-    commands.forEach(command => {
+    commands.forEach((command) => {
       switch (command.type) {
-        case 'start':
+        case "start":
           currentGraphics = new PIXI.Graphics();
           currentGraphics.moveTo(command.x!, command.y!);
           drawingContainerRef.current!.addChild(currentGraphics);
           break;
-          
-        case 'move':
+
+        case "move":
           if (currentGraphics) {
             currentGraphics.stroke({
               width: command.size!,
               color: command.color!,
-              cap: 'round',
-              join: 'round',
+              cap: "round",
+              join: "round",
             });
             currentGraphics.lineTo(command.x!, command.y!);
           }
           break;
-          
-        case 'end':
+
+        case "end":
           currentGraphics = null;
           break;
-          
-        case 'clear':
+
+        case "clear":
           drawingContainerRef.current!.removeChildren();
           currentGraphics = null;
           break;
@@ -546,33 +552,34 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (!drawingContainerRef.current || !validateDrawingCommand(command)) return;
 
     switch (command.type) {
-      case 'start':
+      case "start":
         const graphics = new PIXI.Graphics();
         graphics.moveTo(command.x!, command.y!);
         drawingContainerRef.current.addChild(graphics);
         // Store reference for subsequent moves
         (graphics as any).commandId = command.timestamp;
         break;
-        
-      case 'move':
+
+      case "move":
         // Find the graphics object for this stroke
         const targetGraphics = drawingContainerRef.current.children.find(
-          child => (child as any).commandId && 
-          Math.abs((child as any).commandId - command.timestamp) < 1000
+          (child) =>
+            (child as any).commandId &&
+            Math.abs((child as any).commandId - command.timestamp) < 1000,
         ) as PIXI.Graphics;
-        
+
         if (targetGraphics) {
           targetGraphics.stroke({
             width: command.size!,
             color: command.color!,
-            cap: 'round',
-            join: 'round',
+            cap: "round",
+            join: "round",
           });
           targetGraphics.lineTo(command.x!, command.y!);
         }
         break;
-        
-      case 'clear':
+
+      case "clear":
         drawingContainerRef.current.removeChildren();
         break;
     }
@@ -607,20 +614,19 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         <canvas
           ref={canvasRef}
           class={`block w-full h-auto max-w-full ${
-            !isDrawer || disabled ? 'cursor-not-allowed' : 'cursor-crosshair'
+            !isDrawer || disabled ? "cursor-not-allowed" : "cursor-crosshair"
           }`}
-          style={{ 
-            touchAction: 'none',
-            maxWidth: '100%',
-            height: 'auto'
+          style={{
+            touchAction: "none",
+            maxWidth: "100%",
+            height: "auto",
           }}
         />
       </div>
 
       {/* Status */}
       <div class="mt-2 text-sm text-gray-600">
-        {disabled ? 'Drawing disabled' : 
-         isDrawer ? 'You are drawing' : 'Watching...'}
+        {disabled ? "Drawing disabled" : isDrawer ? "You are drawing" : "Watching..."}
       </div>
     </div>
   );

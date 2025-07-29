@@ -1,6 +1,6 @@
 // Simplified database service using Cloudflare REST API
 import { getCloudflareAPI } from "./cloudflare-api.ts";
-import type { Room, Player, GameSession, Score } from "../types/game.ts";
+import type { GameSession, Player, Room, Score } from "../types/game.ts";
 
 export interface DatabaseResult<T> {
   success: boolean;
@@ -13,16 +13,16 @@ export class DatabaseService {
 
   private async executeQuery<T>(
     operation: () => Promise<T>,
-    errorMessage: string
+    errorMessage: string,
   ): Promise<DatabaseResult<T>> {
     try {
       const data = await operation();
       return { success: true, data };
     } catch (error) {
       console.error(`Database error: ${errorMessage}`, error);
-      return { 
-        success: false, 
-        error: error instanceof Error ? error.message : errorMessage 
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : errorMessage,
       };
     }
   }
@@ -41,7 +41,7 @@ export class DatabaseService {
       `;
       await this.api.executeD1Query(sql, [id, name, hostId, maxPlayers, true]);
       return id;
-    }, 'Failed to create room');
+    }, "Failed to create room");
   }
 
   async getRoomById(id: string): Promise<DatabaseResult<Room | null>> {
@@ -65,12 +65,12 @@ export class DatabaseService {
       `;
       const result = await this.api.executeD1Query(sql, [limit]);
       return result[0]?.results || [];
-    }, 'Failed to get active rooms');
+    }, "Failed to get active rooms");
   }
 
   async updateRoom(id: string, updates: Partial<Room>): Promise<DatabaseResult<boolean>> {
     return this.executeQuery(async () => {
-      const fields = Object.keys(updates).map(key => `${key} = ?`).join(', ');
+      const fields = Object.keys(updates).map((key) => `${key} = ?`).join(", ");
       const values = Object.values(updates);
       const sql = `UPDATE rooms SET ${fields}, updated_at = datetime('now') WHERE id = ?`;
       await this.api.executeD1Query(sql, [...values, id]);
@@ -87,7 +87,11 @@ export class DatabaseService {
   }
 
   // Player operations
-  async createPlayer(name: string, roomId: string, isHost = false): Promise<DatabaseResult<string>> {
+  async createPlayer(
+    name: string,
+    roomId: string,
+    isHost = false,
+  ): Promise<DatabaseResult<string>> {
     return this.executeQuery(async () => {
       const id = this.generateId();
       const sql = `
@@ -96,7 +100,7 @@ export class DatabaseService {
       `;
       await this.api.executeD1Query(sql, [id, name, roomId, isHost]);
       return id;
-    }, 'Failed to create player');
+    }, "Failed to create player");
   }
 
   async getPlayerById(id: string): Promise<DatabaseResult<Player | null>> {
@@ -133,7 +137,7 @@ export class DatabaseService {
       `;
       await this.api.executeD1Query(sql, [id, roomId, totalRounds]);
       return id;
-    }, 'Failed to create game session');
+    }, "Failed to create game session");
   }
 
   async endGameSession(id: string, winnerId?: string): Promise<DatabaseResult<boolean>> {
@@ -149,7 +153,11 @@ export class DatabaseService {
   }
 
   // Score operations
-  async createScore(sessionId: string, playerId: string, points = 0): Promise<DatabaseResult<string>> {
+  async createScore(
+    sessionId: string,
+    playerId: string,
+    points = 0,
+  ): Promise<DatabaseResult<string>> {
     return this.executeQuery(async () => {
       const id = this.generateId();
       const sql = `
@@ -158,10 +166,14 @@ export class DatabaseService {
       `;
       await this.api.executeD1Query(sql, [id, sessionId, playerId, points]);
       return id;
-    }, 'Failed to create score');
+    }, "Failed to create score");
   }
 
-  async updateScore(id: string, points: number, correctGuesses: number): Promise<DatabaseResult<boolean>> {
+  async updateScore(
+    id: string,
+    points: number,
+    correctGuesses: number,
+  ): Promise<DatabaseResult<boolean>> {
     return this.executeQuery(async () => {
       const sql = `
         UPDATE scores 
@@ -193,7 +205,7 @@ export class DatabaseService {
       const sql = "SELECT 1 as test";
       const result = await this.api.executeD1Query(sql);
       return result[0]?.results?.[0]?.test === 1;
-    }, 'Database health check failed');
+    }, "Database health check failed");
   }
 }
 

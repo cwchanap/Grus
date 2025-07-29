@@ -8,7 +8,8 @@ export default function App({ Component }: PageProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Drawing Game</title>
         <link rel="stylesheet" href="/styles.css" />
-        <style>{`
+        <style>
+          {`
           @keyframes slide-in {
             from {
               transform: translateX(100%);
@@ -22,7 +23,8 @@ export default function App({ Component }: PageProps) {
           .animate-slide-in {
             animation: slide-in 0.3s ease-out;
           }
-        `}</style>
+        `}
+        </style>
       </head>
       <body>
         <Component />

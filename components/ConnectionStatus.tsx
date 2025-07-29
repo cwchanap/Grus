@@ -1,35 +1,35 @@
 import { useEffect, useState } from "preact/hooks";
 
 interface ConnectionStatusProps {
-  size?: 'sm' | 'md' | 'lg';
+  size?: "sm" | "md" | "lg";
   showText?: boolean;
   className?: string;
 }
 
-export default function ConnectionStatus({ 
-  size = 'md', 
-  showText = true, 
-  className = "" 
+export default function ConnectionStatus({
+  size = "md",
+  showText = true,
+  className = "",
 }: ConnectionStatusProps) {
-  const [status, setStatus] = useState<'online' | 'offline' | 'slow'>('online');
+  const [status, setStatus] = useState<"online" | "offline" | "slow">("online");
   const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
 
   useEffect(() => {
     const updateConnectionStatus = () => {
       if (!navigator.onLine) {
-        setStatus('offline');
+        setStatus("offline");
       } else {
         // Check connection speed/quality
         const connection = (navigator as any).connection;
         if (connection) {
           const { effectiveType, downlink } = connection;
-          if (effectiveType === 'slow-2g' || effectiveType === '2g' || downlink < 0.5) {
-            setStatus('slow');
+          if (effectiveType === "slow-2g" || effectiveType === "2g" || downlink < 0.5) {
+            setStatus("slow");
           } else {
-            setStatus('online');
+            setStatus("online");
           }
         } else {
-          setStatus('online');
+          setStatus("online");
         }
       }
       setLastUpdate(Date.now());
@@ -39,22 +39,22 @@ export default function ConnectionStatus({
     updateConnectionStatus();
 
     // Listen for online/offline events
-    window.addEventListener('online', updateConnectionStatus);
-    window.addEventListener('offline', updateConnectionStatus);
+    globalThis.addEventListener("online", updateConnectionStatus);
+    globalThis.addEventListener("offline", updateConnectionStatus);
 
     // Listen for connection changes (if supported)
     if ((navigator as any).connection) {
-      (navigator as any).connection.addEventListener('change', updateConnectionStatus);
+      (navigator as any).connection.addEventListener("change", updateConnectionStatus);
     }
 
     // Periodic check
     const interval = setInterval(updateConnectionStatus, 30000); // Check every 30 seconds
 
     return () => {
-      window.removeEventListener('online', updateConnectionStatus);
-      window.removeEventListener('offline', updateConnectionStatus);
+      globalThis.removeEventListener("online", updateConnectionStatus);
+      globalThis.removeEventListener("offline", updateConnectionStatus);
       if ((navigator as any).connection) {
-        (navigator as any).connection.removeEventListener('change', updateConnectionStatus);
+        (navigator as any).connection.removeEventListener("change", updateConnectionStatus);
       }
       clearInterval(interval);
     };
@@ -62,49 +62,49 @@ export default function ConnectionStatus({
 
   const getStatusConfig = () => {
     switch (status) {
-      case 'online':
+      case "online":
         return {
-          color: 'bg-green-500',
-          text: 'Online',
-          icon: '🟢',
-          pulse: false
+          color: "bg-green-500",
+          text: "Online",
+          icon: "🟢",
+          pulse: false,
         };
-      case 'slow':
+      case "slow":
         return {
-          color: 'bg-yellow-500',
-          text: 'Slow',
-          icon: '🟡',
-          pulse: true
+          color: "bg-yellow-500",
+          text: "Slow",
+          icon: "🟡",
+          pulse: true,
         };
-      case 'offline':
+      case "offline":
         return {
-          color: 'bg-red-500',
-          text: 'Offline',
-          icon: '🔴',
-          pulse: true
+          color: "bg-red-500",
+          text: "Offline",
+          icon: "🔴",
+          pulse: true,
         };
     }
   };
 
   const getSizeClasses = () => {
     switch (size) {
-      case 'sm':
+      case "sm":
         return {
-          dot: 'w-2 h-2',
-          text: 'text-xs',
-          container: 'gap-1'
+          dot: "w-2 h-2",
+          text: "text-xs",
+          container: "gap-1",
         };
-      case 'md':
+      case "md":
         return {
-          dot: 'w-3 h-3',
-          text: 'text-sm',
-          container: 'gap-2'
+          dot: "w-3 h-3",
+          text: "text-sm",
+          container: "gap-2",
         };
-      case 'lg':
+      case "lg":
         return {
-          dot: 'w-4 h-4',
-          text: 'text-base',
-          container: 'gap-2'
+          dot: "w-4 h-4",
+          text: "text-base",
+          container: "gap-2",
         };
     }
   };
@@ -114,12 +114,12 @@ export default function ConnectionStatus({
 
   return (
     <div class={`flex items-center ${sizeClasses.container} ${className}`}>
-      <div 
+      <div
         class={`
           ${sizeClasses.dot} 
           ${config.color} 
           rounded-full 
-          ${config.pulse ? 'animate-pulse' : ''}
+          ${config.pulse ? "animate-pulse" : ""}
         `}
         title={`Connection: ${config.text}`}
       />
@@ -134,16 +134,16 @@ export default function ConnectionStatus({
 
 // Hook for connection status
 export function useConnectionStatus() {
-  const [status, setStatus] = useState<'online' | 'offline' | 'slow'>('online');
+  const [status, setStatus] = useState<"online" | "offline" | "slow">("online");
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
     const updateStatus = () => {
       const online = navigator.onLine;
       setIsOnline(online);
-      
+
       if (!online) {
-        setStatus('offline');
+        setStatus("offline");
         return;
       }
 
@@ -151,30 +151,30 @@ export function useConnectionStatus() {
       const connection = (navigator as any).connection;
       if (connection) {
         const { effectiveType, downlink } = connection;
-        if (effectiveType === 'slow-2g' || effectiveType === '2g' || downlink < 0.5) {
-          setStatus('slow');
+        if (effectiveType === "slow-2g" || effectiveType === "2g" || downlink < 0.5) {
+          setStatus("slow");
         } else {
-          setStatus('online');
+          setStatus("online");
         }
       } else {
-        setStatus('online');
+        setStatus("online");
       }
     };
 
     updateStatus();
 
-    window.addEventListener('online', updateStatus);
-    window.addEventListener('offline', updateStatus);
+    globalThis.addEventListener("online", updateStatus);
+    globalThis.addEventListener("offline", updateStatus);
 
     if ((navigator as any).connection) {
-      (navigator as any).connection.addEventListener('change', updateStatus);
+      (navigator as any).connection.addEventListener("change", updateStatus);
     }
 
     return () => {
-      window.removeEventListener('online', updateStatus);
-      window.removeEventListener('offline', updateStatus);
+      globalThis.removeEventListener("online", updateStatus);
+      globalThis.removeEventListener("offline", updateStatus);
       if ((navigator as any).connection) {
-        (navigator as any).connection.removeEventListener('change', updateStatus);
+        (navigator as any).connection.removeEventListener("change", updateStatus);
       }
     };
   }, []);

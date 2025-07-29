@@ -6,7 +6,7 @@ export interface GameState {
   currentWord: string;
   roundNumber: number;
   timeRemaining: number;
-  phase: 'waiting' | 'drawing' | 'guessing' | 'results' | 'finished';
+  phase: "waiting" | "drawing" | "guessing" | "results" | "finished";
   players: PlayerState[];
   scores: Record<string, number>;
   drawingData: DrawingCommand[];
@@ -31,7 +31,7 @@ export interface PlayerState {
 }
 
 export interface DrawingCommand {
-  type: 'start' | 'move' | 'end' | 'clear';
+  type: "start" | "move" | "end" | "clear";
   x?: number;
   y?: number;
   color?: string;
@@ -78,14 +78,30 @@ export interface Score {
 
 // WebSocket message types
 export interface ClientMessage {
-  type: 'join-room' | 'leave-room' | 'chat' | 'draw' | 'guess' | 'start-game' | 'next-round' | 'end-game' | 'ping';
+  type:
+    | "join-room"
+    | "leave-room"
+    | "chat"
+    | "draw"
+    | "guess"
+    | "start-game"
+    | "next-round"
+    | "end-game"
+    | "ping";
   roomId: string;
   playerId: string;
   data: any;
 }
 
 export interface ServerMessage {
-  type: 'room-update' | 'chat-message' | 'draw-update' | 'game-state' | 'score-update' | 'error' | 'pong';
+  type:
+    | "room-update"
+    | "chat-message"
+    | "draw-update"
+    | "game-state"
+    | "score-update"
+    | "error"
+    | "pong";
   roomId: string;
   data: any;
 }
