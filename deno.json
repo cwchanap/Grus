@@ -19,6 +19,7 @@
     "format:check": "deno fmt --check",
     "type-check": "deno check **/*.ts **/*.tsx",
     "pre-commit": "deno fmt",
+    "lint-staged": "deno run --allow-run --allow-read scripts/lint-staged.ts",
     "ci": "deno task format:check && deno task lint && deno task type-check && deno task test",
     "setup-hooks": "deno run --allow-read --allow-write scripts/setup-hooks.ts"
   },
