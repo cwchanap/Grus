@@ -31,7 +31,7 @@ export class DevDatabaseService {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      
+
       rooms.set(id, room);
       return { success: true, data: id };
     } catch (error) {
@@ -57,10 +57,10 @@ export class DevDatabaseService {
   async getActiveRooms(limit = 20): Promise<DatabaseResult<Room[]>> {
     try {
       const activeRooms = Array.from(rooms.values())
-        .filter(room => room.isActive)
+        .filter((room) => room.isActive)
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .slice(0, limit);
-      
+
       return { success: true, data: activeRooms };
     } catch (error) {
       return {
@@ -82,7 +82,7 @@ export class DevDatabaseService {
         ...updates,
         updatedAt: new Date().toISOString(),
       };
-      
+
       rooms.set(id, updatedRoom);
       return { success: true, data: true };
     } catch (error) {
@@ -101,7 +101,7 @@ export class DevDatabaseService {
           players.delete(playerId);
         }
       }
-      
+
       const deleted = rooms.delete(id);
       return { success: true, data: deleted };
     } catch (error) {
@@ -129,7 +129,7 @@ export class DevDatabaseService {
         lastActivity: Date.now(),
         joinedAt: new Date().toISOString(),
       };
-      
+
       players.set(id, player);
       return { success: true, data: id };
     } catch (error) {
@@ -155,9 +155,9 @@ export class DevDatabaseService {
   async getPlayersByRoom(roomId: string): Promise<DatabaseResult<Player[]>> {
     try {
       const roomPlayers = Array.from(players.values())
-        .filter(player => player.roomId === roomId)
+        .filter((player) => player.roomId === roomId)
         .sort((a, b) => new Date(a.joinedAt).getTime() - new Date(b.joinedAt).getTime());
-      
+
       return { success: true, data: roomPlayers };
     } catch (error) {
       return {
@@ -192,7 +192,7 @@ export class DevDatabaseService {
         endedAt: null,
         winnerId: null,
       };
-      
+
       gameSessions.set(id, session);
       return { success: true, data: id };
     } catch (error) {
@@ -215,7 +215,7 @@ export class DevDatabaseService {
         endedAt: new Date().toISOString(),
         winnerId: winnerId || null,
       };
-      
+
       gameSessions.set(id, updatedSession);
       return { success: true, data: true };
     } catch (error) {
@@ -241,7 +241,7 @@ export class DevDatabaseService {
         points,
         correctGuesses: 0,
       };
-      
+
       scores.set(id, score);
       return { success: true, data: id };
     } catch (error) {
@@ -268,7 +268,7 @@ export class DevDatabaseService {
         points,
         correctGuesses,
       };
-      
+
       scores.set(id, updatedScore);
       return { success: true, data: true };
     } catch (error) {
@@ -282,14 +282,16 @@ export class DevDatabaseService {
   async getScoresBySession(sessionId: string): Promise<DatabaseResult<Score[]>> {
     try {
       const sessionScores = Array.from(scores.values())
-        .filter(score => score.sessionId === sessionId)
+        .filter((score) => score.sessionId === sessionId)
         .sort((a, b) => b.points - a.points);
-      
+
       return { success: true, data: sessionScores };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : `Failed to get scores for session: ${sessionId}`,
+        error: error instanceof Error
+          ? error.message
+          : `Failed to get scores for session: ${sessionId}`,
       };
     }
   }

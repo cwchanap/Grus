@@ -66,8 +66,6 @@ export class CloudflareAPI {
 
     return result.result;
   }
-
-
 }
 
 // Singleton instance

@@ -27,7 +27,6 @@ const testConfig = {
   accountId: "test-account-id",
   apiToken: "test-api-token",
   databaseId: "test-database-id",
-
 };
 
 Deno.test("CloudflareAPI - D1 Query Success", async () => {

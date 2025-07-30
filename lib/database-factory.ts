@@ -27,7 +27,7 @@ let databaseService: IDatabaseService | null = null;
 export function getDatabaseService(): IDatabaseService {
   if (!databaseService) {
     const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-    
+
     if (isDevelopment) {
       console.log("Using development database service (in-memory)");
       databaseService = new DevDatabaseService();

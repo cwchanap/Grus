@@ -17,10 +17,17 @@ export default function LeaveRoomButton({
   const [error, setError] = useState<string | null>(null);
 
   const handleLeaveRoom = async () => {
-    if (isLeaving || !playerId) return;
+    if (isLeaving) return;
 
     setIsLeaving(true);
     setError(null);
+
+    // If no playerId, just redirect to lobby (fallback behavior)
+    if (!playerId || playerId.trim() === "") {
+      console.warn("No playerId provided, redirecting to lobby without API call");
+      globalThis.location.href = "/";
+      return;
+    }
 
     try {
       const response = await fetch(`/api/rooms/${roomId}/leave`, {
@@ -50,6 +57,13 @@ export default function LeaveRoomButton({
       console.error("Error leaving room:", error);
       setError(error instanceof Error ? error.message : "Failed to leave room");
       setIsLeaving(false);
+
+      // After 3 seconds, offer fallback option to go to lobby anyway
+      setTimeout(() => {
+        if (confirm("Unable to properly leave the room. Go to lobby anyway?")) {
+          globalThis.location.href = "/";
+        }
+      }, 3000);
     }
   };
 
@@ -57,7 +71,11 @@ export default function LeaveRoomButton({
     e.preventDefault();
 
     // Show confirmation dialog for better UX
-    const confirmed = confirm("Are you sure you want to leave this room?");
+    const confirmMessage = !playerId || playerId.trim() === ""
+      ? "Return to lobby? (Note: Unable to properly leave room due to missing player information)"
+      : "Are you sure you want to leave this room?";
+
+    const confirmed = confirm(confirmMessage);
     if (confirmed) {
       handleLeaveRoom();
     }
@@ -69,7 +87,13 @@ export default function LeaveRoomButton({
         onClick={handleClick}
         disabled={isLeaving}
         class={`${className} ${isLeaving ? "opacity-50 cursor-not-allowed" : ""}`}
-        title={error || (isLeaving ? "Leaving room..." : "Leave room")}
+        title={error
+          ? error
+          : isLeaving
+          ? "Leaving room..."
+          : !playerId || playerId.trim() === ""
+          ? "Return to lobby (player info missing)"
+          : "Leave room"}
       >
         {isLeaving
           ? (

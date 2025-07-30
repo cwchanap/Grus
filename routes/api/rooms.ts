@@ -12,7 +12,7 @@ export const handler: Handlers = {
       const limit = parseInt(url.searchParams.get("limit") || "20");
 
       const roomManager = new RoomManager();
-      
+
       // Get active rooms with automatic cleanup
       const result = await roomManager.getActiveRoomsWithCleanup(limit);
 

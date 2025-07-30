@@ -19,12 +19,15 @@ export const handler: Handlers = {
         });
       }
 
-      return new Response(JSON.stringify({ 
-        message: `Cleaned up ${result.cleanedCount} empty rooms`,
-        cleanedCount: result.cleanedCount 
-      }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          message: `Cleaned up ${result.cleanedCount} empty rooms`,
+          cleanedCount: result.cleanedCount,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (error) {
       console.error("Error cleaning up rooms:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
@@ -38,16 +41,19 @@ export const handler: Handlers = {
   async GET(_req, _ctx) {
     try {
       const roomManager = new RoomManager();
-      
+
       // Perform a dry run to see how many rooms would be cleaned up
       const result = await roomManager.cleanupEmptyRooms(0); // Limit 0 means dry run
-      
-      return new Response(JSON.stringify({
-        message: "Cleanup statistics",
-        potentialCleanupCount: result.cleanedCount,
-      }), {
-        headers: { "Content-Type": "application/json" },
-      });
+
+      return new Response(
+        JSON.stringify({
+          message: "Cleanup statistics",
+          potentialCleanupCount: result.cleanedCount,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     } catch (error) {
       console.error("Error getting cleanup statistics:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {

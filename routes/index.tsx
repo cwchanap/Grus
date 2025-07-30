@@ -12,7 +12,7 @@ export const handler: Handlers<LobbyData> = {
   async GET(_req, ctx) {
     try {
       const roomManager = new RoomManager();
-      
+
       // Get active rooms with automatic cleanup
       const result = await roomManager.getActiveRoomsWithCleanup(20);
 

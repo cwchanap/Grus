@@ -170,7 +170,11 @@ export class RoomManager {
     roomId: string,
     playerId: string,
   ): Promise<
-    { success: boolean; data?: { wasHost: boolean; newHostId?: string; roomDeleted?: boolean }; error?: string }
+    {
+      success: boolean;
+      data?: { wasHost: boolean; newHostId?: string; roomDeleted?: boolean };
+      error?: string;
+    }
   > {
     try {
       const roomSummary = await this.getRoomSummary(roomId);
@@ -298,7 +302,9 @@ export class RoomManager {
    * @param limit Maximum number of rooms to check (default: 50)
    * @returns Number of rooms cleaned up
    */
-  async cleanupEmptyRooms(limit = 50): Promise<{ success: boolean; cleanedCount: number; error?: string }> {
+  async cleanupEmptyRooms(
+    limit = 50,
+  ): Promise<{ success: boolean; cleanedCount: number; error?: string }> {
     try {
       // Get active rooms
       const roomsResult = await this.db.getActiveRooms(limit);
@@ -314,7 +320,7 @@ export class RoomManager {
         const playersResult = await this.db.getPlayersByRoom(room.id);
         if (playersResult.success) {
           const players = playersResult.data || [];
-          
+
           // If room has no players, delete it
           if (players.length === 0) {
             const deleteResult = await this.db.deleteRoom(room.id);
@@ -340,7 +346,9 @@ export class RoomManager {
    * @param limit Maximum number of rooms to return
    * @returns Array of RoomSummary objects for rooms with players
    */
-  async getActiveRoomsWithCleanup(limit = 20): Promise<{ success: boolean; data?: RoomSummary[]; error?: string }> {
+  async getActiveRoomsWithCleanup(
+    limit = 20,
+  ): Promise<{ success: boolean; data?: RoomSummary[]; error?: string }> {
     try {
       // First, clean up empty rooms
       await this.cleanupEmptyRooms(limit * 2); // Check more rooms than we need to return
@@ -359,7 +367,7 @@ export class RoomManager {
         const summaryResult = await this.getRoomSummary(room.id);
         if (summaryResult.success && summaryResult.data) {
           const summary = summaryResult.data;
-          
+
           // Only include rooms with players
           if (summary.playerCount > 0) {
             roomSummaries.push(summary);

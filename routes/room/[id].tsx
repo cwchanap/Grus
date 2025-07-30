@@ -47,6 +47,11 @@ export const handler: Handlers<GameRoomData> = {
       const url = new URL(req.url);
       const playerId = url.searchParams.get("playerId");
 
+      // Log warning if playerId is missing (helps with debugging)
+      if (!playerId) {
+        console.warn(`Room ${roomId} accessed without playerId parameter`);
+      }
+
       // In development, we don't have Cloudflare env, so we skip the DB check
       const env = (ctx.state as any).env as Env;
       const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
@@ -114,6 +119,21 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   return (
     <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">
       <div class="container mx-auto px-2 sm:px-4 py-2 sm:py-4 lg:py-8 max-w-7xl flex flex-col flex-1 min-h-0 h-full">
+        {/* Player ID missing warning */}
+        {(!playerId || playerId.trim() === "") && (
+          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 sm:mb-4">
+            <div class="flex items-center text-yellow-800">
+              <span class="text-yellow-600 mr-2">⚠️</span>
+              <div class="text-sm">
+                <strong>Limited functionality:</strong>{" "}
+                Some features may not work properly because player information is missing.
+                <a href="/" class="ml-2 underline hover:no-underline">Return to lobby</a>{" "}
+                to rejoin properly.
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header - Mobile responsive */}
         <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
           <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 xs:gap-3">
@@ -131,11 +151,24 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 <span>{room.playerCount}/{room.room.maxPlayers} players</span>
               </p>
             </div>
-            <LeaveRoomButton
-              roomId={room.room.id}
-              playerId={playerId || ""}
-              className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
-            />
+            <div class="flex gap-2">
+              <LeaveRoomButton
+                roomId={room.room.id}
+                playerId={playerId || ""}
+                className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+              />
+              {/* Fallback link in case the interactive button fails */}
+              {(!playerId || playerId.trim() === "") && (
+                <a
+                  href="/"
+                  class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 active:bg-blue-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+                  title="Simple link back to lobby"
+                >
+                  <span class="xs:hidden">← Home</span>
+                  <span class="hidden xs:inline">← Back to Lobby</span>
+                </a>
+              )}
+            </div>
           </div>
         </div>
 

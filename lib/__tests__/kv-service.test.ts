@@ -192,10 +192,10 @@ Deno.test("KVService - error handling", async () => {
   // Test with invalid key structure that might cause an error
   // Since Deno KV is quite robust, we'll test a different error scenario
   const result = await kvService.get("");
-  
+
   // The operation might succeed with empty string, so let's just verify the structure
   assertEquals(typeof result.success, "boolean");
-  
+
   if (!result.success) {
     assertExists(result.error);
   }

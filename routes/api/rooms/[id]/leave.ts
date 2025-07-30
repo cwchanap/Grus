@@ -33,7 +33,7 @@ export const handler: Handlers = {
       const body = await req.json();
       const { playerId } = body;
 
-      if (!playerId) {
+      if (!playerId || playerId.trim() === "") {
         return new Response(JSON.stringify({ error: "Player ID is required" }), {
           status: 400,
           headers: { "Content-Type": "application/json" },
