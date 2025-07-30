@@ -1,17 +1,32 @@
 // WebSocket handler for Cloudflare Workers
 import "../../types/websocket.ts";
 import { Env } from "../../types/cloudflare.ts";
-import { ClientMessage, GameState, PlayerState, ServerMessage } from "../../types/game.ts";
-import { getConfig, validateChatMessage, validatePlayerName } from "../config.ts";
+import {
+  ClientMessage,
+  GameState,
+  PlayerState,
+  ServerMessage,
+} from "../../types/game.ts";
+import {
+  getConfig,
+  validateChatMessage,
+  validatePlayerName,
+} from "../config.ts";
 
 export class WebSocketHandler {
   private env: Env;
   private connections: Map<string, WebSocket> = new Map();
   private playerRooms: Map<string, string> = new Map(); // playerId -> roomId
   private roomConnections: Map<string, Set<string>> = new Map(); // roomId -> Set<playerId>
-  private rateLimits: Map<string, { messages: number; drawing: number; lastReset: number }> =
-    new Map();
+  private rateLimits: Map<
+    string,
+    { messages: number; drawing: number; lastReset: number }
+  > = new Map();
   private roundTimers: Map<string, number> = new Map(); // roomId -> timer
+
+  // Development mode in-memory storage
+  private devGameStates: Map<string, GameState> = new Map();
+  private devPlayerStates: Map<string, PlayerState> = new Map();
 
   constructor(env: Env) {
     this.env = env;
@@ -27,7 +42,10 @@ export class WebSocketHandler {
     if (typeof WebSocketPair !== "undefined") {
       // Cloudflare Workers environment
       const webSocketPair = new WebSocketPair();
-      const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
+      const [client, server] = Object.values(webSocketPair) as [
+        WebSocket,
+        WebSocket
+      ];
 
       // Accept the WebSocket connection
       server.accept();
@@ -46,38 +64,70 @@ export class WebSocketHandler {
         this.handleDisconnection(server);
       });
 
-      return new Response(
-        null,
-        {
-          status: 101,
-          webSocket: client,
-        } as ResponseInit & { webSocket: WebSocket },
-      );
+      return new Response(null, {
+        status: 101,
+        webSocket: client,
+      } as ResponseInit & { webSocket: WebSocket });
     } else {
-      // Deno environment - WebSocket upgrade is handled differently
-      // For development, we'll return a placeholder response
-      console.log(
-        "WebSocket connection attempted in Deno environment - not fully supported in development",
-      );
-      return new Response("WebSocket not supported in development environment", {
-        status: 501,
-        headers: { "Content-Type": "text/plain" },
-      });
+      // Deno environment - Use Deno's native WebSocket upgrade
+      try {
+        const { socket, response } = Deno.upgradeWebSocket(request);
+
+        // Handle WebSocket events
+        socket.addEventListener("open", () => {
+          console.log("WebSocket connection opened in Deno environment");
+        });
+
+        socket.addEventListener("message", (event: MessageEvent) => {
+          this.handleMessage(socket, event.data);
+        });
+
+        socket.addEventListener("close", () => {
+          console.log("WebSocket connection closed in Deno environment");
+          this.handleDisconnection(socket);
+        });
+
+        socket.addEventListener("error", (error: Event) => {
+          console.error("WebSocket error in Deno environment:", error);
+          this.handleDisconnection(socket);
+        });
+
+        return response;
+      } catch (error) {
+        console.error(
+          "Failed to upgrade WebSocket in Deno environment:",
+          error
+        );
+        return new Response("WebSocket upgrade failed", {
+          status: 500,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
     }
   }
 
   private async handleMessage(ws: WebSocket, data: string) {
     try {
+      console.log("WebSocket message received:", data);
       const message: ClientMessage = JSON.parse(data);
 
       // Validate message structure
       if (!this.validateClientMessage(message)) {
+        console.error("Invalid message format:", message);
         this.sendError(ws, "Invalid message format");
         return;
       }
 
+      console.log(
+        "Processing message:",
+        message.type,
+        "for player:",
+        message.playerId
+      );
+
       // Check rate limits
       if (!this.checkRateLimit(message.playerId, message.type)) {
+        console.error("Rate limit exceeded for player:", message.playerId);
         this.sendError(ws, "Rate limit exceeded");
         return;
       }
@@ -85,21 +135,27 @@ export class WebSocketHandler {
       // Handle different message types
       switch (message.type) {
         case "join-room":
+          console.log("Handling join-room message");
           await this.handleJoinRoom(ws, message);
           break;
         case "leave-room":
+          console.log("Handling leave-room message");
           await this.handleLeaveRoom(ws, message);
           break;
         case "chat":
+          console.log("Handling chat message");
           await this.handleChatMessage(ws, message);
           break;
         case "draw":
+          console.log("Handling draw message");
           await this.handleDrawMessage(ws, message);
           break;
         case "guess":
+          console.log("Handling guess message");
           await this.handleGuessMessage(ws, message);
           break;
         case "start-game":
+          console.log("Handling start-game message");
           await this.handleStartGame(ws, message);
           break;
         case "next-round":
@@ -113,6 +169,8 @@ export class WebSocketHandler {
       }
     } catch (error) {
       console.error("Error handling message:", error);
+      console.error("Message data:", data);
+      console.error("Error stack:", error.stack);
       this.sendError(ws, "Internal server error");
     }
   }
@@ -296,7 +354,10 @@ export class WebSocketHandler {
         gameState.scores[playerId] += totalPoints;
 
         // Award points to drawer too
-        if (gameState.currentDrawer && !gameState.scores[gameState.currentDrawer]) {
+        if (
+          gameState.currentDrawer &&
+          !gameState.scores[gameState.currentDrawer]
+        ) {
           gameState.scores[gameState.currentDrawer] = 0;
         }
         if (gameState.currentDrawer) {
@@ -350,7 +411,8 @@ export class WebSocketHandler {
             });
 
             // Check if game is complete
-            if (currentGameState.roundNumber >= 5) { // Assuming 5 rounds max
+            if (currentGameState.roundNumber >= 5) {
+              // Assuming 5 rounds max
               await this.broadcastToRoom(roomId, {
                 type: "game-state",
                 roomId,
@@ -412,11 +474,15 @@ export class WebSocketHandler {
     await this.updateGameState(roomId, gameState);
 
     // Broadcast drawing update to all players except sender
-    await this.broadcastToRoom(roomId, {
-      type: "draw-update",
+    await this.broadcastToRoom(
       roomId,
-      data: drawingCommand,
-    }, playerId);
+      {
+        type: "draw-update",
+        roomId,
+        data: drawingCommand,
+      },
+      playerId
+    );
   }
 
   private async handleGuessMessage(_ws: WebSocket, message: ClientMessage) {
@@ -427,68 +493,64 @@ export class WebSocketHandler {
   private async handleStartGame(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId } = message;
 
-    // Verify player is host
-    const playerState = await this.getPlayerState(playerId);
-    if (!playerState || !playerState.isHost) {
-      this.sendError(ws, "Only host can start game");
-      return;
-    }
-
     try {
-      // Get or initialize game state
-      let gameState = await this.getGameState(roomId);
-      if (!gameState) {
-        // Initialize new game state
-        const roomConnections = this.roomConnections.get(roomId);
-        if (!roomConnections || roomConnections.size < 2) {
-          this.sendError(ws, "Need at least 2 players to start game");
-          return;
-        }
-
-        const playerIds = Array.from(roomConnections);
-        const players: PlayerState[] = [];
-
-        for (const pid of playerIds) {
-          const playerState = await this.getPlayerState(pid);
-          if (playerState) {
-            players.push(playerState);
-          }
-        }
-
-        gameState = {
-          roomId,
-          phase: "drawing",
-          roundNumber: 1,
-          currentDrawer: playerIds[0],
-          currentWord: this.getRandomWord(),
-          timeRemaining: 90000, // 90 seconds
-          players,
-          scores: {},
-          drawingData: [],
-          correctGuesses: [],
-          chatMessages: [],
-        };
-      }
-
-      if (!gameState) {
-        this.sendError(ws, "Failed to initialize game state");
+      // Verify player is host using database
+      const isHost = await this.verifyPlayerIsHost(playerId, roomId);
+      if (!isHost) {
+        this.sendError(ws, "Only host can start game");
         return;
       }
 
-      // Check if game can be started
-      const activePlayers = gameState.players.filter((p: PlayerState) => p.isConnected);
-      if (activePlayers.length < 2) {
+      // Get players from database
+      const players = await this.getPlayersFromDatabase(roomId);
+      if (!players || players.length < 2) {
         this.sendError(ws, "Need at least 2 players to start game");
         return;
       }
 
-      // Start the game
-      gameState.phase = "drawing";
-      gameState.timeRemaining = 90000;
+      // Check if game is already started
+      let gameState = await this.getGameState(roomId);
+      if (
+        gameState &&
+        gameState.phase !== "waiting" &&
+        gameState.phase !== "finished"
+      ) {
+        this.sendError(ws, "Game is already in progress");
+        return;
+      }
+
+      // Initialize new game state
+      const firstDrawer = players[0].id;
+      gameState = {
+        roomId,
+        phase: "drawing",
+        roundNumber: 1,
+        currentDrawer: firstDrawer,
+        currentWord: this.getRandomWord(),
+        timeRemaining: 90000, // 90 seconds
+        players: players.map((p) => ({
+          id: p.id,
+          name: p.name,
+          isHost: p.isHost,
+          isConnected: true,
+          lastActivity: Date.now(),
+        })),
+        scores: players.reduce((acc, p) => {
+          acc[p.id] = 0;
+          return acc;
+        }, {} as Record<string, number>),
+        drawingData: [],
+        correctGuesses: [],
+        chatMessages: [],
+      };
+
+      // Save game state
       await this.updateGameState(roomId, gameState);
 
       // Start round timer
       this.startRoundTimer(roomId);
+
+      console.log(`Game started in room ${roomId} by host ${playerId}`);
 
       // Broadcast game state to all players
       await this.broadcastToRoom(roomId, {
@@ -498,7 +560,6 @@ export class WebSocketHandler {
           type: "game-started",
           gameState: gameState,
           currentDrawer: gameState.currentDrawer,
-          currentWord: gameState.currentWord,
           roundNumber: gameState.roundNumber,
           timeRemaining: gameState.timeRemaining,
         },
@@ -516,6 +577,16 @@ export class WebSocketHandler {
           },
         });
       }
+
+      // Send success response to host
+      this.sendMessage(ws, {
+        type: "game-state",
+        roomId,
+        data: {
+          type: "game-start-success",
+          message: "Game started successfully",
+        },
+      });
     } catch (error) {
       console.error("Error starting game:", error);
       this.sendError(ws, "Failed to start game");
@@ -553,9 +624,11 @@ export class WebSocketHandler {
       gameState.correctGuesses = [];
 
       // Get next drawer
-      const activePlayers = gameState.players.filter((p: PlayerState) => p.isConnected);
-      const currentDrawerIndex = activePlayers.findIndex((p: PlayerState) =>
-        p.id === gameState.currentDrawer
+      const activePlayers = gameState.players.filter(
+        (p: PlayerState) => p.isConnected
+      );
+      const currentDrawerIndex = activePlayers.findIndex(
+        (p: PlayerState) => p.id === gameState.currentDrawer
       );
       const nextDrawerIndex = (currentDrawerIndex + 1) % activePlayers.length;
       gameState.currentDrawer = activePlayers[nextDrawerIndex].id;
@@ -640,26 +713,127 @@ export class WebSocketHandler {
 
   private getRandomWord(): string {
     const words = [
+      // Animals
       "cat",
       "dog",
-      "house",
-      "tree",
-      "car",
-      "sun",
-      "moon",
-      "star",
-      "flower",
       "bird",
       "fish",
+      "elephant",
+      "lion",
+      "tiger",
+      "bear",
+      "rabbit",
+      "horse",
+      "cow",
+      "pig",
+      "sheep",
+      "chicken",
+      "duck",
+      "frog",
+      "snake",
+      "turtle",
+      "butterfly",
+      "bee",
+
+      // Objects
+      "house",
+      "car",
+      "tree",
+      "flower",
       "book",
       "chair",
       "table",
       "phone",
       "computer",
+      "clock",
+      "lamp",
+      "door",
+      "window",
+      "key",
+      "bag",
+      "hat",
+      "shoe",
+      "cup",
+      "plate",
+      "spoon",
+
+      // Food
       "pizza",
       "apple",
       "banana",
       "orange",
+      "cake",
+      "bread",
+      "cheese",
+      "ice cream",
+      "cookie",
+      "sandwich",
+      "hamburger",
+      "hot dog",
+      "pasta",
+      "rice",
+      "soup",
+      "salad",
+      "chicken",
+      "fish",
+      "egg",
+      "milk",
+
+      // Nature
+      "sun",
+      "moon",
+      "star",
+      "cloud",
+      "rain",
+      "snow",
+      "mountain",
+      "ocean",
+      "river",
+      "forest",
+      "beach",
+      "island",
+      "desert",
+      "volcano",
+      "rainbow",
+      "lightning",
+      "wind",
+      "fire",
+      "earth",
+      "sky",
+
+      // Activities
+      "running",
+      "swimming",
+      "dancing",
+      "singing",
+      "reading",
+      "writing",
+      "cooking",
+      "painting",
+      "sleeping",
+      "jumping",
+      "flying",
+      "driving",
+      "walking",
+      "climbing",
+      "fishing",
+      "camping",
+      "shopping",
+      "playing",
+      "working",
+      "studying",
+
+      // Easy to draw concepts
+      "smile",
+      "heart",
+      "diamond",
+      "circle",
+      "square",
+      "triangle",
+      "arrow",
+      "cross",
+      "checkmark",
+      "question mark",
     ];
     return words[Math.floor(Math.random() * words.length)];
   }
@@ -671,14 +845,15 @@ export class WebSocketHandler {
       "type" in data &&
       typeof (data as any).type === "string" &&
       ["start", "move", "end", "clear"].includes((data as any).type) &&
-      ((data as any).type === "clear" || (
-        "x" in data &&
-        "y" in data &&
-        typeof (data as any).x === "number" &&
-        typeof (data as any).y === "number" &&
-        (data as any).x >= 0 && (data as any).x <= 1920 && // Max canvas width
-        (data as any).y >= 0 && (data as any).y <= 1080 // Max canvas height
-      ))
+      ((data as any).type === "clear" ||
+        ("x" in data &&
+          "y" in data &&
+          typeof (data as any).x === "number" &&
+          typeof (data as any).y === "number" &&
+          (data as any).x >= 0 &&
+          (data as any).x <= 1920 && // Max canvas width
+          (data as any).y >= 0 &&
+          (data as any).y <= 1080)) // Max canvas height
     );
   }
 
@@ -731,7 +906,11 @@ export class WebSocketHandler {
     });
   }
 
-  private async broadcastToRoom(roomId: string, message: ServerMessage, excludePlayerId?: string) {
+  private async broadcastToRoom(
+    roomId: string,
+    message: ServerMessage,
+    excludePlayerId?: string
+  ) {
     const roomConnections = this.roomConnections.get(roomId);
     if (!roomConnections) return;
 
@@ -773,7 +952,19 @@ export class WebSocketHandler {
   // Helper methods for data access
   private async checkRoomExists(roomId: string): Promise<boolean> {
     try {
-      const stmt = this.env.DB.prepare("SELECT id FROM rooms WHERE id = ? AND is_active = 1");
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log("Development mode: Using database service for room check");
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const result = await db.getRoomById(roomId);
+        return result.success && result.data !== null;
+      }
+
+      const stmt = this.env.DB.prepare(
+        "SELECT id FROM rooms WHERE id = ? AND is_active = 1"
+      );
       const result = await stmt.bind(roomId).first();
       return result !== null;
     } catch (error) {
@@ -782,17 +973,117 @@ export class WebSocketHandler {
     }
   }
 
+  private async verifyPlayerIsHost(
+    playerId: string,
+    roomId: string
+  ): Promise<boolean> {
+    try {
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log(
+          "Development mode: Using database service for host verification"
+        );
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const result = await db.getPlayerById(playerId);
+        return result.success && result.data?.isHost === true;
+      }
+
+      const stmt = this.env.DB.prepare(
+        "SELECT is_host FROM players WHERE id = ? AND room_id = ?"
+      );
+      const result = await stmt
+        .bind(playerId, roomId)
+        .first<{ is_host: number }>();
+      return result?.is_host === 1;
+    } catch (error) {
+      console.error("Error verifying host status:", error);
+      return false;
+    }
+  }
+
+  private async getPlayersFromDatabase(roomId: string): Promise<Array<{
+    id: string;
+    name: string;
+    isHost: boolean;
+  }> | null> {
+    try {
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log("Development mode: Using database service for players");
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const result = await db.getPlayersByRoom(roomId);
+        if (result.success && result.data) {
+          return result.data.map((player) => ({
+            id: player.id,
+            name: player.name,
+            isHost: player.isHost,
+          }));
+        }
+        return null;
+      }
+
+      const stmt = this.env.DB.prepare(
+        "SELECT id, name, is_host FROM players WHERE room_id = ? ORDER BY joined_at ASC"
+      );
+      const results = await stmt.bind(roomId).all<{
+        id: string;
+        name: string;
+        is_host: number;
+      }>();
+
+      if (!results.success) {
+        console.error("Failed to get players from database:", results.error);
+        return null;
+      }
+
+      return results.results.map((row) => ({
+        id: row.id,
+        name: row.name,
+        isHost: row.is_host === 1,
+      }));
+    } catch (error) {
+      console.error("Error getting players from database:", error);
+      return null;
+    }
+  }
+
   private async checkRoomCapacity(roomId: string): Promise<boolean> {
     try {
-      const roomStmt = this.env.DB.prepare("SELECT max_players FROM rooms WHERE id = ?");
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log(
+          "Development mode: Using database service for capacity check"
+        );
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const roomResult = await db.getRoomById(roomId);
+        const playersResult = await db.getPlayersByRoom(roomId);
+
+        if (!roomResult.success || !roomResult.data) return false;
+        if (!playersResult.success) return false;
+
+        const playerCount = playersResult.data?.length || 0;
+        return playerCount < roomResult.data.maxPlayers;
+      }
+
+      const roomStmt = this.env.DB.prepare(
+        "SELECT max_players FROM rooms WHERE id = ?"
+      );
       const room = await roomStmt.bind(roomId).first<{ max_players: number }>();
 
       if (!room) return false;
 
       const playerStmt = this.env.DB.prepare(
-        "SELECT COUNT(*) as count FROM players WHERE room_id = ?",
+        "SELECT COUNT(*) as count FROM players WHERE room_id = ?"
       );
-      const playerCount = await playerStmt.bind(roomId).first<{ count: number }>();
+      const playerCount = await playerStmt
+        .bind(roomId)
+        .first<{ count: number }>();
 
       return (playerCount?.count || 0) < room.max_players;
     } catch (error) {
@@ -803,6 +1094,12 @@ export class WebSocketHandler {
 
   private async getGameState(roomId: string): Promise<GameState | null> {
     try {
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Using in-memory game state storage");
+        return this.devGameStates.get(`game:${roomId}`) || null;
+      }
+
       const gameStateStr = await this.env.GAME_STATE.get(`game:${roomId}`);
       return gameStateStr ? JSON.parse(gameStateStr) : null;
     } catch (error) {
@@ -811,13 +1108,23 @@ export class WebSocketHandler {
     }
   }
 
-  private async updateGameState(roomId: string, gameState: GameState): Promise<void> {
+  private async updateGameState(
+    roomId: string,
+    gameState: GameState
+  ): Promise<void> {
     try {
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Storing game state in memory");
+        this.devGameStates.set(`game:${roomId}`, gameState);
+        return;
+      }
+
       const config = getConfig();
       await this.env.GAME_STATE.put(
         `game:${roomId}`,
         JSON.stringify(gameState),
-        { expirationTtl: config.kv.defaultTtl },
+        { expirationTtl: config.kv.defaultTtl }
       );
     } catch (error) {
       console.error("Error updating game state:", error);
@@ -826,7 +1133,15 @@ export class WebSocketHandler {
 
   private async getPlayerState(playerId: string): Promise<PlayerState | null> {
     try {
-      const playerStateStr = await this.env.GAME_STATE.get(`player:${playerId}`);
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Using in-memory player state storage");
+        return this.devPlayerStates.get(`player:${playerId}`) || null;
+      }
+
+      const playerStateStr = await this.env.GAME_STATE.get(
+        `player:${playerId}`
+      );
       return playerStateStr ? JSON.parse(playerStateStr) : null;
     } catch (error) {
       console.error("Error getting player state:", error);
@@ -834,13 +1149,23 @@ export class WebSocketHandler {
     }
   }
 
-  private async updatePlayerState(playerId: string, playerState: PlayerState): Promise<void> {
+  private async updatePlayerState(
+    playerId: string,
+    playerState: PlayerState
+  ): Promise<void> {
     try {
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Storing player state in memory");
+        this.devPlayerStates.set(`player:${playerId}`, playerState);
+        return;
+      }
+
       const config = getConfig();
       await this.env.GAME_STATE.put(
         `player:${playerId}`,
         JSON.stringify(playerState),
-        { expirationTtl: config.kv.defaultTtl },
+        { expirationTtl: config.kv.defaultTtl }
       );
     } catch (error) {
       console.error("Error updating player state:", error);
@@ -862,7 +1187,10 @@ export class WebSocketHandler {
   }
 
   // Public method to allow manager to broadcast to specific room
-  async broadcastToRoomPublic(_roomId: string, message: ServerMessage): Promise<void> {
+  async broadcastToRoomPublic(
+    _roomId: string,
+    message: ServerMessage
+  ): Promise<void> {
     await this.broadcastToRoom(_roomId, message);
   }
 
@@ -966,7 +1294,10 @@ export class WebSocketHandler {
       try {
         ws.close(1000, "Server shutdown");
       } catch (error) {
-        console.error(`Error closing connection for player ${playerId}:`, error);
+        console.error(
+          `Error closing connection for player ${playerId}:`,
+          error
+        );
       }
     }
 

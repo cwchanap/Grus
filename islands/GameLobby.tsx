@@ -21,14 +21,8 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
 
   // WebSocket connection for real-time updates
   useEffect(() => {
-    // Skip WebSocket in development environment
-    if (
-      globalThis.location.hostname === "localhost" || globalThis.location.hostname === "127.0.0.1"
-    ) {
-      console.log("WebSocket disabled in development environment");
-      setWsConnected(false);
-      return;
-    }
+    // Enable WebSocket in development environment
+    console.log("Enabling WebSocket connection for lobby");
 
     let ws: WebSocket | null = null;
     let reconnectTimeout: number | null = null;
@@ -68,16 +62,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
           console.log("WebSocket disconnected");
           setWsConnected(false);
 
-          // Don't attempt to reconnect in development if WebSocket is not supported
-          if (
-            globalThis.location.hostname === "localhost" ||
-            globalThis.location.hostname === "127.0.0.1"
-          ) {
-            console.log("WebSocket not supported in development environment");
-            return;
-          }
-
-          // Attempt to reconnect after 3 seconds in production
+          // Attempt to reconnect after 3 seconds
           reconnectTimeout = setTimeout(connectWebSocket, 3000);
         };
 
@@ -89,14 +74,8 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
         console.error("Failed to connect WebSocket:", error);
         setWsConnected(false);
 
-        // Don't retry in development environment
-        if (
-          globalThis.location.hostname !== "localhost" &&
-          globalThis.location.hostname !== "127.0.0.1"
-        ) {
-          // Retry connection after 5 seconds in production
-          reconnectTimeout = setTimeout(connectWebSocket, 5000);
-        }
+        // Retry connection after 5 seconds
+        reconnectTimeout = setTimeout(connectWebSocket, 5000);
       }
     };
 

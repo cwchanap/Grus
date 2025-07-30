@@ -34,6 +34,7 @@ export default function Scoreboard({
   const [previousRound, setPreviousRound] = useState<number>(gameState.roundNumber);
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
+  const [isStartingGame, setIsStartingGame] = useState(false);
 
   // Update local state when props change and detect transitions
   useEffect(() => {
@@ -112,14 +113,8 @@ export default function Scoreboard({
 
   // WebSocket connection management
   useEffect(() => {
-    // Skip WebSocket in development environment
-    if (
-      globalThis.location.hostname === "localhost" || globalThis.location.hostname === "127.0.0.1"
-    ) {
-      console.log("WebSocket disabled in development environment");
-      connectionStatus.value = "disconnected";
-      return;
-    }
+    // Enable WebSocket in development environment
+    console.log("Enabling WebSocket connection for development");
 
     let ws: WebSocket | null = null;
     let reconnectTimeout: number | null = null;
@@ -191,14 +186,6 @@ export default function Scoreboard({
           console.log("Scoreboard WebSocket disconnected");
           connectionStatus.value = "disconnected";
           wsConnection.value = null;
-
-          // Don't attempt to reconnect in development
-          if (
-            globalThis.location.hostname === "localhost" ||
-            globalThis.location.hostname === "127.0.0.1"
-          ) {
-            return;
-          }
 
           // Attempt to reconnect with exponential backoff
           if (reconnectAttempts < maxReconnectAttempts) {
@@ -361,8 +348,63 @@ export default function Scoreboard({
   };
 
   // Handle start game
-  const handleStartGame = () => {
-    sendGameControlMessage("start-game");
+  const handleStartGame = async () => {
+    if (isStartingGame) return; // Prevent double-clicks
+    
+    setIsStartingGame(true);
+    setPhaseTransition("Starting game...");
+
+    try {
+      // Try WebSocket first
+      if (connectionStatus.value === "connected") {
+        sendGameControlMessage("start-game");
+        // WebSocket response will be handled in the message handler
+        setTimeout(() => {
+          setIsStartingGame(false);
+          if (phaseTransition === "Starting game...") {
+            setPhaseTransition(null);
+          }
+        }, 3000);
+        return;
+      }
+
+      // Fallback to REST API (useful in development)
+      const response = await fetch("/api/game/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          roomId,
+          playerId,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success && result.gameState) {
+        // Update local game state
+        setLocalGameState(result.gameState);
+        
+        if (onGameStateUpdate) {
+          onGameStateUpdate(result.gameState);
+        }
+
+        // Show success message
+        setPhaseTransition("Game started successfully!");
+        setTimeout(() => setPhaseTransition(null), 3000);
+      } else {
+        // Show error message
+        setPhaseTransition(`Error: ${result.error || "Failed to start game"}`);
+        setTimeout(() => setPhaseTransition(null), 5000);
+      }
+    } catch (error) {
+      console.error("Error starting game:", error);
+      setPhaseTransition("Error: Failed to start game");
+      setTimeout(() => setPhaseTransition(null), 5000);
+    } finally {
+      setIsStartingGame(false);
+    }
   };
 
   // Handle next round
@@ -541,10 +583,20 @@ export default function Scoreboard({
           {localGameState.phase === "waiting" && (
             <button
               onClick={handleStartGame}
-              className="w-full bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
-              disabled={sortedPlayers.filter((p) => p.isConnected).length < 2}
+              className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2 flex items-center justify-center"
+              disabled={sortedPlayers.filter((p) => p.isConnected).length < 2 || isStartingGame}
             >
-              Start Game
+              {isStartingGame ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Starting...
+                </>
+              ) : (
+                "Start Game"
+              )}
             </button>
           )}
 

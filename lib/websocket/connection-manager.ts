@@ -117,12 +117,8 @@ export class WebSocketConnectionManager {
       return;
     }
 
-    // Skip WebSocket in development environment
-    if (this.isDevelopmentEnvironment()) {
-      console.log("WebSocket disabled in development environment");
-      this.updateConnectionState({ status: "disconnected", error: "Development mode" });
-      return;
-    }
+    // Enable WebSocket in development environment
+    console.log("Enabling WebSocket connection in development environment");
 
     this.cleanup();
     this.updateConnectionState({

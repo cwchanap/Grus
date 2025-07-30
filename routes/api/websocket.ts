@@ -18,11 +18,19 @@ export const handler: Handlers = {
     // Get Cloudflare environment from context
     const env = (ctx.state as any).env as Env;
 
-    if (!env) {
-      return new Response("Environment not available", { status: 500 });
-    }
+    // In development mode, create a mock environment
+    const mockEnv: Env = env || {
+      DB: null as any,
+      GAME_STATE: null as any,
+    };
 
-    const manager = getWebSocketManager(env);
+    console.log("WebSocket connection request received", {
+      url: req.url,
+      hasEnv: !!env,
+      isDevelopment: !env
+    });
+
+    const manager = getWebSocketManager(mockEnv);
     return manager.handleRequest(req);
   },
 

@@ -97,6 +97,21 @@ export class WebSocketManager {
 
   private async isRoomActive(roomId: string): Promise<boolean> {
     try {
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log("Development mode: Using database service for room activity check");
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const roomResult = await db.getRoomById(roomId);
+        const playersResult = await db.getPlayersByRoom(roomId);
+        
+        return roomResult.success && 
+               roomResult.data !== null && 
+               playersResult.success && 
+               (playersResult.data?.length || 0) > 0;
+      }
+
       // Check if room exists in database and has active players
       const stmt = this.env.DB.prepare(`
         SELECT r.id 
@@ -197,16 +212,40 @@ export class WebSocketManager {
         } as ResponseInit & { webSocket: WebSocket },
       );
     } else {
-      // Deno environment - WebSocket upgrade is handled differently
-      // For development, we'll return a placeholder response
-      // In production with Cloudflare Workers, the WebSocketPair will be available
-      console.log(
-        "WebSocket connection attempted in Deno environment - not fully supported in development",
-      );
-      return new Response("WebSocket not supported in development environment", {
-        status: 501,
-        headers: { "Content-Type": "text/plain" },
-      });
+      // Deno environment - Use Deno's native WebSocket upgrade
+      try {
+        const { socket, response } = Deno.upgradeWebSocket(request);
+
+        // Add to lobby connections
+        this.lobbyConnections.add(socket);
+
+        // Handle WebSocket events
+        socket.addEventListener("open", () => {
+          console.log("Lobby WebSocket connection opened in Deno environment");
+        });
+
+        socket.addEventListener("message", (event: MessageEvent) => {
+          this.handleLobbyMessage(socket, event.data);
+        });
+
+        socket.addEventListener("close", () => {
+          console.log("Lobby WebSocket connection closed in Deno environment");
+          this.lobbyConnections.delete(socket);
+        });
+
+        socket.addEventListener("error", (error: Event) => {
+          console.error("Lobby WebSocket error in Deno environment:", error);
+          this.lobbyConnections.delete(socket);
+        });
+
+        return response;
+      } catch (error) {
+        console.error("Failed to upgrade lobby WebSocket in Deno environment:", error);
+        return new Response("WebSocket upgrade failed", {
+          status: 500,
+          headers: { "Content-Type": "text/plain" },
+        });
+      }
     }
   }
 
@@ -230,6 +269,16 @@ export class WebSocketManager {
 
   private async getLobbyRooms() {
     try {
+      // In development, we don't have access to Cloudflare DB
+      // Use the database service instead
+      if (!this.env?.DB) {
+        console.log("Development mode: Using database service for lobby rooms");
+        const { getDatabaseService } = await import("../database-factory.ts");
+        const db = getDatabaseService();
+        const result = await db.getActiveRooms(20);
+        return result.success ? (result.data || []) : [];
+      }
+
       // Get active rooms from database
       const stmt = this.env.DB.prepare(`
         SELECT r.*, COUNT(p.id) as player_count
