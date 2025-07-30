@@ -146,7 +146,7 @@ function ChatRoomComponent({
     <div class="flex flex-col h-full">
       {/* Header with connection status - Mobile responsive */}
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-base sm:text-lg font-semibold text-gray-800">Chat</h2>
+        <h2 class="text-base sm:text-lg font-semibold text-gray-800">Chat & Guessing</h2>
         <div class="flex items-center space-x-2 sm:space-x-3">
           <ConnectionStatus size="sm" />
           {offlineStatus.value.isOffline && offlineStatus.value.pendingMessages.length > 0 && (

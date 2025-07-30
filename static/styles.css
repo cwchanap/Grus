@@ -212,4 +212,32 @@
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
     }
   }
+  
+  /* Flexible game layout utilities */
+  .game-container {
+    min-height: 0;
+    flex: 1;
+    height: 100%;
+  }
+  
+  .drawing-area {
+    max-height: 600px;
+    max-width: 960px;
+  }
+  
+  .chat-area {
+    min-height: 0;
+    height: 100%;
+  }
+  
+  /* Ensure full height containers */
+  .full-height-container {
+    height: 100vh;
+    min-height: 100vh;
+  }
+  
+  .flex-fill {
+    flex: 1;
+    min-height: 0;
+  }
 }

@@ -112,8 +112,8 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   const gameState = createInitialGameState(room);
 
   return (
-    <div class="min-h-screen-safe bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset">
-      <div class="container mx-auto px-2 sm:px-4 py-2 sm:py-4 lg:py-8 max-w-7xl">
+    <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">
+      <div class="container mx-auto px-2 sm:px-4 py-2 sm:py-4 lg:py-8 max-w-7xl flex flex-col flex-1 min-h-0 h-full">
         {/* Header - Mobile responsive */}
         <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
           <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 xs:gap-3">
@@ -135,58 +135,52 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
               roomId={room.room.id}
               playerId={playerId || ""}
               className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
-            >
-              <span class="xs:hidden">← Lobby</span>
-              <span class="hidden xs:inline">← Back to Lobby</span>
-            </LeaveRoomButton>
+            />
           </div>
         </div>
 
-        {/* Game area - Enhanced mobile layout */}
-        <div class="flex flex-col lg:grid lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-6">
-          {/* Drawing board area */}
-          <div class="order-2 lg:order-1 lg:col-span-3">
-            <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
-              <DrawingBoard
-                roomId={room.room.id}
-                playerId={playerId || ""}
-                gameState={gameState}
-                width={800}
-                height={500}
-                className="w-full"
-                responsive
-              />
+        {/* Game area - Drawing board and scoreboard on same row, chat below */}
+        <div class="game-container flex flex-col gap-3 sm:gap-4 lg:gap-6 flex-1 min-h-0">
+          {/* Top row - Drawing board and scoreboard side by side */}
+          <div class="flex flex-col lg:flex-row gap-3 sm:gap-4 lg:gap-6 h-auto">
+            {/* Drawing board area - takes 70% on desktop */}
+            <div class="lg:w-[70%] bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
+              <div class="drawing-area overflow-hidden">
+                <DrawingBoard
+                  roomId={room.room.id}
+                  playerId={playerId || ""}
+                  gameState={gameState}
+                  width={960}
+                  height={600}
+                  className="w-full drawing-area"
+                  responsive
+                />
+              </div>
+            </div>
+
+            {/* Scoreboard - takes 30% on desktop, full width on mobile */}
+            <div class="lg:w-[30%] bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex flex-col">
+              <div class="flex-1 min-h-0">
+                <Scoreboard
+                  roomId={room.room.id}
+                  playerId={playerId || ""}
+                  gameState={gameState}
+                  className="h-full"
+                />
+              </div>
             </div>
           </div>
 
-          {/* Sidebar - Mobile optimized */}
-          <div class="order-1 lg:order-2 space-y-3 sm:space-y-4 lg:space-y-6">
-            {/* Mobile: Stacked layout, tablet: side-by-side, desktop: stacked */}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-3 sm:gap-4 lg:gap-6">
-              {/* Chat area - Mobile optimized height */}
-              <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
-                <div class="h-48 xs:h-56 sm:h-64 lg:h-80">
-                  <ChatRoom
-                    roomId={room.room.id}
-                    playerId={playerId || ""}
-                    playerName={room.players.find((p: any) => p.id === playerId)?.name || "Unknown"}
-                    currentWord={gameState.currentWord}
-                    isCurrentDrawer={gameState.currentDrawer === playerId}
-                  />
-                </div>
-              </div>
-
-              {/* Scoreboard - Mobile optimized */}
-              <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
-                <div class="h-48 xs:h-56 sm:h-64 lg:h-auto">
-                  <Scoreboard
-                    roomId={room.room.id}
-                    playerId={playerId || ""}
-                    gameState={gameState}
-                    className="h-full"
-                  />
-                </div>
-              </div>
+          {/* Bottom row - Chat stretches full width and remaining height */}
+          <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex-1 min-h-0 flex flex-col">
+            <div class="flex-1 min-h-0">
+              <ChatRoom
+                roomId={room.room.id}
+                playerId={playerId || ""}
+                playerName={room.players.find((p: any) => p.id === playerId)?.name || "Unknown"}
+                currentWord={gameState.currentWord}
+                isCurrentDrawer={gameState.currentDrawer === playerId}
+              />
             </div>
           </div>
         </div>

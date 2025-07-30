@@ -31,10 +31,17 @@ export default function LeaveRoomButton({
         body: JSON.stringify({ playerId }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || "Failed to leave room");
+        // Try to parse error response
+        let errorMessage = "Failed to leave room";
+        try {
+          const data = await response.json();
+          errorMessage = data.error || errorMessage;
+        } catch {
+          // If JSON parsing fails, use status text
+          errorMessage = response.statusText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       // Successfully left room - redirect to lobby
