@@ -51,6 +51,13 @@ export default function Scoreboard({
     // Update client time remaining when game state changes
     setClientTimeRemaining(localGameState.timeRemaining);
     setLastServerUpdate(Date.now());
+    
+    // Update player count in header if element exists
+    const playerCountElement = document.getElementById('player-count-display');
+    if (playerCountElement && localGameState.players) {
+      const maxPlayers = 8; // Default max players, could be passed as prop
+      playerCountElement.textContent = `${localGameState.players.length}/${maxPlayers} players`;
+    }
   }, [localGameState, previousRound]);
 
   // Detect phase transitions separately to avoid dependency issues
@@ -129,6 +136,9 @@ export default function Scoreboard({
         ws.onopen = () => {
           connectionStatus.value = "connected";
           
+          // Store WebSocket globally for game control messages
+          (globalThis as any).__gameWebSocket = ws;
+          
           // Get player name from game state
           const currentPlayer = localGameState.players.find(p => p.id === playerId);
           const playerName = currentPlayer?.name || "Unknown";
@@ -149,10 +159,37 @@ export default function Scoreboard({
             if (message.type === "game-state") {
               const updatedGameState = message.data;
               
-              if (updatedGameState && updatedGameState.players) {
-                setLocalGameState(updatedGameState);
-                if (onGameStateUpdate) {
-                  onGameStateUpdate(updatedGameState);
+              // Handle different game state message types
+              if (updatedGameState && typeof updatedGameState === 'object') {
+                if (updatedGameState.type === "game-started" && updatedGameState.gameState) {
+                  // Game started successfully
+                  setLocalGameState(updatedGameState.gameState);
+                  setIsStartingGame(false);
+                  setPhaseTransition("Game started!");
+                  setTimeout(() => setPhaseTransition(null), 2000);
+                  
+                  if (onGameStateUpdate) {
+                    onGameStateUpdate(updatedGameState.gameState);
+                  }
+                } else if (updatedGameState.type === "game-start-success") {
+                  // Host received confirmation
+                  setIsStartingGame(false);
+                  setPhaseTransition("Game started successfully!");
+                  setTimeout(() => setPhaseTransition(null), 2000);
+                  
+                  // Update game state if provided
+                  if (updatedGameState.gameState) {
+                    setLocalGameState(updatedGameState.gameState);
+                    if (onGameStateUpdate) {
+                      onGameStateUpdate(updatedGameState.gameState);
+                    }
+                  }
+                } else if (updatedGameState.players) {
+                  // Regular game state update
+                  setLocalGameState(updatedGameState);
+                  if (onGameStateUpdate) {
+                    onGameStateUpdate(updatedGameState);
+                  }
                 }
               }
             } else if (message.type === "room-update") {
@@ -172,11 +209,15 @@ export default function Scoreboard({
         
         ws.onclose = () => {
           connectionStatus.value = "disconnected";
+          // Clear global WebSocket reference
+          (globalThis as any).__gameWebSocket = null;
         };
         
         ws.onerror = (error) => {
           console.error("Scoreboard: WebSocket error:", error);
           connectionStatus.value = "disconnected";
+          // Clear global WebSocket reference
+          (globalThis as any).__gameWebSocket = null;
         };
       } catch (error) {
         console.error("Scoreboard: Failed to create WebSocket:", error);
@@ -190,6 +231,8 @@ export default function Scoreboard({
       if (ws) {
         ws.close();
       }
+      // Clear global WebSocket reference
+      (globalThis as any).__gameWebSocket = null;
     };
   }, [roomId, playerId, onGameStateUpdate]);
 
@@ -310,14 +353,28 @@ export default function Scoreboard({
     type: "start-game" | "next-round" | "end-game",
     data: any = {},
   ) => {
-    const ws = wsConnection.value;
+    // Find the current WebSocket connection from the useEffect
+    const connections = document.querySelectorAll('script[data-ws-connection]');
+    let ws: WebSocket | null = null;
+    
+    // Try to get the WebSocket from the connection status
+    if (connectionStatus.value === "connected") {
+      // Use a more direct approach - store the WebSocket in a global variable
+      ws = (globalThis as any).__gameWebSocket;
+    }
+    
     if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log(`Sending ${type} message via WebSocket`);
       ws.send(JSON.stringify({
         type,
         roomId,
         playerId,
         data,
       }));
+      return true;
+    } else {
+      console.warn(`WebSocket not available for ${type} message, readyState:`, ws?.readyState);
+      return false;
     }
   };
 
@@ -331,18 +388,37 @@ export default function Scoreboard({
     try {
       // Try WebSocket first
       if (connectionStatus.value === "connected") {
-        sendGameControlMessage("start-game");
-        // WebSocket response will be handled in the message handler
-        setTimeout(() => {
-          setIsStartingGame(false);
-          if (phaseTransition === "Starting game...") {
-            setPhaseTransition(null);
-          }
-        }, 3000);
-        return;
+        const success = sendGameControlMessage("start-game");
+        if (success) {
+          console.log("Start game message sent via WebSocket");
+          // WebSocket response will be handled in the message handler
+          // Set a timeout to reset the starting state if no response comes
+          setTimeout(() => {
+            if (isStartingGame) {
+              console.warn("No WebSocket response received, falling back to REST API");
+              setIsStartingGame(false);
+              setPhaseTransition("WebSocket timeout, trying REST API...");
+              // Try REST API as fallback
+              handleStartGameREST();
+            }
+          }, 5000);
+          return;
+        }
       }
 
-      // Fallback to REST API (useful in development)
+      // Fallback to REST API
+      await handleStartGameREST();
+    } catch (error) {
+      console.error("Error starting game:", error);
+      setPhaseTransition("Error: Failed to start game");
+      setTimeout(() => setPhaseTransition(null), 5000);
+      setIsStartingGame(false);
+    }
+  };
+
+  // REST API fallback for starting game
+  const handleStartGameREST = async () => {
+    try {
       const response = await fetch("/api/game/start", {
         method: "POST",
         headers: {
@@ -373,7 +449,7 @@ export default function Scoreboard({
         setTimeout(() => setPhaseTransition(null), 5000);
       }
     } catch (error) {
-      console.error("Error starting game:", error);
+      console.error("Error starting game via REST:", error);
       setPhaseTransition("Error: Failed to start game");
       setTimeout(() => setPhaseTransition(null), 5000);
     } finally {
@@ -424,7 +500,7 @@ export default function Scoreboard({
           <span className="text-xs text-gray-600 capitalize">
             {connectionStatus.value}
           </span>
-          <span className="text-xs text-red-600 font-bold">DEBUG: {roomId}</span>
+
         </div>
       </div>
 

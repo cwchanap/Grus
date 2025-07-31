@@ -336,6 +336,18 @@ export class WebSocketHandler {
         roomId,
         data: gameState,
       });
+      
+      // Also broadcast a room update to ensure UI updates
+      await this.broadcastToRoom(roomId, {
+        type: "room-update",
+        roomId,
+        data: {
+          type: "player-joined",
+          playerId,
+          playerName,
+          gameState: gameState,
+        },
+      });
     } catch (error) {
       console.error("Error getting/sending game state:", error);
     }
@@ -608,6 +620,7 @@ export class WebSocketHandler {
       this.startRoundTimer(roomId);
 
       // Game started successfully
+      console.log(`Game started in room ${roomId} by host ${playerId}`);
 
       // Broadcast game state to all players
       await this.broadcastToRoom(roomId, {
@@ -642,6 +655,7 @@ export class WebSocketHandler {
         data: {
           type: "game-start-success",
           message: "Game started successfully",
+          gameState: gameState,
         },
       });
     } catch (error) {
