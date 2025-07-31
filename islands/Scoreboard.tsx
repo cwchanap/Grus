@@ -37,45 +37,47 @@ export default function Scoreboard({
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
   const [isStartingGame, setIsStartingGame] = useState(false);
 
-  // Update local state when props change and detect transitions
+  // Update local state when localGameState changes and detect transitions
   useEffect(() => {
     // Detect round transitions
-    if (gameState.roundNumber !== previousRound) {
-      setPhaseTransition(`Round ${gameState.roundNumber} starting!`);
-      setPreviousRound(gameState.roundNumber);
+    if (localGameState.roundNumber !== previousRound) {
+      setPhaseTransition(`Round ${localGameState.roundNumber} starting!`);
+      setPreviousRound(localGameState.roundNumber);
 
       // Clear transition message after 3 seconds
       setTimeout(() => setPhaseTransition(null), 3000);
     }
 
-    // Detect phase transitions
-    if (gameState.phase !== localGameState.phase) {
-      let transitionMessage = "";
-      switch (gameState.phase) {
-        case "drawing":
-          transitionMessage = "Drawing phase started!";
-          break;
-        case "guessing":
-          transitionMessage = "Guessing time!";
-          break;
-        case "results":
-          transitionMessage = "Round complete!";
-          break;
-        case "waiting":
-          transitionMessage = "Waiting for next round...";
-          break;
-      }
+    // Update client time remaining when game state changes
+    setClientTimeRemaining(localGameState.timeRemaining);
+    setLastServerUpdate(Date.now());
+  }, [localGameState, previousRound]);
 
-      if (transitionMessage && localGameState.phase !== "waiting") {
-        setPhaseTransition(transitionMessage);
-        setTimeout(() => setPhaseTransition(null), 2500);
-      }
+  // Detect phase transitions separately to avoid dependency issues
+  useEffect(() => {
+    const currentPhase = localGameState.phase;
+    let transitionMessage = "";
+    
+    switch (currentPhase) {
+      case "drawing":
+        transitionMessage = "Drawing phase started!";
+        break;
+      case "guessing":
+        transitionMessage = "Guessing time!";
+        break;
+      case "results":
+        transitionMessage = "Round complete!";
+        break;
+      case "waiting":
+        transitionMessage = "Waiting for next round...";
+        break;
     }
 
-    setLocalGameState(gameState);
-    setClientTimeRemaining(gameState.timeRemaining);
-    setLastServerUpdate(Date.now());
-  }, [gameState, localGameState.phase, previousRound]);
+    if (transitionMessage && currentPhase !== "waiting") {
+      setPhaseTransition(transitionMessage);
+      setTimeout(() => setPhaseTransition(null), 2500);
+    }
+  }, [localGameState.phase]);
 
   // Client-side timer countdown for smooth updates
   useEffect(() => {
@@ -114,10 +116,6 @@ export default function Scoreboard({
 
   // WebSocket connection management
   useEffect(() => {
-    console.log("Scoreboard: Island loaded successfully!");
-    console.log("Scoreboard: roomId =", roomId, "playerId =", playerId);
-    
-    // Simple WebSocket connection without server-side dependencies
     let ws: WebSocket | null = null;
     
     const connectWebSocket = () => {
@@ -126,11 +124,9 @@ export default function Scoreboard({
         const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${globalThis.location.host}/api/websocket?roomId=${roomId}`;
         
-        console.log("Scoreboard: Connecting to WebSocket:", wsUrl);
         ws = new WebSocket(wsUrl);
         
         ws.onopen = () => {
-          console.log("Scoreboard: WebSocket connected!");
           connectionStatus.value = "connected";
           
           // Get player name from game state
@@ -149,13 +145,24 @@ export default function Scoreboard({
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-            console.log("Scoreboard: Received message:", message.type);
             
             if (message.type === "game-state") {
               const updatedGameState = message.data;
-              setLocalGameState(updatedGameState);
-              if (onGameStateUpdate) {
-                onGameStateUpdate(updatedGameState);
+              
+              if (updatedGameState && updatedGameState.players) {
+                setLocalGameState(updatedGameState);
+                if (onGameStateUpdate) {
+                  onGameStateUpdate(updatedGameState);
+                }
+              }
+            } else if (message.type === "room-update") {
+              // Room updates might contain player list changes
+              if (message.data && message.data.gameState) {
+                const updatedGameState = message.data.gameState;
+                setLocalGameState(updatedGameState);
+                if (onGameStateUpdate) {
+                  onGameStateUpdate(updatedGameState);
+                }
               }
             }
           } catch (error) {
@@ -164,7 +171,6 @@ export default function Scoreboard({
         };
         
         ws.onclose = () => {
-          console.log("Scoreboard: WebSocket disconnected");
           connectionStatus.value = "disconnected";
         };
         

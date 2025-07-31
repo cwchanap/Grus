@@ -211,6 +211,11 @@ export class WebSocketHandler {
     const { roomId, playerId, data } = message;
     const { playerName } = data;
 
+    // Check if player is already in this room to prevent duplicate processing
+    if (this.playerRooms.get(playerId) === roomId && this.connections.has(playerId)) {
+      return;
+    }
+
     // Validate player name
     if (!validatePlayerName(playerName)) {
       this.sendError(ws, "Invalid player name");
@@ -267,10 +272,66 @@ export class WebSocketHandler {
       console.error("Error broadcasting room update:", error);
     }
 
-    // Send current game state to new player
+    // Update and send current game state
     try {
-      const gameState = await this.getGameState(roomId);
-      this.sendMessage(ws, {
+      let gameState = await this.getGameState(roomId);
+      
+      // Small delay to ensure database operations are completed
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Get all current players in the room (including the new player)
+      const allPlayers = await this.getPlayersFromDatabase(roomId);
+      
+      // If no game state exists, create initial waiting state
+      if (!gameState) {
+        
+        gameState = {
+          roomId,
+          phase: "waiting",
+          roundNumber: 0,
+          currentDrawer: "",
+          currentWord: "",
+          timeRemaining: 0,
+          players: allPlayers.map((p) => ({
+            id: p.id,
+            name: p.name,
+            isHost: p.isHost,
+            isConnected: true,
+            lastActivity: Date.now(),
+          })),
+          scores: allPlayers.reduce((acc, p) => {
+            acc[p.id] = 0;
+            return acc;
+          }, {} as Record<string, number>),
+          drawingData: [],
+          correctGuesses: [],
+          chatMessages: [],
+        };
+      } else {
+        // Game state exists, update it with current players
+        
+        // Update players list with all current players
+        gameState.players = allPlayers.map((p) => ({
+          id: p.id,
+          name: p.name,
+          isHost: p.isHost,
+          isConnected: true,
+          lastActivity: Date.now(),
+        }));
+        
+        // Update scores to include new players (preserve existing scores)
+        const newScores: Record<string, number> = {};
+        allPlayers.forEach((p) => {
+          newScores[p.id] = gameState.scores[p.id] || 0;
+        });
+        gameState.scores = newScores;
+      }
+      
+      // Save the updated game state
+      await this.updateGameState(roomId, gameState);
+      
+      // Broadcast updated game state to ALL players in the room
+      await this.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: gameState,

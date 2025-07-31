@@ -69,6 +69,11 @@ function ChatRoomComponent({
       }
     });
 
+    // Handle game-state messages (ChatRoom doesn't need to process them, just acknowledge)
+    connectionManagerRef.current.onMessage("game-state", (message) => {
+      // Game state is handled by Scoreboard component, ChatRoom just needs to acknowledge
+    });
+
     return () => {
       connectionManagerRef.current?.destroy();
       offlineManagerRef.current?.destroy();

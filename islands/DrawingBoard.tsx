@@ -53,7 +53,7 @@ export default function DrawingBoard({
         // Construct WebSocket URL
         const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl =
-          `${protocol}//${globalThis.location.host}/ws?roomId=${roomId}&playerId=${playerId}`;
+          `${protocol}//${globalThis.location.host}/api/websocket?roomId=${roomId}&playerId=${playerId}`;
 
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
