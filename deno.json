@@ -21,7 +21,11 @@
     "pre-commit": "deno fmt",
     "lint-staged": "deno run --allow-run --allow-read scripts/lint-staged.ts",
     "ci": "deno task format:check && deno task lint && deno task type-check && deno task test",
-    "setup-hooks": "deno run --allow-read --allow-write scripts/setup-hooks.ts"
+    "setup-hooks": "deno run --allow-read --allow-write scripts/setup-hooks.ts",
+    "test:e2e": "deno run -A --unstable-kv tests/e2e/run-tests.ts",
+    "test:e2e:headed": "deno run -A --unstable-kv tests/e2e/run-tests.ts --headed",
+    "test:e2e:debug": "deno run -A --unstable-kv tests/e2e/run-tests.ts --debug",
+    "playwright:install": "deno run -A npm:playwright@1.40.0 install"
   },
   "lint": {
     "rules": {
@@ -100,6 +104,8 @@
     "tailwindcss/plugin": "npm:/tailwindcss@3.4.1/plugin.js",
     "$std/": "https://deno.land/std@0.216.0/",
     "pixi.js": "https://esm.sh/pixi.js@8.0.0",
+    "playwright": "npm:playwright@1.40.0",
+    "@playwright/test": "npm:@playwright/test@1.40.0",
     "node:process": "data:application/javascript,export default {env:{}};",
     "node:crypto": "data:application/javascript,export default {randomUUID:()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9)};"
   },

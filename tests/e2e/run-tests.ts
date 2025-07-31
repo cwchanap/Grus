@@ -1,0 +1,68 @@
+#!/usr/bin/env -S deno run -A --unstable-kv
+
+/**
+ * Test runner for Playwright E2E tests
+ * This script handles running Playwright tests with proper Deno integration
+ */
+
+import { parseArgs } from "$std/cli/parse_args.ts";
+
+const args = parseArgs(Deno.args, {
+  boolean: ["headed", "debug", "help"],
+  string: ["project", "grep"],
+  alias: {
+    h: "help",
+    p: "project",
+    g: "grep",
+  },
+});
+
+if (args.help) {
+  console.log(`
+Usage: deno task test:e2e [options]
+
+Options:
+  --headed        Run tests in headed mode (show browser)
+  --debug         Run tests in debug mode
+  --project       Run tests for specific project (chromium, firefox, webkit)
+  --grep          Run tests matching pattern
+  --help, -h      Show this help message
+
+Examples:
+  deno task test:e2e                    # Run all tests headless
+  deno task test:e2e --headed           # Run tests with browser visible
+  deno task test:e2e --project chromium # Run only Chrome tests
+  deno task test:e2e --grep "room"      # Run tests matching "room"
+  `);
+  Deno.exit(0);
+}
+
+// Build the Playwright command
+const playwrightArgs = ["test"];
+
+if (args.headed) {
+  playwrightArgs.push("--headed");
+}
+
+if (args.debug) {
+  playwrightArgs.push("--debug");
+}
+
+if (args.project) {
+  playwrightArgs.push("--project", args.project);
+}
+
+if (args.grep) {
+  playwrightArgs.push("--grep", args.grep);
+}
+
+// Run Playwright tests
+const command = new Deno.Command("npx", {
+  args: ["playwright", ...playwrightArgs],
+  cwd: Deno.cwd(),
+  stdout: "inherit",
+  stderr: "inherit",
+});
+
+const { code } = await command.output();
+Deno.exit(code);
