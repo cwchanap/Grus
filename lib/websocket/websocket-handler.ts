@@ -75,7 +75,7 @@ export class WebSocketHandler {
 
         // Handle WebSocket events
         socket.addEventListener("open", () => {
-          console.log("WebSocket connection opened in Deno environment");
+          // Connection opened successfully
         });
 
         socket.addEventListener("message", (event: MessageEvent) => {
@@ -83,12 +83,11 @@ export class WebSocketHandler {
         });
 
         socket.addEventListener("close", () => {
-          console.log("WebSocket connection closed in Deno environment");
           this.handleDisconnection(socket);
         });
 
         socket.addEventListener("error", (error: Event) => {
-          console.error("WebSocket error in Deno environment:", error);
+          console.error("WebSocket error:", error);
           this.handleDisconnection(socket);
         });
 
@@ -108,26 +107,16 @@ export class WebSocketHandler {
 
   private async handleMessage(ws: WebSocket, data: string) {
     try {
-      console.log("WebSocket message received:", data);
       const message: ClientMessage = JSON.parse(data);
 
       // Validate message structure
       if (!this.validateClientMessage(message)) {
-        console.error("Invalid message format:", message);
         this.sendError(ws, "Invalid message format");
         return;
       }
 
-      console.log(
-        "Processing message:",
-        message.type,
-        "for player:",
-        message.playerId
-      );
-
       // Check rate limits
       if (!this.checkRateLimit(message.playerId, message.type)) {
-        console.error("Rate limit exceeded for player:", message.playerId);
         this.sendError(ws, "Rate limit exceeded");
         return;
       }
@@ -135,27 +124,21 @@ export class WebSocketHandler {
       // Handle different message types
       switch (message.type) {
         case "join-room":
-          console.log("Handling join-room message");
           await this.handleJoinRoom(ws, message);
           break;
         case "leave-room":
-          console.log("Handling leave-room message");
           await this.handleLeaveRoom(ws, message);
           break;
         case "chat":
-          console.log("Handling chat message");
           await this.handleChatMessage(ws, message);
           break;
         case "draw":
-          console.log("Handling draw message");
           await this.handleDrawMessage(ws, message);
           break;
         case "guess":
-          console.log("Handling guess message");
           await this.handleGuessMessage(ws, message);
           break;
         case "start-game":
-          console.log("Handling start-game message");
           await this.handleStartGame(ws, message);
           break;
         case "next-round":
@@ -164,13 +147,14 @@ export class WebSocketHandler {
         case "end-game":
           await this.handleEndGame(ws, message);
           break;
+        case "ping":
+          await this.handlePing(ws, message);
+          break;
         default:
           this.sendError(ws, "Unknown message type");
       }
     } catch (error) {
-      console.error("Error handling message:", error);
-      console.error("Message data:", data);
-      console.error("Error stack:", error.stack);
+      console.error("WebSocket message error:", error instanceof Error ? error.message : error);
       this.sendError(ws, "Internal server error");
     }
   }
@@ -256,32 +240,44 @@ export class WebSocketHandler {
     this.roomConnections.get(roomId)!.add(playerId);
 
     // Update player state in KV
-    await this.updatePlayerState(playerId, {
-      id: playerId,
-      name: playerName,
-      isHost: false, // Will be determined by room logic
-      isConnected: true,
-      lastActivity: Date.now(),
-    });
+    try {
+      await this.updatePlayerState(playerId, {
+        id: playerId,
+        name: playerName,
+        isHost: false, // Will be determined by room logic
+        isConnected: true,
+        lastActivity: Date.now(),
+      });
+    } catch (error) {
+      console.error("Error updating player state:", error);
+    }
 
     // Broadcast room update to all players in room
-    await this.broadcastToRoom(roomId, {
-      type: "room-update",
-      roomId,
-      data: {
-        type: "player-joined",
-        playerId,
-        playerName,
-      },
-    });
+    try {
+      await this.broadcastToRoom(roomId, {
+        type: "room-update",
+        roomId,
+        data: {
+          type: "player-joined",
+          playerId,
+          playerName,
+        },
+      });
+    } catch (error) {
+      console.error("Error broadcasting room update:", error);
+    }
 
     // Send current game state to new player
-    const gameState = await this.getGameState(roomId);
-    this.sendMessage(ws, {
-      type: "game-state",
-      roomId,
-      data: gameState,
-    });
+    try {
+      const gameState = await this.getGameState(roomId);
+      this.sendMessage(ws, {
+        type: "game-state",
+        roomId,
+        data: gameState,
+      });
+    } catch (error) {
+      console.error("Error getting/sending game state:", error);
+    }
   }
 
   private async handleLeaveRoom(ws: WebSocket, message: ClientMessage) {
@@ -550,7 +546,7 @@ export class WebSocketHandler {
       // Start round timer
       this.startRoundTimer(roomId);
 
-      console.log(`Game started in room ${roomId} by host ${playerId}`);
+      // Game started successfully
 
       // Broadcast game state to all players
       await this.broadcastToRoom(roomId, {
@@ -709,6 +705,22 @@ export class WebSocketHandler {
       console.error("Error ending game:", error);
       this.sendError(ws, "Failed to end game");
     }
+  }
+
+  private async handlePing(ws: WebSocket, message: ClientMessage) {
+    const { roomId, playerId, data } = message;
+    
+    // Send pong response
+    this.sendMessage(ws, {
+      type: "game-state",
+      roomId,
+      data: {
+        type: "pong",
+        playerId,
+        timestamp: Date.now(),
+        originalTimestamp: data?.timestamp,
+      },
+    });
   }
 
   private getRandomWord(): string {
@@ -934,7 +946,11 @@ export class WebSocketHandler {
 
   private sendMessage(ws: WebSocket, message: ServerMessage) {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(message));
+      try {
+        ws.send(JSON.stringify(message));
+      } catch (error) {
+        console.error("Error sending message:", error);
+      }
     }
   }
 
@@ -955,7 +971,6 @@ export class WebSocketHandler {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log("Development mode: Using database service for room check");
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const result = await db.getRoomById(roomId);
@@ -981,9 +996,6 @@ export class WebSocketHandler {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log(
-          "Development mode: Using database service for host verification"
-        );
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const result = await db.getPlayerById(playerId);
@@ -1012,12 +1024,11 @@ export class WebSocketHandler {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log("Development mode: Using database service for players");
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const result = await db.getPlayersByRoom(roomId);
         if (result.success && result.data) {
-          return result.data.map((player) => ({
+          return result.data.map((player: any) => ({
             id: player.id,
             name: player.name,
             isHost: player.isHost,
@@ -1040,7 +1051,7 @@ export class WebSocketHandler {
         return null;
       }
 
-      return results.results.map((row) => ({
+      return (results.results || []).map((row) => ({
         id: row.id,
         name: row.name,
         isHost: row.is_host === 1,
@@ -1056,9 +1067,6 @@ export class WebSocketHandler {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log(
-          "Development mode: Using database service for capacity check"
-        );
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const roomResult = await db.getRoomById(roomId);

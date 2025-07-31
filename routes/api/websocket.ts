@@ -24,11 +24,7 @@ export const handler: Handlers = {
       GAME_STATE: null as any,
     };
 
-    console.log("WebSocket connection request received", {
-      url: req.url,
-      hasEnv: !!env,
-      isDevelopment: !env
-    });
+    // WebSocket connection request received
 
     const manager = getWebSocketManager(mockEnv);
     return manager.handleRequest(req);

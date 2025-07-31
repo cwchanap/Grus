@@ -23,6 +23,7 @@ export default function Scoreboard({
   onGameStateUpdate,
   className = "",
 }: ScoreboardProps) {
+  console.log("Scoreboard component rendered with roomId:", roomId, "playerId:", playerId);
   const [localGameState, setLocalGameState] = useState<GameState>(gameState);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
@@ -113,106 +114,73 @@ export default function Scoreboard({
 
   // WebSocket connection management
   useEffect(() => {
-    // Enable WebSocket in development environment
-    console.log("Enabling WebSocket connection for development");
-
+    console.log("Scoreboard: Island loaded successfully!");
+    console.log("Scoreboard: roomId =", roomId, "playerId =", playerId);
+    
+    // Simple WebSocket connection without server-side dependencies
     let ws: WebSocket | null = null;
-    let reconnectTimeout: number | null = null;
-    let reconnectAttempts = 0;
-    const maxReconnectAttempts = 5;
-
+    
     const connectWebSocket = () => {
       try {
         connectionStatus.value = "connecting";
         const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${globalThis.location.host}/api/websocket?roomId=${roomId}`;
-
+        
+        console.log("Scoreboard: Connecting to WebSocket:", wsUrl);
         ws = new WebSocket(wsUrl);
-        wsConnection.value = ws;
-
+        
         ws.onopen = () => {
-          console.log("Scoreboard WebSocket connected");
+          console.log("Scoreboard: WebSocket connected!");
           connectionStatus.value = "connected";
-          reconnectAttempts = 0;
-
-          // Subscribe to game state updates
+          
+          // Get player name from game state
+          const currentPlayer = localGameState.players.find(p => p.id === playerId);
+          const playerName = currentPlayer?.name || "Unknown";
+          
+          // Send join-room message
           ws?.send(JSON.stringify({
             type: "join-room",
             roomId,
             playerId,
-            data: { subscribeToGameState: true },
+            data: { playerName },
           }));
         };
-
+        
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-
+            console.log("Scoreboard: Received message:", message.type);
+            
             if (message.type === "game-state") {
-              const updatedGameState: GameState = message.data;
+              const updatedGameState = message.data;
               setLocalGameState(updatedGameState);
-
               if (onGameStateUpdate) {
                 onGameStateUpdate(updatedGameState);
               }
-            } else if (message.type === "score-update") {
-              // Handle individual score updates
-              const { playerId: scoredPlayerId, newScore } = message.data;
-              setLocalGameState((prev) => ({
-                ...prev,
-                scores: {
-                  ...prev.scores,
-                  [scoredPlayerId]: newScore,
-                },
-              }));
-            } else if (message.type === "timer-sync") {
-              // Handle timer synchronization
-              const { timeRemaining, serverTimestamp } = message.data;
-              const clientTimestamp = Date.now();
-              const latency = clientTimestamp - serverTimestamp;
-              const adjustedTime = Math.max(0, timeRemaining - latency);
-
-              setLocalGameState((prev) => ({
-                ...prev,
-                timeRemaining: adjustedTime,
-              }));
             }
           } catch (error) {
-            console.error("Error parsing scoreboard message:", error);
+            console.error("Scoreboard: Error parsing message:", error);
           }
         };
-
+        
         ws.onclose = () => {
-          console.log("Scoreboard WebSocket disconnected");
+          console.log("Scoreboard: WebSocket disconnected");
           connectionStatus.value = "disconnected";
-          wsConnection.value = null;
-
-          // Attempt to reconnect with exponential backoff
-          if (reconnectAttempts < maxReconnectAttempts) {
-            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
-            reconnectTimeout = setTimeout(() => {
-              reconnectAttempts++;
-              connectWebSocket();
-            }, delay);
-          }
         };
-
+        
         ws.onerror = (error) => {
-          console.error("Scoreboard WebSocket error:", error);
+          console.error("Scoreboard: WebSocket error:", error);
           connectionStatus.value = "disconnected";
         };
       } catch (error) {
-        console.error("Failed to connect scoreboard WebSocket:", error);
+        console.error("Scoreboard: Failed to create WebSocket:", error);
         connectionStatus.value = "disconnected";
       }
     };
-
+    
     connectWebSocket();
-
+    
     return () => {
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
       if (ws) {
         ws.close();
       }
@@ -450,6 +418,7 @@ export default function Scoreboard({
           <span className="text-xs text-gray-600 capitalize">
             {connectionStatus.value}
           </span>
+          <span className="text-xs text-red-600 font-bold">DEBUG: {roomId}</span>
         </div>
       </div>
 
@@ -563,9 +532,7 @@ export default function Scoreboard({
                 <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">Drawing</span>
               )}
               <div
-                className={`w-2 h-2 rounded-full ${
-                  player.isConnected ? "bg-green-500" : "bg-gray-400"
-                }`}
+                className={`w-2 h-2 rounded-full bg-green-500`}
               >
               </div>
             </div>
@@ -584,7 +551,7 @@ export default function Scoreboard({
             <button
               onClick={handleStartGame}
               className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2 flex items-center justify-center"
-              disabled={sortedPlayers.filter((p) => p.isConnected).length < 2 || isStartingGame}
+              disabled={sortedPlayers.length < 2 || isStartingGame}
             >
               {isStartingGame ? (
                 <>

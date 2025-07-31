@@ -125,8 +125,6 @@ export class DevDatabaseService {
         name,
         roomId,
         isHost,
-        isConnected: true,
-        lastActivity: Date.now(),
         joinedAt: new Date().toISOString(),
       };
 
@@ -187,10 +185,9 @@ export class DevDatabaseService {
         id,
         roomId,
         totalRounds,
-        currentRound: 0,
         startedAt: new Date().toISOString(),
-        endedAt: null,
-        winnerId: null,
+        endedAt: undefined,
+        winnerId: undefined,
       };
 
       gameSessions.set(id, session);
@@ -213,7 +210,7 @@ export class DevDatabaseService {
       const updatedSession = {
         ...session,
         endedAt: new Date().toISOString(),
-        winnerId: winnerId || null,
+        winnerId: winnerId || undefined,
       };
 
       gameSessions.set(id, updatedSession);

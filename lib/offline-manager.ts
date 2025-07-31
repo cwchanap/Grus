@@ -137,8 +137,13 @@ export class OfflineManager {
 
   // Queue any action for later execution
   public queueAction(type: string, data: any) {
+    // Generate a browser-safe unique ID
+    const generateId = () => {
+      return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+    };
+
     const action = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       type,
       data,
       timestamp: Date.now(),

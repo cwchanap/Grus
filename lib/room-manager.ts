@@ -258,7 +258,7 @@ export class RoomManager {
 
       const room = roomResult.data;
       const players = playersResult.data || [];
-      const host = players.find((p) => p.isHost) || null;
+      const host = players.find((p: any) => p.isHost) || null;
 
       const roomSummary: RoomSummary = {
         room,

@@ -90,7 +90,6 @@ export class WebSocketManager {
       const isActive = await this.isRoomActive(roomId);
       if (!isActive) {
         this.handlers.delete(roomId);
-        console.log(`Cleaned up inactive room handler: ${roomId}`);
       }
     }
   }
@@ -100,7 +99,6 @@ export class WebSocketManager {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log("Development mode: Using database service for room activity check");
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const roomResult = await db.getRoomById(roomId);
@@ -161,7 +159,6 @@ export class WebSocketManager {
     if (handler) {
       // Perform any cleanup needed
       this.handlers.delete(roomId);
-      console.log(`Cleaned up room handler: ${roomId}`);
     }
   }
 
@@ -221,7 +218,7 @@ export class WebSocketManager {
 
         // Handle WebSocket events
         socket.addEventListener("open", () => {
-          console.log("Lobby WebSocket connection opened in Deno environment");
+          // Lobby connection opened
         });
 
         socket.addEventListener("message", (event: MessageEvent) => {
@@ -229,12 +226,11 @@ export class WebSocketManager {
         });
 
         socket.addEventListener("close", () => {
-          console.log("Lobby WebSocket connection closed in Deno environment");
           this.lobbyConnections.delete(socket);
         });
 
         socket.addEventListener("error", (error: Event) => {
-          console.error("Lobby WebSocket error in Deno environment:", error);
+          console.error("Lobby WebSocket error:", error);
           this.lobbyConnections.delete(socket);
         });
 
@@ -272,7 +268,6 @@ export class WebSocketManager {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
       if (!this.env?.DB) {
-        console.log("Development mode: Using database service for lobby rooms");
         const { getDatabaseService } = await import("../database-factory.ts");
         const db = getDatabaseService();
         const result = await db.getActiveRooms(20);

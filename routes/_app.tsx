@@ -8,6 +8,25 @@ export default function App({ Component }: PageProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Drawing Game</title>
         <link rel="stylesheet" href="/styles.css" />
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            // Polyfill to prevent node:process imports
+            if (typeof globalThis !== 'undefined') {
+              // Ensure crypto.randomUUID is available
+              if (!globalThis.crypto || !globalThis.crypto.randomUUID) {
+                if (!globalThis.crypto) globalThis.crypto = {};
+                globalThis.crypto.randomUUID = function() {
+                  return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
+                };
+              }
+              
+              // Prevent Node.js module resolution
+              if (typeof globalThis.process === 'undefined') {
+                globalThis.process = { env: {} };
+              }
+            }
+          `
+        }} />
         <style>
           {`
           @keyframes slide-in {

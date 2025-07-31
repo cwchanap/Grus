@@ -99,7 +99,9 @@
     "tailwindcss/": "npm:/tailwindcss@3.4.1/",
     "tailwindcss/plugin": "npm:/tailwindcss@3.4.1/plugin.js",
     "$std/": "https://deno.land/std@0.216.0/",
-    "pixi.js": "https://esm.sh/pixi.js@8.0.0"
+    "pixi.js": "https://esm.sh/pixi.js@8.0.0",
+    "node:process": "data:application/javascript,export default {env:{}};",
+    "node:crypto": "data:application/javascript,export default {randomUUID:()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9)};"
   },
   "compilerOptions": {
     "jsx": "react-jsx",
