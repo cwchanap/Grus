@@ -1,167 +1,167 @@
 #!/usr/bin/env -S deno run --allow-run --allow-read
+
 /**
- * Deno equivalent of lint-staged
+ * Lint-staged equivalent for Deno
  * Runs linting and formatting only on staged files
  */
 
-import * as colors from "$std/fmt/colors.ts";
+import { globToRegExp } from "$std/path/mod.ts";
+import { config, excludePatterns } from "./lint-staged.config.ts";
 
 interface StagedFile {
   path: string;
-  status: string;
-}
-
-async function runCommand(command: string[]): Promise<{ success: boolean; output: string }> {
-  try {
-    const process = new Deno.Command(command[0], {
-      args: command.slice(1),
-      stdout: "piped",
-      stderr: "piped",
-    });
-
-    const { code, stdout, stderr } = await process.output();
-    const output = new TextDecoder().decode(stdout) + new TextDecoder().decode(stderr);
-
-    return { success: code === 0, output };
-  } catch (error) {
-    return { success: false, output: error instanceof Error ? error.message : String(error) };
-  }
+  extension: string;
 }
 
 async function getStagedFiles(): Promise<StagedFile[]> {
-  const { success, output } = await runCommand(["git", "diff", "--cached", "--name-status"]);
+  const cmd = new Deno.Command("git", {
+    args: ["diff", "--cached", "--name-only", "--diff-filter=ACM"],
+    stdout: "piped",
+    stderr: "piped",
+  });
 
-  if (!success) {
-    console.error(colors.red("❌ Failed to get staged files"));
-    return [];
+  const { code, stdout } = await cmd.output();
+  
+  if (code !== 0) {
+    console.error("❌ Failed to get staged files");
+    Deno.exit(1);
   }
 
-  return output
-    .trim()
+  const files = new TextDecoder().decode(stdout)
     .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => {
-      const [status, path] = line.split("\t");
-      return { status, path };
+    .filter(Boolean)
+    .filter(path => {
+      // Exclude files matching exclude patterns
+      return !excludePatterns.some(pattern => {
+        const regex = globToRegExp(pattern);
+        return regex.test(path);
+      });
     })
-    .filter((file) =>
-      // Only process TypeScript/JavaScript files that exist (not deleted)
-      !file.status.startsWith("D") &&
-      (file.path.endsWith(".ts") || file.path.endsWith(".tsx") || file.path.endsWith(".js") ||
-        file.path.endsWith(".jsx"))
-    );
+    .map(path => ({
+      path,
+      extension: path.split(".").pop() || "",
+    }));
+
+  return files;
 }
 
-async function formatFiles(files: string[]): Promise<boolean> {
-  if (files.length === 0) return true;
+function matchesPattern(filePath: string, pattern: string): boolean {
+  const regex = globToRegExp(pattern);
+  return regex.test(filePath);
+}
 
-  console.log(colors.blue(`📝 Formatting ${files.length} staged files...`));
+async function runCommand(
+  command: string, 
+  args: string[], 
+  description: string,
+  files?: string[]
+): Promise<boolean> {
+  if (files && files.length === 0) return true;
+  
+  console.log(`🔄 ${description}...`);
+  
+  const finalArgs = files ? [...args, ...files] : args;
+  
+  const cmd = new Deno.Command(command, {
+    args: finalArgs,
+    stdout: "piped",
+    stderr: "piped",
+  });
 
-  const { success, output } = await runCommand(["deno", "fmt", ...files]);
-
-  if (!success) {
-    console.error(colors.red("❌ Formatting failed:"));
-    console.error(output);
+  const { code, stdout, stderr } = await cmd.output();
+  
+  if (code !== 0) {
+    console.error(`❌ ${description} failed:`);
+    const errorOutput = new TextDecoder().decode(stderr);
+    if (errorOutput.trim()) {
+      console.error(errorOutput);
+    }
     return false;
   }
 
-  console.log(colors.green("✅ Files formatted successfully"));
+  const output = new TextDecoder().decode(stdout);
+  if (output.trim()) {
+    console.log(output);
+  }
+
   return true;
 }
 
-async function lintFiles(files: string[]): Promise<boolean> {
-  if (files.length === 0) return true;
-
-  console.log(colors.blue(`🔍 Linting ${files.length} staged files...`));
-
-  const { success, output } = await runCommand(["deno", "lint", ...files]);
-
-  if (!success) {
-    console.error(colors.yellow("⚠️ Linting issues found:"));
-    console.error(output);
-    // Don't fail on linting issues, just warn
-    return true;
+async function executeCommandsForFiles(
+  files: string[], 
+  commands: string | string[]
+): Promise<boolean> {
+  const commandList = Array.isArray(commands) ? commands : [commands];
+  
+  for (const command of commandList) {
+    const [cmd, ...args] = command.split(" ");
+    
+    let success = false;
+    
+    if (cmd === "deno" && args[0] === "fmt") {
+      success = await runCommand("deno", ["fmt", ...files], `Formatting ${files.length} file(s)`);
+      if (success && files.length > 0) {
+        // Stage the formatted files
+        await runCommand("git", ["add", ...files], "Staging formatted files");
+      }
+    } else if (cmd === "deno" && args[0] === "lint") {
+      success = await runCommand("deno", ["lint", ...files], `Linting ${files.length} file(s)`);
+    } else if (cmd === "deno" && args[0] === "check") {
+      success = await runCommand("deno", args, `Type checking ${files.length} file(s)`, files);
+    } else {
+      // Generic command execution
+      success = await runCommand(cmd, [...args, ...files], `Running ${command} on ${files.length} file(s)`);
+    }
+    
+    if (!success) {
+      return false;
+    }
   }
-
-  console.log(colors.green("✅ No linting issues found"));
+  
   return true;
-}
-
-async function typeCheckFiles(files: string[]): Promise<boolean> {
-  if (files.length === 0) return true;
-
-  console.log(colors.blue(`🔧 Type checking ${files.length} staged files...`));
-
-  const { success, output } = await runCommand(["deno", "check", ...files]);
-
-  if (!success) {
-    console.error(colors.red("❌ Type checking failed:"));
-    console.error(output);
-    return false;
-  }
-
-  console.log(colors.green("✅ Type checking passed"));
-  return true;
-}
-
-async function restageFiles(files: string[]): Promise<void> {
-  if (files.length === 0) return;
-
-  console.log(colors.blue("📦 Re-staging formatted files..."));
-
-  const { success } = await runCommand(["git", "add", ...files]);
-
-  if (!success) {
-    console.error(colors.yellow("⚠️ Failed to re-stage some files"));
-  }
 }
 
 async function main() {
-  console.log(colors.bold("🚀 Running lint-staged for Deno..."));
+  console.log("🚀 Running lint-staged checks...\n");
 
   const stagedFiles = await getStagedFiles();
-
+  
   if (stagedFiles.length === 0) {
-    console.log(colors.green("✅ No staged TypeScript/JavaScript files to process"));
+    console.log("📝 No staged files to process");
     return;
   }
 
-  const filePaths = stagedFiles.map((f) => f.path);
-  console.log(colors.cyan(`Found ${filePaths.length} staged files:`));
-  filePaths.forEach((path) => console.log(colors.gray(`  - ${path}`)));
+  console.log(`📁 Processing ${stagedFiles.length} staged file(s):`);
+  stagedFiles.forEach(f => console.log(`   • ${f.path}`));
+  console.log();
 
   let allPassed = true;
 
-  // 1. Format files first
-  const formatSuccess = await formatFiles(filePaths);
-  if (!formatSuccess) {
-    allPassed = false;
-  }
+  // Process files according to configuration
+  for (const [pattern, commands] of Object.entries(config)) {
+    const matchingFiles = stagedFiles
+      .filter(f => matchesPattern(f.path, pattern))
+      .map(f => f.path);
 
-  // 2. Re-stage formatted files
-  if (formatSuccess) {
-    await restageFiles(filePaths);
-  }
-
-  // 3. Run linting (non-blocking)
-  await lintFiles(filePaths);
-
-  // 4. Type check files
-  const typeCheckSuccess = await typeCheckFiles(filePaths);
-  if (!typeCheckSuccess) {
-    allPassed = false;
+    if (matchingFiles.length > 0) {
+      console.log(`\n🎯 Processing ${matchingFiles.length} file(s) matching "${pattern}"`);
+      
+      const success = await executeCommandsForFiles(matchingFiles, commands);
+      if (!success) {
+        allPassed = false;
+        break; // Stop on first failure
+      }
+    }
   }
 
   if (allPassed) {
-    console.log(colors.green("✅ All checks passed! Commit can proceed."));
-    Deno.exit(0);
+    console.log("\n✅ All lint-staged checks passed!");
   } else {
-    console.log(colors.red("💥 Some checks failed. Please fix the issues before committing."));
-    console.log(colors.yellow("Tip: Run 'deno task lint-staged' to fix issues manually."));
+    console.log("\n❌ Some lint-staged checks failed!");
     Deno.exit(1);
   }
 }
 
 if (import.meta.main) {
-  main();
+  await main();
 }
