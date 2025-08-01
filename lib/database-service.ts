@@ -12,7 +12,7 @@ export class DatabaseService {
   private db: Database;
 
   constructor() {
-    this.db = new Database("game.db");
+    this.db = new Database("db/game.db");
     this.initializeDatabase();
   }
 

@@ -106,5 +106,11 @@ Deno.test("Database Service - Basic Operations", async (t) => {
     await db.removePlayer(playerId);
     await db.deleteRoom(roomId);
     db.close();
+    // Clean up test database file
+    try {
+      Deno.removeSync("db/game.db");
+    } catch {
+      // Ignore if file doesn't exist
+    }
   });
 });

@@ -10,6 +10,9 @@ _fresh/
 # npm dependencies
 node_modules/
 
+# Database files
+db/*.db
+
 *.log
 .wrangler
 test-results/
