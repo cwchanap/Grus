@@ -1,58 +1,28 @@
-// Database service factory that chooses between production and development services
-import { DatabaseService } from "./database-service.ts";
-import { DevDatabaseService } from "./dev-database-service.ts";
+// Database service factory - now uses SQLite for both development and production
+import { getDatabaseService as getService } from "./database-service.ts";
 
-// Common interface for both database services
-export interface IDatabaseService {
-  createRoom(name: string, hostId: string, maxPlayers?: number): Promise<any>;
-  getRoomById(id: string): Promise<any>;
-  getActiveRooms(limit?: number): Promise<any>;
-  updateRoom(id: string, updates: any): Promise<any>;
-  deleteRoom(id: string): Promise<any>;
-  createPlayer(name: string, roomId: string, isHost?: boolean): Promise<any>;
-  getPlayerById(id: string): Promise<any>;
-  getPlayersByRoom(roomId: string): Promise<any>;
-  removePlayer(id: string): Promise<any>;
-  createGameSession(roomId: string, totalRounds?: number): Promise<any>;
-  endGameSession(id: string, winnerId?: string): Promise<any>;
-  createScore(sessionId: string, playerId: string, points?: number): Promise<any>;
-  updateScore(id: string, points: number, correctGuesses: number): Promise<any>;
-  getScoresBySession(sessionId: string): Promise<any>;
-  healthCheck(): Promise<any>;
+// Re-export the database service
+export function getDatabaseService() {
+  return getService();
 }
 
-// Singleton instance
-let databaseService: IDatabaseService | null = null;
-
-export function getDatabaseService(): IDatabaseService {
-  if (!databaseService) {
-    const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-
-    if (isDevelopment) {
-      console.log("Using development database service (in-memory)");
-      databaseService = new DevDatabaseService();
-    } else {
-      console.log("Using production database service (Cloudflare D1)");
-      databaseService = new DatabaseService();
-    }
-  }
-  return databaseService;
-}
-
-// For development: clear all data
+// For development: clear all data (SQLite version)
 export function clearDevelopmentData(): void {
   const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-  if (isDevelopment && databaseService instanceof DevDatabaseService) {
-    databaseService.clearAll();
-    console.log("Development database cleared");
+  if (isDevelopment) {
+    // For SQLite, we could truncate tables or delete the database file
+    // For now, just log that this would clear data
+    console.log("Development database clear requested (SQLite)");
   }
 }
 
-// For development: get stats
+// For development: get stats (SQLite version)
 export function getDevelopmentStats(): any {
   const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-  if (isDevelopment && databaseService instanceof DevDatabaseService) {
-    return databaseService.getStats();
+  if (isDevelopment) {
+    // Could implement table row counts for SQLite
+    console.log("Development stats requested (SQLite)");
+    return { message: "SQLite stats not implemented yet" };
   }
   return null;
 }

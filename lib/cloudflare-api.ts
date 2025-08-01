@@ -76,7 +76,7 @@ export function getCloudflareAPI(): CloudflareAPI {
     const config: CloudflareConfig = {
       accountId: Deno.env.get("CLOUDFLARE_ACCOUNT_ID") || "",
       apiToken: Deno.env.get("CLOUDFLARE_API_TOKEN") || "",
-      databaseId: Deno.env.get("DATABASE_ID") || "d616e1fe-17e6-4320-aba2-393a60167603",
+      databaseId: Deno.env.get("DATABASE_ID") || "",
     };
 
     if (!config.accountId || !config.apiToken) {
