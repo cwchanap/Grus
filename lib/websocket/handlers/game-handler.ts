@@ -47,7 +47,7 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleStartGame(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleStartGame(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId } = message;
 
     try {
@@ -146,7 +146,7 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleNextRound(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleNextRound(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId } = message;
 
     // Verify player is host
@@ -219,7 +219,7 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleEndGame(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleEndGame(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId } = message;
 
     // Verify player is host
@@ -259,7 +259,7 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handlePing(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private handlePing(_connection: WebSocketConnection, message: ClientMessage): void {
     const { roomId, playerId, data } = message;
 
     // Send pong response

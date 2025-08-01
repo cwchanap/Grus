@@ -19,7 +19,7 @@ export class WebSocketManager {
     }
   }
 
-  async handleRequest(request: Request): Promise<Response> {
+  handleRequest(request: Request): Response {
     const url = new URL(request.url);
 
     // Handle WebSocket upgrade requests
@@ -35,7 +35,7 @@ export class WebSocketManager {
     return new Response("Not Found", { status: 404 });
   }
 
-  private async handleWebSocketUpgrade(request: Request): Response {
+  private handleWebSocketUpgrade(request: Request): Response {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("roomId");
 
@@ -113,7 +113,7 @@ export class WebSocketManager {
   }
 
   // Utility methods for external use
-  async getRoomConnectionCount(roomId: string): Promise<number> {
+  getRoomConnectionCount(roomId: string): number {
     const server = this.servers.get(roomId);
     return server ? server.getRoomConnectionCount(roomId) : 0;
   }
@@ -132,7 +132,7 @@ export class WebSocketManager {
     return Array.from(this.servers.keys());
   }
 
-  async cleanupRoom(roomId: string): Promise<void> {
+  cleanupRoom(roomId: string): void {
     const server = this.servers.get(roomId);
     if (server) {
       server.cleanup();
@@ -145,7 +145,7 @@ export class WebSocketManager {
     return this.servers.size;
   }
 
-  private async handleLobbyWebSocket(request: Request): Promise<Response> {
+  private handleLobbyWebSocket(request: Request): Response {
     const upgradeHeader = request.headers.get("Upgrade");
     if (upgradeHeader !== "websocket") {
       return new Response("Expected Upgrade: websocket", { status: 426 });
@@ -285,7 +285,7 @@ export class WebSocketManager {
     this.stopHeartbeat();
     
     // Cleanup all servers
-    for (const [roomId, server] of this.servers.entries()) {
+    for (const [_roomId, server] of this.servers.entries()) {
       server.cleanup();
     }
     this.servers.clear();

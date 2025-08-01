@@ -1,6 +1,6 @@
 // Room join/leave operations handler
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler, WebSocketService } from "../types/websocket-internal.ts";
+import type { WebSocketConnection, MessageHandler, WebSocketService as _WebSocketService } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { PlayerService } from "../services/player-service.ts";
@@ -174,7 +174,7 @@ export class RoomHandler implements MessageHandler {
     }
   }
 
-  private async handleLeaveRoom(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleLeaveRoom(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId } = message;
     await this.removePlayerFromRoom(playerId, roomId);
   }

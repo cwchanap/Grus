@@ -30,7 +30,7 @@ export class TimerService implements TimerManager {
 
   cleanup(): void {
     // Clear all round timers
-    for (const [roomId, timer] of this.roundTimers.entries()) {
+    for (const [_roomId, timer] of this.roundTimers.entries()) {
       clearInterval(timer);
     }
     this.roundTimers.clear();

@@ -108,7 +108,7 @@ export class WebSocketServer {
     }
   }
 
-  private handleCloudflareWebSocket(request: Request): Response {
+  private handleCloudflareWebSocket(_request: Request): Response {
     // Cloudflare Workers environment
     const webSocketPair = new WebSocketPair();
     const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
@@ -117,7 +117,7 @@ export class WebSocketServer {
     server.accept();
 
     // Create connection object (will be updated when player joins)
-    let connection: WebSocketConnection = {
+    const connection: WebSocketConnection = {
       ws: server,
       playerId: "",
       roomId: "",
@@ -150,7 +150,7 @@ export class WebSocketServer {
       const { socket, response } = Deno.upgradeWebSocket(request);
 
       // Create connection object (will be updated when player joins)
-      let connection: WebSocketConnection = {
+      const connection: WebSocketConnection = {
         ws: socket,
         playerId: "",
         roomId: "",

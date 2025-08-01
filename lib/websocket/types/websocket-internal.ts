@@ -1,6 +1,6 @@
 // Internal WebSocket types and interfaces
 import type { Env } from "../../../types/cloudflare.ts";
-import type { ClientMessage, ServerMessage, GameState, PlayerState } from "../../../types/game.ts";
+import type { ClientMessage, ServerMessage as _ServerMessage, GameState, PlayerState } from "../../../types/game.ts";
 
 export interface WebSocketConnection {
   ws: WebSocket;

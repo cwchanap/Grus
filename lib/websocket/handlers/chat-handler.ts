@@ -28,7 +28,7 @@ export class ChatHandler implements MessageHandler {
     await this.handleChatMessage(connection, message);
   }
 
-  private async handleChatMessage(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleChatMessage(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId, data } = message;
     const { text } = data;
 

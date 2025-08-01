@@ -28,7 +28,7 @@ export class DrawingHandler implements MessageHandler {
     await this.handleDrawMessage(connection, message);
   }
 
-  private async handleDrawMessage(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleDrawMessage(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId, data } = message;
 
     // Verify player is current drawer

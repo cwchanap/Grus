@@ -1,5 +1,5 @@
 // WebSocket connection pool management
-import type { WebSocketConnection, RoomConnections } from "../types/websocket-internal.ts";
+import type { WebSocketConnection, RoomConnections as _RoomConnections } from "../types/websocket-internal.ts";
 import type { ServerMessage } from "../../../types/game.ts";
 
 export class ConnectionPool {
@@ -57,11 +57,11 @@ export class ConnectionPool {
     return this.playerRooms.get(playerId) || null;
   }
 
-  async broadcastToRoom(
+  broadcastToRoom(
     roomId: string,
     message: ServerMessage,
     excludePlayerId?: string,
-  ): Promise<void> {
+  ): void {
     const roomConnections = this.roomConnections.get(roomId);
     if (!roomConnections) return;
 
