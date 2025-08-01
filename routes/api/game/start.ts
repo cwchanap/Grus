@@ -30,12 +30,12 @@ export const handler: Handlers = {
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
       const roomManager = new RoomManager();
-      
+
       // Get room summary to verify room exists and get players
       const roomResult = await roomManager.getRoomSummary(roomId);
       if (!roomResult.success || !roomResult.data) {
@@ -47,7 +47,7 @@ export const handler: Handlers = {
           {
             status: 404,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
@@ -63,7 +63,7 @@ export const handler: Handlers = {
           {
             status: 403,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
@@ -77,7 +77,7 @@ export const handler: Handlers = {
           {
             status: 400,
             headers: { "Content-Type": "application/json" },
-          }
+          },
         );
       }
 
@@ -115,7 +115,7 @@ export const handler: Handlers = {
           await env.GAME_STATE.put(
             `game:${roomId}`,
             JSON.stringify(gameState),
-            { expirationTtl: config.kv.defaultTtl }
+            { expirationTtl: config.kv.defaultTtl },
           );
         } catch (error) {
           console.error("Error storing game state in KV:", error);
@@ -133,9 +133,8 @@ export const handler: Handlers = {
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
-
     } catch (error) {
       console.error("Error starting game via REST API:", error);
       return new Response(
@@ -146,7 +145,7 @@ export const handler: Handlers = {
         {
           status: 500,
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
     }
   },
@@ -155,27 +154,126 @@ export const handler: Handlers = {
 function getRandomWord(): string {
   const words = [
     // Animals
-    "cat", "dog", "bird", "fish", "elephant", "lion", "tiger", "bear", "rabbit", "horse",
-    "cow", "pig", "sheep", "chicken", "duck", "frog", "snake", "turtle", "butterfly", "bee",
-    
+    "cat",
+    "dog",
+    "bird",
+    "fish",
+    "elephant",
+    "lion",
+    "tiger",
+    "bear",
+    "rabbit",
+    "horse",
+    "cow",
+    "pig",
+    "sheep",
+    "chicken",
+    "duck",
+    "frog",
+    "snake",
+    "turtle",
+    "butterfly",
+    "bee",
+
     // Objects
-    "house", "car", "tree", "flower", "book", "chair", "table", "phone", "computer", "clock",
-    "lamp", "door", "window", "key", "bag", "hat", "shoe", "cup", "plate", "spoon",
-    
+    "house",
+    "car",
+    "tree",
+    "flower",
+    "book",
+    "chair",
+    "table",
+    "phone",
+    "computer",
+    "clock",
+    "lamp",
+    "door",
+    "window",
+    "key",
+    "bag",
+    "hat",
+    "shoe",
+    "cup",
+    "plate",
+    "spoon",
+
     // Food
-    "pizza", "apple", "banana", "orange", "cake", "bread", "cheese", "ice cream", "cookie", "sandwich",
-    "hamburger", "hot dog", "pasta", "rice", "soup", "salad", "chicken", "fish", "egg", "milk",
-    
+    "pizza",
+    "apple",
+    "banana",
+    "orange",
+    "cake",
+    "bread",
+    "cheese",
+    "ice cream",
+    "cookie",
+    "sandwich",
+    "hamburger",
+    "hot dog",
+    "pasta",
+    "rice",
+    "soup",
+    "salad",
+    "chicken",
+    "fish",
+    "egg",
+    "milk",
+
     // Nature
-    "sun", "moon", "star", "cloud", "rain", "snow", "mountain", "ocean", "river", "forest",
-    "beach", "island", "desert", "volcano", "rainbow", "lightning", "wind", "fire", "earth", "sky",
-    
+    "sun",
+    "moon",
+    "star",
+    "cloud",
+    "rain",
+    "snow",
+    "mountain",
+    "ocean",
+    "river",
+    "forest",
+    "beach",
+    "island",
+    "desert",
+    "volcano",
+    "rainbow",
+    "lightning",
+    "wind",
+    "fire",
+    "earth",
+    "sky",
+
     // Activities
-    "running", "swimming", "dancing", "singing", "reading", "writing", "cooking", "painting", "sleeping", "jumping",
-    "flying", "driving", "walking", "climbing", "fishing", "camping", "shopping", "playing", "working", "studying",
-    
+    "running",
+    "swimming",
+    "dancing",
+    "singing",
+    "reading",
+    "writing",
+    "cooking",
+    "painting",
+    "sleeping",
+    "jumping",
+    "flying",
+    "driving",
+    "walking",
+    "climbing",
+    "fishing",
+    "camping",
+    "shopping",
+    "playing",
+    "working",
+    "studying",
+
     // Easy to draw concepts
-    "smile", "heart", "diamond", "circle", "square", "triangle", "arrow", "cross", "checkmark", "question mark"
+    "smile",
+    "heart",
+    "diamond",
+    "circle",
+    "square",
+    "triangle",
+    "arrow",
+    "cross",
+    "checkmark",
+    "question mark",
   ];
   return words[Math.floor(Math.random() * words.length)];
 }

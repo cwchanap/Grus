@@ -16,25 +16,25 @@ export const handler: Handlers = {
         socket.send(JSON.stringify({
           type: "welcome",
           message: "WebSocket test connection established",
-          timestamp: Date.now()
+          timestamp: Date.now(),
         }));
       });
 
       socket.addEventListener("message", (event) => {
         try {
           const data = JSON.parse(event.data);
-          
+
           // Echo back the message with a timestamp
           socket.send(JSON.stringify({
             type: "echo",
             originalMessage: data,
-            timestamp: Date.now()
+            timestamp: Date.now(),
           }));
         } catch (error) {
           socket.send(JSON.stringify({
             type: "error",
             message: "Invalid JSON",
-            timestamp: Date.now()
+            timestamp: Date.now(),
           }));
         }
       });

@@ -1,4 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
+import { Badge } from "./ui/badge.tsx";
+import { cn } from "../lib/utils.ts";
 
 interface ConnectionStatusProps {
   size?: "sm" | "md" | "lg";
@@ -64,23 +66,23 @@ export default function ConnectionStatus({
     switch (status) {
       case "online":
         return {
-          color: "bg-green-500",
+          variant: "default" as const,
           text: "Online",
-          icon: "🟢",
+          dotColor: "bg-green-500",
           pulse: false,
         };
       case "slow":
         return {
-          color: "bg-yellow-500",
+          variant: "secondary" as const,
           text: "Slow",
-          icon: "🟡",
+          dotColor: "bg-yellow-500",
           pulse: true,
         };
       case "offline":
         return {
-          color: "bg-red-500",
+          variant: "destructive" as const,
           text: "Offline",
-          icon: "🔴",
+          dotColor: "bg-red-500",
           pulse: true,
         };
     }
@@ -91,19 +93,16 @@ export default function ConnectionStatus({
       case "sm":
         return {
           dot: "w-2 h-2",
-          text: "text-xs",
           container: "gap-1",
         };
       case "md":
         return {
           dot: "w-3 h-3",
-          text: "text-sm",
           container: "gap-2",
         };
       case "lg":
         return {
           dot: "w-4 h-4",
-          text: "text-base",
           container: "gap-2",
         };
     }
@@ -112,23 +111,37 @@ export default function ConnectionStatus({
   const config = getStatusConfig();
   const sizeClasses = getSizeClasses();
 
+  if (showText) {
+    return (
+      <Badge
+        variant={config.variant}
+        className={cn("flex items-center", sizeClasses.container, className)}
+      >
+        <div
+          className={cn(
+            sizeClasses.dot,
+            config.dotColor,
+            "rounded-full mr-1",
+            config.pulse && "animate-pulse",
+          )}
+          title={`Connection: ${config.text}`}
+        />
+        {config.text}
+      </Badge>
+    );
+  }
+
   return (
-    <div class={`flex items-center ${sizeClasses.container} ${className}`}>
-      <div
-        class={`
-          ${sizeClasses.dot} 
-          ${config.color} 
-          rounded-full 
-          ${config.pulse ? "animate-pulse" : ""}
-        `}
-        title={`Connection: ${config.text}`}
-      />
-      {showText && (
-        <span class={`${sizeClasses.text} text-gray-600 font-medium`}>
-          {config.text}
-        </span>
+    <div
+      className={cn(
+        sizeClasses.dot,
+        config.dotColor,
+        "rounded-full",
+        config.pulse && "animate-pulse",
+        className,
       )}
-    </div>
+      title={`Connection: ${config.text}`}
+    />
   );
 }
 

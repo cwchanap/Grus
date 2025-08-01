@@ -14,7 +14,7 @@ export default defineConfig({
   retries: isCI ? 2 : 0,
   workers: isCI ? 1 : undefined,
   reporter: "html",
-  
+
   use: {
     baseURL: "http://localhost:3000",
     trace: "on-first-retry",

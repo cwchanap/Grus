@@ -148,7 +148,9 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 </span>
                 <span class="hidden xs:inline">Host: {room.host?.name || "Unknown"}</span>
                 <span class="mx-1">•</span>
-                <span id="player-count-display">{room.playerCount}/{room.room.maxPlayers} players</span>
+                <span id="player-count-display">
+                  {room.playerCount}/{room.room.maxPlayers} players
+                </span>
               </p>
             </div>
             <div class="flex gap-2">

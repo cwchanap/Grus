@@ -51,9 +51,9 @@ export default function Scoreboard({
     // Update client time remaining when game state changes
     setClientTimeRemaining(localGameState.timeRemaining);
     setLastServerUpdate(Date.now());
-    
+
     // Update player count in header if element exists
-    const playerCountElement = document.getElementById('player-count-display');
+    const playerCountElement = document.getElementById("player-count-display");
     if (playerCountElement && localGameState.players) {
       const maxPlayers = 8; // Default max players, could be passed as prop
       playerCountElement.textContent = `${localGameState.players.length}/${maxPlayers} players`;
@@ -64,7 +64,7 @@ export default function Scoreboard({
   useEffect(() => {
     const currentPhase = localGameState.phase;
     let transitionMessage = "";
-    
+
     switch (currentPhase) {
       case "drawing":
         transitionMessage = "Drawing phase started!";
@@ -124,25 +124,25 @@ export default function Scoreboard({
   // WebSocket connection management
   useEffect(() => {
     let ws: WebSocket | null = null;
-    
+
     const connectWebSocket = () => {
       try {
         connectionStatus.value = "connecting";
         const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${globalThis.location.host}/api/websocket?roomId=${roomId}`;
-        
+
         ws = new WebSocket(wsUrl);
-        
+
         ws.onopen = () => {
           connectionStatus.value = "connected";
-          
+
           // Store WebSocket globally for game control messages
           (globalThis as any).__gameWebSocket = ws;
-          
+
           // Get player name from game state
-          const currentPlayer = localGameState.players.find(p => p.id === playerId);
+          const currentPlayer = localGameState.players.find((p) => p.id === playerId);
           const playerName = currentPlayer?.name || "Unknown";
-          
+
           // Send join-room message
           ws?.send(JSON.stringify({
             type: "join-room",
@@ -151,23 +151,23 @@ export default function Scoreboard({
             data: { playerName },
           }));
         };
-        
+
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
-            
+
             if (message.type === "game-state") {
               const updatedGameState = message.data;
-              
+
               // Handle different game state message types
-              if (updatedGameState && typeof updatedGameState === 'object') {
+              if (updatedGameState && typeof updatedGameState === "object") {
                 if (updatedGameState.type === "game-started" && updatedGameState.gameState) {
                   // Game started successfully
                   setLocalGameState(updatedGameState.gameState);
                   setIsStartingGame(false);
                   setPhaseTransition("Game started!");
                   setTimeout(() => setPhaseTransition(null), 2000);
-                  
+
                   if (onGameStateUpdate) {
                     onGameStateUpdate(updatedGameState.gameState);
                   }
@@ -176,7 +176,7 @@ export default function Scoreboard({
                   setIsStartingGame(false);
                   setPhaseTransition("Game started successfully!");
                   setTimeout(() => setPhaseTransition(null), 2000);
-                  
+
                   // Update game state if provided
                   if (updatedGameState.gameState) {
                     setLocalGameState(updatedGameState.gameState);
@@ -206,13 +206,13 @@ export default function Scoreboard({
             console.error("Scoreboard: Error parsing message:", error);
           }
         };
-        
+
         ws.onclose = () => {
           connectionStatus.value = "disconnected";
           // Clear global WebSocket reference
           (globalThis as any).__gameWebSocket = null;
         };
-        
+
         ws.onerror = (error) => {
           console.error("Scoreboard: WebSocket error:", error);
           connectionStatus.value = "disconnected";
@@ -224,9 +224,9 @@ export default function Scoreboard({
         connectionStatus.value = "disconnected";
       }
     };
-    
+
     connectWebSocket();
-    
+
     return () => {
       if (ws) {
         ws.close();
@@ -354,15 +354,15 @@ export default function Scoreboard({
     data: any = {},
   ) => {
     // Find the current WebSocket connection from the useEffect
-    const connections = document.querySelectorAll('script[data-ws-connection]');
+    const connections = document.querySelectorAll("script[data-ws-connection]");
     let ws: WebSocket | null = null;
-    
+
     // Try to get the WebSocket from the connection status
     if (connectionStatus.value === "connected") {
       // Use a more direct approach - store the WebSocket in a global variable
       ws = (globalThis as any).__gameWebSocket;
     }
-    
+
     if (ws && ws.readyState === WebSocket.OPEN) {
       console.log(`Sending ${type} message via WebSocket`);
       ws.send(JSON.stringify({
@@ -381,7 +381,7 @@ export default function Scoreboard({
   // Handle start game
   const handleStartGame = async () => {
     if (isStartingGame) return; // Prevent double-clicks
-    
+
     setIsStartingGame(true);
     setPhaseTransition("Starting game...");
 
@@ -435,7 +435,7 @@ export default function Scoreboard({
       if (result.success && result.gameState) {
         // Update local game state
         setLocalGameState(result.gameState);
-        
+
         if (onGameStateUpdate) {
           onGameStateUpdate(result.gameState);
         }
@@ -500,7 +500,6 @@ export default function Scoreboard({
           <span className="text-xs text-gray-600 capitalize">
             {connectionStatus.value}
           </span>
-
         </div>
       </div>
 
@@ -635,17 +634,37 @@ export default function Scoreboard({
               className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2 flex items-center justify-center"
               disabled={sortedPlayers.length < 2 || isStartingGame}
             >
-              {isStartingGame ? (
-                <>
-                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  Starting...
-                </>
-              ) : (
-                "Start Game"
-              )}
+              {isStartingGame
+                ? (
+                  <>
+                    <svg
+                      className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      >
+                      </circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      >
+                      </path>
+                    </svg>
+                    Starting...
+                  </>
+                )
+                : (
+                  "Start Game"
+                )}
             </button>
           )}
 

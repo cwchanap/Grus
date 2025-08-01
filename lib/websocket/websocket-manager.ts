@@ -103,11 +103,11 @@ export class WebSocketManager {
         const db = getDatabaseService();
         const roomResult = await db.getRoomById(roomId);
         const playersResult = await db.getPlayersByRoom(roomId);
-        
-        return roomResult.success && 
-               roomResult.data !== null && 
-               playersResult.success && 
-               (playersResult.data?.length || 0) > 0;
+
+        return roomResult.success &&
+          roomResult.data !== null &&
+          playersResult.success &&
+          (playersResult.data?.length || 0) > 0;
       }
 
       // Check if room exists in database and has active players

@@ -102,6 +102,10 @@
     "tailwindcss": "npm:tailwindcss@3.4.1",
     "tailwindcss/": "npm:/tailwindcss@3.4.1/",
     "tailwindcss/plugin": "npm:/tailwindcss@3.4.1/plugin.js",
+    "tailwindcss-animate": "npm:tailwindcss-animate@1.0.7",
+    "class-variance-authority": "https://esm.sh/class-variance-authority@0.7.0",
+    "clsx": "https://esm.sh/clsx@2.1.0",
+    "tailwind-merge": "https://esm.sh/tailwind-merge@2.2.1",
     "$std/": "https://deno.land/std@0.216.0/",
     "pixi.js": "https://esm.sh/pixi.js@8.0.0",
     "playwright": "npm:playwright@1.40.0",
@@ -112,7 +116,14 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "dom.asynciterable",
+      "deno.ns",
+      "deno.unstable",
+      "webworker"
+    ],
     "strict": true
   },
   "nodeModulesDir": "auto"

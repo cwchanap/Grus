@@ -4,7 +4,7 @@ import { getDatabaseService } from "./database-service.ts";
 
 Deno.test("Database Service - Basic Operations", async (t) => {
   const db = getDatabaseService();
-  
+
   // Test health check
   await t.step("health check", async () => {
     const result = await db.healthCheck();

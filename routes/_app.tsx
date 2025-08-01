@@ -8,8 +8,9 @@ export default function App({ Component }: PageProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Drawing Game</title>
         <link rel="stylesheet" href="/styles.css" />
-        <script dangerouslySetInnerHTML={{
-          __html: `
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
             // Polyfill to prevent node:process imports
             if (typeof globalThis !== 'undefined') {
               // Ensure crypto.randomUUID is available
@@ -25,8 +26,9 @@ export default function App({ Component }: PageProps) {
                 globalThis.process = { env: {} };
               }
             }
-          `
-        }} />
+          `,
+          }}
+        />
         <style>
           {`
           @keyframes slide-in {

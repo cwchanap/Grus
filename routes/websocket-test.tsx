@@ -9,54 +9,56 @@ export default function WebSocketTest() {
       </Head>
       <div class="container mx-auto p-4">
         <h1 class="text-2xl font-bold mb-4">WebSocket Connection Test</h1>
-        
+
         <div class="space-y-4">
           <div>
-            <button 
-              id="connect-btn" 
+            <button
+              id="connect-btn"
               class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
             >
               Connect to WebSocket
             </button>
-            <button 
-              id="disconnect-btn" 
+            <button
+              id="disconnect-btn"
               class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 ml-2"
               disabled
             >
               Disconnect
             </button>
           </div>
-          
+
           <div>
-            <input 
-              id="message-input" 
-              type="text" 
-              placeholder="Enter test message" 
+            <input
+              id="message-input"
+              type="text"
+              placeholder="Enter test message"
               class="border border-gray-300 px-3 py-2 rounded w-64"
             />
-            <button 
-              id="send-btn" 
+            <button
+              id="send-btn"
               class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 ml-2"
               disabled
             >
               Send Message
             </button>
           </div>
-          
+
           <div>
             <h3 class="font-semibold">Connection Status:</h3>
             <div id="status" class="text-gray-600">Disconnected</div>
           </div>
-          
+
           <div>
             <h3 class="font-semibold">Messages:</h3>
-            <div id="messages" class="border border-gray-300 p-3 h-64 overflow-y-auto bg-gray-50"></div>
+            <div id="messages" class="border border-gray-300 p-3 h-64 overflow-y-auto bg-gray-50">
+            </div>
           </div>
         </div>
       </div>
 
-      <script dangerouslySetInnerHTML={{
-        __html: `
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
           let ws = null;
           const connectBtn = document.getElementById('connect-btn');
           const disconnectBtn = document.getElementById('disconnect-btn');
@@ -147,8 +149,9 @@ export default function WebSocketTest() {
               sendBtn.click();
             }
           });
-        `
-      }} />
+        `,
+        }}
+      />
     </>
   );
 }

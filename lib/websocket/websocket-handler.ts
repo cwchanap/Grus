@@ -1,17 +1,8 @@
 // WebSocket handler for Cloudflare Workers
 import "../../types/websocket.ts";
 import { Env } from "../../types/cloudflare.ts";
-import {
-  ClientMessage,
-  GameState,
-  PlayerState,
-  ServerMessage,
-} from "../../types/game.ts";
-import {
-  getConfig,
-  validateChatMessage,
-  validatePlayerName,
-} from "../config.ts";
+import { ClientMessage, GameState, PlayerState, ServerMessage } from "../../types/game.ts";
+import { getConfig, validateChatMessage, validatePlayerName } from "../config.ts";
 
 export class WebSocketHandler {
   private env: Env;
@@ -44,7 +35,7 @@ export class WebSocketHandler {
       const webSocketPair = new WebSocketPair();
       const [client, server] = Object.values(webSocketPair) as [
         WebSocket,
-        WebSocket
+        WebSocket,
       ];
 
       // Accept the WebSocket connection
@@ -64,10 +55,13 @@ export class WebSocketHandler {
         this.handleDisconnection(server);
       });
 
-      return new Response(null, {
-        status: 101,
-        webSocket: client,
-      } as ResponseInit & { webSocket: WebSocket });
+      return new Response(
+        null,
+        {
+          status: 101,
+          webSocket: client,
+        } as ResponseInit & { webSocket: WebSocket },
+      );
     } else {
       // Deno environment - Use Deno's native WebSocket upgrade
       try {
@@ -95,7 +89,7 @@ export class WebSocketHandler {
       } catch (error) {
         console.error(
           "Failed to upgrade WebSocket in Deno environment:",
-          error
+          error,
         );
         return new Response("WebSocket upgrade failed", {
           status: 500,
@@ -275,16 +269,15 @@ export class WebSocketHandler {
     // Update and send current game state
     try {
       let gameState = await this.getGameState(roomId);
-      
+
       // Small delay to ensure database operations are completed
-      await new Promise(resolve => setTimeout(resolve, 50));
-      
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
       // Get all current players in the room (including the new player)
       const allPlayers = await this.getPlayersFromDatabase(roomId);
-      
+
       // If no game state exists, create initial waiting state
       if (!gameState) {
-        
         gameState = {
           roomId,
           phase: "waiting",
@@ -309,7 +302,7 @@ export class WebSocketHandler {
         };
       } else {
         // Game state exists, update it with current players
-        
+
         // Update players list with all current players
         gameState.players = allPlayers.map((p) => ({
           id: p.id,
@@ -318,7 +311,7 @@ export class WebSocketHandler {
           isConnected: true,
           lastActivity: Date.now(),
         }));
-        
+
         // Update scores to include new players (preserve existing scores)
         const newScores: Record<string, number> = {};
         allPlayers.forEach((p) => {
@@ -326,17 +319,17 @@ export class WebSocketHandler {
         });
         gameState.scores = newScores;
       }
-      
+
       // Save the updated game state
       await this.updateGameState(roomId, gameState);
-      
+
       // Broadcast updated game state to ALL players in the room
       await this.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: gameState,
       });
-      
+
       // Also broadcast a room update to ensure UI updates
       await this.broadcastToRoom(roomId, {
         type: "room-update",
@@ -550,7 +543,7 @@ export class WebSocketHandler {
         roomId,
         data: drawingCommand,
       },
-      playerId
+      playerId,
     );
   }
 
@@ -696,10 +689,10 @@ export class WebSocketHandler {
 
       // Get next drawer
       const activePlayers = gameState.players.filter(
-        (p: PlayerState) => p.isConnected
+        (p: PlayerState) => p.isConnected,
       );
       const currentDrawerIndex = activePlayers.findIndex(
-        (p: PlayerState) => p.id === gameState.currentDrawer
+        (p: PlayerState) => p.id === gameState.currentDrawer,
       );
       const nextDrawerIndex = (currentDrawerIndex + 1) % activePlayers.length;
       gameState.currentDrawer = activePlayers[nextDrawerIndex].id;
@@ -784,7 +777,7 @@ export class WebSocketHandler {
 
   private async handlePing(ws: WebSocket, message: ClientMessage) {
     const { roomId, playerId, data } = message;
-    
+
     // Send pong response
     this.sendMessage(ws, {
       type: "game-state",
@@ -996,7 +989,7 @@ export class WebSocketHandler {
   private async broadcastToRoom(
     roomId: string,
     message: ServerMessage,
-    excludePlayerId?: string
+    excludePlayerId?: string,
   ) {
     const roomConnections = this.roomConnections.get(roomId);
     if (!roomConnections) return;
@@ -1053,7 +1046,7 @@ export class WebSocketHandler {
       }
 
       const stmt = this.env.DB.prepare(
-        "SELECT id FROM rooms WHERE id = ? AND is_active = 1"
+        "SELECT id FROM rooms WHERE id = ? AND is_active = 1",
       );
       const result = await stmt.bind(roomId).first();
       return result !== null;
@@ -1065,7 +1058,7 @@ export class WebSocketHandler {
 
   private async verifyPlayerIsHost(
     playerId: string,
-    roomId: string
+    roomId: string,
   ): Promise<boolean> {
     try {
       // In development, we don't have access to Cloudflare DB
@@ -1078,7 +1071,7 @@ export class WebSocketHandler {
       }
 
       const stmt = this.env.DB.prepare(
-        "SELECT is_host FROM players WHERE id = ? AND room_id = ?"
+        "SELECT is_host FROM players WHERE id = ? AND room_id = ?",
       );
       const result = await stmt
         .bind(playerId, roomId)
@@ -1090,11 +1083,13 @@ export class WebSocketHandler {
     }
   }
 
-  private async getPlayersFromDatabase(roomId: string): Promise<Array<{
-    id: string;
-    name: string;
-    isHost: boolean;
-  }> | null> {
+  private async getPlayersFromDatabase(roomId: string): Promise<
+    Array<{
+      id: string;
+      name: string;
+      isHost: boolean;
+    }> | null
+  > {
     try {
       // In development, we don't have access to Cloudflare DB
       // Use the database service instead
@@ -1113,7 +1108,7 @@ export class WebSocketHandler {
       }
 
       const stmt = this.env.DB.prepare(
-        "SELECT id, name, is_host FROM players WHERE room_id = ? ORDER BY joined_at ASC"
+        "SELECT id, name, is_host FROM players WHERE room_id = ? ORDER BY joined_at ASC",
       );
       const results = await stmt.bind(roomId).all<{
         id: string;
@@ -1155,14 +1150,14 @@ export class WebSocketHandler {
       }
 
       const roomStmt = this.env.DB.prepare(
-        "SELECT max_players FROM rooms WHERE id = ?"
+        "SELECT max_players FROM rooms WHERE id = ?",
       );
       const room = await roomStmt.bind(roomId).first<{ max_players: number }>();
 
       if (!room) return false;
 
       const playerStmt = this.env.DB.prepare(
-        "SELECT COUNT(*) as count FROM players WHERE room_id = ?"
+        "SELECT COUNT(*) as count FROM players WHERE room_id = ?",
       );
       const playerCount = await playerStmt
         .bind(roomId)
@@ -1193,7 +1188,7 @@ export class WebSocketHandler {
 
   private async updateGameState(
     roomId: string,
-    gameState: GameState
+    gameState: GameState,
   ): Promise<void> {
     try {
       // In development, use in-memory storage
@@ -1207,7 +1202,7 @@ export class WebSocketHandler {
       await this.env.GAME_STATE.put(
         `game:${roomId}`,
         JSON.stringify(gameState),
-        { expirationTtl: config.kv.defaultTtl }
+        { expirationTtl: config.kv.defaultTtl },
       );
     } catch (error) {
       console.error("Error updating game state:", error);
@@ -1223,7 +1218,7 @@ export class WebSocketHandler {
       }
 
       const playerStateStr = await this.env.GAME_STATE.get(
-        `player:${playerId}`
+        `player:${playerId}`,
       );
       return playerStateStr ? JSON.parse(playerStateStr) : null;
     } catch (error) {
@@ -1234,7 +1229,7 @@ export class WebSocketHandler {
 
   private async updatePlayerState(
     playerId: string,
-    playerState: PlayerState
+    playerState: PlayerState,
   ): Promise<void> {
     try {
       // In development, use in-memory storage
@@ -1248,7 +1243,7 @@ export class WebSocketHandler {
       await this.env.GAME_STATE.put(
         `player:${playerId}`,
         JSON.stringify(playerState),
-        { expirationTtl: config.kv.defaultTtl }
+        { expirationTtl: config.kv.defaultTtl },
       );
     } catch (error) {
       console.error("Error updating player state:", error);
@@ -1272,7 +1267,7 @@ export class WebSocketHandler {
   // Public method to allow manager to broadcast to specific room
   async broadcastToRoomPublic(
     _roomId: string,
-    message: ServerMessage
+    message: ServerMessage,
   ): Promise<void> {
     await this.broadcastToRoom(_roomId, message);
   }
@@ -1379,7 +1374,7 @@ export class WebSocketHandler {
       } catch (error) {
         console.error(
           `Error closing connection for player ${playerId}:`,
-          error
+          error,
         );
       }
     }
