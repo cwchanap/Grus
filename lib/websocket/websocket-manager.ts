@@ -1,13 +1,14 @@
 // WebSocket connection manager for handling multiple connections and rooms
 import { Env } from "../../types/cloudflare.ts";
-import { WebSocketHandler } from "./websocket-handler.ts";
+import { WebSocketServer } from "./core/websocket-server.ts";
 import { getConfig } from "../config.ts";
 
 export class WebSocketManager {
-  private handlers: Map<string, WebSocketHandler> = new Map();
+  private servers: Map<string, WebSocketServer> = new Map();
   private env: Env;
   private heartbeatInterval: number;
   private heartbeatTimer?: number;
+  private lobbyConnections: Set<WebSocket> = new Set();
 
   constructor(env: Env, startHeartbeat = true) {
     this.env = env;
@@ -34,7 +35,7 @@ export class WebSocketManager {
     return new Response("Not Found", { status: 404 });
   }
 
-  private async handleWebSocketUpgrade(request: Request): Promise<Response> {
+  private async handleWebSocketUpgrade(request: Request): Response {
     const url = new URL(request.url);
     const roomId = url.searchParams.get("roomId");
 
@@ -43,19 +44,19 @@ export class WebSocketManager {
       return this.handleLobbyWebSocket(request);
     }
 
-    // Get or create handler for this room
-    let handler = this.handlers.get(roomId);
-    if (!handler) {
-      handler = new WebSocketHandler(this.env);
-      this.handlers.set(roomId, handler);
+    // Get or create server for this room
+    let server = this.servers.get(roomId);
+    if (!server) {
+      server = new WebSocketServer(this.env);
+      this.servers.set(roomId, server);
     }
 
-    return handler.handleWebSocketUpgrade(request);
+    return server.handleWebSocketUpgrade(request);
   }
 
   private handleWebSocketInfo(): Response {
     const info = {
-      activeRooms: this.handlers.size,
+      activeRooms: this.servers.size,
       timestamp: new Date().toISOString(),
       status: "healthy",
     };
@@ -66,8 +67,6 @@ export class WebSocketManager {
   }
 
   private startHeartbeat() {
-    // In a real Cloudflare Worker, we'd use Durable Objects for this
-    // For now, this is a placeholder for heartbeat functionality
     this.heartbeatTimer = setInterval(() => {
       this.performHeartbeat();
     }, this.heartbeatInterval);
@@ -81,35 +80,20 @@ export class WebSocketManager {
   }
 
   private async performHeartbeat() {
-    // Clean up inactive handlers
-    const now = Date.now();
-    const config = getConfig();
-
-    for (const [roomId, handler] of this.handlers.entries()) {
+    // Clean up inactive servers
+    for (const [roomId, server] of this.servers.entries()) {
       // Check if room is still active
       const isActive = await this.isRoomActive(roomId);
       if (!isActive) {
-        this.handlers.delete(roomId);
+        server.cleanup();
+        this.servers.delete(roomId);
+        console.log(`Cleaned up inactive room server: ${roomId}`);
       }
     }
   }
 
   private async isRoomActive(roomId: string): Promise<boolean> {
     try {
-      // In development, we don't have access to Cloudflare DB
-      // Use the database service instead
-      if (!this.env?.DB) {
-        const { getDatabaseService } = await import("../database-factory.ts");
-        const db = getDatabaseService();
-        const roomResult = await db.getRoomById(roomId);
-        const playersResult = await db.getPlayersByRoom(roomId);
-
-        return roomResult.success &&
-          roomResult.data !== null &&
-          playersResult.success &&
-          (playersResult.data?.length || 0) > 0;
-      }
-
       // Check if room exists in database and has active players
       const stmt = this.env.DB.prepare(`
         SELECT r.id 
@@ -130,44 +114,36 @@ export class WebSocketManager {
 
   // Utility methods for external use
   async getRoomConnectionCount(roomId: string): Promise<number> {
-    const handler = this.handlers.get(roomId);
-    if (!handler) return 0;
-
-    // Access the private connections map through a public method
-    return (handler as any).getConnectionCount?.() || 0;
+    const server = this.servers.get(roomId);
+    return server ? server.getRoomConnectionCount(roomId) : 0;
   }
 
   async broadcastToAllRooms(message: any): Promise<void> {
-    for (const [roomId, handler] of this.handlers.entries()) {
+    for (const [roomId, server] of this.servers.entries()) {
       try {
-        // Broadcast to all connections in each room
-        await (handler as any).broadcastToRoom?.(roomId, message);
+        await server.broadcastToRoom(roomId, message);
       } catch (error) {
         console.error(`Error broadcasting to room ${roomId}:`, error);
       }
     }
   }
 
-  // Get all active room IDs
   getActiveRoomIds(): string[] {
-    return Array.from(this.handlers.keys());
+    return Array.from(this.servers.keys());
   }
 
-  // Clean up a specific room handler
   async cleanupRoom(roomId: string): Promise<void> {
-    const handler = this.handlers.get(roomId);
-    if (handler) {
-      // Perform any cleanup needed
-      this.handlers.delete(roomId);
+    const server = this.servers.get(roomId);
+    if (server) {
+      server.cleanup();
+      this.servers.delete(roomId);
+      console.log(`Cleaned up room server: ${roomId}`);
     }
   }
 
   getActiveRoomCount(): number {
-    return this.handlers.size;
+    return this.servers.size;
   }
-
-  // Lobby WebSocket connections
-  private lobbyConnections: Set<WebSocket> = new Set();
 
   private async handleLobbyWebSocket(request: Request): Promise<Response> {
     const upgradeHeader = request.headers.get("Upgrade");
@@ -209,39 +185,14 @@ export class WebSocketManager {
         } as ResponseInit & { webSocket: WebSocket },
       );
     } else {
-      // Deno environment - Use Deno's native WebSocket upgrade
-      try {
-        const { socket, response } = Deno.upgradeWebSocket(request);
-
-        // Add to lobby connections
-        this.lobbyConnections.add(socket);
-
-        // Handle WebSocket events
-        socket.addEventListener("open", () => {
-          // Lobby connection opened
-        });
-
-        socket.addEventListener("message", (event: MessageEvent) => {
-          this.handleLobbyMessage(socket, event.data);
-        });
-
-        socket.addEventListener("close", () => {
-          this.lobbyConnections.delete(socket);
-        });
-
-        socket.addEventListener("error", (error: Event) => {
-          console.error("Lobby WebSocket error:", error);
-          this.lobbyConnections.delete(socket);
-        });
-
-        return response;
-      } catch (error) {
-        console.error("Failed to upgrade lobby WebSocket in Deno environment:", error);
-        return new Response("WebSocket upgrade failed", {
-          status: 500,
-          headers: { "Content-Type": "text/plain" },
-        });
-      }
+      // Deno environment - WebSocket upgrade is handled differently
+      console.log(
+        "WebSocket connection attempted in Deno environment - not fully supported in development",
+      );
+      return new Response("WebSocket not supported in development environment", {
+        status: 501,
+        headers: { "Content-Type": "text/plain" },
+      });
     }
   }
 
@@ -265,15 +216,6 @@ export class WebSocketManager {
 
   private async getLobbyRooms() {
     try {
-      // In development, we don't have access to Cloudflare DB
-      // Use the database service instead
-      if (!this.env?.DB) {
-        const { getDatabaseService } = await import("../database-factory.ts");
-        const db = getDatabaseService();
-        const result = await db.getActiveRooms(20);
-        return result.success ? (result.data || []) : [];
-      }
-
       // Get active rooms from database
       const stmt = this.env.DB.prepare(`
         SELECT r.*, COUNT(p.id) as player_count
@@ -304,7 +246,6 @@ export class WebSocketManager {
     }
   }
 
-  // Broadcast lobby updates to all lobby connections
   async broadcastLobbyUpdate(): Promise<void> {
     const rooms = await this.getLobbyRooms();
     const message = {
@@ -329,15 +270,34 @@ export class WebSocketManager {
     }
   }
 
-  // Broadcast message to specific room
   async broadcastToRoomPublic(roomId: string, message: any): Promise<void> {
-    const handler = this.handlers.get(roomId);
-    if (handler) {
+    const server = this.servers.get(roomId);
+    if (server) {
       try {
-        await (handler as any).broadcastToRoomPublic(roomId, message);
+        await server.broadcastToRoom(roomId, message);
       } catch (error) {
         console.error(`Error broadcasting to room ${roomId}:`, error);
       }
     }
+  }
+
+  cleanup(): void {
+    this.stopHeartbeat();
+    
+    // Cleanup all servers
+    for (const [roomId, server] of this.servers.entries()) {
+      server.cleanup();
+    }
+    this.servers.clear();
+
+    // Close all lobby connections
+    for (const ws of this.lobbyConnections) {
+      try {
+        ws.close(1000, "Server shutdown");
+      } catch (error) {
+        console.error("Error closing lobby connection:", error);
+      }
+    }
+    this.lobbyConnections.clear();
   }
 }
