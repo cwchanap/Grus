@@ -3,16 +3,20 @@ import { defineConfig, devices } from "@playwright/test";
 /**
  * Playwright configuration for testing the multiplayer drawing game
  */
+
+// Check if we're in Deno or Node environment
+const isCI = (typeof Deno !== "undefined" ? Deno.env.get("CI") : process.env.CI) === "true";
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
-  forbidOnly: !!Deno.env.get("CI"),
-  retries: Deno.env.get("CI") ? 2 : 0,
-  workers: Deno.env.get("CI") ? 1 : undefined,
+  forbidOnly: isCI,
+  retries: isCI ? 2 : 0,
+  workers: isCI ? 1 : undefined,
   reporter: "html",
   
   use: {
-    baseURL: "http://localhost:8000",
+    baseURL: "http://localhost:3000",
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -43,8 +47,8 @@ export default defineConfig({
 
   webServer: {
     command: "deno task start",
-    url: "http://localhost:8000",
-    reuseExistingServer: !Deno.env.get("CI"),
+    url: "http://localhost:3000",
+    reuseExistingServer: !isCI,
     timeout: 120 * 1000,
   },
 });
