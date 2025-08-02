@@ -1,8 +1,7 @@
 // Health check endpoint for monitoring
 
 import { Handlers } from "$fresh/server.ts";
-import { getDatabaseService } from "../../lib/database-service.ts";
-import { getKVService } from "../../lib/kv-service.ts";
+import { getDatabaseService, getKVService } from "../../lib/db/index.ts";
 
 interface HealthCheck {
   status: string;

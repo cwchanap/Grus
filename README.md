@@ -125,8 +125,10 @@ These resources are accessed via Cloudflare's REST API, not Workers bindings.
 ├── routes/             # Fresh file-based routing
 ├── lib/                # Core business logic and utilities
 │   ├── cloudflare-api.ts    # Cloudflare REST API client
-│   ├── database-service.ts  # Database operations
-│   ├── kv-service.ts        # KV storage operations
+│   ├── db/                  # Database services
+│   │   ├── database-service.ts  # Database operations
+│   │   ├── kv-service.ts        # KV storage operations
+│   │   └── index.ts             # Database module exports
 │   └── websocket/           # WebSocket handling
 ├── types/              # TypeScript type definitions
 ├── db/                 # Database schema and seeds

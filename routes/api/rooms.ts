@@ -1,7 +1,7 @@
 // API routes for room operations
 import { Handlers } from "$fresh/server.ts";
 import { getDatabaseService } from "../../lib/database-factory.ts";
-// import { getKVService } from "../../lib/kv-service.ts";
+// import { getKVService } from "../../lib/db/index.ts";
 import { RoomManager } from "../../lib/room-manager.ts";
 
 export const handler: Handlers = {

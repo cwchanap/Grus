@@ -1,6 +1,6 @@
 // Database service using local SQLite
 import { Database } from "https://deno.land/x/sqlite3@0.12.0/mod.ts";
-import type { Player, Room, Score } from "../types/game.ts";
+import type { Player, Room, Score } from "../../types/game.ts";
 
 export interface DatabaseResult<T> {
   success: boolean;

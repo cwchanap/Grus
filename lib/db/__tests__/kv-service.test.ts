@@ -9,7 +9,7 @@ function setupTest() {
 
 async function teardownTest() {
   // Clean up any test data and close the KV connection
-  await kvService.close();
+  kvService.close();
 }
 
 Deno.test("KVService - setGameState and getGameState", async () => {

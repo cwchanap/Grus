@@ -1,5 +1,5 @@
 // Database service factory - now uses SQLite for both development and production
-import { getDatabaseService as getService } from "./database-service.ts";
+import { getDatabaseService as getService } from "./db/index.ts";
 
 // Re-export the database service
 export function getDatabaseService() {
