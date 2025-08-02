@@ -6,7 +6,7 @@ interface CreateRoomModalProps {
   onSuccess: () => void;
 }
 
-export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoomModalProps) {
+export default function CreateRoomModal({ show, onClose, onSuccess: _onSuccess }: CreateRoomModalProps) {
   const [formData, setFormData] = useState({
     roomName: "",
     hostName: "",
@@ -76,6 +76,7 @@ export default function CreateRoomModal({ show, onClose, onSuccess }: CreateRoom
         <div class="flex justify-between items-center p-6 border-b border-gray-200">
           <h2 class="text-xl font-semibold text-gray-800">Create New Room</h2>
           <button
+            type="button"
             onClick={handleClose}
             disabled={loading}
             class="text-gray-400 hover:text-gray-600 text-2xl leading-none disabled:opacity-50"

@@ -5,13 +5,13 @@
  * testing the integration of all Fresh Islands with WebSocket communication.
  */
 
-import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
+import { assert, assertEquals } from "$std/assert/mod.ts";
 import type {
   ChatMessage,
   ClientMessage,
   DrawingCommand,
   GameState,
-  PlayerState,
+  // PlayerState,
   ServerMessage,
 } from "../../types/game.ts";
 
@@ -143,7 +143,7 @@ class GameSessionSimulator {
     this.gameState = gameState;
   }
 
-  addPlayer(playerId: string, playerName: string): MockWebSocket {
+  addPlayer(playerId: string, _playerName: string): MockWebSocket {
     const ws = new MockWebSocket(`ws://localhost/ws?roomId=${this.gameState.roomId}`);
     this.players.set(playerId, ws);
 
@@ -173,7 +173,7 @@ class GameSessionSimulator {
     await new Promise((resolve) => setTimeout(resolve, 10)); // Wait for response
   }
 
-  async startGame(hostPlayerId: string): Promise<void> {
+  startGame(hostPlayerId: string): void {
     const ws = this.players.get(hostPlayerId);
     if (!ws) throw new Error(`Host ${hostPlayerId} not found`);
 
@@ -202,7 +202,7 @@ class GameSessionSimulator {
     });
   }
 
-  async sendChatMessage(playerId: string, message: string): Promise<void> {
+  sendChatMessage(playerId: string, message: string): void {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
@@ -243,10 +243,10 @@ class GameSessionSimulator {
     }
   }
 
-  async sendDrawingCommand(
+  sendDrawingCommand(
     playerId: string,
     command: Omit<DrawingCommand, "timestamp">,
-  ): Promise<void> {
+  ): void {
     if (playerId !== this.gameState.currentDrawer) {
       throw new Error(`Player ${playerId} is not the current drawer`);
     }
@@ -299,7 +299,7 @@ class GameSessionSimulator {
     });
   }
 
-  private handleServerMessage(playerId: string, message: ServerMessage): void {
+  private handleServerMessage(_playerId: string, message: ServerMessage): void {
     // Handle server messages that would affect client state
     switch (message.type) {
       case "game-state":
@@ -491,7 +491,7 @@ Deno.test("E2E Integration - Error scenarios and recovery mechanisms", async () 
   const simulator = new GameSessionSimulator(gameState);
 
   // Add players
-  const player1Ws = simulator.addPlayer("player1", "Alice");
+  const _player1Ws = simulator.addPlayer("player1", "Alice");
   const player2Ws = simulator.addPlayer("player2", "Bob");
 
   await simulator.joinRoom("player1", "Alice");
@@ -568,7 +568,7 @@ Deno.test("E2E Integration - Cross-browser compatibility simulation", async () =
       continue;
     }
 
-    const ws = simulator.addPlayer("player1", `${browser.name}User`);
+    const _ws = simulator.addPlayer("player1", `${browser.name}User`);
     await simulator.joinRoom("player1", `${browser.name}User`);
     await simulator.startGame("player1");
 

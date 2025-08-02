@@ -1,5 +1,5 @@
 import { getDatabaseService, IDatabaseService } from "./database-factory.ts";
-import { GameState, Player, Room } from "../types/game.ts";
+import { Player, Room } from "../types/game.ts";
 
 export interface RoomSummary {
   room: Room;
@@ -275,7 +275,7 @@ export class RoomManager {
     }
   }
 
-  async updatePlayerActivity(roomId: string, playerId: string): Promise<boolean> {
+  updatePlayerActivity(_roomId: string, _playerId: string): boolean {
     try {
       // Note: updatePlayer method needs to be added to DatabaseService
       // For now, we'll just return true
@@ -286,7 +286,7 @@ export class RoomManager {
     }
   }
 
-  async setPlayerDisconnected(roomId: string, playerId: string): Promise<boolean> {
+  setPlayerDisconnected(_roomId: string, _playerId: string): boolean {
     try {
       // Note: updatePlayer method needs to be added to DatabaseService
       // For now, we'll just return true

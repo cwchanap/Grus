@@ -30,7 +30,7 @@ export const handler: Handlers = {
     return manager.handleRequest(req);
   },
 
-  POST(req, ctx) {
+  POST(_req, _ctx) {
     // Handle WebSocket-related POST requests (if needed)
     return new Response("Method not allowed", { status: 405 });
   },

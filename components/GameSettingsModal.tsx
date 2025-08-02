@@ -9,7 +9,7 @@ import {
 } from "./ui/dialog.tsx";
 import { Button } from "./ui/button.tsx";
 import { Select, SelectItem } from "./ui/select.tsx";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card.tsx";
 
 interface GameSettingsModalProps {
   isOpen: boolean;

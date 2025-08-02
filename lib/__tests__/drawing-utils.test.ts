@@ -157,7 +157,7 @@ Deno.test("Drawing Utils - Throttler", async () => {
   throttler.destroy();
 });
 
-Deno.test("Drawing Utils - Buffer", async () => {
+Deno.test("Drawing Utils - Buffer", () => {
   const flushedBatches: DrawingCommand[][] = [];
   const buffer = new DrawingCommandBuffer(
     (commands) => flushedBatches.push(commands),

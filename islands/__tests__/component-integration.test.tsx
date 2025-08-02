@@ -107,7 +107,7 @@ Deno.test("Component Integration - Game state synchronization", () => {
 
 // Integration test: Chat message flow
 Deno.test("Component Integration - Chat message flow", () => {
-  const gameState = createTestGameState();
+  const _gameState = createTestGameState();
   const messages: ChatMessage[] = [];
 
   // Simulate regular chat message
@@ -153,7 +153,7 @@ Deno.test("Component Integration - Chat message flow", () => {
 
 // Integration test: Drawing command synchronization
 Deno.test("Component Integration - Drawing command synchronization", () => {
-  const gameState = createTestGameState();
+  const _gameState = createTestGameState();
   const drawingCommands: DrawingCommand[] = [];
 
   // Simulate drawing a simple line
@@ -230,7 +230,7 @@ Deno.test("Component Integration - Score calculation", () => {
   });
 
   // Simulate score calculation for correct guess
-  const calculateScore = (timeRemaining: number, basePoints: number = 100): number => {
+  const calculateScore = (timeRemaining: number, basePoints = 100): number => {
     const timeBonus = Math.floor(timeRemaining / 1000); // 1 point per second remaining
     return basePoints + timeBonus;
   };
@@ -389,7 +389,7 @@ Deno.test("Component Integration - WebSocket message validation", () => {
 
 // Integration test: Error handling scenarios
 Deno.test("Component Integration - Error handling", () => {
-  const gameState = createTestGameState();
+  const _gameState = createTestGameState();
 
   // Test invalid drawing command handling
   const validateDrawingCommand = (command: any): boolean => {

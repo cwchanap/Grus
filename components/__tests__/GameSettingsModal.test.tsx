@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "$std/assert/mod.ts";
+import { assertEquals } from "$std/assert/mod.ts";
 import type { GameSettings } from "../GameSettingsModal.tsx";
 
 // Test helper functions for GameSettingsModal

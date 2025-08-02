@@ -60,17 +60,17 @@ const mockEnv: Env = {
   DB: {
     prepare: () => ({
       bind: () => ({
-        first: async () => ({ id: "test-room", max_players: 8 }),
-        run: async () => ({ success: true }),
-        all: async () => ({ results: [] }),
+        first: () => ({ id: "test-room", max_players: 8 }),
+        run: () => ({ success: true }),
+        all: () => ({ results: [] }),
       }),
     }),
-    exec: async () => ({ count: 0, duration: 0 }),
-    dump: async () => new ArrayBuffer(0),
-    batch: async () => [],
+    exec: () => ({ count: 0, duration: 0 }),
+    dump: () => new ArrayBuffer(0),
+    batch: () => [],
   } as any,
   GAME_STATE: {
-    get: async (key: string) => {
+    get: (key: string) => {
       if (key.startsWith("game:")) {
         return JSON.stringify({
           roomId: "test-room",
@@ -100,7 +100,7 @@ const mockEnv: Env = {
     },
     put: async () => {},
     delete: async () => {},
-    list: async () => ({ keys: [], list_complete: true }),
+    list: () => ({ keys: [], list_complete: true }),
   } as any,
   WEBSOCKET_HANDLER: {} as any,
   ENVIRONMENT: "test",

@@ -148,24 +148,28 @@ export default function GameRoomExample({ roomId, playerId, playerName }: GameRo
             <h3 class="text-lg font-semibold mb-3">Controls</h3>
             <div class="space-y-2">
               <button
+                type="button"
                 onClick={() => handlePhaseTransition("waiting")}
                 class="w-full px-3 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600 text-sm"
               >
                 Pause Game
               </button>
               <button
+                type="button"
                 onClick={() => handlePhaseTransition("drawing")}
                 class="w-full px-3 py-2 bg-green-500 text-white rounded hover:bg-green-600 text-sm"
               >
                 Resume Game
               </button>
               <button
+                type="button"
                 onClick={handleNextTurn}
                 class="w-full px-3 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
               >
                 Next Turn
               </button>
               <button
+                type="button"
                 onClick={() => handlePhaseTransition("results")}
                 class="w-full px-3 py-2 bg-purple-500 text-white rounded hover:bg-purple-600 text-sm"
               >
@@ -209,6 +213,7 @@ export default function GameRoomExample({ roomId, playerId, playerName }: GameRo
             class="flex-1 px-3 py-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <button
+            type="button"
             disabled={gameState.currentDrawer === playerId}
             class="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400"
           >

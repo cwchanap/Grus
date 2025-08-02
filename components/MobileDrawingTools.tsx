@@ -41,7 +41,7 @@ export default function MobileDrawingTools({
   canUndo,
   disabled = false,
 }: MobileDrawingToolsProps) {
-  const { isMobile, isTouch } = useIsMobile();
+  const { isMobile, isTouch: _isTouch } = useIsMobile();
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [showSizePicker, setShowSizePicker] = useState(false);
 
@@ -90,6 +90,7 @@ export default function MobileDrawingTools({
               {/* Color Picker */}
               <div class="relative">
                 <button
+                  type="button"
                   onClick={() => setShowColorPicker(!showColorPicker)}
                   class="color-picker-button flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg touch-manipulation no-tap-highlight"
                 >
@@ -107,6 +108,7 @@ export default function MobileDrawingTools({
                     <div class="grid grid-cols-4 gap-2 mb-3">
                       {QUICK_COLORS.map((color) => (
                         <button
+                          type="button"
                           key={color}
                           onClick={() => handleColorChange(color)}
                           class={`w-10 h-10 rounded border-2 touch-manipulation no-tap-highlight ${
@@ -133,6 +135,7 @@ export default function MobileDrawingTools({
               {/* Size Picker */}
               <div class="relative">
                 <button
+                  type="button"
                   onClick={() => setShowSizePicker(!showSizePicker)}
                   class="size-picker-button flex items-center gap-2 px-3 py-2 bg-white border border-gray-300 rounded-lg touch-manipulation no-tap-highlight"
                 >
@@ -155,6 +158,7 @@ export default function MobileDrawingTools({
                     <div class="space-y-2 mb-3">
                       {QUICK_SIZES.map((size) => (
                         <button
+                          type="button"
                           key={size}
                           onClick={() => handleSizeChange(size)}
                           class={`w-full flex items-center gap-3 px-2 py-2 rounded touch-manipulation no-tap-highlight ${
@@ -235,6 +239,7 @@ export default function MobileDrawingTools({
               <div class="flex gap-1 ml-2">
                 {QUICK_COLORS.slice(0, 6).map((color) => (
                   <button
+                    type="button"
                     key={color}
                     onClick={() => onToolChange({ ...currentTool, color })}
                     class={`w-6 h-6 rounded border-2 ${
@@ -267,12 +272,14 @@ export default function MobileDrawingTools({
             {/* Action Buttons */}
             <div class="flex gap-2">
               <button
+                type="button"
                 onClick={onClear}
                 class="px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium"
               >
                 Clear
               </button>
               <button
+                type="button"
                 onClick={onUndo}
                 disabled={!canUndo}
                 class="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 text-sm font-medium"

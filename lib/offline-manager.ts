@@ -207,7 +207,7 @@ export class OfflineManager {
   }
 
   // Send pending data to server (placeholder implementation)
-  private async sendPendingData(state: OfflineState): Promise<void> {
+  private sendPendingData(_state: OfflineState): Promise<void> {
     // In a real implementation, this would:
     // 1. Send pending chat messages
     // 2. Send pending drawing commands

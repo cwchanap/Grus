@@ -2,7 +2,7 @@
  * Simplified tests for WebSocket connection manager
  */
 
-import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { connectionState } from "../connection-manager.ts";
 
 Deno.test("Connection Manager - State Management", () => {
@@ -37,7 +37,7 @@ Deno.test("Connection Manager - Error Messages", async () => {
 });
 
 Deno.test("Connection Manager - Offline State", async () => {
-  const { OfflineManager, offlineState } = await import("../../offline-manager.ts");
+  const { OfflineManager: _OfflineManager, offlineState } = await import("../../offline-manager.ts");
 
   // Test initial offline state
   assertExists(offlineState.value);

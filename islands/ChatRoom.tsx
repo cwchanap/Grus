@@ -37,7 +37,7 @@ function ChatRoomComponent({
   const connectionManagerRef = useRef<WebSocketConnectionManager | null>(null);
   const offlineManagerRef = useRef<OfflineManager | null>(null);
 
-  const connectionStatus = useComputed(() => connectionState.value);
+  const _connectionStatus = useComputed(() => connectionState.value);
   const offlineStatus = useComputed(() => offlineState.value);
 
   // Auto-scroll to bottom when new messages arrive
@@ -70,7 +70,7 @@ function ChatRoomComponent({
     });
 
     // Handle game-state messages (ChatRoom doesn't need to process them, just acknowledge)
-    connectionManagerRef.current.onMessage("game-state", (message) => {
+    connectionManagerRef.current.onMessage("game-state", (_message) => {
       // Game state is handled by Scoreboard component, ChatRoom just needs to acknowledge
     });
 
@@ -296,6 +296,7 @@ export default function ChatRoom(props: ChatRoomProps) {
             Failed to load chat: {error.message}
           </div>
           <button
+            type="button"
             onClick={retry}
             class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
           >

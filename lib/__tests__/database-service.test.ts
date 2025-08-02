@@ -9,7 +9,7 @@ class MockCloudflareAPI {
     this.mockResponses.set(sql.trim(), response);
   }
 
-  async executeD1Query(sql: string, params: any[] = []) {
+  executeD1Query(sql: string, params: any[] = []) {
     const normalizedSql = sql.trim().replace(/\s+/g, " ");
 
     // Handle different SQL patterns
@@ -92,7 +92,7 @@ class MockCloudflareAPI {
 }
 
 // Override the getCloudflareAPI function for testing
-const originalGetCloudflareAPI = (await import("../cloudflare-api.ts")).getCloudflareAPI;
+const _originalGetCloudflareAPI = (await import("../cloudflare-api.ts")).getCloudflareAPI;
 let mockAPI: MockCloudflareAPI;
 
 function setupMockAPI() {
@@ -219,7 +219,7 @@ Deno.test("DatabaseService - error handling", async () => {
   setupMockAPI();
 
   // Override mock to throw error
-  mockAPI.executeD1Query = async () => {
+  mockAPI.executeD1Query = () => {
     throw new Error("Database connection failed");
   };
 

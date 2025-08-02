@@ -132,13 +132,13 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     }
   }, [isDrawer, disabled]);
 
-  const setupDrawingEvents = (app: PIXI.Application, container: PIXI.Container) => {
+  const setupDrawingEvents = (app: PIXI.Application, _container: PIXI.Container) => {
     // Enhanced mobile touch support
     let lastTouchTime = 0;
     let touchStartPoint: { x: number; y: number } | null = null;
 
     // Prevent default touch behaviors to avoid scrolling/zooming while drawing
-    const preventDefaultTouch = (e: TouchEvent) => {
+    const _preventDefaultTouch = (e: TouchEvent) => {
       e.preventDefault();
       e.stopPropagation();
     };
@@ -552,15 +552,16 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (!drawingContainerRef.current || !validateDrawingCommand(command)) return;
 
     switch (command.type) {
-      case "start":
+      case "start": {
         const graphics = new PIXI.Graphics();
         graphics.moveTo(command.x!, command.y!);
         drawingContainerRef.current.addChild(graphics);
         // Store reference for subsequent moves
         (graphics as any).commandId = command.timestamp;
         break;
+      }
 
-      case "move":
+      case "move": {
         // Find the graphics object for this stroke
         const targetGraphics = drawingContainerRef.current.children.find(
           (child) =>
@@ -578,10 +579,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           targetGraphics.lineTo(command.x!, command.y!);
         }
         break;
+      }
 
-      case "clear":
+      case "clear": {
         drawingContainerRef.current.removeChildren();
         break;
+      }
     }
   };
 

@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
+import { assert, assertEquals } from "$std/assert/mod.ts";
 import { DrawingCommand, GameState } from "../../types/game.ts";
 
 /**
@@ -33,7 +33,7 @@ function createGameRoomScenario() {
 }
 
 Deno.test("DrawingBoard Integration - Complete drawing session", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players: _players, gameState: _gameState } = createGameRoomScenario();
 
   // Simulate a complete drawing session
   const drawingSession: DrawingCommand[] = [];
@@ -88,7 +88,7 @@ Deno.test("DrawingBoard Integration - Complete drawing session", () => {
 });
 
 Deno.test("DrawingBoard Integration - Multi-player synchronization", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players, gameState: _gameState } = createGameRoomScenario();
 
   // Simulate multiple players receiving the same drawing commands
   const playersDrawingState = new Map<string, DrawingCommand[]>();
@@ -138,7 +138,7 @@ Deno.test("DrawingBoard Integration - Multi-player synchronization", () => {
 });
 
 Deno.test("DrawingBoard Integration - Turn-based drawing permissions", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players: _players, gameState } = createGameRoomScenario();
 
   // Test drawing permissions for each game phase
   const testDrawingPermissions = (
@@ -146,7 +146,7 @@ Deno.test("DrawingBoard Integration - Turn-based drawing permissions", () => {
     phase: GameState["phase"],
     playerId: string,
   ) => {
-    const testGameState = { ...gameState, currentDrawer, phase };
+    const _testGameState = { ...gameState, currentDrawer, phase };
     return currentDrawer === playerId && phase === "drawing";
   };
 
@@ -176,7 +176,7 @@ Deno.test("DrawingBoard Integration - Turn-based drawing permissions", () => {
 });
 
 Deno.test("DrawingBoard Integration - Error recovery scenarios", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players: _players, gameState: _gameState } = createGameRoomScenario();
 
   // Simulate connection loss and recovery
   let connectionStatus = "connected";
@@ -228,7 +228,7 @@ Deno.test("DrawingBoard Integration - Error recovery scenarios", () => {
 });
 
 Deno.test("DrawingBoard Integration - Performance under load", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players: _players, gameState: _gameState } = createGameRoomScenario();
 
   // Simulate high-frequency drawing commands
   const commands: DrawingCommand[] = [];
@@ -280,7 +280,7 @@ Deno.test("DrawingBoard Integration - Performance under load", () => {
 });
 
 Deno.test("DrawingBoard Integration - Canvas state consistency", () => {
-  const { roomId, players, gameState } = createGameRoomScenario();
+  const { roomId: _roomId, players: _players, gameState: _gameState } = createGameRoomScenario();
 
   // Simulate canvas state management
   interface CanvasState {

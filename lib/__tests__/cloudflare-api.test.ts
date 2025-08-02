@@ -6,7 +6,7 @@ const originalFetch = globalThis.fetch;
 
 function mockFetch(responses: Array<{ url?: string; response: Response }>) {
   let callIndex = 0;
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (input: RequestInfo | URL, _init?: RequestInit) => {
     const urlString = input.toString();
     const mockResponse = responses[callIndex] || responses[responses.length - 1];
     callIndex++;

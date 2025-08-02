@@ -30,7 +30,7 @@ export const handler: Handlers = {
             originalMessage: data,
             timestamp: Date.now(),
           }));
-        } catch (error) {
+        } catch (_error) {
           socket.send(JSON.stringify({
             type: "error",
             message: "Invalid JSON",

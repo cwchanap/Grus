@@ -84,6 +84,7 @@ export default function LeaveRoomButton({
   return (
     <>
       <button
+        type="button"
         onClick={handleClick}
         disabled={isLeaving}
         class={`${className} ${isLeaving ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -122,6 +123,7 @@ export default function LeaveRoomButton({
               <span class="block sm:inline">{error}</span>
             </div>
             <button
+              type="button"
               onClick={() => setError(null)}
               class="ml-2 text-red-500 hover:text-red-700"
             >

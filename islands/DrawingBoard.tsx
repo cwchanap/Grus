@@ -30,7 +30,7 @@ export default function DrawingBoard({
   >("disconnected");
   const [drawingHistory, setDrawingHistory] = useState<DrawingCommand[]>([]);
   const [isDrawer, setIsDrawer] = useState(false);
-  const [currentTool, setCurrentTool] = useState<DrawingTool>({
+  const [_currentTool, _setCurrentTool] = useState<DrawingTool>({
     color: "#000000",
     size: 5,
     type: "brush",
@@ -326,6 +326,7 @@ export default function DrawingBoard({
             </div>
             <div class="flex gap-2 justify-center sm:justify-end">
               <button
+                type="button"
                 onClick={handleClearCanvas}
                 class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-red-500 text-white rounded hover:bg-red-600 text-sm font-medium touch-manipulation"
                 disabled={connectionStatus !== "connected"}
@@ -333,6 +334,7 @@ export default function DrawingBoard({
                 Clear All
               </button>
               <button
+                type="button"
                 onClick={handleUndo}
                 class="flex-1 sm:flex-none px-4 py-2 sm:px-3 sm:py-1 bg-gray-500 text-white rounded hover:bg-gray-600 text-sm font-medium touch-manipulation"
                 disabled={connectionStatus !== "connected"}

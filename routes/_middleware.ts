@@ -18,7 +18,7 @@ export async function handler(
       response.headers.set("Access-Control-Allow-Origin", "*");
       response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
       response.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    } catch (error) {
+    } catch (_error) {
       // Headers are immutable (e.g., WebSocket upgrade response), skip CORS
       console.log("Skipping CORS headers for immutable response");
     }

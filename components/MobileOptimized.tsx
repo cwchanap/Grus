@@ -121,6 +121,7 @@ export function TouchButton({
 
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       class={`${baseClasses} ${variantClasses[variant]} ${

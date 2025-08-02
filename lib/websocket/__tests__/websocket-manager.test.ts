@@ -8,16 +8,16 @@ class MockWebSocket {
   readyState = 1;
   static READY_STATE_OPEN = 1;
 
-  private listeners: Map<string, Function[]> = new Map();
+  private listeners: Map<string, ((...args: unknown[]) => void)[]> = new Map();
 
-  addEventListener(event: string, callback: Function) {
+  addEventListener(event: string, callback: (...args: unknown[]) => void) {
     if (!this.listeners.has(event)) {
       this.listeners.set(event, []);
     }
     this.listeners.get(event)!.push(callback);
   }
 
-  send(data: string) {
+  send(_data: string) {
     // Mock send
   }
 
@@ -44,26 +44,26 @@ class MockWebSocketPair {
 const mockEnv: Env = {
   DB: {
     prepare: (query: string) => ({
-      bind: (...values: unknown[]) => ({
-        first: async () => {
+      bind: (..._values: unknown[]) => ({
+        first: () => {
           if (query.includes("COUNT")) {
             return { count: 1 };
           }
           return { id: "test-room", max_players: 8 };
         },
-        run: async () => ({ success: true }),
-        all: async () => ({ results: [] }),
+        run: () => ({ success: true }),
+        all: () => ({ results: [] }),
       }),
     }),
-    exec: async () => ({ count: 0, duration: 0 }),
-    dump: async () => new ArrayBuffer(0),
-    batch: async () => [],
+    exec: () => ({ count: 0, duration: 0 }),
+    dump: () => new ArrayBuffer(0),
+    batch: () => [],
   } as any,
   GAME_STATE: {
-    get: async (key: string) => null,
+    get: (_key: string) => null,
     put: async () => {},
     delete: async () => {},
-    list: async () => ({ keys: [], list_complete: true }),
+    list: () => ({ keys: [], list_complete: true }),
   } as any,
   WEBSOCKET_HANDLER: {} as any,
   ENVIRONMENT: "test",
@@ -167,7 +167,7 @@ Deno.test("WebSocketManager - multiple room handlers", async () => {
   assertEquals(activeRooms >= 2, true);
 });
 
-Deno.test("WebSocketManager - heartbeat functionality", async () => {
+Deno.test("WebSocketManager - heartbeat functionality", () => {
   const manager = new WebSocketManager(mockEnv, false);
 
   // Test that heartbeat can be started and stopped without errors

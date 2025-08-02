@@ -124,7 +124,7 @@ export const handler: Handlers<HealthResponse> = {
         },
         status: statusCode,
       });
-    } catch (error) {
+    } catch (_error) {
       const responseTime = Date.now() - startTime;
 
       const health: HealthResponse = {

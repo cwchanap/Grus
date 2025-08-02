@@ -137,6 +137,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
           </div>
           <p class="text-red-700">{error}</p>
           <button
+            type="button"
             onClick={refreshRooms}
             class="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
           >
@@ -153,6 +154,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
       <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
         <div class="flex items-center justify-between sm:justify-start sm:space-x-4">
           <button
+            type="button"
             onClick={refreshRooms}
             disabled={loading}
             class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
@@ -173,6 +175,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
         </div>
 
         <button
+          type="button"
           onClick={handleCreateRoom}
           class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
         >
@@ -194,6 +197,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
                 Be the first to create a room and start playing!
               </p>
               <button
+                type="button"
                 onClick={handleCreateRoom}
                 class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation no-tap-highlight"
               >
@@ -291,6 +295,7 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
       </div>
 
       <button
+        type="button"
         onClick={onJoin}
         disabled={!canJoin}
         class={`w-full py-3 px-4 rounded-lg font-medium transition-all duration-200 touch-manipulation no-tap-highlight text-touch ${

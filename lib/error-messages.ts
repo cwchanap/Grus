@@ -14,7 +14,7 @@ export interface ErrorInfo {
 
 export function getErrorInfo(error: Error | string): ErrorInfo {
   const errorMessage = typeof error === "string" ? error : error.message;
-  const errorType = typeof error === "string" ? error : error.name;
+  const _errorType = typeof error === "string" ? error : error.name;
 
   // Network-related errors
   if (

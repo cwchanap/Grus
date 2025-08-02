@@ -35,7 +35,7 @@ export class KVService {
 
   // Game state operations
   async setGameState(roomId: string, state: any, ttl?: number): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["game_state", roomId];
       const options = ttl ? { expireIn: ttl * 1000 } : {};
@@ -44,7 +44,7 @@ export class KVService {
   }
 
   async getGameState(roomId: string): Promise<KVResult<any | null>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["game_state", roomId];
       const result = await kv.get(key);
@@ -53,7 +53,7 @@ export class KVService {
   }
 
   async deleteGameState(roomId: string): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["game_state", roomId];
       await kv.delete(key);
@@ -62,7 +62,7 @@ export class KVService {
 
   // Player session operations
   async setPlayerSession(playerId: string, session: any, ttl = 3600): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["player_session", playerId];
       await kv.set(key, session, { expireIn: ttl * 1000 });
@@ -70,7 +70,7 @@ export class KVService {
   }
 
   async getPlayerSession(playerId: string): Promise<KVResult<any | null>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["player_session", playerId];
       const result = await kv.get(key);
@@ -79,7 +79,7 @@ export class KVService {
   }
 
   async deletePlayerSession(playerId: string): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["player_session", playerId];
       await kv.delete(key);
@@ -88,7 +88,7 @@ export class KVService {
 
   // Room cache operations
   async cacheRoomData(roomId: string, data: any, ttl = 300): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["room_cache", roomId];
       await kv.set(key, data, { expireIn: ttl * 1000 });
@@ -96,7 +96,7 @@ export class KVService {
   }
 
   async getCachedRoomData(roomId: string): Promise<KVResult<any | null>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const key = ["room_cache", roomId];
       const result = await kv.get(key);
@@ -106,7 +106,7 @@ export class KVService {
 
   // Drawing data operations
   async saveDrawingData(roomId: string, drawingData: any, ttl = 1800): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const timestamp = Date.now();
       const key = ["drawing", roomId, timestamp];
@@ -115,7 +115,7 @@ export class KVService {
   }
 
   async getDrawingHistory(roomId: string): Promise<KVResult<any[]>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const prefix = ["drawing", roomId];
       const entries = kv.list({ prefix });
@@ -133,7 +133,7 @@ export class KVService {
 
   // Chat message cache
   async cacheMessage(roomId: string, message: any, ttl = 3600): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const timestamp = Date.now();
       const key = ["message", roomId, timestamp];
@@ -142,7 +142,7 @@ export class KVService {
   }
 
   async getRecentMessages(roomId: string, limit = 50): Promise<KVResult<any[]>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const prefix = ["message", roomId];
       const entries = kv.list({ prefix });
@@ -162,7 +162,7 @@ export class KVService {
 
   // Generic operations
   async set(key: string, value: any, ttl?: number): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const kvKey = ["generic", key];
       const options = ttl ? { expireIn: ttl * 1000 } : {};
@@ -171,7 +171,7 @@ export class KVService {
   }
 
   async get(key: string): Promise<KVResult<any | null>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const kvKey = ["generic", key];
       const result = await kv.get(kvKey);
@@ -180,7 +180,7 @@ export class KVService {
   }
 
   async delete(key: string): Promise<KVResult<void>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const kvKey = ["generic", key];
       await kv.delete(kvKey);
@@ -189,7 +189,7 @@ export class KVService {
 
   // Health check
   async healthCheck(): Promise<KVResult<boolean>> {
-    return this.executeOperation(async () => {
+    return await this.executeOperation(async () => {
       const kv = await this.getKv();
       const testKey = ["health_check"];
       const testValue = { timestamp: Date.now() };
@@ -203,7 +203,7 @@ export class KVService {
   }
 
   // Cleanup method for graceful shutdown
-  async close(): Promise<void> {
+  close(): void {
     if (this.kv) {
       this.kv.close();
       this.kv = null;

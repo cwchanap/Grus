@@ -81,6 +81,7 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
         <div class="flex justify-between items-center p-6 border-b border-gray-200">
           <h2 class="text-xl font-semibold text-gray-800">Join Room</h2>
           <button
+            type="button"
             onClick={handleClose}
             disabled={loading}
             class="text-gray-400 hover:text-gray-600 text-2xl leading-none disabled:opacity-50"

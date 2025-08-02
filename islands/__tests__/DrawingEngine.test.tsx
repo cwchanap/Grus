@@ -1,4 +1,4 @@
-import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
+import { assert, assertEquals } from "$std/assert/mod.ts";
 import { DrawingCommand } from "../../types/game.ts";
 import {
   deserializeDrawingCommand,

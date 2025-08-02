@@ -14,7 +14,7 @@ export default function ConnectionStatus({
   className = "",
 }: ConnectionStatusProps) {
   const [status, setStatus] = useState<"online" | "offline" | "slow">("online");
-  const [lastUpdate, setLastUpdate] = useState<number>(Date.now());
+  const [_lastUpdate, setLastUpdate] = useState<number>(Date.now());
 
   useEffect(() => {
     const updateConnectionStatus = () => {

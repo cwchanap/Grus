@@ -13,12 +13,14 @@ export default function WebSocketTest() {
         <div class="space-y-4">
           <div>
             <button
+              type="button"
               id="connect-btn"
               class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600"
             >
               Connect to WebSocket
             </button>
             <button
+              type="button"
               id="disconnect-btn"
               class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600 ml-2"
               disabled
@@ -35,6 +37,7 @@ export default function WebSocketTest() {
               class="border border-gray-300 px-3 py-2 rounded w-64"
             />
             <button
+              type="button"
               id="send-btn"
               class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 ml-2"
               disabled
@@ -56,7 +59,10 @@ export default function WebSocketTest() {
         </div>
       </div>
 
+      {/* deno-lint-ignore react-no-danger */}
+      {/* @ts-ignore */}
       <script
+        // deno-lint-ignore react-no-danger
         dangerouslySetInnerHTML={{
           __html: `
           let ws = null;

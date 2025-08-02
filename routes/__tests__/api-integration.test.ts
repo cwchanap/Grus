@@ -1,5 +1,5 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
-import { createHandler } from "$fresh/server.ts";
+// import { createHandler } from "$fresh/server.ts";
 import { handler as healthHandler } from "../api/health.ts";
 import { handler as roomsHandler } from "../api/rooms.ts";
 
@@ -29,7 +29,7 @@ function teardownMockEnv() {
 const originalFetch = globalThis.fetch;
 
 function mockCloudflareAPI() {
-  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const urlString = input.toString();
     const options = init;
 
@@ -204,7 +204,7 @@ Deno.test("API Integration - Health Check Database Error", async () => {
   setupMockEnv();
 
   // Mock API to return error
-  globalThis.fetch = async (input: RequestInfo | URL) => {
+  globalThis.fetch = (input: RequestInfo | URL) => {
     if (input.toString().includes("/d1/database/")) {
       return new Response("Database Error", { status: 500 });
     }

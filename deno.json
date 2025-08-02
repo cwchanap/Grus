@@ -42,7 +42,8 @@
         "no-inferrable-types"
       ],
       "exclude": [
-        "no-explicit-any"
+        "no-explicit-any",
+        "react-no-danger"
       ]
     },
     "include": [

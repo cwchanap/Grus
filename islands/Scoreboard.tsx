@@ -1,7 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import type { GameState, PlayerState } from "../types/game.ts";
-import type { JSX } from "preact";
+// import type { JSX } from "preact";
 import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
 interface ScoreboardProps {
@@ -13,7 +13,7 @@ interface ScoreboardProps {
 }
 
 // Global signal for WebSocket connection
-const wsConnection = signal<WebSocket | null>(null);
+const _wsConnection = signal<WebSocket | null>(null);
 const connectionStatus = signal<"connecting" | "connected" | "disconnected">("disconnected");
 
 export default function Scoreboard({
@@ -289,7 +289,7 @@ export default function Scoreboard({
 
       oscillator.start(audioContext.currentTime);
       oscillator.stop(audioContext.currentTime + 0.2);
-    } catch (error) {
+    } catch (_error) {
       // Silently fail if audio is not supported
       console.log("Audio notification not supported");
     }
@@ -354,7 +354,7 @@ export default function Scoreboard({
     data: any = {},
   ) => {
     // Find the current WebSocket connection from the useEffect
-    const connections = document.querySelectorAll("script[data-ws-connection]");
+    const _connections = document.querySelectorAll("script[data-ws-connection]");
     let ws: WebSocket | null = null;
 
     // Try to get the WebSocket from the connection status
@@ -630,6 +630,7 @@ export default function Scoreboard({
           {/* Start Game Button */}
           {localGameState.phase === "waiting" && (
             <button
+              type="button"
               onClick={handleStartGame}
               className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2 flex items-center justify-center"
               disabled={sortedPlayers.length < 2 || isStartingGame}
@@ -671,6 +672,7 @@ export default function Scoreboard({
           {/* End Round Button (during drawing phase) */}
           {localGameState.phase === "drawing" && (
             <button
+              type="button"
               onClick={handleNextRound}
               className="w-full bg-orange-600 hover:bg-orange-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
             >
@@ -681,6 +683,7 @@ export default function Scoreboard({
           {/* Next Round Button (during results phase) */}
           {localGameState.phase === "results" && (
             <button
+              type="button"
               onClick={handleNextRound}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
             >
@@ -691,6 +694,7 @@ export default function Scoreboard({
           {/* End Game Button */}
           {(localGameState.phase === "drawing" || localGameState.phase === "results") && (
             <button
+              type="button"
               onClick={handleEndGame}
               className="w-full bg-red-600 hover:bg-red-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200"
             >
@@ -701,6 +705,7 @@ export default function Scoreboard({
           {/* Game Settings Button */}
           {localGameState.phase === "waiting" && (
             <button
+              type="button"
               onClick={() => setShowSettingsModal(true)}
               className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
             >

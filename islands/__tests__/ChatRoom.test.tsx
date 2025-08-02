@@ -1,6 +1,6 @@
-import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
-import { signal } from "@preact/signals";
-import ChatRoom from "../ChatRoom.tsx";
+import { assertEquals } from "$std/assert/mod.ts";
+// import { signal } from "@preact/signals";
+// import ChatRoom from "../ChatRoom.tsx";
 import type { ChatMessage } from "../../types/game.ts";
 
 // Mock WebSocket for testing
@@ -100,7 +100,7 @@ Deno.test({
       isCorrect: true,
     };
 
-    const serverMessage = {
+    const _serverMessage = {
       type: "chat-message",
       roomId: "test-room",
       data: testMessage,
@@ -118,7 +118,7 @@ Deno.test({
   fn: () => {
     // Create a mock date
     const testDate = new Date("2024-01-01T12:30:45Z");
-    const timestamp = testDate.getTime();
+    const _timestamp = testDate.getTime();
 
     // Test the time formatting logic
     const formattedTime = testDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });

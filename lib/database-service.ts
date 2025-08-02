@@ -1,6 +1,6 @@
 // Database service using local SQLite
 import { Database } from "https://deno.land/x/sqlite3@0.12.0/mod.ts";
-import type { GameSession, Player, Room, Score } from "../types/game.ts";
+import type { Player, Room, Score } from "../types/game.ts";
 
 export interface DatabaseResult<T> {
   success: boolean;
@@ -43,7 +43,7 @@ export class DatabaseService {
   }
 
   // Room operations
-  async createRoom(name: string, hostId: string, maxPlayers = 8): Promise<DatabaseResult<string>> {
+  createRoom(name: string, hostId: string, maxPlayers = 8): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
@@ -56,7 +56,7 @@ export class DatabaseService {
     }, "Failed to create room");
   }
 
-  async getRoomById(id: string): Promise<DatabaseResult<Room | null>> {
+  getRoomById(id: string): DatabaseResult<Room | null> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("SELECT * FROM rooms WHERE id = ?");
       const result = stmt.get(id) as any;
@@ -76,7 +76,7 @@ export class DatabaseService {
     }, `Failed to get room with id: ${id}`);
   }
 
-  async getActiveRooms(limit = 20): Promise<DatabaseResult<Room[]>> {
+  getActiveRooms(limit = 20): DatabaseResult<Room[]> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare(`
         SELECT r.*, COUNT(p.id) as player_count
@@ -104,7 +104,7 @@ export class DatabaseService {
     }, "Failed to get active rooms");
   }
 
-  async updateRoom(id: string, updates: Partial<Room>): Promise<DatabaseResult<boolean>> {
+  updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const fields = Object.keys(updates).map((key) => `${key} = ?`).join(", ");
       const values = Object.values(updates);
@@ -117,7 +117,7 @@ export class DatabaseService {
     }, `Failed to update room with id: ${id}`);
   }
 
-  async deleteRoom(id: string): Promise<DatabaseResult<boolean>> {
+  deleteRoom(id: string): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("DELETE FROM rooms WHERE id = ?");
       stmt.run(id);
@@ -127,11 +127,11 @@ export class DatabaseService {
   }
 
   // Player operations
-  async createPlayer(
+  createPlayer(
     name: string,
     roomId: string,
     isHost = false,
-  ): Promise<DatabaseResult<string>> {
+  ): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
@@ -144,7 +144,7 @@ export class DatabaseService {
     }, "Failed to create player");
   }
 
-  async getPlayerById(id: string): Promise<DatabaseResult<Player | null>> {
+  getPlayerById(id: string): DatabaseResult<Player | null> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("SELECT * FROM players WHERE id = ?");
       const result = stmt.get(id) as any;
@@ -162,7 +162,7 @@ export class DatabaseService {
     }, `Failed to get player with id: ${id}`);
   }
 
-  async getPlayersByRoom(roomId: string): Promise<DatabaseResult<Player[]>> {
+  getPlayersByRoom(roomId: string): DatabaseResult<Player[]> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare(
         "SELECT * FROM players WHERE room_id = ? ORDER BY joined_at ASC",
@@ -181,7 +181,7 @@ export class DatabaseService {
     }, `Failed to get players for room: ${roomId}`);
   }
 
-  async removePlayer(id: string): Promise<DatabaseResult<boolean>> {
+  removePlayer(id: string): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("DELETE FROM players WHERE id = ?");
       stmt.run(id);
@@ -191,7 +191,7 @@ export class DatabaseService {
   }
 
   // Game session operations
-  async createGameSession(roomId: string, totalRounds = 5): Promise<DatabaseResult<string>> {
+  createGameSession(roomId: string, totalRounds = 5): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
@@ -204,7 +204,7 @@ export class DatabaseService {
     }, "Failed to create game session");
   }
 
-  async endGameSession(id: string, winnerId?: string): Promise<DatabaseResult<boolean>> {
+  endGameSession(id: string, winnerId?: string): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare(
         `UPDATE game_sessions 
@@ -218,11 +218,11 @@ export class DatabaseService {
   }
 
   // Score operations
-  async createScore(
+  createScore(
     sessionId: string,
     playerId: string,
     points = 0,
-  ): Promise<DatabaseResult<string>> {
+  ): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
@@ -235,11 +235,11 @@ export class DatabaseService {
     }, "Failed to create score");
   }
 
-  async updateScore(
+  updateScore(
     id: string,
     points: number,
     correctGuesses: number,
-  ): Promise<DatabaseResult<boolean>> {
+  ): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare(
         `UPDATE scores 
@@ -252,7 +252,7 @@ export class DatabaseService {
     }, `Failed to update score with id: ${id}`);
   }
 
-  async getScoresBySession(sessionId: string): Promise<DatabaseResult<Score[]>> {
+  getScoresBySession(sessionId: string): DatabaseResult<Score[]> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare(`
         SELECT s.*, p.name as player_name
@@ -277,7 +277,7 @@ export class DatabaseService {
   }
 
   // Health check
-  async healthCheck(): Promise<DatabaseResult<boolean>> {
+  healthCheck(): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("SELECT 1 as test");
       const result = stmt.get();

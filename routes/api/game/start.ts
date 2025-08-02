@@ -51,7 +51,7 @@ export const handler: Handlers = {
         );
       }
 
-      const { room, players, host } = roomResult.data;
+      const { room: _room, players, host } = roomResult.data;
 
       // Verify player is host
       if (!host || host.id !== playerId) {
