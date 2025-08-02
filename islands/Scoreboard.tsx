@@ -37,6 +37,40 @@ export default function Scoreboard({
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
   const [isStartingGame, setIsStartingGame] = useState(false);
 
+  // Helper function to update header information
+  const updateHeaderInfo = (updatedGameState: GameState) => {
+    try {
+      // Update player count
+      const playerCountElement = document.getElementById("player-count-display");
+      if (playerCountElement) {
+        const maxPlayers = playerCountElement.textContent?.split("/")[1]?.split(" ")[0] || "8";
+        playerCountElement.textContent = `${updatedGameState.players.length}/${maxPlayers} players`;
+      }
+
+      // Update host name
+      const host = updatedGameState.players.find(p => p.isHost);
+      const hostName = host?.name || "Unknown";
+      
+      const hostNameShort = document.getElementById("host-name-short");
+      const hostNameFull = document.getElementById("host-name-full");
+      const hostNameEllipsis = document.getElementById("host-name-ellipsis");
+      
+      if (hostNameShort) {
+        hostNameShort.textContent = hostName.slice(0, 10);
+      }
+      
+      if (hostNameFull) {
+        hostNameFull.textContent = hostName;
+      }
+      
+      if (hostNameEllipsis) {
+        hostNameEllipsis.style.display = hostName.length > 10 ? "inline" : "none";
+      }
+    } catch (error) {
+      console.error("Error updating header info:", error);
+    }
+  };
+
   // Update local state when localGameState changes and detect transitions
   useEffect(() => {
     // Detect round transitions
@@ -190,6 +224,9 @@ export default function Scoreboard({
                   if (onGameStateUpdate) {
                     onGameStateUpdate(updatedGameState);
                   }
+                  
+                  // Update header information
+                  updateHeaderInfo(updatedGameState);
                 }
               }
             } else if (message.type === "room-update") {
@@ -200,6 +237,9 @@ export default function Scoreboard({
                 if (onGameStateUpdate) {
                   onGameStateUpdate(updatedGameState);
                 }
+                
+                // Update header information
+                updateHeaderInfo(updatedGameState);
               }
             }
           } catch (error) {

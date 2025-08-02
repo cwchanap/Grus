@@ -1,8 +1,34 @@
 // Database service factory - now uses SQLite for both development and production
-import { getDatabaseService as getService } from "./db/index.ts";
+import { getDatabaseService as getService, DatabaseService, type DatabaseResult } from "./db/index.ts";
+import type { Player, Room, Score } from "../types/game.ts";
+
+// Database service interface
+export interface IDatabaseService {
+  createRoom(name: string, hostId: string, maxPlayers?: number): DatabaseResult<string>;
+  getRoomById(id: string): DatabaseResult<Room | null>;
+  getActiveRooms(limit?: number): DatabaseResult<Room[]>;
+  updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean>;
+  deleteRoom(id: string): DatabaseResult<boolean>;
+  
+  createPlayer(name: string, roomId: string, isHost?: boolean): DatabaseResult<string>;
+  getPlayerById(id: string): DatabaseResult<Player | null>;
+  getPlayersByRoom(roomId: string): DatabaseResult<Player[]>;
+  updatePlayer(id: string, updates: Partial<{ name: string; isHost: boolean }>): DatabaseResult<boolean>;
+  removePlayer(id: string): DatabaseResult<boolean>;
+  
+  createGameSession(roomId: string, totalRounds?: number): DatabaseResult<string>;
+  endGameSession(id: string, winnerId?: string): DatabaseResult<boolean>;
+  
+  createScore(sessionId: string, playerId: string, points?: number): DatabaseResult<string>;
+  updateScore(id: string, points: number, correctGuesses: number): DatabaseResult<boolean>;
+  getScoresBySession(sessionId: string): DatabaseResult<Score[]>;
+  
+  healthCheck(): DatabaseResult<boolean>;
+  close(): void;
+}
 
 // Re-export the database service
-export function getDatabaseService() {
+export function getDatabaseService(): IDatabaseService {
   return getService();
 }
 

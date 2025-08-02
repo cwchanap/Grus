@@ -197,8 +197,13 @@ export class RoomManager {
         const newHost = players.find((p: any) => p.id !== playerId);
         if (newHost) {
           newHostId = newHost.id;
-          // Note: We need to add updatePlayer method to DatabaseService
-          // For now, we'll skip this functionality
+          // Transfer host privileges to the next player
+          const updateResult = await this.db.updatePlayer(newHostId, { isHost: true });
+          if (!updateResult.success) {
+            console.error(`Failed to transfer host to ${newHostId}:`, updateResult.error);
+          } else {
+            console.log(`Host transferred from ${playerId} to ${newHostId} in room ${roomId}`);
+          }
         }
       }
 
@@ -275,10 +280,11 @@ export class RoomManager {
     }
   }
 
-  updatePlayerActivity(_roomId: string, _playerId: string): boolean {
+  async updatePlayerActivity(roomId: string, playerId: string): Promise<boolean> {
     try {
-      // Note: updatePlayer method needs to be added to DatabaseService
-      // For now, we'll just return true
+      // For now, we don't have a last_activity field in the database
+      // This could be added later if needed for activity tracking
+      console.log(`Player activity updated: ${playerId} in room ${roomId}`);
       return true;
     } catch (error) {
       console.error("Error updating player activity:", error);
@@ -286,10 +292,11 @@ export class RoomManager {
     }
   }
 
-  setPlayerDisconnected(_roomId: string, _playerId: string): boolean {
+  async setPlayerDisconnected(roomId: string, playerId: string): Promise<boolean> {
     try {
-      // Note: updatePlayer method needs to be added to DatabaseService
-      // For now, we'll just return true
+      // For now, we don't have a connection status field in the database
+      // This could be added later if needed for connection tracking
+      console.log(`Player disconnected: ${playerId} in room ${roomId}`);
       return true;
     } catch (error) {
       console.error("Error setting player disconnected:", error);

@@ -181,6 +181,34 @@ export class DatabaseService {
     }, `Failed to get players for room: ${roomId}`);
   }
 
+  updatePlayer(id: string, updates: Partial<{ name: string; isHost: boolean }>): DatabaseResult<boolean> {
+    return this.executeQuery(() => {
+      const fields: string[] = [];
+      const values: any[] = [];
+      
+      if (updates.name !== undefined) {
+        fields.push("name = ?");
+        values.push(updates.name);
+      }
+      
+      if (updates.isHost !== undefined) {
+        fields.push("is_host = ?");
+        values.push(updates.isHost);
+      }
+      
+      if (fields.length === 0) {
+        return true; // No updates needed
+      }
+      
+      const stmt = this.db.prepare(
+        `UPDATE players SET ${fields.join(", ")} WHERE id = ?`
+      );
+      stmt.run(...values, id);
+      stmt.finalize();
+      return true;
+    }, `Failed to update player with id: ${id}`);
+  }
+
   removePlayer(id: string): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       const stmt = this.db.prepare("DELETE FROM players WHERE id = ?");

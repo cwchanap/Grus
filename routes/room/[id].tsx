@@ -143,10 +143,10 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
               </h1>
               <p class="text-xs sm:text-sm lg:text-base text-gray-600">
                 <span class="inline xs:hidden">
-                  Host: {(room.host?.name || "Unknown").slice(0, 10)}
-                  {(room.host?.name || "").length > 10 ? "..." : ""}
+                  Host: <span id="host-name-short">{(room.host?.name || "Unknown").slice(0, 10)}</span>
+                  <span id="host-name-ellipsis" style="display: none;">...</span>
                 </span>
-                <span class="hidden xs:inline">Host: {room.host?.name || "Unknown"}</span>
+                <span class="hidden xs:inline">Host: <span id="host-name-full">{room.host?.name || "Unknown"}</span></span>
                 <span class="mx-1">•</span>
                 <span id="player-count-display">
                   {room.playerCount}/{room.room.maxPlayers} players

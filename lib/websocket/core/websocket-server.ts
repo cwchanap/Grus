@@ -101,7 +101,7 @@ export class WebSocketServer {
     }
 
     // Check if we're in Cloudflare Workers environment
-    if (typeof WebSocketPair !== "undefined") {
+    if (typeof (globalThis as any).WebSocketPair !== "undefined") {
       return this.handleCloudflareWebSocket(request);
     } else {
       return this.handleDenoWebSocket(request);
@@ -110,11 +110,11 @@ export class WebSocketServer {
 
   private handleCloudflareWebSocket(_request: Request): Response {
     // Cloudflare Workers environment
-    const webSocketPair = new WebSocketPair();
+    const webSocketPair = new (globalThis as any).WebSocketPair();
     const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
 
     // Accept the WebSocket connection
-    server.accept();
+    (server as any).accept();
 
     // Create connection object (will be updated when player joins)
     const connection: WebSocketConnection = {
