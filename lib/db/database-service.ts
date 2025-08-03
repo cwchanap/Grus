@@ -17,6 +17,9 @@ export class DatabaseService {
   }
 
   private initializeDatabase(): void {
+    // Enable foreign key constraints
+    this.db.exec("PRAGMA foreign_keys = ON;");
+    
     // Read and execute schema
     const schemaSQL = Deno.readTextFileSync("db/schema.sql");
     this.db.exec(schemaSQL);
@@ -106,10 +109,30 @@ export class DatabaseService {
 
   updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean> {
     return this.executeQuery(() => {
-      const fields = Object.keys(updates).map((key) => `${key} = ?`).join(", ");
-      const values = Object.values(updates);
+      // Map camelCase to snake_case for database fields
+      const fieldMapping: Record<string, string> = {
+        hostId: 'host_id',
+        maxPlayers: 'max_players',
+        isActive: 'is_active',
+        createdAt: 'created_at',
+        updatedAt: 'updated_at'
+      };
+      
+      const fields: string[] = [];
+      const values: any[] = [];
+      
+      Object.entries(updates).forEach(([key, value]) => {
+        const dbField = fieldMapping[key] || key;
+        fields.push(`${dbField} = ?`);
+        values.push(value);
+      });
+      
+      if (fields.length === 0) {
+        return true; // No updates needed
+      }
+      
       const stmt = this.db.prepare(
-        `UPDATE rooms SET ${fields}, updated_at = datetime('now') WHERE id = ?`,
+        `UPDATE rooms SET ${fields.join(', ')}, updated_at = datetime('now') WHERE id = ?`,
       );
       stmt.run(...values, id);
       stmt.finalize();

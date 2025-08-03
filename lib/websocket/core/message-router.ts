@@ -23,10 +23,24 @@ export class MessageRouter {
 
   async routeMessage(connection: WebSocketConnection, data: string): Promise<void> {
     try {
-      const message: ClientMessage = JSON.parse(data);
+      // Validate data before parsing
+      if (!data || typeof data !== 'string') {
+        console.error("Invalid message data:", data);
+        return;
+      }
+
+      let message: ClientMessage;
+      try {
+        message = JSON.parse(data);
+      } catch (parseError) {
+        console.error("JSON parse error:", parseError, "Data:", data);
+        this.connectionPool.sendError(connection.playerId, "Invalid JSON format");
+        return;
+      }
 
       // Validate message structure
       if (!this.validator.validateClientMessage(message)) {
+        console.error("Message validation failed:", message);
         this.connectionPool.sendError(connection.playerId, "Invalid message format");
         return;
       }

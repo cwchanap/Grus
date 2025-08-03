@@ -100,6 +100,7 @@ export interface ServerMessage {
     | "draw-update"
     | "game-state"
     | "score-update"
+    | "host-changed"
     | "error"
     | "pong";
   roomId: string;

@@ -230,16 +230,36 @@ export default function Scoreboard({
                 }
               }
             } else if (message.type === "room-update") {
-              // Room updates might contain player list changes
-              if (message.data && message.data.gameState) {
-                const updatedGameState = message.data.gameState;
-                setLocalGameState(updatedGameState);
-                if (onGameStateUpdate) {
-                  onGameStateUpdate(updatedGameState);
+              // Handle different types of room updates
+              if (message.data) {
+                const updateData = message.data;
+                
+                // Handle host migration specifically
+                if (updateData.type === "host-changed" || updateData.type === "player-left") {
+                  console.log("Host migration detected:", updateData);
+                  
+                  // If this is a host change, we need to refresh the game state
+                  // to get the updated player list with new host information
+                  if (updateData.type === "host-changed" || (updateData.type === "player-left" && updateData.wasHost)) {
+                    // Force a page refresh to get the latest state
+                    // This is a temporary solution until we implement proper real-time state sync
+                    setTimeout(() => {
+                      window.location.reload();
+                    }, 1000);
+                  }
                 }
                 
-                // Update header information
-                updateHeaderInfo(updatedGameState);
+                // Room updates might contain player list changes
+                if (updateData.gameState) {
+                  const updatedGameState = updateData.gameState;
+                  setLocalGameState(updatedGameState);
+                  if (onGameStateUpdate) {
+                    onGameStateUpdate(updatedGameState);
+                  }
+                  
+                  // Update header information
+                  updateHeaderInfo(updatedGameState);
+                }
               }
             }
           } catch (error) {

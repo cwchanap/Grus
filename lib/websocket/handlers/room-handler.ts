@@ -5,6 +5,7 @@ import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { PlayerService } from "../services/player-service.ts";
 import { GameStateService } from "../services/game-state-service.ts";
+import { RoomManager } from "../../room-manager.ts";
 
 export class RoomHandler implements MessageHandler {
   private connectionPool: ConnectionPool;
@@ -67,6 +68,10 @@ export class RoomHandler implements MessageHandler {
 
     // Add connection to room
     this.connectionPool.addConnection(playerId, roomId, connection.ws);
+    
+    // Update the connection object with player and room info
+    connection.playerId = playerId;
+    connection.roomId = roomId;
 
     // Update player state in KV
     try {
@@ -83,7 +88,7 @@ export class RoomHandler implements MessageHandler {
 
     // Broadcast room update to all players in room
     try {
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "room-update",
         roomId,
         data: {
@@ -152,14 +157,14 @@ export class RoomHandler implements MessageHandler {
       await this.gameStateService.updateGameState(roomId, gameState);
 
       // Broadcast updated game state to ALL players in the room
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: gameState,
       });
 
       // Also broadcast a room update to ensure UI updates
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "room-update",
         roomId,
         data: {
@@ -174,30 +179,139 @@ export class RoomHandler implements MessageHandler {
     }
   }
 
-  private async handleLeaveRoom(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleLeaveRoom(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
     const { roomId, playerId } = message;
     await this.removePlayerFromRoom(playerId, roomId);
+    
+    // Clear the connection info since the player left
+    connection.playerId = "";
+    connection.roomId = "";
   }
 
-  private async removePlayerFromRoom(playerId: string, roomId: string): Promise<void> {
-    // Remove from connection pool
-    this.connectionPool.removeConnection(playerId);
+  async removePlayerFromRoom(playerId: string, roomId: string): Promise<void> {
+    try {
+      // Get player info before removal for broadcasting
+      const playerState = await this.gameStateService.getPlayerState(playerId);
+      const playerName = playerState?.name || "Unknown Player";
 
-    // Update player state
-    const playerState = await this.gameStateService.getPlayerState(playerId);
-    if (playerState) {
-      playerState.isConnected = false;
-      await this.gameStateService.updatePlayerState(playerId, playerState);
-    }
+      // Use room manager to handle the leave logic (including host migration)
+      const roomManager = new RoomManager();
+      const leaveResult = await roomManager.leaveRoom(roomId, playerId);
 
-    // Broadcast player left to room
-    await this.connectionPool.broadcastToRoom(roomId, {
-      type: "room-update",
-      roomId,
-      data: {
+      if (!leaveResult.success) {
+        console.error(`Failed to remove player ${playerId} from room ${roomId}:`, leaveResult.error);
+        return;
+      }
+
+      // Remove from connection pool
+      this.connectionPool.removeConnection(playerId);
+
+      // Update player state to disconnected
+      if (playerState) {
+        playerState.isConnected = false;
+        await this.gameStateService.updatePlayerState(playerId, playerState);
+      }
+
+      // Safely extract data from leave result
+      const leaveData = leaveResult.data;
+      if (!leaveData) {
+        console.error(`No data returned from leaveRoom for player ${playerId} in room ${roomId}`);
+        return;
+      }
+
+      const { wasHost, newHostId, newHostName, roomDeleted, remainingPlayers } = leaveData;
+
+      // If room was deleted, no need to broadcast
+      if (roomDeleted) {
+        console.log(`Room ${roomId} was deleted after player ${playerId} left`);
+        return;
+      }
+
+      // Update game state with remaining players
+      let gameState = await this.gameStateService.getGameState(roomId);
+      if (gameState && remainingPlayers && Array.isArray(remainingPlayers)) {
+        // Update players list in game state
+        gameState.players = remainingPlayers.map((p) => ({
+          id: p.id,
+          name: p.name,
+          isHost: p.isHost,
+          isConnected: true,
+          lastActivity: Date.now(),
+        }));
+
+        // Remove the leaving player from scores
+        if (gameState.scores[playerId] !== undefined) {
+          delete gameState.scores[playerId];
+        }
+
+        // If the leaving player was the current drawer, reset the game state
+        if (gameState.currentDrawer === playerId) {
+          gameState.currentDrawer = "";
+          gameState.currentWord = "";
+          gameState.phase = "waiting";
+          gameState.drawingData = [];
+          gameState.correctGuesses = [];
+        }
+
+        // Save updated game state
+        await this.gameStateService.updateGameState(roomId, gameState);
+
+        // Broadcast updated game state to all remaining players
+        this.connectionPool.broadcastToRoom(roomId, {
+          type: "game-state",
+          roomId,
+          data: gameState,
+        });
+      }
+
+      // Prepare the room update message
+      const roomUpdateData: any = {
         type: "player-left",
         playerId,
-      },
-    });
+        playerName,
+        wasHost,
+      };
+
+      // Add host migration info if applicable
+      if (wasHost && newHostId && newHostName) {
+        roomUpdateData.hostMigration = {
+          newHostId,
+          newHostName,
+        };
+      }
+
+      // Broadcast player left update to all remaining players
+      console.log(`Broadcasting player-left message to room ${roomId}:`, roomUpdateData);
+      this.connectionPool.broadcastToRoom(roomId, {
+        type: "room-update",
+        roomId,
+        data: roomUpdateData,
+      });
+
+      // If there was a host migration, send a specific host-changed message
+      if (wasHost && newHostId && newHostName) {
+        const hostChangedData = {
+          type: "host-changed",
+          oldHostId: playerId,
+          oldHostName: playerName,
+          newHostId,
+          newHostName,
+        };
+        
+        console.log(`Broadcasting host-changed message to room ${roomId}:`, hostChangedData);
+        this.connectionPool.broadcastToRoom(roomId, {
+          type: "room-update",
+          roomId,
+          data: hostChangedData,
+        });
+
+        console.log(`Host migration completed: ${playerName} (${playerId}) -> ${newHostName} (${newHostId}) in room ${roomId}`);
+      }
+
+      console.log(`Player ${playerName} (${playerId}) left room ${roomId}. Remaining players: ${remainingPlayers?.length || 0}`);
+
+    } catch (error) {
+      console.error(`Error removing player ${playerId} from room ${roomId}:`, error);
+    }
   }
 }

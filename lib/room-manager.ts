@@ -56,8 +56,8 @@ export class RoomManager {
       // Generate room ID
       const roomId = this.generateRoomId();
 
-      // Create room
-      const roomResult = await this.db.createRoom(roomId, "temp-host-id", maxPlayers);
+      // First create a temporary room without foreign key constraint
+      const roomResult = await this.db.createRoom(roomId, "temp-host", maxPlayers);
 
       if (!roomResult.success || !roomResult.data) {
         return { success: false, error: roomResult.error || "Failed to create room" };
@@ -71,10 +71,21 @@ export class RoomManager {
       );
 
       if (!playerResult.success || !playerResult.data) {
+        // Clean up the room if player creation fails
+        await this.db.deleteRoom(roomId);
         return { success: false, error: "Failed to create host player" };
       }
 
       const hostPlayerId = playerResult.data;
+
+      // Update the room with the actual host ID
+      const updateResult = await this.db.updateRoom(roomId, { hostId: hostPlayerId });
+      if (!updateResult.success) {
+        // Clean up if update fails
+        await this.db.removePlayer(hostPlayerId);
+        await this.db.deleteRoom(roomId);
+        return { success: false, error: "Failed to update room with host" };
+      }
 
       // Get the created room with players
       const roomSummary = await this.getRoomSummary(roomId);
@@ -172,7 +183,13 @@ export class RoomManager {
   ): Promise<
     {
       success: boolean;
-      data?: { wasHost: boolean; newHostId?: string; roomDeleted?: boolean };
+      data?: { 
+        wasHost: boolean; 
+        newHostId?: string; 
+        newHostName?: string;
+        roomDeleted?: boolean;
+        remainingPlayers?: Player[];
+      };
       error?: string;
     }
   > {
@@ -190,25 +207,35 @@ export class RoomManager {
 
       const wasHost = player.isHost;
       let newHostId: string | undefined;
+      let newHostName: string | undefined;
       let roomDeleted = false;
 
       // If host is leaving and there are other players, transfer host
       if (wasHost && players.length > 1) {
-        const newHost = players.find((p: any) => p.id !== playerId);
+        // Find the next player to become host (first player that joined after the current host)
+        const remainingPlayers = players.filter((p: any) => p.id !== playerId);
+        const newHost = remainingPlayers[0]; // Take the first remaining player
+        
         if (newHost) {
           newHostId = newHost.id;
-          // Transfer host privileges to the next player
+          newHostName = newHost.name;
+          
+          // Transfer host privileges to the new host
           const updateResult = await this.db.updatePlayer(newHostId, { isHost: true });
           if (!updateResult.success) {
             console.error(`Failed to transfer host to ${newHostId}:`, updateResult.error);
+            return { success: false, error: "Failed to transfer host privileges" };
           } else {
-            console.log(`Host transferred from ${playerId} to ${newHostId} in room ${roomId}`);
+            console.log(`Host transferred from ${playerId} (${player.name}) to ${newHostId} (${newHostName}) in room ${roomId}`);
           }
         }
       }
 
       // Remove player from room
-      await this.db.removePlayer(playerId);
+      const removeResult = await this.db.removePlayer(playerId);
+      if (!removeResult.success) {
+        return { success: false, error: "Failed to remove player from room" };
+      }
 
       // If no players left, delete the room entirely
       if (players.length === 1) { // Only the leaving player
@@ -223,12 +250,23 @@ export class RoomManager {
         }
       }
 
+      // Get remaining players for the response
+      let remainingPlayers: Player[] = [];
+      if (!roomDeleted) {
+        const updatedRoomSummary = await this.getRoomSummary(roomId);
+        if (updatedRoomSummary.success && updatedRoomSummary.data) {
+          remainingPlayers = updatedRoomSummary.data.players;
+        }
+      }
+
       return {
         success: true,
         data: {
           wasHost,
           newHostId,
+          newHostName,
           roomDeleted,
+          remainingPlayers,
         },
       };
     } catch (error) {

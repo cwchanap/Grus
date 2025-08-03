@@ -62,6 +62,7 @@ export class ConnectionPool {
     message: ServerMessage,
     excludePlayerId?: string,
   ): void {
+    console.log(`Broadcasting message to room ${roomId}:`, message);
     const roomConnections = this.roomConnections.get(roomId);
     if (!roomConnections) return;
 

@@ -186,35 +186,55 @@ export class WebSocketServer {
   }
 
   private async handleMessage(connection: WebSocketConnection, data: string): Promise<void> {
-    // Update connection activity
-    connection.lastActivity = Date.now();
+    try {
+      // Update connection activity
+      connection.lastActivity = Date.now();
 
-    // Route message through the message router
-    await this.messageRouter.routeMessage(connection, data);
+      // Validate that data is a string and not empty
+      if (typeof data !== 'string' || data.length === 0) {
+        console.error("Invalid message data received:", typeof data, data);
+        return;
+      }
+
+      // Route message through the message router
+      await this.messageRouter.routeMessage(connection, data);
+    } catch (error) {
+      console.error("Error handling WebSocket message:", error);
+    }
   }
 
   private async handleDisconnection(connection: WebSocketConnection): Promise<void> {
+    console.log(`WebSocket disconnection - playerId: ${connection.playerId}, roomId: ${connection.roomId}`);
+    
     if (connection.playerId && connection.roomId) {
-      // Remove from connection pool (this will handle cleanup)
-      const roomId = this.connectionPool.removeConnection(connection.playerId);
-      
-      if (roomId) {
-        // Update player state
-        const playerState = await this.gameStateService.getPlayerState(connection.playerId);
-        if (playerState) {
-          playerState.isConnected = false;
-          await this.gameStateService.updatePlayerState(connection.playerId, playerState);
-        }
+      console.log(`Processing disconnection for player ${connection.playerId} in room ${connection.roomId}`);
+      // Use the room handler's removePlayerFromRoom method for consistent behavior
+      try {
+        await this.roomHandler.removePlayerFromRoom(connection.playerId, connection.roomId);
+      } catch (error) {
+        console.error(`Error handling disconnection for player ${connection.playerId}:`, error);
+        
+        // Fallback: just remove from connection pool
+        const roomId = this.connectionPool.removeConnection(connection.playerId);
+        
+        if (roomId) {
+          // Update player state
+          const playerState = await this.gameStateService.getPlayerState(connection.playerId);
+          if (playerState) {
+            playerState.isConnected = false;
+            await this.gameStateService.updatePlayerState(connection.playerId, playerState);
+          }
 
-        // Broadcast player left to room
-        await this.connectionPool.broadcastToRoom(roomId, {
-          type: "room-update",
-          roomId,
-          data: {
-            type: "player-left",
-            playerId: connection.playerId,
-          },
-        });
+          // Broadcast basic player left message
+          this.connectionPool.broadcastToRoom(roomId, {
+            type: "room-update",
+            roomId,
+            data: {
+              type: "player-left",
+              playerId: connection.playerId,
+            },
+          });
+        }
       }
     }
   }
