@@ -7,6 +7,7 @@ import ChatRoom from "../../islands/ChatRoom.tsx";
 import DrawingBoard from "../../islands/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
+import RoomHeader from "../../islands/RoomHeader.tsx";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -134,45 +135,12 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
         )}
 
-        {/* Header - Mobile responsive */}
-        <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
-          <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 xs:gap-3">
-            <div class="min-w-0 flex-1">
-              <h1 class="text-lg xs:text-xl sm:text-2xl font-bold text-gray-800 truncate">
-                {room.room.name}
-              </h1>
-              <p class="text-xs sm:text-sm lg:text-base text-gray-600">
-                <span class="inline xs:hidden">
-                  Host: <span id="host-name-short">{(room.host?.name || "Unknown").slice(0, 10)}</span>
-                  <span id="host-name-ellipsis" style="display: none;">...</span>
-                </span>
-                <span class="hidden xs:inline">Host: <span id="host-name-full">{room.host?.name || "Unknown"}</span></span>
-                <span class="mx-1">•</span>
-                <span id="player-count-display">
-                  {room.playerCount}/{room.room.maxPlayers} players
-                </span>
-              </p>
-            </div>
-            <div class="flex gap-2">
-              <LeaveRoomButton
-                roomId={room.room.id}
-                playerId={playerId || ""}
-                className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
-              />
-              {/* Fallback link in case the interactive button fails */}
-              {(!playerId || playerId.trim() === "") && (
-                <a
-                  href="/"
-                  class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 active:bg-blue-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
-                  title="Simple link back to lobby"
-                >
-                  <span class="xs:hidden">← Home</span>
-                  <span class="hidden xs:inline">← Back to Lobby</span>
-                </a>
-              )}
-            </div>
-          </div>
-        </div>
+        {/* Header - Mobile responsive with real-time updates */}
+        <RoomHeader
+          room={room}
+          playerId={playerId || ""}
+          gameState={gameState}
+        />
 
         {/* Game area - Drawing board and scoreboard on same row, chat below */}
         <div class="game-container flex flex-col gap-3 sm:gap-4 lg:gap-6 flex-1 min-h-0">

@@ -235,18 +235,51 @@ export default function Scoreboard({
                 const updateData = message.data;
                 
                 // Handle host migration specifically
-                if (updateData.type === "host-changed" || updateData.type === "player-left") {
-                  console.log("Host migration detected:", updateData);
+                if (updateData.type === "host-changed") {
+                  console.log("Scoreboard: Host changed detected:", updateData);
                   
-                  // If this is a host change, we need to refresh the game state
-                  // to get the updated player list with new host information
-                  if (updateData.type === "host-changed" || (updateData.type === "player-left" && updateData.wasHost)) {
-                    // Force a page refresh to get the latest state
-                    // This is a temporary solution until we implement proper real-time state sync
-                    setTimeout(() => {
-                      window.location.reload();
-                    }, 1000);
-                  }
+                  // Update local game state to reflect host change
+                  setLocalGameState(prevState => {
+                    const updatedState = {
+                      ...prevState,
+                      players: prevState.players.map(player => ({
+                        ...player,
+                        isHost: player.id === updateData.newHostId
+                      }))
+                    };
+
+                    // Notify parent component of the state change
+                    if (onGameStateUpdate) {
+                      onGameStateUpdate(updatedState);
+                    }
+
+                    return updatedState;
+                  });
+                } else if (updateData.type === "player-left") {
+                  console.log("Scoreboard: Player left detected:", updateData);
+                  
+                  // Update local game state to remove the player
+                  setLocalGameState(prevState => {
+                    const updatedState = {
+                      ...prevState,
+                      players: prevState.players.filter(player => player.id !== updateData.playerId)
+                    };
+
+                    // If this was a host leaving with migration, update host status
+                    if (updateData.wasHost && updateData.hostMigration) {
+                      updatedState.players = updatedState.players.map(player => ({
+                        ...player,
+                        isHost: player.id === updateData.hostMigration.newHostId
+                      }));
+                    }
+
+                    // Notify parent component of the state change
+                    if (onGameStateUpdate) {
+                      onGameStateUpdate(updatedState);
+                    }
+
+                    return updatedState;
+                  });
                 }
                 
                 // Room updates might contain player list changes
@@ -407,6 +440,11 @@ export default function Scoreboard({
 
   // Check if current player is host
   const isHost = localGameState.players.find((p) => p.id === playerId)?.isHost || false;
+  
+  // Debug logging for host status
+  useEffect(() => {
+    console.log(`Scoreboard: Player ${playerId} host status: ${isHost}`);
+  }, [isHost, playerId]);
 
   // Send WebSocket message
   const sendGameControlMessage = (
