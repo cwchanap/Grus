@@ -42,9 +42,36 @@ export class RoomHandler implements MessageHandler {
     const { roomId, playerId, data } = message;
     const { playerName } = data;
 
+    console.log(`Processing join room request: playerId=${playerId}, roomId=${roomId}, playerName=${playerName}`);
+
     // Check if player is already in this room to prevent duplicate processing
-    if (this.connectionPool.getPlayerRoom(playerId) === roomId && this.connectionPool.getConnection(playerId)) {
+    const existingRoom = this.connectionPool.getPlayerRoom(playerId);
+    const existingConnection = this.connectionPool.getConnection(playerId);
+    
+    if (existingRoom === roomId && existingConnection) {
+      console.log(`Player ${playerId} already connected to room ${roomId}, skipping join`);
+      
+      // Still send the current game state to ensure the client is up to date
+      try {
+        const gameState = await this.gameStateService.getGameState(roomId);
+        if (gameState) {
+          this.connectionPool.sendMessage(playerId, {
+            type: "game-state",
+            roomId,
+            data: gameState,
+          });
+        }
+      } catch (error) {
+        console.error("Error sending game state to existing connection:", error);
+      }
+      
       return;
+    }
+    
+    // If player is in a different room, remove them first
+    if (existingRoom && existingRoom !== roomId) {
+      console.log(`Player ${playerId} switching from room ${existingRoom} to ${roomId}`);
+      await this.removePlayerFromRoom(playerId, existingRoom);
     }
 
     // Validate player name
@@ -66,12 +93,12 @@ export class RoomHandler implements MessageHandler {
       return;
     }
 
-    // Add connection to room
-    this.connectionPool.addConnection(playerId, roomId, connection.ws);
-    
-    // Update the connection object with player and room info
+    // Update the connection object with player and room info FIRST
     connection.playerId = playerId;
     connection.roomId = roomId;
+    
+    // Add connection to room
+    this.connectionPool.addConnection(playerId, roomId, connection.ws);
 
     // Update player state in KV
     try {
@@ -194,22 +221,49 @@ export class RoomHandler implements MessageHandler {
       const playerState = await this.gameStateService.getPlayerState(playerId);
       const playerName = playerState?.name || "Unknown Player";
 
+      // Always remove from connection pool first to prevent further messages
+      this.connectionPool.removeConnection(playerId);
+
       // Use room manager to handle the leave logic (including host migration)
       const roomManager = new RoomManager();
       const leaveResult = await roomManager.leaveRoom(roomId, playerId);
 
       if (!leaveResult.success) {
         console.error(`Failed to remove player ${playerId} from room ${roomId}:`, leaveResult.error);
+        
+        // Update player state to disconnected even if database removal failed
+        if (playerState) {
+          try {
+            playerState.isConnected = false;
+            await this.gameStateService.updatePlayerState(playerId, playerState);
+          } catch (stateError) {
+            console.error(`Failed to update player state for ${playerId}:`, stateError);
+          }
+        }
+        
+        // Broadcast a basic player left message even if database operation failed
+        this.connectionPool.broadcastToRoom(roomId, {
+          type: "room-update",
+          roomId,
+          data: {
+            type: "player-left",
+            playerId,
+            playerName,
+            wasHost: false,
+          },
+        });
+        
         return;
       }
 
-      // Remove from connection pool
-      this.connectionPool.removeConnection(playerId);
-
       // Update player state to disconnected
       if (playerState) {
-        playerState.isConnected = false;
-        await this.gameStateService.updatePlayerState(playerId, playerState);
+        try {
+          playerState.isConnected = false;
+          await this.gameStateService.updatePlayerState(playerId, playerState);
+        } catch (stateError) {
+          console.error(`Failed to update player state for ${playerId}:`, stateError);
+        }
       }
 
       // Safely extract data from leave result

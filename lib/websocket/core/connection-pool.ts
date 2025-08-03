@@ -8,6 +8,8 @@ export class ConnectionPool {
   private roomConnections: Map<string, Set<string>> = new Map();
 
   addConnection(playerId: string, roomId: string, ws: WebSocket): void {
+    console.log(`Adding connection: playerId=${playerId}, roomId=${roomId}`);
+    
     const connection: WebSocketConnection = {
       ws,
       playerId,
@@ -22,11 +24,18 @@ export class ConnectionPool {
       this.roomConnections.set(roomId, new Set());
     }
     this.roomConnections.get(roomId)!.add(playerId);
+    
+    console.log(`Connection added. Total connections: ${this.connections.size}, Room ${roomId} connections: ${this.roomConnections.get(roomId)?.size || 0}`);
   }
 
   removeConnection(playerId: string): string | null {
+    console.log(`Removing connection: playerId=${playerId}`);
+    
     const connection = this.connections.get(playerId);
-    if (!connection) return null;
+    if (!connection) {
+      console.log(`No connection found for playerId=${playerId}`);
+      return null;
+    }
 
     const roomId = connection.roomId;
 
@@ -38,9 +47,11 @@ export class ConnectionPool {
       roomConnections.delete(playerId);
       if (roomConnections.size === 0) {
         this.roomConnections.delete(roomId);
+        console.log(`Room ${roomId} has no more connections, removing from room connections`);
       }
     }
 
+    console.log(`Connection removed. Total connections: ${this.connections.size}, Room ${roomId} connections: ${this.roomConnections.get(roomId)?.size || 0}`);
     return roomId;
   }
 

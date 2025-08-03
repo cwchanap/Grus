@@ -16,7 +16,22 @@ interface GameRoomData {
 }
 
 // Helper function to create initial game state from room data
-function createInitialGameState(room: RoomSummary): GameState {
+function createInitialGameState(room: RoomSummary, playerId?: string | null): GameState {
+  // Ensure the current player is included in the players list
+  let players = room.players.map((player: any) => ({
+    id: player.id,
+    name: player.name,
+    isHost: player.isHost,
+    isConnected: true, // Assume all players in room are connected
+    lastActivity: Date.now(),
+  }));
+
+  // If playerId is provided but not found in players, this might be a timing issue
+  // Log a warning but don't add a placeholder player
+  if (playerId && !players.find(p => p.id === playerId)) {
+    console.warn(`Player ${playerId} not found in room players list. This might be a timing issue.`);
+  }
+
   return {
     roomId: room.room.id,
     currentDrawer: "", // No drawer initially
@@ -24,14 +39,8 @@ function createInitialGameState(room: RoomSummary): GameState {
     roundNumber: 0, // Game hasn't started
     timeRemaining: 120000, // 2 minutes default
     phase: "waiting", // Waiting for game to start
-    players: room.players.map((player: any) => ({
-      id: player.id,
-      name: player.name,
-      isHost: player.isHost,
-      isConnected: true, // Assume all players in room are connected
-      lastActivity: Date.now(),
-    })),
-    scores: room.players.reduce((acc: any, player: any) => {
+    players,
+    scores: players.reduce((acc: any, player: any) => {
       acc[player.id] = 0; // Initialize all scores to 0
       return acc;
     }, {} as Record<string, number>),
@@ -115,7 +124,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   }
 
   const { room, playerId } = data;
-  const gameState = createInitialGameState(room);
+  const gameState = createInitialGameState(room, playerId);
 
   return (
     <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">

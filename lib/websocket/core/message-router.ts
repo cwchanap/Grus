@@ -24,8 +24,8 @@ export class MessageRouter {
   async routeMessage(connection: WebSocketConnection, data: string): Promise<void> {
     try {
       // Validate data before parsing
-      if (!data || typeof data !== 'string') {
-        console.error("Invalid message data:", data);
+      if (!data || typeof data !== 'string' || data.length === 0) {
+        console.error("Invalid message data:", typeof data, data);
         return;
       }
 
@@ -34,34 +34,51 @@ export class MessageRouter {
         message = JSON.parse(data);
       } catch (parseError) {
         console.error("JSON parse error:", parseError, "Data:", data);
-        this.connectionPool.sendError(connection.playerId, "Invalid JSON format");
+        if (connection.playerId) {
+          this.connectionPool.sendError(connection.playerId, "Invalid JSON format");
+        }
         return;
       }
 
       // Validate message structure
       if (!this.validator.validateClientMessage(message)) {
-        console.error("Message validation failed:", message);
-        this.connectionPool.sendError(connection.playerId, "Invalid message format");
+        console.error("Message validation failed:", {
+          message,
+          hasType: 'type' in message,
+          hasRoomId: 'roomId' in message,
+          hasPlayerId: 'playerId' in message,
+          hasData: 'data' in message,
+          typeOfMessage: typeof message
+        });
+        if (connection.playerId) {
+          this.connectionPool.sendError(connection.playerId, "Invalid message format");
+        }
         return;
       }
 
       // Check rate limits
       if (!this.rateLimiter.checkRateLimit(message.playerId, message.type)) {
-        this.connectionPool.sendError(connection.playerId, "Rate limit exceeded");
+        if (connection.playerId) {
+          this.connectionPool.sendError(connection.playerId, "Rate limit exceeded");
+        }
         return;
       }
 
       // Route to appropriate handler
       const handler = this.handlers.get(message.type);
       if (!handler) {
-        this.connectionPool.sendError(connection.playerId, "Unknown message type");
+        if (connection.playerId) {
+          this.connectionPool.sendError(connection.playerId, "Unknown message type");
+        }
         return;
       }
 
       await handler.handle(connection, message);
     } catch (error) {
       console.error("Message routing error:", error instanceof Error ? error.message : error);
-      this.connectionPool.sendError(connection.playerId, "Internal server error");
+      if (connection.playerId) {
+        this.connectionPool.sendError(connection.playerId, "Internal server error");
+      }
     }
   }
 

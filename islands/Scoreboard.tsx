@@ -168,6 +168,7 @@ export default function Scoreboard({
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          console.log(`Scoreboard: WebSocket connected for room ${roomId}`);
           connectionStatus.value = "connected";
 
           // Store WebSocket globally for game control messages
@@ -175,15 +176,33 @@ export default function Scoreboard({
 
           // Get player name from game state
           const currentPlayer = localGameState.players.find((p) => p.id === playerId);
-          const playerName = currentPlayer?.name || "Unknown";
+          let playerName = currentPlayer?.name;
 
-          // Send join-room message
-          ws?.send(JSON.stringify({
-            type: "join-room",
-            roomId,
-            playerId,
-            data: { playerName },
-          }));
+          // If player not found in initial game state, try to get from session storage or URL
+          if (!playerName && playerId) {
+            const urlParams = new URLSearchParams(globalThis.location.search);
+            playerName = urlParams.get('playerName') || 
+                        (globalThis.sessionStorage?.getItem(`playerName_${playerId}`));
+          }
+
+          // Only send join-room message if we have a valid player name and playerId
+          if (playerName && playerName !== 'Unknown' && playerId) {
+            console.log(`Scoreboard: Sending join-room message for player ${playerId} (${playerName}) to room ${roomId}`);
+            ws?.send(JSON.stringify({
+              type: "join-room",
+              roomId,
+              playerId,
+              data: { playerName },
+            }));
+          } else {
+            console.warn(`Scoreboard: Cannot join room ${roomId} - playerId: ${playerId}, playerName: ${playerName}`);
+            console.log('Available players in game state:', localGameState.players.map(p => ({ id: p.id, name: p.name })));
+            
+            // If we have a playerId but no playerName, we might need to wait for the room data to load
+            if (playerId && !playerName) {
+              console.log('Scoreboard: Player ID exists but name not found. This might be a timing issue.');
+            }
+          }
         };
 
         ws.onmessage = (event) => {
@@ -205,6 +224,11 @@ export default function Scoreboard({
                   if (onGameStateUpdate) {
                     onGameStateUpdate(updatedGameState.gameState);
                   }
+                  
+                  // Emit custom event for other components
+                  globalThis.dispatchEvent(new CustomEvent('gameStateUpdate', {
+                    detail: { gameState: updatedGameState.gameState }
+                  }));
                 } else if (updatedGameState.type === "game-start-success") {
                   // Host received confirmation
                   setIsStartingGame(false);
@@ -217,6 +241,11 @@ export default function Scoreboard({
                     if (onGameStateUpdate) {
                       onGameStateUpdate(updatedGameState.gameState);
                     }
+                    
+                    // Emit custom event for other components
+                    globalThis.dispatchEvent(new CustomEvent('gameStateUpdate', {
+                      detail: { gameState: updatedGameState.gameState }
+                    }));
                   }
                 } else if (updatedGameState.players) {
                   // Regular game state update
@@ -227,12 +256,22 @@ export default function Scoreboard({
                   
                   // Update header information
                   updateHeaderInfo(updatedGameState);
+                  
+                  // Emit custom event for other components
+                  globalThis.dispatchEvent(new CustomEvent('gameStateUpdate', {
+                    detail: { gameState: updatedGameState }
+                  }));
                 }
               }
             } else if (message.type === "room-update") {
               // Handle different types of room updates
               if (message.data) {
                 const updateData = message.data;
+                
+                // Emit custom event for other components
+                globalThis.dispatchEvent(new CustomEvent('roomUpdate', {
+                  detail: { updateData: { ...updateData, roomId } }
+                }));
                 
                 // Handle host migration specifically
                 if (updateData.type === "host-changed") {
@@ -292,6 +331,11 @@ export default function Scoreboard({
                   
                   // Update header information
                   updateHeaderInfo(updatedGameState);
+                  
+                  // Emit custom event for other components
+                  globalThis.dispatchEvent(new CustomEvent('gameStateUpdate', {
+                    detail: { gameState: updatedGameState }
+                  }));
                 }
               }
             }

@@ -245,6 +245,12 @@ export class WebSocketManager {
 
   private async handleLobbyMessage(ws: WebSocket, data: string) {
     try {
+      // Validate that data is a string and not empty
+      if (typeof data !== 'string' || data.length === 0) {
+        console.error("Invalid lobby message data received:", typeof data, data);
+        return;
+      }
+
       const message = JSON.parse(data);
 
       if (message.type === "subscribe-lobby") {

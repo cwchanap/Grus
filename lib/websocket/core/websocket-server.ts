@@ -204,7 +204,7 @@ export class WebSocketServer {
   }
 
   private async handleDisconnection(connection: WebSocketConnection): Promise<void> {
-    console.log(`WebSocket disconnection - playerId: ${connection.playerId}, roomId: ${connection.roomId}`);
+    console.log(`WebSocket disconnection - playerId: ${connection.playerId || 'unknown'}, roomId: ${connection.roomId || 'unknown'}`);
     
     if (connection.playerId && connection.roomId) {
       console.log(`Processing disconnection for player ${connection.playerId} in room ${connection.roomId}`);
@@ -219,22 +219,32 @@ export class WebSocketServer {
         
         if (roomId) {
           // Update player state
-          const playerState = await this.gameStateService.getPlayerState(connection.playerId);
-          if (playerState) {
-            playerState.isConnected = false;
-            await this.gameStateService.updatePlayerState(connection.playerId, playerState);
-          }
+          try {
+            const playerState = await this.gameStateService.getPlayerState(connection.playerId);
+            if (playerState) {
+              playerState.isConnected = false;
+              await this.gameStateService.updatePlayerState(connection.playerId, playerState);
+            }
 
-          // Broadcast basic player left message
-          this.connectionPool.broadcastToRoom(roomId, {
-            type: "room-update",
-            roomId,
-            data: {
-              type: "player-left",
-              playerId: connection.playerId,
-            },
-          });
+            // Broadcast basic player left message
+            this.connectionPool.broadcastToRoom(roomId, {
+              type: "room-update",
+              roomId,
+              data: {
+                type: "player-left",
+                playerId: connection.playerId,
+              },
+            });
+          } catch (fallbackError) {
+            console.error(`Fallback disconnection handling failed for player ${connection.playerId}:`, fallbackError);
+          }
         }
+      }
+    } else {
+      // Connection without proper player/room info, just clean up
+      console.log("WebSocket disconnection without proper player/room info, cleaning up connection");
+      if (connection.playerId) {
+        this.connectionPool.removeConnection(connection.playerId);
       }
     }
   }

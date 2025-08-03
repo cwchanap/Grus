@@ -53,6 +53,10 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
       const data = await response.json();
 
       if (response.ok) {
+        // Store player name in session storage for later use
+        if (globalThis.sessionStorage && data.playerId) {
+          globalThis.sessionStorage.setItem(`playerName_${data.playerId}`, playerName.trim());
+        }
         onSuccess(data.roomId, data.playerId);
       } else {
         setError(data.error || "Failed to join room");

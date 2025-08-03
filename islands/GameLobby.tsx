@@ -35,7 +35,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log("WebSocket connected");
+          console.log("Lobby WebSocket connected");
           setWsConnected(true);
 
           // Subscribe to lobby updates
@@ -59,7 +59,7 @@ export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
         };
 
         ws.onclose = () => {
-          console.log("WebSocket disconnected");
+          console.log("Lobby WebSocket disconnected");
           setWsConnected(false);
 
           // Attempt to reconnect after 3 seconds

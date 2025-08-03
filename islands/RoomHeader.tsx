@@ -26,6 +26,18 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
   // Sync with game state changes (in case parent component updates)
   useEffect(() => {
     const hostPlayer = gameState.players?.find(p => p.isHost);
+    const currentPlayerCount = gameState.players?.length || 0;
+    
+    // Always update player count from game state
+    if (currentPlayerCount !== room.playerCount) {
+      console.log(`RoomHeader: Updating player count from ${room.playerCount} to ${currentPlayerCount}`);
+      setRoom(prevRoom => ({
+        ...prevRoom,
+        playerCount: currentPlayerCount
+      }));
+    }
+    
+    // Update host information if changed
     if (hostPlayer && hostPlayer.id !== room.host?.id) {
       console.log(`RoomHeader: Syncing host from game state - ${hostPlayer.name} (${hostPlayer.id})`);
       setRoom(prevRoom => ({
@@ -37,188 +49,164 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
           isConnected: hostPlayer.isConnected || true,
           lastActivity: hostPlayer.lastActivity || Date.now()
         },
-        playerCount: gameState.players?.length || prevRoom.playerCount
+        playerCount: currentPlayerCount
       }));
     }
-  }, [gameState.players, room.host?.id]);
+  }, [gameState.players, room.host?.id, room.playerCount]);
 
   useEffect(() => {
-    // Set up WebSocket connection for real-time updates
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: number | null = null;
+    // Listen for WebSocket updates from the global game WebSocket connection
+    // The Scoreboard component manages the main WebSocket connection
+    const handleGameStateUpdate = (event: CustomEvent) => {
+      const { gameState: updatedGameState } = event.detail;
+      if (updatedGameState && updatedGameState.roomId === room.room.id) {
+        console.log("RoomHeader: Received game state update from global WebSocket");
+        setGameState(updatedGameState);
+        
+        // Update room host information from game state
+        const hostPlayer = updatedGameState.players?.find(p => p.isHost);
+        if (hostPlayer) {
+          setRoom(prevRoom => ({
+            ...prevRoom,
+            host: {
+              id: hostPlayer.id,
+              name: hostPlayer.name,
+              isHost: true,
+              isConnected: hostPlayer.isConnected,
+              lastActivity: hostPlayer.lastActivity
+            },
+            playerCount: updatedGameState.players?.length || prevRoom.playerCount
+          }));
+        }
+      }
+    };
 
-    const connectWebSocket = () => {
-      try {
-        const protocol = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${protocol}//${globalThis.location.host}/api/websocket`;
-
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-          console.log("RoomHeader WebSocket connected");
-
-          // Join the room to receive updates
-          ws?.send(JSON.stringify({
-            type: "join-room",
-            roomId: room.room.id,
-            playerId: playerId,
-            data: {
-              playerName: room.players.find(p => p.id === playerId)?.name || "Unknown"
+    const handleRoomUpdate = (event: CustomEvent) => {
+      const { updateData } = event.detail;
+      if (updateData && updateData.roomId === room.room.id) {
+        console.log("RoomHeader: Received room update from global WebSocket", updateData);
+        
+        // Handle host migration
+        if (updateData.type === "host-changed") {
+          setRoom(prevRoom => ({
+            ...prevRoom,
+            host: {
+              id: updateData.newHostId,
+              name: updateData.newHostName,
+              isHost: true,
+              isConnected: true,
+              lastActivity: Date.now()
             }
           }));
-        };
 
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
+          setGameState(prevState => ({
+            ...prevState,
+            players: prevState.players.map(player => ({
+              ...player,
+              isHost: player.id === updateData.newHostId
+            }))
+          }));
+        } else if (updateData.type === "player-left") {
+          console.log("RoomHeader: Player left, updating player count");
+          
+          // Handle host migration if the leaving player was host
+          if (updateData.wasHost && updateData.hostMigration) {
+            setRoom(prevRoom => ({
+              ...prevRoom,
+              host: {
+                id: updateData.hostMigration.newHostId,
+                name: updateData.hostMigration.newHostName,
+                isHost: true,
+                isConnected: true,
+                lastActivity: Date.now()
+              },
+              playerCount: Math.max(0, prevRoom.playerCount - 1)
+            }));
 
-            if (message.type === "game-state" && message.data) {
-              // Update game state when received
-              console.log("RoomHeader: Received game-state update", message.data);
-              setGameState(message.data);
-              
-              // Also update room host information from game state
-              const hostPlayer = message.data.players?.find(p => p.isHost);
-              if (hostPlayer) {
-                setRoom(prevRoom => ({
-                  ...prevRoom,
-                  host: {
-                    id: hostPlayer.id,
-                    name: hostPlayer.name,
-                    isHost: true,
-                    isConnected: hostPlayer.isConnected,
-                    lastActivity: hostPlayer.lastActivity
-                  },
-                  playerCount: message.data.players?.length || prevRoom.playerCount
-                }));
-              }
-            } else if (message.type === "room-update" && message.data) {
-              const updateData = message.data;
+            setGameState(prevState => ({
+              ...prevState,
+              players: prevState.players
+                .filter(player => player.id !== updateData.playerId)
+                .map(player => ({
+                  ...player,
+                  isHost: player.id === updateData.hostMigration.newHostId
+                }))
+            }));
+          } else {
+            // Regular player leaving (not host)
+            setRoom(prevRoom => ({
+              ...prevRoom,
+              playerCount: Math.max(0, prevRoom.playerCount - 1)
+            }));
 
-              // Handle host migration
-              if (updateData.type === "host-changed") {
-                console.log("RoomHeader: Host changed detected", updateData);
-                
-                // Update the room state with new host information
-                setRoom(prevRoom => ({
-                  ...prevRoom,
-                  host: {
-                    id: updateData.newHostId,
-                    name: updateData.newHostName,
-                    isHost: true,
-                    isConnected: true,
-                    lastActivity: Date.now()
-                  }
-                }));
-
-                // Update game state to reflect host change
-                setGameState(prevState => ({
-                  ...prevState,
-                  players: prevState.players.map(player => ({
-                    ...player,
-                    isHost: player.id === updateData.newHostId
-                  }))
-                }));
-              } else if (updateData.type === "player-left" && updateData.wasHost && updateData.hostMigration) {
-                console.log("RoomHeader: Host migration detected", updateData);
-                
-                // Update the room state with new host information
-                setRoom(prevRoom => ({
-                  ...prevRoom,
-                  host: {
-                    id: updateData.hostMigration.newHostId,
-                    name: updateData.hostMigration.newHostName,
-                    isHost: true,
-                    isConnected: true,
-                    lastActivity: Date.now()
-                  },
-                  playerCount: prevRoom.playerCount - 1
-                }));
-
-                // Update game state to reflect host change and player removal
-                setGameState(prevState => ({
-                  ...prevState,
-                  players: prevState.players
-                    .filter(player => player.id !== updateData.playerId)
-                    .map(player => ({
-                      ...player,
-                      isHost: player.id === updateData.hostMigration.newHostId
-                    }))
-                }));
-                
-                console.log(`RoomHeader: Host migrated from ${updateData.playerName} to ${updateData.hostMigration.newHostName}`);
-              } else if (updateData.type === "player-left") {
-                // Handle regular player leaving (not host)
-                setRoom(prevRoom => ({
-                  ...prevRoom,
-                  playerCount: prevRoom.playerCount - 1
-                }));
-
-                setGameState(prevState => ({
-                  ...prevState,
-                  players: prevState.players.filter(player => player.id !== updateData.playerId)
-                }));
-              } else if (updateData.type === "player-joined") {
-                // Handle new player joining
-                setRoom(prevRoom => ({
-                  ...prevRoom,
-                  playerCount: prevRoom.playerCount + 1
-                }));
-              }
-
-              // If the update contains a complete game state, use it
-              if (updateData.gameState) {
-                setGameState(updateData.gameState);
-                
-                // Also update room host information from the complete game state
-                const hostPlayer = updateData.gameState.players?.find(p => p.isHost);
-                if (hostPlayer) {
-                  setRoom(prevRoom => ({
-                    ...prevRoom,
-                    host: {
-                      id: hostPlayer.id,
-                      name: hostPlayer.name,
-                      isHost: true,
-                      isConnected: hostPlayer.isConnected,
-                      lastActivity: hostPlayer.lastActivity
-                    },
-                    playerCount: updateData.gameState.players?.length || prevRoom.playerCount
-                  }));
-                }
-              }
-            }
-          } catch (error) {
-            console.error("RoomHeader: Error parsing WebSocket message:", error);
+            setGameState(prevState => ({
+              ...prevState,
+              players: prevState.players.filter(player => player.id !== updateData.playerId)
+            }));
           }
-        };
+        } else if (updateData.type === "player-joined") {
+          console.log("RoomHeader: Player joined, updating player count");
+          
+          setRoom(prevRoom => ({
+            ...prevRoom,
+            playerCount: prevRoom.playerCount + 1
+          }));
 
-        ws.onclose = () => {
-          console.log("RoomHeader WebSocket disconnected");
-          // Attempt to reconnect after 3 seconds
-          reconnectTimeout = setTimeout(connectWebSocket, 3000);
-        };
+          // If the update contains complete game state, use it for accurate player list
+          if (updateData.gameState && updateData.gameState.players) {
+            setGameState(updateData.gameState);
+            
+            // Update room info from complete game state
+            const hostPlayer = updateData.gameState.players.find(p => p.isHost);
+            if (hostPlayer) {
+              setRoom(prevRoom => ({
+                ...prevRoom,
+                host: {
+                  id: hostPlayer.id,
+                  name: hostPlayer.name,
+                  isHost: true,
+                  isConnected: hostPlayer.isConnected,
+                  lastActivity: hostPlayer.lastActivity
+                },
+                playerCount: updateData.gameState.players.length
+              }));
+            }
+          }
+        }
 
-        ws.onerror = (error) => {
-          console.error("RoomHeader WebSocket error:", error);
-        };
-      } catch (error) {
-        console.error("RoomHeader: Failed to connect WebSocket:", error);
-        // Retry connection after 5 seconds
-        reconnectTimeout = setTimeout(connectWebSocket, 5000);
+        // If the update contains a complete game state, use it for most accurate data
+        if (updateData.gameState && updateData.gameState.players) {
+          console.log("RoomHeader: Updating from complete game state in room update");
+          setGameState(updateData.gameState);
+          
+          const hostPlayer = updateData.gameState.players.find(p => p.isHost);
+          if (hostPlayer) {
+            setRoom(prevRoom => ({
+              ...prevRoom,
+              host: {
+                id: hostPlayer.id,
+                name: hostPlayer.name,
+                isHost: true,
+                isConnected: hostPlayer.isConnected,
+                lastActivity: hostPlayer.lastActivity
+              },
+              playerCount: updateData.gameState.players.length
+            }));
+          }
+        }
       }
     };
 
-    connectWebSocket();
+    // Listen for custom events from the global WebSocket
+    globalThis.addEventListener('gameStateUpdate', handleGameStateUpdate);
+    globalThis.addEventListener('roomUpdate', handleRoomUpdate);
 
     return () => {
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
-      if (ws) {
-        ws.close();
-      }
+      globalThis.removeEventListener('gameStateUpdate', handleGameStateUpdate);
+      globalThis.removeEventListener('roomUpdate', handleRoomUpdate);
     };
-  }, [room.room.id, playerId]);
+
+  }, [room.room.id]);
 
   return (
     <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
@@ -237,8 +225,8 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
               <span class="ml-1 text-yellow-600 font-semibold">(You)</span>
             )}
             <span class="mx-1">•</span>
-            <span>
-              {gameState.players.length}/{room.room.maxPlayers} players
+            <span id="player-count-display">
+              {gameState.players?.length || room.playerCount || 0}/{room.room.maxPlayers} players
             </span>
           </p>
         </div>
