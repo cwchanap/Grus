@@ -360,7 +360,8 @@ export default function DrawingBoard({
       {gameState.phase === "waiting" && (
         <div class="drawing-board-status mt-4 p-3 bg-yellow-50 rounded-lg border">
           <div class="text-sm text-yellow-800">
-            <strong>Waiting:</strong> Game hasn't started yet or waiting for next round.
+            <strong>Waiting:</strong>{" "}
+            Game hasn't started yet. Chat with other players while you wait!
           </div>
         </div>
       )}

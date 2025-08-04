@@ -156,7 +156,9 @@ function ChatRoomComponent({
     <div class="flex flex-col h-full">
       {/* Header with connection status - Mobile responsive */}
       <div class="flex items-center justify-between mb-3">
-        <h2 class="text-base sm:text-lg font-semibold text-gray-800">Chat & Guessing</h2>
+        <h2 class="text-base sm:text-lg font-semibold text-gray-800">
+          {currentWord && !isCurrentDrawer ? "Chat & Guessing" : "Chat"}
+        </h2>
         <div class="flex items-center space-x-2 sm:space-x-3">
           <ConnectionStatus size="sm" />
           {offlineStatus.value.isOffline && offlineStatus.value.pendingMessages.length > 0 && (
@@ -178,9 +180,11 @@ function ChatRoomComponent({
               <div class="text-center text-gray-500 py-8">
                 <div class="text-2xl mb-2">💬</div>
                 <p class="text-sm">
-                  {isCurrentDrawer
+                  {currentWord && isCurrentDrawer
                     ? "Others will guess your drawing here!"
-                    : "Start guessing what's being drawn!"}
+                    : currentWord && !isCurrentDrawer
+                    ? "Start guessing what's being drawn!"
+                    : "Chat with other players!"}
                 </p>
               </div>
             )
@@ -244,11 +248,20 @@ function ChatRoomComponent({
         </div>
       </div>
 
-      {/* Guess hint for non-drawers */}
+      {/* Guess hint for non-drawers during drawing phase */}
       {shouldShowGuessHint() && (
         <div class="bg-blue-50 border border-blue-200 rounded-lg p-2 mb-3">
           <div class="text-xs text-blue-700 font-medium">
             💡 Tip: Type your guess and press Enter!
+          </div>
+        </div>
+      )}
+
+      {/* General chat hint when not in drawing phase */}
+      {!currentWord && messages.length === 0 && (
+        <div class="bg-green-50 border border-green-200 rounded-lg p-2 mb-3">
+          <div class="text-xs text-green-700 font-medium">
+            💬 Chat is always available! Say hello to other players.
           </div>
         </div>
       )}
@@ -260,9 +273,11 @@ function ChatRoomComponent({
           type="text"
           value={inputMessage}
           onInput={handleInputChange}
-          placeholder={isCurrentDrawer
+          placeholder={currentWord && isCurrentDrawer
             ? "You're drawing! Others will guess..."
-            : "Type your guess here..."}
+            : currentWord && !isCurrentDrawer
+            ? "Type your guess here..."
+            : "Type a message..."}
           maxLength={200}
           disabled={false} // Allow typing in offline mode
           class="flex-1 px-3 py-2 sm:py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm touch-manipulation"

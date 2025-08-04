@@ -1,5 +1,8 @@
 // WebSocket connection pool management
-import type { WebSocketConnection, RoomConnections as _RoomConnections } from "../types/websocket-internal.ts";
+import type {
+  RoomConnections as _RoomConnections,
+  WebSocketConnection,
+} from "../types/websocket-internal.ts";
 import type { ServerMessage } from "../../../types/game.ts";
 
 export class ConnectionPool {
@@ -9,7 +12,7 @@ export class ConnectionPool {
 
   addConnection(playerId: string, roomId: string, ws: WebSocket): void {
     console.log(`Adding connection: playerId=${playerId}, roomId=${roomId}`);
-    
+
     const connection: WebSocketConnection = {
       ws,
       playerId,
@@ -24,13 +27,17 @@ export class ConnectionPool {
       this.roomConnections.set(roomId, new Set());
     }
     this.roomConnections.get(roomId)!.add(playerId);
-    
-    console.log(`Connection added. Total connections: ${this.connections.size}, Room ${roomId} connections: ${this.roomConnections.get(roomId)?.size || 0}`);
+
+    console.log(
+      `Connection added. Total connections: ${this.connections.size}, Room ${roomId} connections: ${
+        this.roomConnections.get(roomId)?.size || 0
+      }`,
+    );
   }
 
   removeConnection(playerId: string): string | null {
     console.log(`Removing connection: playerId=${playerId}`);
-    
+
     const connection = this.connections.get(playerId);
     if (!connection) {
       console.log(`No connection found for playerId=${playerId}`);
@@ -51,7 +58,11 @@ export class ConnectionPool {
       }
     }
 
-    console.log(`Connection removed. Total connections: ${this.connections.size}, Room ${roomId} connections: ${this.roomConnections.get(roomId)?.size || 0}`);
+    console.log(
+      `Connection removed. Total connections: ${this.connections.size}, Room ${roomId} connections: ${
+        this.roomConnections.get(roomId)?.size || 0
+      }`,
+    );
     return roomId;
   }
 

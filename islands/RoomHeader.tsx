@@ -9,7 +9,9 @@ interface RoomHeaderProps {
   gameState: GameState;
 }
 
-export default function RoomHeader({ room: initialRoom, playerId, gameState: initialGameState }: RoomHeaderProps) {
+export default function RoomHeader(
+  { room: initialRoom, playerId, gameState: initialGameState }: RoomHeaderProps,
+) {
   const [room, setRoom] = useState(initialRoom);
   const [gameState, setGameState] = useState(initialGameState);
 
@@ -20,36 +22,45 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
 
   // Debug logging for host changes
   useEffect(() => {
-    console.log(`RoomHeader: Current host is ${room.host?.name} (${room.host?.id}), current player is ${playerId}, isHost: ${playerId === room.host?.id}`);
+    console.log(
+      `RoomHeader: Current host is ${room.host?.name} (${room.host?.id}), current player is ${playerId}, isHost: ${
+        playerId === room.host?.id
+      }`,
+    );
   }, [room.host, playerId]);
 
   // Sync with game state changes (in case parent component updates)
   useEffect(() => {
-    const hostPlayer = gameState.players?.find(p => p.isHost);
+    const hostPlayer = gameState.players?.find((p) => p.isHost);
     const currentPlayerCount = gameState.players?.length || 0;
-    
+
     // Always update player count from game state
     if (currentPlayerCount !== room.playerCount) {
-      console.log(`RoomHeader: Updating player count from ${room.playerCount} to ${currentPlayerCount}`);
-      setRoom(prevRoom => ({
+      console.log(
+        `RoomHeader: Updating player count from ${room.playerCount} to ${currentPlayerCount}`,
+      );
+      setRoom((prevRoom) => ({
         ...prevRoom,
-        playerCount: currentPlayerCount
+        playerCount: currentPlayerCount,
       }));
     }
-    
+
     // Update host information if changed
     if (hostPlayer && hostPlayer.id !== room.host?.id) {
-      console.log(`RoomHeader: Syncing host from game state - ${hostPlayer.name} (${hostPlayer.id})`);
-      setRoom(prevRoom => ({
+      console.log(
+        `RoomHeader: Syncing host from game state - ${hostPlayer.name} (${hostPlayer.id})`,
+      );
+      setRoom((prevRoom) => ({
         ...prevRoom,
         host: {
           id: hostPlayer.id,
           name: hostPlayer.name,
           isHost: true,
           isConnected: hostPlayer.isConnected || true,
-          lastActivity: hostPlayer.lastActivity || Date.now()
+          lastActivity: hostPlayer.lastActivity || Date.now(),
+          joinedAt: new Date().toISOString(),
         },
-        playerCount: currentPlayerCount
+        playerCount: currentPlayerCount,
       }));
     }
   }, [gameState.players, room.host?.id, room.playerCount]);
@@ -57,118 +68,124 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
   useEffect(() => {
     // Listen for WebSocket updates from the global game WebSocket connection
     // The Scoreboard component manages the main WebSocket connection
-    const handleGameStateUpdate = (event: CustomEvent) => {
-      const { gameState: updatedGameState } = event.detail;
+    const handleGameStateUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { gameState: updatedGameState } = customEvent.detail;
       if (updatedGameState && updatedGameState.roomId === room.room.id) {
         console.log("RoomHeader: Received game state update from global WebSocket");
         setGameState(updatedGameState);
-        
+
         // Update room host information from game state
-        const hostPlayer = updatedGameState.players?.find(p => p.isHost);
+        const hostPlayer = updatedGameState.players?.find((p: any) => p.isHost);
         if (hostPlayer) {
-          setRoom(prevRoom => ({
+          setRoom((prevRoom) => ({
             ...prevRoom,
             host: {
               id: hostPlayer.id,
               name: hostPlayer.name,
               isHost: true,
               isConnected: hostPlayer.isConnected,
-              lastActivity: hostPlayer.lastActivity
+              lastActivity: hostPlayer.lastActivity,
+              joinedAt: new Date().toISOString(),
             },
-            playerCount: updatedGameState.players?.length || prevRoom.playerCount
+            playerCount: updatedGameState.players?.length || prevRoom.playerCount,
           }));
         }
       }
     };
 
-    const handleRoomUpdate = (event: CustomEvent) => {
-      const { updateData } = event.detail;
+    const handleRoomUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { updateData } = customEvent.detail;
       if (updateData && updateData.roomId === room.room.id) {
         console.log("RoomHeader: Received room update from global WebSocket", updateData);
-        
+
         // Handle host migration
         if (updateData.type === "host-changed") {
-          setRoom(prevRoom => ({
+          setRoom((prevRoom) => ({
             ...prevRoom,
             host: {
               id: updateData.newHostId,
               name: updateData.newHostName,
               isHost: true,
               isConnected: true,
-              lastActivity: Date.now()
-            }
+              lastActivity: Date.now(),
+              joinedAt: new Date().toISOString(),
+            },
           }));
 
-          setGameState(prevState => ({
+          setGameState((prevState) => ({
             ...prevState,
-            players: prevState.players.map(player => ({
+            players: prevState.players.map((player) => ({
               ...player,
-              isHost: player.id === updateData.newHostId
-            }))
+              isHost: player.id === updateData.newHostId,
+            })),
           }));
         } else if (updateData.type === "player-left") {
           console.log("RoomHeader: Player left, updating player count");
-          
+
           // Handle host migration if the leaving player was host
           if (updateData.wasHost && updateData.hostMigration) {
-            setRoom(prevRoom => ({
+            setRoom((prevRoom) => ({
               ...prevRoom,
               host: {
                 id: updateData.hostMigration.newHostId,
                 name: updateData.hostMigration.newHostName,
                 isHost: true,
                 isConnected: true,
-                lastActivity: Date.now()
+                lastActivity: Date.now(),
+                joinedAt: new Date().toISOString(),
               },
-              playerCount: Math.max(0, prevRoom.playerCount - 1)
+              playerCount: Math.max(0, prevRoom.playerCount - 1),
             }));
 
-            setGameState(prevState => ({
+            setGameState((prevState) => ({
               ...prevState,
               players: prevState.players
-                .filter(player => player.id !== updateData.playerId)
-                .map(player => ({
+                .filter((player) => player.id !== updateData.playerId)
+                .map((player) => ({
                   ...player,
-                  isHost: player.id === updateData.hostMigration.newHostId
-                }))
+                  isHost: player.id === updateData.hostMigration.newHostId,
+                })),
             }));
           } else {
             // Regular player leaving (not host)
-            setRoom(prevRoom => ({
+            setRoom((prevRoom) => ({
               ...prevRoom,
-              playerCount: Math.max(0, prevRoom.playerCount - 1)
+              playerCount: Math.max(0, prevRoom.playerCount - 1),
             }));
 
-            setGameState(prevState => ({
+            setGameState((prevState) => ({
               ...prevState,
-              players: prevState.players.filter(player => player.id !== updateData.playerId)
+              players: prevState.players.filter((player) => player.id !== updateData.playerId),
             }));
           }
         } else if (updateData.type === "player-joined") {
           console.log("RoomHeader: Player joined, updating player count");
-          
-          setRoom(prevRoom => ({
+
+          setRoom((prevRoom) => ({
             ...prevRoom,
-            playerCount: prevRoom.playerCount + 1
+            playerCount: prevRoom.playerCount + 1,
           }));
 
           // If the update contains complete game state, use it for accurate player list
           if (updateData.gameState && updateData.gameState.players) {
             setGameState(updateData.gameState);
-            
+
             // Update room info from complete game state
-            const hostPlayer = updateData.gameState.players.find(p => p.isHost);
+            const hostPlayer = updateData.gameState.players.find((p: any) => p.isHost);
             if (hostPlayer) {
-              setRoom(prevRoom => ({
+              setRoom((prevRoom) => ({
                 ...prevRoom,
                 host: {
                   id: hostPlayer.id,
                   name: hostPlayer.name,
                   isHost: true,
                   isConnected: hostPlayer.isConnected,
-                  lastActivity: hostPlayer.lastActivity
+                  lastActivity: hostPlayer.lastActivity,
+                  joinedAt: new Date().toISOString(),
                 },
-                playerCount: updateData.gameState.players.length
+                playerCount: updateData.gameState.players.length,
               }));
             }
           }
@@ -178,19 +195,20 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
         if (updateData.gameState && updateData.gameState.players) {
           console.log("RoomHeader: Updating from complete game state in room update");
           setGameState(updateData.gameState);
-          
-          const hostPlayer = updateData.gameState.players.find(p => p.isHost);
+
+          const hostPlayer = updateData.gameState.players.find((p: any) => p.isHost);
           if (hostPlayer) {
-            setRoom(prevRoom => ({
+            setRoom((prevRoom) => ({
               ...prevRoom,
               host: {
                 id: hostPlayer.id,
                 name: hostPlayer.name,
                 isHost: true,
                 isConnected: hostPlayer.isConnected,
-                lastActivity: hostPlayer.lastActivity
+                lastActivity: hostPlayer.lastActivity,
+                joinedAt: new Date().toISOString(),
               },
-              playerCount: updateData.gameState.players.length
+              playerCount: updateData.gameState.players.length,
             }));
           }
         }
@@ -198,14 +216,13 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
     };
 
     // Listen for custom events from the global WebSocket
-    globalThis.addEventListener('gameStateUpdate', handleGameStateUpdate);
-    globalThis.addEventListener('roomUpdate', handleRoomUpdate);
+    globalThis.addEventListener("gameStateUpdate", handleGameStateUpdate);
+    globalThis.addEventListener("roomUpdate", handleRoomUpdate);
 
     return () => {
-      globalThis.removeEventListener('gameStateUpdate', handleGameStateUpdate);
-      globalThis.removeEventListener('roomUpdate', handleRoomUpdate);
+      globalThis.removeEventListener("gameStateUpdate", handleGameStateUpdate);
+      globalThis.removeEventListener("roomUpdate", handleRoomUpdate);
     };
-
   }, [room.room.id]);
 
   return (
@@ -220,7 +237,9 @@ export default function RoomHeader({ room: initialRoom, playerId, gameState: ini
               Host: <span>{(room.host?.name || "Unknown").slice(0, 10)}</span>
               {(room.host?.name || "").length > 10 && <span>...</span>}
             </span>
-            <span class="hidden xs:inline">Host: <span>{room.host?.name || "Unknown"}</span></span>
+            <span class="hidden xs:inline">
+              Host: <span>{room.host?.name || "Unknown"}</span>
+            </span>
             {playerId === room.host?.id && (
               <span class="ml-1 text-yellow-600 font-semibold">(You)</span>
             )}

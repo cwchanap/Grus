@@ -138,10 +138,13 @@ export class WebSocketServer {
       this.handleDisconnection(connection);
     });
 
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    } as ResponseInit & { webSocket: WebSocket });
+    return new Response(
+      null,
+      {
+        status: 101,
+        webSocket: client,
+      } as ResponseInit & { webSocket: WebSocket },
+    );
   }
 
   private handleDenoWebSocket(request: Request): Response {
@@ -191,7 +194,7 @@ export class WebSocketServer {
       connection.lastActivity = Date.now();
 
       // Validate that data is a string and not empty
-      if (typeof data !== 'string' || data.length === 0) {
+      if (typeof data !== "string" || data.length === 0) {
         console.error("Invalid message data received:", typeof data, data);
         return;
       }
@@ -204,19 +207,25 @@ export class WebSocketServer {
   }
 
   private async handleDisconnection(connection: WebSocketConnection): Promise<void> {
-    console.log(`WebSocket disconnection - playerId: ${connection.playerId || 'unknown'}, roomId: ${connection.roomId || 'unknown'}`);
-    
+    console.log(
+      `WebSocket disconnection - playerId: ${connection.playerId || "unknown"}, roomId: ${
+        connection.roomId || "unknown"
+      }`,
+    );
+
     if (connection.playerId && connection.roomId) {
-      console.log(`Processing disconnection for player ${connection.playerId} in room ${connection.roomId}`);
+      console.log(
+        `Processing disconnection for player ${connection.playerId} in room ${connection.roomId}`,
+      );
       // Use the room handler's removePlayerFromRoom method for consistent behavior
       try {
         await this.roomHandler.removePlayerFromRoom(connection.playerId, connection.roomId);
       } catch (error) {
         console.error(`Error handling disconnection for player ${connection.playerId}:`, error);
-        
+
         // Fallback: just remove from connection pool
         const roomId = this.connectionPool.removeConnection(connection.playerId);
-        
+
         if (roomId) {
           // Update player state
           try {
@@ -236,13 +245,18 @@ export class WebSocketServer {
               },
             });
           } catch (fallbackError) {
-            console.error(`Fallback disconnection handling failed for player ${connection.playerId}:`, fallbackError);
+            console.error(
+              `Fallback disconnection handling failed for player ${connection.playerId}:`,
+              fallbackError,
+            );
           }
         }
       }
     } else {
       // Connection without proper player/room info, just clean up
-      console.log("WebSocket disconnection without proper player/room info, cleaning up connection");
+      console.log(
+        "WebSocket disconnection without proper player/room info, cleaning up connection",
+      );
       if (connection.playerId) {
         this.connectionPool.removeConnection(connection.playerId);
       }

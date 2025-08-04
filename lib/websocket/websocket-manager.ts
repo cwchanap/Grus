@@ -246,7 +246,7 @@ export class WebSocketManager {
   private async handleLobbyMessage(ws: WebSocket, data: string) {
     try {
       // Validate that data is a string and not empty
-      if (typeof data !== 'string' || data.length === 0) {
+      if (typeof data !== "string" || data.length === 0) {
         console.error("Invalid lobby message data received:", typeof data, data);
         return;
       }
@@ -345,7 +345,7 @@ export class WebSocketManager {
 
   cleanup(): void {
     this.stopHeartbeat();
-    
+
     // Cleanup all servers
     for (const [_roomId, server] of this.servers.entries()) {
       server.cleanup();

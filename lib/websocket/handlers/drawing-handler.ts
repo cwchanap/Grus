@@ -1,6 +1,6 @@
 // Drawing operations handler
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler } from "../types/websocket-internal.ts";
+import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { GameStateService } from "../services/game-state-service.ts";
@@ -28,7 +28,10 @@ export class DrawingHandler implements MessageHandler {
     await this.handleDrawMessage(connection, message);
   }
 
-  private async handleDrawMessage(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleDrawMessage(
+    _connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId, data } = message;
 
     // Verify player is current drawer

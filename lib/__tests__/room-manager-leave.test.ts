@@ -17,14 +17,14 @@ Deno.test("Room Manager - Player Leave and Host Migration", async (t) => {
       hostName: "Host Player",
       maxPlayers: 8,
     });
-    
+
     if (!createResult.success) {
       console.error("Failed to create room:", createResult.error);
     }
-    
+
     assertEquals(createResult.success, true);
     assertExists(createResult.data);
-    
+
     roomId = createResult.data.roomId;
     hostPlayerId = createResult.data.playerId;
 
@@ -123,7 +123,7 @@ Deno.test("Room Manager - Edge Cases for Player Leave", async (t) => {
     });
     assertEquals(createResult.success, true);
     assertExists(createResult.data);
-    
+
     const roomId = createResult.data.roomId;
 
     // Try to leave with non-existent player

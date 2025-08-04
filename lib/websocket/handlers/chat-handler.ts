@@ -1,6 +1,6 @@
 // Chat message handling
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler } from "../types/websocket-internal.ts";
+import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { GameStateService } from "../services/game-state-service.ts";
@@ -28,10 +28,14 @@ export class ChatHandler implements MessageHandler {
     await this.handleChatMessage(connection, message);
   }
 
-  private async handleChatMessage(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleChatMessage(
+    _connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId, data } = message;
     const { text } = data;
 
+    // Chat messages are always allowed regardless of game state
     if (!this.validator.validateChatMessage(text)) {
       this.connectionPool.sendError(playerId, "Invalid chat message");
       return;
@@ -62,7 +66,7 @@ export class ChatHandler implements MessageHandler {
       isCorrect: false,
     };
 
-    // Check if it's a correct guess
+    // Check if it's a correct guess (only during drawing phase)
     if (
       gameState.phase === "drawing" &&
       gameState.currentWord &&
@@ -73,7 +77,7 @@ export class ChatHandler implements MessageHandler {
       return;
     }
 
-    // Broadcast regular chat message to room
+    // Always broadcast chat message to room (regardless of game phase)
     await this.connectionPool.broadcastToRoom(roomId, {
       type: "chat-message",
       roomId,

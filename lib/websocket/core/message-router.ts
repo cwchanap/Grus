@@ -1,6 +1,6 @@
 // Message routing and validation
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler } from "../types/websocket-internal.ts";
+import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { RateLimiter } from "../utils/rate-limiter.ts";
 import { ConnectionPool } from "./connection-pool.ts";
@@ -24,7 +24,7 @@ export class MessageRouter {
   async routeMessage(connection: WebSocketConnection, data: string): Promise<void> {
     try {
       // Validate data before parsing
-      if (!data || typeof data !== 'string' || data.length === 0) {
+      if (!data || typeof data !== "string" || data.length === 0) {
         console.error("Invalid message data:", typeof data, data);
         return;
       }
@@ -44,11 +44,11 @@ export class MessageRouter {
       if (!this.validator.validateClientMessage(message)) {
         console.error("Message validation failed:", {
           message,
-          hasType: 'type' in message,
-          hasRoomId: 'roomId' in message,
-          hasPlayerId: 'playerId' in message,
-          hasData: 'data' in message,
-          typeOfMessage: typeof message
+          hasType: "type" in message,
+          hasRoomId: "roomId" in message,
+          hasPlayerId: "playerId" in message,
+          hasData: "data" in message,
+          typeOfMessage: typeof message,
         });
         if (connection.playerId) {
           this.connectionPool.sendError(connection.playerId, "Invalid message format");

@@ -1,6 +1,10 @@
 // Room join/leave operations handler
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler, WebSocketService as _WebSocketService } from "../types/websocket-internal.ts";
+import type {
+  MessageHandler,
+  WebSocketConnection,
+  WebSocketService as _WebSocketService,
+} from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { PlayerService } from "../services/player-service.ts";
@@ -38,19 +42,24 @@ export class RoomHandler implements MessageHandler {
     }
   }
 
-  private async handleJoinRoom(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleJoinRoom(
+    connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId, data } = message;
     const { playerName } = data;
 
-    console.log(`Processing join room request: playerId=${playerId}, roomId=${roomId}, playerName=${playerName}`);
+    console.log(
+      `Processing join room request: playerId=${playerId}, roomId=${roomId}, playerName=${playerName}`,
+    );
 
     // Check if player is already in this room to prevent duplicate processing
     const existingRoom = this.connectionPool.getPlayerRoom(playerId);
     const existingConnection = this.connectionPool.getConnection(playerId);
-    
+
     if (existingRoom === roomId && existingConnection) {
       console.log(`Player ${playerId} already connected to room ${roomId}, skipping join`);
-      
+
       // Still send the current game state to ensure the client is up to date
       try {
         const gameState = await this.gameStateService.getGameState(roomId);
@@ -64,10 +73,10 @@ export class RoomHandler implements MessageHandler {
       } catch (error) {
         console.error("Error sending game state to existing connection:", error);
       }
-      
+
       return;
     }
-    
+
     // If player is in a different room, remove them first
     if (existingRoom && existingRoom !== roomId) {
       console.log(`Player ${playerId} switching from room ${existingRoom} to ${roomId}`);
@@ -96,7 +105,7 @@ export class RoomHandler implements MessageHandler {
     // Update the connection object with player and room info FIRST
     connection.playerId = playerId;
     connection.roomId = roomId;
-    
+
     // Add connection to room
     this.connectionPool.addConnection(playerId, roomId, connection.ws);
 
@@ -206,10 +215,13 @@ export class RoomHandler implements MessageHandler {
     }
   }
 
-  private async handleLeaveRoom(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleLeaveRoom(
+    connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId } = message;
     await this.removePlayerFromRoom(playerId, roomId);
-    
+
     // Clear the connection info since the player left
     connection.playerId = "";
     connection.roomId = "";
@@ -229,8 +241,11 @@ export class RoomHandler implements MessageHandler {
       const leaveResult = await roomManager.leaveRoom(roomId, playerId);
 
       if (!leaveResult.success) {
-        console.error(`Failed to remove player ${playerId} from room ${roomId}:`, leaveResult.error);
-        
+        console.error(
+          `Failed to remove player ${playerId} from room ${roomId}:`,
+          leaveResult.error,
+        );
+
         // Update player state to disconnected even if database removal failed
         if (playerState) {
           try {
@@ -240,7 +255,7 @@ export class RoomHandler implements MessageHandler {
             console.error(`Failed to update player state for ${playerId}:`, stateError);
           }
         }
-        
+
         // Broadcast a basic player left message even if database operation failed
         this.connectionPool.broadcastToRoom(roomId, {
           type: "room-update",
@@ -252,7 +267,7 @@ export class RoomHandler implements MessageHandler {
             wasHost: false,
           },
         });
-        
+
         return;
       }
 
@@ -282,7 +297,7 @@ export class RoomHandler implements MessageHandler {
       }
 
       // Update game state with remaining players
-      let gameState = await this.gameStateService.getGameState(roomId);
+      const gameState = await this.gameStateService.getGameState(roomId);
       if (gameState && remainingPlayers && Array.isArray(remainingPlayers)) {
         // Update players list in game state
         gameState.players = remainingPlayers.map((p) => ({
@@ -351,7 +366,7 @@ export class RoomHandler implements MessageHandler {
           newHostId,
           newHostName,
         };
-        
+
         console.log(`Broadcasting host-changed message to room ${roomId}:`, hostChangedData);
         this.connectionPool.broadcastToRoom(roomId, {
           type: "room-update",
@@ -359,11 +374,16 @@ export class RoomHandler implements MessageHandler {
           data: hostChangedData,
         });
 
-        console.log(`Host migration completed: ${playerName} (${playerId}) -> ${newHostName} (${newHostId}) in room ${roomId}`);
+        console.log(
+          `Host migration completed: ${playerName} (${playerId}) -> ${newHostName} (${newHostId}) in room ${roomId}`,
+        );
       }
 
-      console.log(`Player ${playerName} (${playerId}) left room ${roomId}. Remaining players: ${remainingPlayers?.length || 0}`);
-
+      console.log(
+        `Player ${playerName} (${playerId}) left room ${roomId}. Remaining players: ${
+          remainingPlayers?.length || 0
+        }`,
+      );
     } catch (error) {
       console.error(`Error removing player ${playerId} from room ${roomId}:`, error);
     }

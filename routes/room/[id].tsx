@@ -6,7 +6,7 @@ import type { GameState } from "../../types/game.ts";
 import ChatRoom from "../../islands/ChatRoom.tsx";
 import DrawingBoard from "../../islands/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
-import LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
+import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
 
 interface GameRoomData {
@@ -18,7 +18,7 @@ interface GameRoomData {
 // Helper function to create initial game state from room data
 function createInitialGameState(room: RoomSummary, playerId?: string | null): GameState {
   // Ensure the current player is included in the players list
-  let players = room.players.map((player: any) => ({
+  const players = room.players.map((player: any) => ({
     id: player.id,
     name: player.name,
     isHost: player.isHost,
@@ -28,8 +28,10 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ga
 
   // If playerId is provided but not found in players, this might be a timing issue
   // Log a warning but don't add a placeholder player
-  if (playerId && !players.find(p => p.id === playerId)) {
-    console.warn(`Player ${playerId} not found in room players list. This might be a timing issue.`);
+  if (playerId && !players.find((p) => p.id === playerId)) {
+    console.warn(
+      `Player ${playerId} not found in room players list. This might be a timing issue.`,
+    );
   }
 
   return {
@@ -139,6 +141,20 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                 Some features may not work properly because player information is missing.
                 <a href="/" class="ml-2 underline hover:no-underline">Return to lobby</a>{" "}
                 to rejoin properly.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Welcome message for waiting phase */}
+        {gameState.phase === "waiting" && playerId && (
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 sm:mb-4">
+            <div class="flex items-center text-blue-800">
+              <span class="text-blue-600 mr-2">💬</span>
+              <div class="text-sm">
+                <strong>Welcome to the room!</strong>{" "}
+                Chat is available at all times - say hello to other players while waiting for the
+                game to start.
               </div>
             </div>
           </div>

@@ -183,9 +183,9 @@ export class RoomManager {
   ): Promise<
     {
       success: boolean;
-      data?: { 
-        wasHost: boolean; 
-        newHostId?: string; 
+      data?: {
+        wasHost: boolean;
+        newHostId?: string;
         newHostName?: string;
         roomDeleted?: boolean;
         remainingPlayers?: Player[];
@@ -215,18 +215,20 @@ export class RoomManager {
         // Find the next player to become host (first player that joined after the current host)
         const remainingPlayers = players.filter((p: any) => p.id !== playerId);
         const newHost = remainingPlayers[0]; // Take the first remaining player
-        
+
         if (newHost) {
           newHostId = newHost.id;
           newHostName = newHost.name;
-          
+
           // Transfer host privileges to the new host
           const updateResult = await this.db.updatePlayer(newHostId, { isHost: true });
           if (!updateResult.success) {
             console.error(`Failed to transfer host to ${newHostId}:`, updateResult.error);
             return { success: false, error: "Failed to transfer host privileges" };
           } else {
-            console.log(`Host transferred from ${playerId} (${player.name}) to ${newHostId} (${newHostName}) in room ${roomId}`);
+            console.log(
+              `Host transferred from ${playerId} (${player.name}) to ${newHostId} (${newHostName}) in room ${roomId}`,
+            );
           }
         }
       }

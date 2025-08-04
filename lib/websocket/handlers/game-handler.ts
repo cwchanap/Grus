@@ -1,6 +1,6 @@
 // Game state management handler
 import type { ClientMessage } from "../../../types/game.ts";
-import type { WebSocketConnection, MessageHandler } from "../types/websocket-internal.ts";
+import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { PlayerService } from "../services/player-service.ts";
 import { GameStateService } from "../services/game-state-service.ts";
@@ -47,7 +47,10 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleStartGame(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleStartGame(
+    _connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId } = message;
 
     try {
@@ -146,7 +149,10 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleNextRound(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleNextRound(
+    _connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId } = message;
 
     // Verify player is host
@@ -178,7 +184,9 @@ export class GameHandler implements MessageHandler {
 
       // Get next drawer
       const activePlayers = gameState.players.filter((p: any) => p.isConnected);
-      const currentDrawerIndex = activePlayers.findIndex((p: any) => p.id === gameState.currentDrawer);
+      const currentDrawerIndex = activePlayers.findIndex((p: any) =>
+        p.id === gameState.currentDrawer
+      );
       const nextDrawerIndex = (currentDrawerIndex + 1) % activePlayers.length;
       gameState.currentDrawer = activePlayers[nextDrawerIndex].id;
       gameState.currentWord = this.wordGenerator.getRandomWord();
@@ -219,7 +227,10 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private async handleEndGame(_connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  private async handleEndGame(
+    _connection: WebSocketConnection,
+    message: ClientMessage,
+  ): Promise<void> {
     const { roomId, playerId } = message;
 
     // Verify player is host

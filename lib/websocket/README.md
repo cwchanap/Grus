@@ -5,27 +5,32 @@ This directory contains the refactored WebSocket implementation for the drawing 
 ## Architecture Overview
 
 ### Core Components (`core/`)
+
 - **`websocket-server.ts`** - Main WebSocket server that orchestrates all components
 - **`connection-pool.ts`** - Manages WebSocket connections and room mappings
 - **`message-router.ts`** - Routes and validates incoming messages
 
 ### Message Handlers (`handlers/`)
+
 - **`room-handler.ts`** - Handles room join/leave operations
 - **`chat-handler.ts`** - Processes chat messages and correct guesses
 - **`drawing-handler.ts`** - Manages drawing operations
 - **`game-handler.ts`** - Controls game state and round management
 
 ### Services (`services/`)
+
 - **`game-state-service.ts`** - Game state persistence (KV storage)
 - **`player-service.ts`** - Player and room database operations
 - **`timer-service.ts`** - Round timer management
 
 ### Utilities (`utils/`)
+
 - **`message-validator.ts`** - Message validation logic
 - **`rate-limiter.ts`** - Rate limiting implementation
 - **`word-generator.ts`** - Random word selection
 
 ### Types (`types/`)
+
 - **`websocket-internal.ts`** - Internal type definitions
 
 ## Key Benefits
@@ -39,6 +44,7 @@ This directory contains the refactored WebSocket implementation for the drawing 
 ## Usage
 
 ### New Code (Recommended)
+
 ```typescript
 import { WebSocketServer } from "./lib/websocket/core/websocket-server.ts";
 
@@ -47,6 +53,7 @@ const response = server.handleWebSocketUpgrade(request);
 ```
 
 ### Legacy Code (Backward Compatible)
+
 ```typescript
 import { WebSocketHandler } from "./lib/websocket/websocket-handler.ts";
 
@@ -55,6 +62,7 @@ const response = handler.handleWebSocketUpgrade(request);
 ```
 
 ### WebSocket Manager (Unchanged)
+
 ```typescript
 import { WebSocketManager } from "./lib/websocket/websocket-manager.ts";
 
@@ -65,6 +73,7 @@ const response = await manager.handleRequest(request);
 ## Environment Support
 
 The refactored code maintains support for both:
+
 - **Cloudflare Workers** (production environment)
 - **Deno** (development environment)
 
@@ -90,7 +99,7 @@ const mockGameStateService = new MockGameStateService();
 const chatHandler = new ChatHandler(
   mockConnectionPool,
   mockValidator,
-  mockGameStateService
+  mockGameStateService,
 );
 
 // Test specific functionality
@@ -114,6 +123,7 @@ await chatHandler.handle(mockConnection, mockMessage);
 ## Future Enhancements
 
 The modular structure enables:
+
 - Plugin-based message handlers
 - Multiple storage backends
 - Advanced monitoring and metrics

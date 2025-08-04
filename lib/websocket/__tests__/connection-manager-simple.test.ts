@@ -37,7 +37,9 @@ Deno.test("Connection Manager - Error Messages", async () => {
 });
 
 Deno.test("Connection Manager - Offline State", async () => {
-  const { OfflineManager: _OfflineManager, offlineState } = await import("../../offline-manager.ts");
+  const { OfflineManager: _OfflineManager, offlineState } = await import(
+    "../../offline-manager.ts"
+  );
 
   // Test initial offline state
   assertExists(offlineState.value);

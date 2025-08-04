@@ -6,7 +6,9 @@ interface CreateRoomModalProps {
   onSuccess: () => void;
 }
 
-export default function CreateRoomModal({ show, onClose, onSuccess: _onSuccess }: CreateRoomModalProps) {
+export default function CreateRoomModal(
+  { show, onClose, onSuccess: _onSuccess }: CreateRoomModalProps,
+) {
   const [formData, setFormData] = useState({
     roomName: "",
     hostName: "",

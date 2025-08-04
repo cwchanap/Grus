@@ -7,10 +7,10 @@
 // Load environment variables safely
 try {
   const { load } = await import("$std/dotenv/mod.ts");
-  await load({ 
+  await load({
     allowEmptyValues: true,
     defaultsPath: null, // Don't require .env.example
-    envPath: ".env"
+    envPath: ".env",
   });
 } catch (error) {
   console.warn("Warning: Could not load .env file:", error.message);
