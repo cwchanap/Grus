@@ -359,6 +359,14 @@ export default function Scoreboard({
                   );
                 }
               }
+            } else if (message.type === "chat-message") {
+              // Handle chat messages and forward to ChatRoom component
+              console.log("Scoreboard: Received chat message, forwarding to ChatRoom");
+              globalThis.dispatchEvent(
+                new CustomEvent("websocket-message", {
+                  detail: { data: message },
+                }),
+              );
             }
           } catch (error) {
             console.error("Scoreboard: Error parsing message:", error);

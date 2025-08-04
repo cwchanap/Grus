@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { useComputed } from "@preact/signals";
+import type { JSX } from "preact";
 import type { ChatMessage } from "../types/game.ts";
 
 // Extend ChatMessage type for offline support
@@ -8,7 +9,6 @@ interface ExtendedChatMessage extends ChatMessage {
 }
 import {
   connectionState,
-  WebSocketConnectionManager,
 } from "../lib/websocket/connection-manager.ts";
 import { OfflineManager, offlineState } from "../lib/offline-manager.ts";
 import { ErrorBoundary } from "../components/ErrorBoundary.tsx";
@@ -30,66 +30,146 @@ function ChatRoomComponent({
   isCurrentDrawer = false,
 }: ChatRoomProps) {
   const [messages, setMessages] = useState<ExtendedChatMessage[]>([]);
-  const [inputMessage, setInputMessage] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const connectionManagerRef = useRef<WebSocketConnectionManager | null>(null);
+  const [buttonEnabled, setButtonEnabled] = useState(false);
+  const [charCount, setCharCount] = useState(0);
+
   const offlineManagerRef = useRef<OfflineManager | null>(null);
 
   const _connectionStatus = useComputed(() => connectionState.value);
   const offlineStatus = useComputed(() => offlineState.value);
+
+  // Debug logging
+  console.log("ChatRoom: Rendering with buttonEnabled:", buttonEnabled, "charCount:", charCount, "messages:", messages.length);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Connection and offline management
+  // Use shared WebSocket connection instead of creating our own
   useEffect(() => {
-    // Initialize connection manager
-    connectionManagerRef.current = new WebSocketConnectionManager(
-      roomId,
-      playerId,
-      playerName,
-    );
-
     // Initialize offline manager
     offlineManagerRef.current = new OfflineManager(roomId);
 
-    // Set up message handlers
-    connectionManagerRef.current.onMessage("chat-message", (message) => {
-      const chatMessage: ChatMessage = message.data;
-      setMessages((prev) => [...prev, chatMessage]);
-    });
-
-    connectionManagerRef.current.onMessage("room-update", (message) => {
-      if (message.data?.type === "error") {
-        console.error("Chat error:", message.data.message);
+    // Listen for chat messages from the shared WebSocket connection
+    const handleChatMessage = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { data } = customEvent.detail;
+      if (data && data.type === "chat-message") {
+        const chatMessage: ChatMessage = data.data;
+        console.log("ChatRoom: Received WebSocket message:", chatMessage);
+        setMessages((prev) => {
+          const newMessages = [...prev, chatMessage];
+          console.log("ChatRoom: Updated messages from WebSocket, length:", newMessages.length);
+          
+          // Only add to DOM if it's not our own message (we already added it optimistically)
+          if (chatMessage.playerId !== playerId) {
+            addMessageToDOM(chatMessage);
+          } else {
+            // For our own messages, update the existing DOM message to remove offline indicator
+            updateMessageInDOM(chatMessage);
+          }
+          
+          return newMessages;
+        });
       }
-    });
+    };
 
-    // Handle game-state messages (ChatRoom doesn't need to process them, just acknowledge)
-    connectionManagerRef.current.onMessage("game-state", (_message) => {
-      // Game state is handled by Scoreboard component, ChatRoom just needs to acknowledge
-    });
+    // Listen for global WebSocket messages
+    globalThis.addEventListener("websocket-message", handleChatMessage);
 
     return () => {
-      connectionManagerRef.current?.destroy();
       offlineManagerRef.current?.destroy();
+      globalThis.removeEventListener("websocket-message", handleChatMessage);
     };
-  }, [roomId, playerId, playerName]);
+  }, [roomId]);
 
-  const sendMessage = (e: Event) => {
+  // Function to update existing message in DOM (remove offline indicator)
+  const updateMessageInDOM = (message: ChatMessage) => {
+    const chatContainer = document.querySelector('.bg-gray-50.rounded-lg.p-3.mb-3.overflow-y-auto.min-h-0');
+    const messagesContainer = chatContainer?.querySelector('.space-y-2');
+    if (!messagesContainer) return;
+
+    // Find the message with offline indicator and update it
+    const messageElements = messagesContainer.querySelectorAll('.flex.flex-col.space-y-1');
+    for (const messageEl of messageElements) {
+      const offlineIndicator = messageEl.querySelector('span.ml-2.text-xs.opacity-75');
+      if (offlineIndicator && offlineIndicator.textContent === '⏳') {
+        // Update the message styling to remove offline indicator and change color
+        const messageContent = messageEl.querySelector('.max-w-xs, .max-w-sm');
+        if (messageContent) {
+          messageContent.className = messageContent.className.replace(
+            'bg-gray-400 text-white opacity-75',
+            'bg-blue-500 text-white'
+          );
+          offlineIndicator.remove();
+          console.log("ChatRoom: Updated message in DOM to remove offline indicator");
+          break;
+        }
+      }
+    }
+  };
+
+  // Function to add message directly to DOM
+  const addMessageToDOM = (message: ExtendedChatMessage) => {
+    // Find the chat messages container more specifically
+    const chatContainer = document.querySelector('.bg-gray-50.rounded-lg.p-3.mb-3.overflow-y-auto.min-h-0');
+    const messagesContainer = chatContainer?.querySelector('.space-y-2');
+    if (!messagesContainer) {
+      console.log("ChatRoom: Could not find chat messages container");
+      return;
+    }
+
+    // Remove empty state if it exists
+    const emptyState = messagesContainer.querySelector('.text-center.text-gray-500.py-8');
+    if (emptyState) {
+      emptyState.remove();
+    }
+
+    // Create message element
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `flex flex-col space-y-1 ${
+      message.playerId === playerId ? 'items-end' : 'items-start'
+    }`;
+
+    const isOwn = message.playerId === playerId;
+    const messageContent = `
+      <div class="max-w-xs sm:max-w-sm px-3 py-2 rounded-lg text-sm ${
+        isOwn
+          ? message.isOffline 
+            ? 'bg-gray-400 text-white opacity-75'
+            : 'bg-blue-500 text-white'
+          : 'bg-white border border-gray-200 text-gray-800'
+      }">
+        ${!isOwn ? `<div class="text-xs font-medium mb-1 opacity-75">${message.playerName}</div>` : ''}
+        <div class="break-words">
+          ${message.message}
+          ${message.isOffline && isOwn ? '<span class="ml-2 text-xs opacity-75">⏳</span>' : ''}
+        </div>
+      </div>
+      <div class="text-xs text-gray-400">
+        ${formatTime(message.timestamp)}
+      </div>
+    `;
+
+    messageDiv.innerHTML = messageContent;
+    messagesContainer.appendChild(messageDiv);
+
+    // Scroll to bottom
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    
+    console.log("ChatRoom: Message added to DOM:", message.message);
+  };
+
+  const sendMessage = (e: JSX.TargetedEvent<HTMLFormElement, Event>) => {
     e.preventDefault();
 
-    const message = inputMessage.trim();
+    // Get message directly from DOM
+    const message = (inputRef.current?.value || "").trim();
     if (!message || message.length > 200) return;
-
-    const connectionManager = connectionManagerRef.current;
-    const offlineManager = offlineManagerRef.current;
-
-    if (!connectionManager) return;
 
     // Generate a browser-safe unique ID
     const generateId = () => {
@@ -106,29 +186,96 @@ function ChatRoomComponent({
       isCorrect: false,
     };
 
-    // Try to send message
-    const sent = connectionManager.sendMessage({
-      type: "chat",
-      roomId,
-      playerId,
-      data: { text: message },
+    // Always show the message locally first (optimistic update)
+    console.log("ChatRoom: Adding message locally:", chatMessage);
+    setMessages((prev) => {
+      const newMessages = [...prev, { ...chatMessage, isOffline: true }];
+      console.log("ChatRoom: New messages array length:", newMessages.length);
+      
+      // DIRECT DOM MANIPULATION to ensure message appears immediately
+      addMessageToDOM({ ...chatMessage, isOffline: true });
+      
+      return newMessages;
     });
 
-    if (!sent && offlineManager) {
-      // Queue message for offline mode
-      offlineManager.queueChatMessage(chatMessage);
-
-      // Add to local messages with offline indicator
-      setMessages((prev) => [...prev, { ...chatMessage, isOffline: true }]);
+    // Try to send message via shared WebSocket
+    const ws = (globalThis as any).__gameWebSocket as WebSocket;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log("ChatRoom: Sending chat message via shared WebSocket");
+      ws.send(JSON.stringify({
+        type: "chat",
+        roomId,
+        playerId,
+        data: { text: message },
+      }));
+      
+      // Update the message to remove offline indicator after successful send
+      setTimeout(() => {
+        setMessages((prev) => prev.map(msg => 
+          msg.id === chatMessage.id ? { ...msg, isOffline: false } : msg
+        ));
+      }, 100);
+    } else {
+      console.log("ChatRoom: WebSocket not available, message will remain as offline");
+      
+      // Try to queue for later if offline manager is available
+      const offlineManager = offlineManagerRef.current;
+      if (offlineManager) {
+        offlineManager.queueChatMessage(chatMessage);
+      }
     }
 
-    setInputMessage("");
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
+    
+    // Update React state
+    setButtonEnabled(false);
+    setCharCount(0);
+    
+    // DIRECT DOM MANIPULATION to ensure UI resets immediately
+    const button = inputRef.current?.closest('form')?.querySelector('button[type="submit"]') as HTMLButtonElement;
+    const charCountElement = inputRef.current?.closest('form')?.parentElement?.querySelector('.text-xs.text-gray-500') as HTMLElement;
+    
+    if (button) {
+      button.disabled = true;
+      console.log("ChatRoom: Button directly disabled after send");
+    }
+    
+    if (charCountElement) {
+      charCountElement.textContent = "0/200";
+      console.log("ChatRoom: Character count reset to 0");
+    }
+    
     inputRef.current?.focus();
   };
 
-  const handleInputChange = (e: Event) => {
-    const value = (e.target as HTMLInputElement).value;
-    setInputMessage(value);
+  const handleInputChange = (e: JSX.TargetedEvent<HTMLInputElement, Event>) => {
+    const value = e.currentTarget.value;
+    console.log("ChatRoom: Input change event fired", value);
+    
+    // Update UI state based on input value
+    const trimmedValue = value.trim();
+    const isValid = trimmedValue.length > 0 && value.length <= 200;
+    
+    // Update React state (even though it might not trigger re-render)
+    setButtonEnabled(isValid);
+    setCharCount(value.length);
+    
+    // DIRECT DOM MANIPULATION to ensure UI updates immediately
+    const form = e.currentTarget.closest('form');
+    const button = form?.querySelector('button[type="submit"]') as HTMLButtonElement;
+    const charCountElement = form?.parentElement?.querySelector('.text-xs.text-gray-500') as HTMLElement;
+    
+    if (button) {
+      button.disabled = !isValid;
+      console.log("ChatRoom: Button directly", isValid ? "enabled" : "disabled");
+    }
+    
+    if (charCountElement) {
+      charCountElement.textContent = `${value.length}/200`;
+      console.log("ChatRoom: Character count updated to:", value.length);
+    }
 
     // Show typing indicator briefly
     setIsTyping(true);
@@ -201,7 +348,9 @@ function ChatRoomComponent({
                       isCorrectGuess(message)
                         ? "bg-green-100 border border-green-300 text-green-800"
                         : isOwnMessage(message)
-                        ? "bg-blue-500 text-white"
+                        ? message.isOffline 
+                          ? "bg-gray-400 text-white opacity-75"
+                          : "bg-blue-500 text-white"
                         : "bg-white border border-gray-200 text-gray-800"
                     }`}
                   >
@@ -213,6 +362,9 @@ function ChatRoomComponent({
                     )}
                     <div class="break-words">
                       {message.message}
+                      {message.isOffline && isOwnMessage(message) && (
+                        <span class="ml-2 text-xs opacity-75">⏳</span>
+                      )}
                     </div>
                     {isCorrectGuess(message) && (
                       <div class="text-xs mt-1 font-medium">
@@ -271,7 +423,6 @@ function ChatRoomComponent({
         <input
           ref={inputRef}
           type="text"
-          value={inputMessage}
           onInput={handleInputChange}
           placeholder={currentWord && isCurrentDrawer
             ? "You're drawing! Others will guess..."
@@ -284,43 +435,23 @@ function ChatRoomComponent({
         />
         <button
           type="submit"
-          disabled={!inputMessage.trim() || inputMessage.length > 200}
+          disabled={!buttonEnabled}
           class="px-3 sm:px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium touch-manipulation"
         >
-          <span class="hidden sm:inline">{offlineStatus.value.isOffline ? "Queue" : "Send"}</span>
+          <span class="hidden sm:inline">Send</span>
           <span class="sm:hidden">→</span>
         </button>
       </form>
 
       {/* Character count */}
       <div class="text-xs text-gray-500 mt-1 text-right">
-        {inputMessage.length}/200
+        {charCount}/200
       </div>
     </div>
   );
 }
 
-// Export with error boundary
+// Export directly without error boundary for testing
 export default function ChatRoom(props: ChatRoomProps) {
-  return (
-    <ErrorBoundary
-      fallback={(error, retry) => (
-        <div class="bg-red-50 border border-red-200 rounded-lg p-4">
-          <div class="text-red-800 font-medium mb-2">Chat Error</div>
-          <div class="text-red-600 text-sm mb-3">
-            Failed to load chat: {error.message}
-          </div>
-          <button
-            type="button"
-            onClick={retry}
-            class="px-3 py-1 bg-red-600 text-white rounded text-sm hover:bg-red-700"
-          >
-            Retry
-          </button>
-        </div>
-      )}
-    >
-      <ChatRoomComponent {...props} />
-    </ErrorBoundary>
-  );
+  return <ChatRoomComponent key={`${props.roomId}-${props.playerId}`} {...props} />;
 }

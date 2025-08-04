@@ -31,37 +31,12 @@
   },
   "lint": {
     "rules": {
-      "tags": [
-        "fresh",
-        "recommended"
-      ],
-      "include": [
-        "no-unused-vars",
-        "no-implicit-any",
-        "prefer-const",
-        "no-inferrable-types"
-      ],
-      "exclude": [
-        "no-explicit-any",
-        "react-no-danger"
-      ]
+      "tags": ["fresh", "recommended"],
+      "include": ["no-unused-vars", "no-implicit-any", "prefer-const", "no-inferrable-types"],
+      "exclude": ["no-explicit-any", "react-no-danger"]
     },
-    "include": [
-      "components/",
-      "islands/",
-      "lib/",
-      "routes/",
-      "types/",
-      "*.ts",
-      "*.tsx"
-    ],
-    "exclude": [
-      "**/_fresh/*",
-      "**/node_modules/*",
-      "**/.git/*",
-      "**/coverage/*",
-      "fresh.gen.ts"
-    ]
+    "include": ["components/", "islands/", "lib/", "routes/", "types/", "*.ts", "*.tsx"],
+    "exclude": ["**/_fresh/*", "**/node_modules/*", "**/.git/*", "**/coverage/*", "fresh.gen.ts"]
   },
   "fmt": {
     "include": [
@@ -78,13 +53,7 @@
       "*.jsonc",
       "*.md"
     ],
-    "exclude": [
-      "**/_fresh/*",
-      "**/node_modules/*",
-      "**/.git/*",
-      "**/coverage/*",
-      "fresh.gen.ts"
-    ],
+    "exclude": ["**/_fresh/*", "**/node_modules/*", "**/.git/*", "**/coverage/*", "fresh.gen.ts"],
     "options": {
       "lineWidth": 100,
       "indentWidth": 2,
@@ -93,9 +62,7 @@
       "proseWrap": "preserve"
     }
   },
-  "exclude": [
-    "**/_fresh/*"
-  ],
+  "exclude": ["**/_fresh/*"],
   "imports": {
     "$fresh/": "https://deno.land/x/fresh@1.7.3/",
     "preact": "https://esm.sh/preact@10.22.0",
@@ -119,14 +86,7 @@
   "compilerOptions": {
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
-    "lib": [
-      "dom",
-      "dom.iterable",
-      "dom.asynciterable",
-      "deno.ns",
-      "deno.unstable",
-      "webworker"
-    ],
+    "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
     "strict": true
   },
   "nodeModulesDir": "auto"
