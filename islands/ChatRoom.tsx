@@ -435,8 +435,6 @@ function ChatRoomComponent({
         </div>
       )}
 
-
-
       {/* Message input - Mobile optimized */}
       <form onSubmit={sendMessage} class="flex space-x-2">
         <input

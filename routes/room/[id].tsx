@@ -150,8 +150,6 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
         )}
 
-
-
         {/* Header - Mobile responsive with real-time updates */}
         <RoomHeader
           room={room}

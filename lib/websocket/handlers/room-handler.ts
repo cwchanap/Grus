@@ -192,7 +192,9 @@ export class RoomHandler implements MessageHandler {
         },
       });
 
-      console.log(`Player ${playerName} (${playerId}) successfully joined room ${roomId}. Total players: ${gameState.players.length}`);
+      console.log(
+        `Player ${playerName} (${playerId}) successfully joined room ${roomId}. Total players: ${gameState.players.length}`,
+      );
     } catch (error) {
       console.error("Error getting/sending game state:", error);
     }
@@ -308,43 +310,32 @@ export class RoomHandler implements MessageHandler {
         // Save updated game state
         await this.gameStateService.updateGameState(roomId, gameState);
 
-        // Broadcast updated game state to all remaining players
+        // Send a single comprehensive message with the complete game state
         this.connectionPool.broadcastToRoom(roomId, {
           type: "game-state",
           roomId,
-          data: gameState,
-        });
-      }
-
-      // Send room update notification for UI feedback
-      this.connectionPool.broadcastToRoom(roomId, {
-        type: "room-update",
-        roomId,
-        data: {
-          type: "player-left",
-          playerId,
-          playerName,
-          wasHost,
-        },
-      });
-
-      // If there was a host migration, send a specific host-changed message
-      if (wasHost && newHostId && newHostName) {
-        this.connectionPool.broadcastToRoom(roomId, {
-          type: "room-update",
-          roomId,
           data: {
-            type: "host-changed",
-            oldHostId: playerId,
-            oldHostName: playerName,
-            newHostId,
-            newHostName,
+            ...gameState,
+            updateType: "player-left",
+            leftPlayer: {
+              playerId,
+              playerName,
+              wasHost,
+            },
+            hostMigration: wasHost && newHostId && newHostName
+              ? {
+                newHostId,
+                newHostName,
+              }
+              : undefined,
           },
         });
 
-        console.log(
-          `Host migration completed: ${playerName} (${playerId}) -> ${newHostName} (${newHostId}) in room ${roomId}`,
-        );
+        if (wasHost && newHostId && newHostName) {
+          console.log(
+            `Host migration completed: ${playerName} (${playerId}) -> ${newHostName} (${newHostId}) in room ${roomId}`,
+          );
+        }
       }
 
       console.log(
