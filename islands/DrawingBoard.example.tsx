@@ -36,6 +36,7 @@ export default function GameRoomExample({ roomId, playerId, playerName }: GameRo
     drawingData: [],
     correctGuesses: [],
     chatMessages: [],
+    settings: { maxRounds: 5, roundTimeSeconds: 75 },
   });
 
   const [timeRemaining, setTimeRemaining] = useState(gameState.timeRemaining);

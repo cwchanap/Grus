@@ -12,6 +12,7 @@ import { RoomHandler } from "../handlers/room-handler.ts";
 import { ChatHandler } from "../handlers/chat-handler.ts";
 import { DrawingHandler } from "../handlers/drawing-handler.ts";
 import { GameHandler } from "../handlers/game-handler.ts";
+import { SettingsHandler } from "../handlers/settings-handler.ts";
 
 export class WebSocketServer {
   private env: Env;
@@ -30,6 +31,7 @@ export class WebSocketServer {
   private chatHandler: ChatHandler;
   private drawingHandler: DrawingHandler;
   private gameHandler: GameHandler;
+  private settingsHandler: SettingsHandler;
 
   constructor(env: Env) {
     this.env = env;
@@ -71,6 +73,12 @@ export class WebSocketServer {
       this.wordGenerator,
     );
 
+    this.settingsHandler = new SettingsHandler(
+      this.connectionPool,
+      this.validator,
+      this.gameStateService,
+    );
+
     // Register message handlers
     this.registerHandlers();
   }
@@ -92,6 +100,9 @@ export class WebSocketServer {
     this.messageRouter.registerHandler("next-round", this.gameHandler);
     this.messageRouter.registerHandler("end-game", this.gameHandler);
     this.messageRouter.registerHandler("ping", this.gameHandler);
+
+    // Settings operations
+    this.messageRouter.registerHandler("update-settings", this.settingsHandler);
   }
 
   handleWebSocketUpgrade(request: Request): Response {

@@ -98,6 +98,7 @@ export class GameHandler implements MessageHandler {
         drawingData: [],
         correctGuesses: [],
         chatMessages: [],
+        settings: { maxRounds: 5, roundTimeSeconds: 75 },
       };
 
       // Save game state

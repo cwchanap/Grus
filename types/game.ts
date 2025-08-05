@@ -1,5 +1,10 @@
 // Game-specific type definitions
 
+export interface GameSettings {
+  maxRounds: number;
+  roundTimeSeconds: number; // 60-90 seconds as per product rules
+}
+
 export interface GameState {
   roomId: string;
   currentDrawer: string;
@@ -12,6 +17,7 @@ export interface GameState {
   drawingData: DrawingCommand[];
   correctGuesses: Array<{ playerId: string; timestamp: number }>;
   chatMessages: ChatMessage[];
+  settings: GameSettings;
 }
 
 export interface Player {
@@ -87,6 +93,7 @@ export interface ClientMessage {
     | "start-game"
     | "next-round"
     | "end-game"
+    | "update-settings"
     | "ping";
   roomId: string;
   playerId: string;
@@ -101,6 +108,7 @@ export interface ServerMessage {
     | "game-state"
     | "score-update"
     | "host-changed"
+    | "settings-updated"
     | "error"
     | "pong";
   roomId: string;

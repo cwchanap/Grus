@@ -170,6 +170,7 @@ export class RoomHandler implements MessageHandler {
           drawingData: [],
           correctGuesses: [],
           chatMessages: [],
+          settings: { maxRounds: 5, roundTimeSeconds: 75 },
         };
       } else if (allPlayers) {
         // Game state exists, update it with current players

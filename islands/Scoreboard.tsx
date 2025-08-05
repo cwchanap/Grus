@@ -25,14 +25,23 @@ export default function Scoreboard({
 }: ScoreboardProps) {
   console.log("Scoreboard component rendered with roomId:", roomId, "playerId:", playerId);
   const [localGameState, setLocalGameState] = useState<GameState>(gameState);
+
+  // Sync local state with gameState prop changes
+  useEffect(() => {
+    console.log(
+      "Scoreboard: Syncing with gameState prop:",
+      gameState.players.map((p) => ({ id: p.id, name: p.name })),
+    );
+    setLocalGameState(gameState);
+  }, [gameState]);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     maxRounds: 5,
-    roundTimeMinutes: 1,
-    roundTimeSeconds: 30,
+    roundTimeSeconds: 75,
   });
   const [phaseTransition, setPhaseTransition] = useState<string | null>(null);
   const [previousRound, setPreviousRound] = useState<number>(gameState.roundNumber);
+  const [forceRenderCounter, setForceRenderCounter] = useState(0);
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
   const [isStartingGame, setIsStartingGame] = useState(false);
@@ -311,6 +320,69 @@ export default function Scoreboard({
 
                     return updatedState;
                   });
+                } else if (updateData.type === "player-joined") {
+                  console.log("Scoreboard: Player joined detected:", updateData);
+
+                  // If this message includes a complete gameState, we'll use that instead
+                  if (updateData.gameState) {
+                    console.log(
+                      "Scoreboard: Player-joined message includes complete gameState, will be handled below",
+                    );
+                    // Don't manually add the player, let the gameState update handle it
+                  } else {
+                    // Only manually add the player if no complete gameState is provided
+                    console.log("Scoreboard: Manually adding player to local state");
+                    setLocalGameState((prevState) => {
+                      console.log(
+                        "Scoreboard: Current players before add:",
+                        prevState.players.map((p) => ({ id: p.id, name: p.name })),
+                      );
+
+                      // Check if player already exists to avoid duplicates
+                      const playerExists = prevState.players.some((player) =>
+                        player.id === updateData.playerId
+                      );
+                      if (playerExists) {
+                        console.log("Scoreboard: Player already exists, skipping add");
+                        return prevState;
+                      }
+
+                      const newPlayer = {
+                        id: updateData.playerId,
+                        name: updateData.playerName,
+                        score: 0,
+                        isHost: false,
+                        isReady: false,
+                      };
+
+                      const updatedState = {
+                        ...prevState,
+                        players: [...prevState.players, newPlayer],
+                      };
+
+                      console.log("Scoreboard: Added new player to local state:", newPlayer);
+                      console.log(
+                        "Scoreboard: Updated players list:",
+                        updatedState.players.map((p) => ({ id: p.id, name: p.name })),
+                      );
+
+                      // Notify parent component of the state change
+                      if (onGameStateUpdate) {
+                        onGameStateUpdate(updatedState);
+                      }
+
+                      // Force a re-render by creating a completely new object reference
+                      const finalUpdatedState = JSON.parse(JSON.stringify(updatedState));
+
+                      // Force a re-render by incrementing the counter
+                      setTimeout(() => {
+                        setForceRenderCounter((prev) => prev + 1);
+                        console.log("Scoreboard: Forced re-render after manual player add");
+                      }, 50);
+
+                      return finalUpdatedState;
+                    });
+                  }
                 } else if (updateData.type === "player-left") {
                   console.log("Scoreboard: Player left detected:", updateData);
 
@@ -343,9 +415,24 @@ export default function Scoreboard({
                 // Room updates might contain player list changes
                 if (updateData.gameState) {
                   const updatedGameState = updateData.gameState;
-                  setLocalGameState(updatedGameState);
+                  console.log("Scoreboard: Updating from complete game state in room update");
+
+                  // Use the complete gameState as the authoritative source
+                  console.log(
+                    "Scoreboard: Using complete gameState from server:",
+                    updatedGameState.players.map((p) => ({ id: p.id, name: p.name })),
+                  );
+
+                  // Force a re-render by creating a completely new object reference
+                  const newGameState = JSON.parse(JSON.stringify(updatedGameState));
+                  setLocalGameState(newGameState);
+
+                  // Force a re-render by incrementing the counter
+                  setForceRenderCounter((prev) => prev + 1);
+                  console.log("Scoreboard: Forced re-render, counter:", forceRenderCounter + 1);
+
                   if (onGameStateUpdate) {
-                    onGameStateUpdate(updatedGameState);
+                    onGameStateUpdate(newGameState);
                   }
 
                   // Update header information
@@ -480,7 +567,7 @@ export default function Scoreboard({
   const getPhaseText = (): string => {
     switch (localGameState.phase) {
       case "waiting":
-        return "Waiting for game to start • Chat is available!";
+        return "Waiting for game to start";
       case "drawing":
         return "Drawing in progress";
       case "guessing":
@@ -510,6 +597,23 @@ export default function Scoreboard({
 
   const sortedPlayers = getSortedPlayers();
   const currentDrawer = getCurrentDrawer();
+
+  // Create a dynamic key based on player list to force remounting
+  const componentKey = `${roomId}-${playerId}-${
+    localGameState.players.map((p) => p.id).sort().join("-")
+  }-${forceRenderCounter}`;
+
+  // Debug logging for player list
+  console.log(
+    "Scoreboard: Current players in localGameState:",
+    localGameState.players.map((p) => ({ id: p.id, name: p.name })),
+  );
+  console.log(
+    "Scoreboard: Sorted players for rendering:",
+    sortedPlayers.map((p) => ({ id: p.id, name: p.name })),
+  );
+  console.log("Scoreboard: Force render counter:", forceRenderCounter);
+  console.log("Scoreboard: Component key:", componentKey);
 
   // Check if current player is host
   const isHost = localGameState.players.find((p) => p.id === playerId)?.isHost || false;
@@ -646,7 +750,7 @@ export default function Scoreboard({
   };
 
   return (
-    <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+    <div key={componentKey} className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
       {/* Phase Transition Notification */}
       {phaseTransition && (
         <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition">
@@ -726,8 +830,7 @@ export default function Scoreboard({
                     Math.max(
                       0,
                       (clientTimeRemaining /
-                        (gameSettings.roundTimeMinutes * 60 * 1000 +
-                          gameSettings.roundTimeSeconds * 1000)) * 100,
+                        (gameSettings.roundTimeSeconds * 1000)) * 100,
                     )
                   }%`,
                 }}
@@ -771,7 +874,10 @@ export default function Scoreboard({
       <div className="space-y-2 mb-4">
         <h3 className="text-sm font-medium text-gray-700">Players</h3>
         {sortedPlayers.map((player, index) => (
-          <div key={player.id} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+          <div
+            key={`${player.id}-${forceRenderCounter}`}
+            className="flex items-center justify-between p-2 bg-gray-50 rounded"
+          >
             <div className="flex items-center space-x-2">
               <span className="text-sm font-medium text-gray-600">#{index + 1}</span>
               <span className="text-sm font-medium text-gray-800">{player.name}</span>
@@ -889,10 +995,11 @@ export default function Scoreboard({
             <div>Max Rounds: {gameSettings.maxRounds}</div>
             <div>
               Round Time:{" "}
-              {gameSettings.roundTimeMinutes}:{gameSettings.roundTimeSeconds.toString().padStart(
-                2,
-                "0",
-              )}
+              {Math.floor(gameSettings.roundTimeSeconds / 60)}:{(gameSettings.roundTimeSeconds % 60)
+                .toString().padStart(
+                  2,
+                  "0",
+                )}
             </div>
           </div>
         </div>

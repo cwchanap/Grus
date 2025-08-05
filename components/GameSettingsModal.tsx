@@ -20,8 +20,7 @@ interface GameSettingsModalProps {
 
 export interface GameSettings {
   maxRounds: number;
-  roundTimeMinutes: number;
-  roundTimeSeconds: number;
+  roundTimeSeconds: number; // Total seconds (60-90 range as per product rules)
 }
 
 export default function GameSettingsModal({
@@ -76,47 +75,24 @@ export default function GameSettingsModal({
           {/* Round Time */}
           <div className="space-y-2">
             <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-              Round Time
+              Round Time (60-90 seconds)
             </label>
-            <div className="flex space-x-2">
-              <div className="flex-1 space-y-1">
-                <Select
-                  value={settings.roundTimeMinutes.toString()}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      roundTimeMinutes: parseInt((e.target as HTMLSelectElement).value),
-                    }))}
-                >
-                  <SelectItem value="0">0</SelectItem>
-                  <SelectItem value="1">1</SelectItem>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="3">3</SelectItem>
-                  <SelectItem value="4">4</SelectItem>
-                  <SelectItem value="5">5</SelectItem>
-                </Select>
-                <label className="text-xs text-muted-foreground">Minutes</label>
-              </div>
-              <div className="flex-1 space-y-1">
-                <Select
-                  value={settings.roundTimeSeconds.toString()}
-                  onChange={(e) =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      roundTimeSeconds: parseInt((e.target as HTMLSelectElement).value),
-                    }))}
-                >
-                  <SelectItem value="0">00</SelectItem>
-                  <SelectItem value="15">15</SelectItem>
-                  <SelectItem value="30">30</SelectItem>
-                  <SelectItem value="45">45</SelectItem>
-                </Select>
-                <label className="text-xs text-muted-foreground">Seconds</label>
-              </div>
-            </div>
+            <Select
+              value={settings.roundTimeSeconds.toString()}
+              onChange={(e) =>
+                setSettings((prev) => ({
+                  ...prev,
+                  roundTimeSeconds: parseInt((e.target as HTMLSelectElement).value),
+                }))}
+            >
+              <SelectItem value="60">1:00 (60 seconds)</SelectItem>
+              <SelectItem value="75">1:15 (75 seconds) - Default</SelectItem>
+              <SelectItem value="90">1:30 (90 seconds)</SelectItem>
+            </Select>
             <div className="text-xs text-muted-foreground">
-              Total:{" "}
-              {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(2, "0")}
+              Selected:{" "}
+              {Math.floor(settings.roundTimeSeconds / 60)}:{(settings.roundTimeSeconds % 60)
+                .toString().padStart(2, "0")}
             </div>
           </div>
 
@@ -129,15 +105,12 @@ export default function GameSettingsModal({
               <div className="text-sm space-y-1">
                 <div>• {settings.maxRounds} rounds total</div>
                 <div>
-                  • {settings.roundTimeMinutes}:{settings.roundTimeSeconds.toString().padStart(
-                    2,
-                    "0",
-                  )} per round
+                  • {Math.floor(settings.roundTimeSeconds / 60)}:{(settings.roundTimeSeconds % 60)
+                    .toString().padStart(2, "0")} per round
                 </div>
                 <div>
                   • Estimated game time: ~{Math.ceil(
-                    settings.maxRounds *
-                      (settings.roundTimeMinutes + settings.roundTimeSeconds / 60) * 1.5,
+                    settings.maxRounds * (settings.roundTimeSeconds / 60) * 1.2,
                   )} minutes
                 </div>
               </div>

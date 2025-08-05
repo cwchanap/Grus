@@ -39,7 +39,7 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ga
     currentDrawer: "", // No drawer initially
     currentWord: "", // No word initially
     roundNumber: 0, // Game hasn't started
-    timeRemaining: 120000, // 2 minutes default
+    timeRemaining: 75000, // Default 75 seconds as per product rules
     phase: "waiting", // Waiting for game to start
     players,
     scores: players.reduce((acc: any, player: any) => {
@@ -49,6 +49,10 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ga
     drawingData: [], // No drawing data initially
     correctGuesses: [], // No correct guesses initially
     chatMessages: [], // No chat messages initially
+    settings: {
+      maxRounds: 5,
+      roundTimeSeconds: 75, // Default 75 seconds as per product rules
+    },
   };
 }
 
@@ -146,19 +150,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
         )}
 
-        {/* Welcome message for waiting phase */}
-        {gameState.phase === "waiting" && playerId && (
-          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-3 sm:mb-4">
-            <div class="flex items-center text-blue-800">
-              <span class="text-blue-600 mr-2">💬</span>
-              <div class="text-sm">
-                <strong>Welcome to the room!</strong>{" "}
-                Chat is available at all times - say hello to other players while waiting for the
-                game to start.
-              </div>
-            </div>
-          </div>
-        )}
+
 
         {/* Header - Mobile responsive with real-time updates */}
         <RoomHeader

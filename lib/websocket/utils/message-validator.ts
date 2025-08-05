@@ -44,4 +44,16 @@ export class MessageValidator {
   validateChatMessage(message: string): boolean {
     return validateChatMessage(message);
   }
+
+  validateRoomId(roomId: string): boolean {
+    return typeof roomId === "string" &&
+      roomId.length === 6 &&
+      /^[A-Z0-9]{6}$/.test(roomId);
+  }
+
+  validatePlayerId(playerId: string): boolean {
+    return typeof playerId === "string" &&
+      playerId.length > 0 &&
+      playerId.length <= 100;
+  }
 }

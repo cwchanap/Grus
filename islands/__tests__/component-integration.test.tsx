@@ -40,6 +40,7 @@ function createTestGameState(overrides: Partial<GameState> = {}): GameState {
     drawingData: [],
     correctGuesses: [],
     chatMessages: [],
+    settings: { maxRounds: 5, roundTimeSeconds: 75 },
     ...overrides,
   };
 }

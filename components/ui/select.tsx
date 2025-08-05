@@ -1,60 +1,39 @@
 import { ComponentChildren } from "preact";
-import { forwardRef } from "preact/compat";
-import { cn } from "../../lib/utils.ts";
+import { JSX } from "preact/jsx-runtime";
 
-interface SelectProps extends preact.JSX.HTMLAttributes<HTMLSelectElement> {
+interface SelectProps {
+  value: string;
+  onChange: (e: JSX.TargetedEvent<HTMLSelectElement>) => void;
   children: ComponentChildren;
+  className?: string;
+  disabled?: boolean;
 }
 
-const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ className, children, ...props }, ref) => (
-    <div className="relative">
-      <select
-        className={cn(
-          "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 appearance-none",
-          className,
-        )}
-        ref={ref}
-        {...props}
-      >
-        {children}
-      </select>
-      <svg
-        className="absolute right-3 top-3 h-4 w-4 opacity-50 pointer-events-none"
-        fill="none"
-        stroke="currentColor"
-        viewBox="0 0 24 24"
-      >
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-      </svg>
-    </div>
-  ),
-);
-Select.displayName = "Select";
+export function Select(
+  { value, onChange, children, className = "", disabled = false }: SelectProps,
+) {
+  return (
+    <select
+      value={value}
+      onChange={onChange}
+      disabled={disabled}
+      className={`flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+    >
+      {children}
+    </select>
+  );
+}
 
-const SelectContent = ({ children }: { children: ComponentChildren }) => <>{children}</>;
+interface SelectItemProps {
+  value: string;
+  children: ComponentChildren;
+  disabled?: boolean;
+}
 
-const SelectItem = forwardRef<
-  HTMLOptionElement,
-  preact.JSX.HTMLAttributes<HTMLOptionElement> & { value: string }
->(({ className, children, ...props }, ref) => (
-  <option
-    ref={ref}
-    className={cn(
-      "relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-8 pr-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-      className,
-    )}
-    {...props}
-  >
-    {children}
-  </option>
-));
-SelectItem.displayName = "SelectItem";
-
-const SelectValue = ({ placeholder }: { placeholder?: string }) => (
-  <option value="" disabled selected hidden>
-    {placeholder}
-  </option>
-);
-
-export { Select, SelectContent, SelectItem, SelectValue };
+export function SelectItem({ value, children, disabled = false }: SelectItemProps) {
+  return (
+    <option value={value} disabled={disabled}>
+      {children}
+    </option>
+  );
+}

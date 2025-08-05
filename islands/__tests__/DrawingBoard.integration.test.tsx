@@ -27,6 +27,7 @@ function createGameRoomScenario() {
     drawingData: [],
     correctGuesses: [],
     chatMessages: [],
+    settings: { maxRounds: 5, roundTimeSeconds: 75 },
   };
 
   return { roomId, players, gameState };

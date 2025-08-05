@@ -104,6 +104,7 @@ export const handler: Handlers = {
         drawingData: [],
         correctGuesses: [],
         chatMessages: [],
+        settings: { maxRounds: 5, roundTimeSeconds: 75 },
       };
 
       // In development, we can't use KV store, so we'll just return the game state
