@@ -122,21 +122,6 @@ export class RoomHandler implements MessageHandler {
       console.error("Error updating player state:", error);
     }
 
-    // Broadcast room update to all players in room
-    try {
-      this.connectionPool.broadcastToRoom(roomId, {
-        type: "room-update",
-        roomId,
-        data: {
-          type: "player-joined",
-          playerId,
-          playerName,
-        },
-      });
-    } catch (error) {
-      console.error("Error broadcasting room update:", error);
-    }
-
     // Update and send current game state
     try {
       let gameState = await this.gameStateService.getGameState(roomId);
@@ -193,24 +178,21 @@ export class RoomHandler implements MessageHandler {
       // Save the updated game state
       await this.gameStateService.updateGameState(roomId, gameState);
 
-      // Broadcast updated game state to ALL players in the room
+      // Send a single comprehensive message with the complete game state
       this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
-        data: gameState,
-      });
-
-      // Also broadcast a room update to ensure UI updates
-      this.connectionPool.broadcastToRoom(roomId, {
-        type: "room-update",
-        roomId,
         data: {
-          type: "player-joined",
-          playerId,
-          playerName,
-          gameState: gameState,
+          ...gameState,
+          updateType: "player-joined",
+          joinedPlayer: {
+            playerId,
+            playerName,
+          },
         },
       });
+
+      console.log(`Player ${playerName} (${playerId}) successfully joined room ${roomId}. Total players: ${gameState.players.length}`);
     } catch (error) {
       console.error("Error getting/sending game state:", error);
     }
@@ -334,45 +316,30 @@ export class RoomHandler implements MessageHandler {
         });
       }
 
-      // Prepare the room update message
-      const roomUpdateData: any = {
-        type: "player-left",
-        playerId,
-        playerName,
-        wasHost,
-      };
-
-      // Add host migration info if applicable
-      if (wasHost && newHostId && newHostName) {
-        roomUpdateData.hostMigration = {
-          newHostId,
-          newHostName,
-        };
-      }
-
-      // Broadcast player left update to all remaining players
-      console.log(`Broadcasting player-left message to room ${roomId}:`, roomUpdateData);
+      // Send room update notification for UI feedback
       this.connectionPool.broadcastToRoom(roomId, {
         type: "room-update",
         roomId,
-        data: roomUpdateData,
+        data: {
+          type: "player-left",
+          playerId,
+          playerName,
+          wasHost,
+        },
       });
 
       // If there was a host migration, send a specific host-changed message
       if (wasHost && newHostId && newHostName) {
-        const hostChangedData = {
-          type: "host-changed",
-          oldHostId: playerId,
-          oldHostName: playerName,
-          newHostId,
-          newHostName,
-        };
-
-        console.log(`Broadcasting host-changed message to room ${roomId}:`, hostChangedData);
         this.connectionPool.broadcastToRoom(roomId, {
           type: "room-update",
           roomId,
-          data: hostChangedData,
+          data: {
+            type: "host-changed",
+            oldHostId: playerId,
+            oldHostName: playerName,
+            newHostId,
+            newHostName,
+          },
         });
 
         console.log(

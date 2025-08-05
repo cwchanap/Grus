@@ -28,6 +28,11 @@ export default function Scoreboard({
 
   // Sync local state with gameState prop changes
   useEffect(() => {
+    if (!gameState.players || !Array.isArray(gameState.players)) {
+      console.error("Scoreboard: Invalid gameState prop - players is not an array");
+      return;
+    }
+
     console.log(
       "Scoreboard: Syncing with gameState prop:",
       gameState.players.map((p) => ({ id: p.id, name: p.name })),
@@ -41,7 +46,7 @@ export default function Scoreboard({
   });
   const [phaseTransition, setPhaseTransition] = useState<string | null>(null);
   const [previousRound, setPreviousRound] = useState<number>(gameState.roundNumber);
-  const [forceRenderCounter, setForceRenderCounter] = useState(0);
+
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
   const [isStartingGame, setIsStartingGame] = useState(false);
@@ -205,6 +210,17 @@ export default function Scoreboard({
               playerId,
               data: { playerName },
             }));
+
+            // Request current game state to ensure we're in sync
+            setTimeout(() => {
+              if (ws?.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: "request-game-state",
+                  roomId,
+                  playerId,
+                }));
+              }
+            }, 100);
           } else {
             console.warn(
               `Scoreboard: Cannot join room ${roomId} - playerId: ${playerId}, playerName: ${playerName}`,
@@ -270,25 +286,74 @@ export default function Scoreboard({
                     );
                   }
                 } else if (updatedGameState.players) {
-                  // Regular game state update
-                  setLocalGameState(updatedGameState);
+                  // Regular game state update - this handles all player changes
+                  console.log(
+                    "Scoreboard: Received game state update with players:",
+                    updatedGameState.players.map((p: any) => ({ id: p.id, name: p.name })),
+                  );
+
+                  // Show transition messages for player changes
+                  if (
+                    updatedGameState.updateType === "player-joined" && updatedGameState.joinedPlayer
+                  ) {
+                    setPhaseTransition(
+                      `${updatedGameState.joinedPlayer.playerName} joined the room!`,
+                    );
+                    setTimeout(() => setPhaseTransition(null), 2000);
+                  } else if (
+                    updatedGameState.updateType === "player-left" && updatedGameState.leftPlayer
+                  ) {
+                    const leftPlayer = updatedGameState.leftPlayer;
+                    if (leftPlayer.wasHost && updatedGameState.hostMigration) {
+                      setPhaseTransition(
+                        `${leftPlayer.playerName} left. ${updatedGameState.hostMigration.newHostName} is now the host.`,
+                      );
+                    } else {
+                      setPhaseTransition(`${leftPlayer.playerName} left the room`);
+                    }
+                    setTimeout(() => setPhaseTransition(null), 2000);
+                  }
+
+                  // Validate the game state before updating
+                  if (!updatedGameState.players || !Array.isArray(updatedGameState.players)) {
+                    console.error(
+                      "Scoreboard: Invalid game state received - players is not an array",
+                    );
+                    return;
+                  }
+
+                  // Create a new state object to ensure React detects the change
+                  const newGameState = {
+                    ...updatedGameState,
+                    players: [...updatedGameState.players],
+                    scores: { ...updatedGameState.scores },
+                  };
+
+                  setLocalGameState(newGameState);
+
                   if (onGameStateUpdate) {
-                    onGameStateUpdate(updatedGameState);
+                    onGameStateUpdate(newGameState);
                   }
 
                   // Update header information
-                  updateHeaderInfo(updatedGameState);
+                  updateHeaderInfo(newGameState);
 
                   // Emit custom event for other components
                   globalThis.dispatchEvent(
                     new CustomEvent("gameStateUpdate", {
-                      detail: { gameState: updatedGameState },
+                      detail: { gameState: newGameState },
                     }),
+                  );
+
+                  console.log(
+                    "Scoreboard: Local game state updated with",
+                    newGameState.players.length,
+                    "players",
                   );
                 }
               }
             } else if (message.type === "room-update") {
-              // Handle different types of room updates
+              // Handle room updates that don't require game state changes
               if (message.data) {
                 const updateData = message.data;
 
@@ -299,152 +364,9 @@ export default function Scoreboard({
                   }),
                 );
 
-                // Handle host migration specifically
-                if (updateData.type === "host-changed") {
-                  console.log("Scoreboard: Host changed detected:", updateData);
-
-                  // Update local game state to reflect host change
-                  setLocalGameState((prevState) => {
-                    const updatedState = {
-                      ...prevState,
-                      players: prevState.players.map((player) => ({
-                        ...player,
-                        isHost: player.id === updateData.newHostId,
-                      })),
-                    };
-
-                    // Notify parent component of the state change
-                    if (onGameStateUpdate) {
-                      onGameStateUpdate(updatedState);
-                    }
-
-                    return updatedState;
-                  });
-                } else if (updateData.type === "player-joined") {
-                  console.log("Scoreboard: Player joined detected:", updateData);
-
-                  // If this message includes a complete gameState, we'll use that instead
-                  if (updateData.gameState) {
-                    console.log(
-                      "Scoreboard: Player-joined message includes complete gameState, will be handled below",
-                    );
-                    // Don't manually add the player, let the gameState update handle it
-                  } else {
-                    // Only manually add the player if no complete gameState is provided
-                    console.log("Scoreboard: Manually adding player to local state");
-                    setLocalGameState((prevState) => {
-                      console.log(
-                        "Scoreboard: Current players before add:",
-                        prevState.players.map((p) => ({ id: p.id, name: p.name })),
-                      );
-
-                      // Check if player already exists to avoid duplicates
-                      const playerExists = prevState.players.some((player) =>
-                        player.id === updateData.playerId
-                      );
-                      if (playerExists) {
-                        console.log("Scoreboard: Player already exists, skipping add");
-                        return prevState;
-                      }
-
-                      const newPlayer = {
-                        id: updateData.playerId,
-                        name: updateData.playerName,
-                        score: 0,
-                        isHost: false,
-                        isReady: false,
-                      };
-
-                      const updatedState = {
-                        ...prevState,
-                        players: [...prevState.players, newPlayer],
-                      };
-
-                      console.log("Scoreboard: Added new player to local state:", newPlayer);
-                      console.log(
-                        "Scoreboard: Updated players list:",
-                        updatedState.players.map((p) => ({ id: p.id, name: p.name })),
-                      );
-
-                      // Notify parent component of the state change
-                      if (onGameStateUpdate) {
-                        onGameStateUpdate(updatedState);
-                      }
-
-                      // Force a re-render by creating a completely new object reference
-                      const finalUpdatedState = JSON.parse(JSON.stringify(updatedState));
-
-                      // Force a re-render by incrementing the counter
-                      setTimeout(() => {
-                        setForceRenderCounter((prev) => prev + 1);
-                        console.log("Scoreboard: Forced re-render after manual player add");
-                      }, 50);
-
-                      return finalUpdatedState;
-                    });
-                  }
-                } else if (updateData.type === "player-left") {
-                  console.log("Scoreboard: Player left detected:", updateData);
-
-                  // Update local game state to remove the player
-                  setLocalGameState((prevState) => {
-                    const updatedState = {
-                      ...prevState,
-                      players: prevState.players.filter((player) =>
-                        player.id !== updateData.playerId
-                      ),
-                    };
-
-                    // If this was a host leaving with migration, update host status
-                    if (updateData.wasHost && updateData.hostMigration) {
-                      updatedState.players = updatedState.players.map((player) => ({
-                        ...player,
-                        isHost: player.id === updateData.hostMigration.newHostId,
-                      }));
-                    }
-
-                    // Notify parent component of the state change
-                    if (onGameStateUpdate) {
-                      onGameStateUpdate(updatedState);
-                    }
-
-                    return updatedState;
-                  });
-                }
-
-                // Room updates might contain player list changes
-                if (updateData.gameState) {
-                  const updatedGameState = updateData.gameState;
-                  console.log("Scoreboard: Updating from complete game state in room update");
-
-                  // Use the complete gameState as the authoritative source
-                  console.log(
-                    "Scoreboard: Using complete gameState from server:",
-                    updatedGameState.players.map((p) => ({ id: p.id, name: p.name })),
-                  );
-
-                  // Force a re-render by creating a completely new object reference
-                  const newGameState = JSON.parse(JSON.stringify(updatedGameState));
-                  setLocalGameState(newGameState);
-
-                  // Force a re-render by incrementing the counter
-                  setForceRenderCounter((prev) => prev + 1);
-                  console.log("Scoreboard: Forced re-render, counter:", forceRenderCounter + 1);
-
-                  if (onGameStateUpdate) {
-                    onGameStateUpdate(newGameState);
-                  }
-
-                  // Update header information
-                  updateHeaderInfo(updatedGameState);
-
-                  // Emit custom event for other components
-                  globalThis.dispatchEvent(
-                    new CustomEvent("gameStateUpdate", {
-                      detail: { gameState: updatedGameState },
-                    }),
-                  );
-                }
+                // Note: All actual game state changes are now handled via game-state messages
+                // Room-update messages are only used for non-state UI feedback
+                console.log("Scoreboard: Received room-update message:", updateData.type);
               }
             } else if (message.type === "chat-message") {
               // Handle chat messages and forward to ChatRoom component
@@ -598,11 +520,6 @@ export default function Scoreboard({
   const sortedPlayers = getSortedPlayers();
   const currentDrawer = getCurrentDrawer();
 
-  // Create a dynamic key based on player list to force remounting
-  const componentKey = `${roomId}-${playerId}-${
-    localGameState.players.map((p) => p.id).sort().join("-")
-  }-${forceRenderCounter}`;
-
   // Debug logging for player list
   console.log(
     "Scoreboard: Current players in localGameState:",
@@ -612,8 +529,6 @@ export default function Scoreboard({
     "Scoreboard: Sorted players for rendering:",
     sortedPlayers.map((p) => ({ id: p.id, name: p.name })),
   );
-  console.log("Scoreboard: Force render counter:", forceRenderCounter);
-  console.log("Scoreboard: Component key:", componentKey);
 
   // Check if current player is host
   const isHost = localGameState.players.find((p) => p.id === playerId)?.isHost || false;
@@ -750,7 +665,7 @@ export default function Scoreboard({
   };
 
   return (
-    <div key={componentKey} className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+    <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
       {/* Phase Transition Notification */}
       {phaseTransition && (
         <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition">
@@ -875,7 +790,7 @@ export default function Scoreboard({
         <h3 className="text-sm font-medium text-gray-700">Players</h3>
         {sortedPlayers.map((player, index) => (
           <div
-            key={`${player.id}-${forceRenderCounter}`}
+            key={player.id}
             className="flex items-center justify-between p-2 bg-gray-50 rounded"
           >
             <div className="flex items-center space-x-2">
