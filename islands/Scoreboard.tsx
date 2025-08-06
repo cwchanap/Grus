@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useState, useMemo } from "preact/hooks";
 import { signal } from "@preact/signals";
 import type { GameState, PlayerState } from "../types/game.ts";
 // import type { JSX } from "preact";
@@ -39,6 +39,15 @@ export default function Scoreboard({
     );
     setLocalGameState(gameState);
   }, [gameState]);
+
+  // Force re-render when player list changes
+  useEffect(() => {
+    setRenderKey(prev => prev + 1);
+    console.log("Scoreboard: Player list changed, forcing re-render. New player count:", localGameState.players.length);
+    console.log("Scoreboard: Player IDs:", localGameState.players.map(p => p.id));
+    console.log("Scoreboard: Player names:", localGameState.players.map(p => p.name));
+  }, [JSON.stringify(localGameState.players)]);
+
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     maxRounds: 5,
@@ -50,6 +59,7 @@ export default function Scoreboard({
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
   const [isStartingGame, setIsStartingGame] = useState(false);
+  const [renderKey, setRenderKey] = useState(0);
 
   // Helper function to update header information
   const updateHeaderInfo = (updatedGameState: GameState) => {
@@ -210,17 +220,6 @@ export default function Scoreboard({
               playerId,
               data: { playerName },
             }));
-
-            // Request current game state to ensure we're in sync
-            setTimeout(() => {
-              if (ws?.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                  type: "request-game-state",
-                  roomId,
-                  playerId,
-                }));
-              }
-            }, 100);
           } else {
             console.warn(
               `Scoreboard: Cannot join room ${roomId} - playerId: ${playerId}, playerName: ${playerName}`,
@@ -470,15 +469,16 @@ export default function Scoreboard({
     }
   };
 
-  // Get sorted players by score
-  const getSortedPlayers = (): (PlayerState & { score: number })[] => {
+  // Get sorted players by score - memoized to ensure proper re-renders
+  const getSortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
+    console.log("Scoreboard: Recalculating sorted players, player count:", localGameState.players.length);
     return localGameState.players
       .map((player) => ({
         ...player,
         score: localGameState.scores[player.id] || 0,
       }))
       .sort((a, b) => b.score - a.score);
-  };
+  }, [localGameState.players, localGameState.scores]);
 
   // Get current drawer info
   const getCurrentDrawer = (): PlayerState | null => {
@@ -517,7 +517,7 @@ export default function Scoreboard({
     }
   };
 
-  const sortedPlayers = getSortedPlayers();
+  const sortedPlayers = getSortedPlayers;
   const currentDrawer = getCurrentDrawer();
 
   // Debug logging for player list
@@ -665,7 +665,7 @@ export default function Scoreboard({
   };
 
   return (
-    <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+    <div key={`scoreboard-${renderKey}`} className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
       {/* Phase Transition Notification */}
       {phaseTransition && (
         <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition">
@@ -786,7 +786,7 @@ export default function Scoreboard({
       )}
 
       {/* Player Scores */}
-      <div className="space-y-2 mb-4">
+      <div className="space-y-2 mb-4" key={`players-${localGameState.players.length}-${localGameState.players.map(p => p.id).join('-')}`}>
         <h3 className="text-sm font-medium text-gray-700">Players</h3>
         {sortedPlayers.map((player, index) => (
           <div
