@@ -46,13 +46,18 @@ export default function Scoreboard({
     });
   }, [gameState.players.length, JSON.stringify(gameState.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost }))), gameState.phase, gameState.roundNumber]);
 
-  // Force re-render when player list changes
+  // Force re-render when player list changes - multiple triggers to ensure it works
   useEffect(() => {
     setRenderKey(prev => prev + 1);
     console.log("Scoreboard: Player list changed, forcing re-render. New player count:", localGameState.players.length);
     console.log("Scoreboard: Player IDs:", localGameState.players.map(p => p.id));
     console.log("Scoreboard: Player names:", localGameState.players.map(p => p.name));
-  }, [JSON.stringify(localGameState.players)]);
+  }, [
+    localGameState.players.length,
+    localGameState.players.map(p => p.id).join(','),
+    localGameState.players.map(p => p.name).join(','),
+    JSON.stringify(localGameState.players)
+  ]);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
@@ -362,6 +367,9 @@ export default function Scoreboard({
                   );
 
                   setLocalGameState(newGameState);
+                  
+                  // Force re-render by updating renderKey directly
+                  setRenderKey(prev => prev + 1);
 
                   if (onGameStateUpdate) {
                     onGameStateUpdate(newGameState);
@@ -502,8 +510,8 @@ export default function Scoreboard({
     }
   };
 
-  // Get sorted players by score - memoized to ensure proper re-renders
-  const sortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
+  // Get sorted players by score - force recalculation on every render to ensure updates
+  const getSortedPlayers = (): (PlayerState & { score: number })[] => {
     console.log("Scoreboard: Recalculating sorted players, player count:", localGameState.players.length);
     return localGameState.players
       .map((player) => ({
@@ -511,12 +519,9 @@ export default function Scoreboard({
         score: localGameState.scores[player.id] || 0,
       }))
       .sort((a, b) => b.score - a.score);
-  }, [
-    localGameState.players.length,
-    JSON.stringify(localGameState.players.map(p => ({ id: p.id, name: p.name }))),
-    localGameState.scores,
-    renderKey
-  ]);
+  };
+  
+  const sortedPlayers = getSortedPlayers();
 
   // Get current drawer info
   const currentDrawer = useMemo((): PlayerState | null => {
