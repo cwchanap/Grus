@@ -321,6 +321,26 @@ export default function Scoreboard({
                     return;
                   }
 
+                  // Check if current player is missing from the game state
+                  const currentPlayerExists = updatedGameState.players.some(p => p.id === playerId);
+                  if (!currentPlayerExists && playerId) {
+                    console.warn(`Scoreboard: Current player ${playerId} missing from game state, requesting refresh`);
+                    // Send another join-room message to ensure we're properly synced
+                    const currentPlayer = localGameState.players.find((p) => p.id === playerId);
+                    const playerName = currentPlayer?.name;
+                    const globalWs = (globalThis as any).__gameWebSocket;
+                    if (playerName && globalWs?.readyState === WebSocket.OPEN) {
+                      setTimeout(() => {
+                        globalWs.send(JSON.stringify({
+                          type: "join-room",
+                          roomId,
+                          playerId,
+                          data: { playerName },
+                        }));
+                      }, 1000);
+                    }
+                  }
+
                   // Create a new state object to ensure React detects the change
                   const newGameState = {
                     ...updatedGameState,

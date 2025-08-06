@@ -126,11 +126,43 @@ export class RoomHandler implements MessageHandler {
     try {
       let gameState = await this.gameStateService.getGameState(roomId);
 
-      // Small delay to ensure database operations are completed
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      // Ensure the joining player is in the database with retry logic
+      let allPlayers = null;
+      let retryCount = 0;
+      const maxRetries = 5;
+      
+      while (retryCount < maxRetries) {
+        allPlayers = await this.playerService.getPlayersFromDatabase(roomId);
+        const playerExists = allPlayers?.some(p => p.id === playerId);
+        
+        if (playerExists) {
+          console.log(`Room ${roomId}: Player ${playerId} found in database on attempt ${retryCount + 1}`);
+          break;
+        }
+        
+        console.log(`Room ${roomId}: Player ${playerId} not found in database, attempt ${retryCount + 1}/${maxRetries}`);
+        retryCount++;
+        
+        if (retryCount < maxRetries) {
+          // Wait before retrying, with exponential backoff
+          await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, retryCount)));
+        } else {
+          // Last resort: ensure player exists in database
+          console.warn(`Room ${roomId}: Adding player ${playerId} to database as fallback`);
+          try {
+            const { getDatabaseService } = await import("../../database-factory.ts");
+            const db = getDatabaseService();
+            await db.createPlayer(playerName, roomId, false);
+            // Get updated player list
+            allPlayers = await this.playerService.getPlayersFromDatabase(roomId);
+          } catch (dbError) {
+            console.error("Failed to add player to database:", dbError);
+          }
+        }
+      }
 
-      // Get all current players in the room (including the new player)
-      const allPlayers = await this.playerService.getPlayersFromDatabase(roomId);
+      console.log(`Room ${roomId}: Final player list has ${allPlayers?.length || 0} players:`, 
+        allPlayers?.map(p => ({ id: p.id, name: p.name })) || []);
 
       // If no game state exists, create initial waiting state
       if (!gameState) {
