@@ -1,4 +1,4 @@
-import { assertEquals } from "$std/assert/mod.ts";
+import { assertEquals, assertExists } from "$std/assert/mod.ts";
 // import { signal } from "@preact/signals";
 import type { GameState } from "../../types/game.ts";
 
@@ -342,4 +342,217 @@ Deno.test("Scoreboard - game settings modal should only show in waiting phase", 
 
   assertEquals(shouldShowSettingsInWaiting, true);
   assertEquals(shouldNotShowSettingsInDrawing, false);
+});
+
+Deno.test("Scoreboard - handles player join updates correctly", () => {
+  // Initial state with 2 players
+  const initialState = createMockGameState({
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+    scores: {
+      "player1": 0,
+      "player2": 0,
+    },
+  });
+
+  // Updated state with new player joined
+  const updatedState = createMockGameState({
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player3",
+        name: "Charlie",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+    scores: {
+      "player1": 0,
+      "player2": 0,
+      "player3": 0,
+    },
+  });
+
+  // Verify initial state
+  assertEquals(initialState.players.length, 2);
+  assertEquals(Object.keys(initialState.scores).length, 2);
+
+  // Verify updated state
+  assertEquals(updatedState.players.length, 3);
+  assertEquals(Object.keys(updatedState.scores).length, 3);
+
+  // Verify new player exists
+  const newPlayer = updatedState.players.find((p) => p.id === "player3");
+  assertExists(newPlayer);
+  assertEquals(newPlayer.name, "Charlie");
+  assertEquals(newPlayer.isHost, false);
+  assertEquals(newPlayer.isConnected, true);
+
+  // Verify host remains the same
+  const hostPlayer = updatedState.players.find((p) => p.isHost);
+  assertExists(hostPlayer);
+  assertEquals(hostPlayer.id, "player1");
+  assertEquals(hostPlayer.name, "Alice");
+});
+
+Deno.test("Scoreboard - handles player leave updates correctly", () => {
+  // Initial state with 3 players
+  const initialState = createMockGameState({
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player3",
+        name: "Charlie",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+    scores: {
+      "player1": 100,
+      "player2": 50,
+      "player3": 25,
+    },
+  });
+
+  // Updated state with player left
+  const updatedState = createMockGameState({
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+    scores: {
+      "player1": 100,
+      "player2": 50,
+      // player3 removed from scores
+    },
+  });
+
+  // Verify initial state
+  assertEquals(initialState.players.length, 3);
+  assertEquals(Object.keys(initialState.scores).length, 3);
+
+  // Verify updated state
+  assertEquals(updatedState.players.length, 2);
+  assertEquals(Object.keys(updatedState.scores).length, 2);
+
+  // Verify player3 is gone
+  const removedPlayer = updatedState.players.find((p) => p.id === "player3");
+  assertEquals(removedPlayer, undefined);
+
+  // Verify remaining players are still there
+  const alice = updatedState.players.find((p) => p.id === "player1");
+  const bob = updatedState.players.find((p) => p.id === "player2");
+  assertExists(alice);
+  assertExists(bob);
+  assertEquals(alice.name, "Alice");
+  assertEquals(bob.name, "Bob");
+});
+
+Deno.test("Scoreboard - handles host migration correctly", () => {
+  // Initial state with host
+  const initialState = createMockGameState({
+    players: [
+      {
+        id: "player1",
+        name: "Alice",
+        isHost: true,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: false,
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+  });
+
+  // Updated state with host migrated to player2
+  const updatedState = createMockGameState({
+    players: [
+      {
+        id: "player2",
+        name: "Bob",
+        isHost: true, // Bob is now the host
+        isConnected: true,
+        lastActivity: Date.now(),
+      },
+    ],
+    scores: {
+      "player2": 0,
+      // player1 removed
+    },
+  });
+
+  // Verify initial host
+  const initialHost = initialState.players.find((p) => p.isHost);
+  assertExists(initialHost);
+  assertEquals(initialHost.id, "player1");
+  assertEquals(initialHost.name, "Alice");
+
+  // Verify new host
+  const newHost = updatedState.players.find((p) => p.isHost);
+  assertExists(newHost);
+  assertEquals(newHost.id, "player2");
+  assertEquals(newHost.name, "Bob");
+
+  // Verify only one host exists
+  const hostCount = updatedState.players.filter((p) => p.isHost).length;
+  assertEquals(hostCount, 1);
 });

@@ -239,13 +239,30 @@ export default function RoomHeader(
       }
     };
 
+    // Listen for header update events from Scoreboard
+    const handleHeaderUpdate = (event: Event) => {
+      const customEvent = event as CustomEvent;
+      const { playerCount, hostName } = customEvent.detail;
+      
+      setRoom((prevRoom) => ({
+        ...prevRoom,
+        playerCount,
+        host: prevRoom.host ? {
+          ...prevRoom.host,
+          name: hostName
+        } : prevRoom.host
+      }));
+    };
+
     // Listen for custom events from the global WebSocket
     globalThis.addEventListener("gameStateUpdate", handleGameStateUpdate);
     globalThis.addEventListener("roomUpdate", handleRoomUpdate);
+    globalThis.addEventListener("headerUpdate", handleHeaderUpdate);
 
     return () => {
       globalThis.removeEventListener("gameStateUpdate", handleGameStateUpdate);
       globalThis.removeEventListener("roomUpdate", handleRoomUpdate);
+      globalThis.removeEventListener("headerUpdate", handleHeaderUpdate);
     };
   }, [room.room.id]);
 

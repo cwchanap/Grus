@@ -26,7 +26,7 @@ export default function Scoreboard({
   console.log("Scoreboard component rendered with roomId:", roomId, "playerId:", playerId);
   const [localGameState, setLocalGameState] = useState<GameState>(gameState);
 
-  // Sync local state with gameState prop changes
+  // Sync local state with gameState prop changes - simplified dependencies
   useEffect(() => {
     if (!gameState.players || !Array.isArray(gameState.players)) {
       console.error("Scoreboard: Invalid gameState prop - players is not an array");
@@ -38,26 +38,16 @@ export default function Scoreboard({
       gameState.players.map((p) => ({ id: p.id, name: p.name })),
     );
     
-    // Create a new state object to ensure React detects the change
-    setLocalGameState({
-      ...gameState,
-      players: [...gameState.players],
-      scores: { ...gameState.scores },
-    });
-  }, [gameState.players.length, JSON.stringify(gameState.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost }))), gameState.phase, gameState.roundNumber]);
+    // Always update local state when gameState prop changes
+    setLocalGameState(gameState);
+  }, [gameState]);
 
-  // Force re-render when player list changes - multiple triggers to ensure it works
+  // Log player list changes for debugging
   useEffect(() => {
-    setRenderKey(prev => prev + 1);
-    console.log("Scoreboard: Player list changed, forcing re-render. New player count:", localGameState.players.length);
+    console.log("Scoreboard: Player list changed, new player count:", localGameState.players.length);
     console.log("Scoreboard: Player IDs:", localGameState.players.map(p => p.id));
     console.log("Scoreboard: Player names:", localGameState.players.map(p => p.name));
-  }, [
-    localGameState.players.length,
-    localGameState.players.map(p => p.id).join(','),
-    localGameState.players.map(p => p.name).join(','),
-    JSON.stringify(localGameState.players)
-  ]);
+  }, [localGameState.players.length]);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
@@ -69,40 +59,22 @@ export default function Scoreboard({
 
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
-  const [renderKey, setRenderKey] = useState(0);
   const [isStartingGame, setIsStartingGame] = useState(false);
 
-  // Helper function to update header information
-  const updateHeaderInfo = (updatedGameState: GameState) => {
+  // Helper function to emit header update events (instead of direct DOM manipulation)
+  const emitHeaderUpdate = (updatedGameState: GameState) => {
     try {
-      // Update player count
-      const playerCountElement = document.getElementById("player-count-display");
-      if (playerCountElement) {
-        const maxPlayers = playerCountElement.textContent?.split("/")[1]?.split(" ")[0] || "8";
-        playerCountElement.textContent = `${updatedGameState.players.length}/${maxPlayers} players`;
-      }
-
-      // Update host name
-      const host = updatedGameState.players.find((p) => p.isHost);
-      const hostName = host?.name || "Unknown";
-
-      const hostNameShort = document.getElementById("host-name-short");
-      const hostNameFull = document.getElementById("host-name-full");
-      const hostNameEllipsis = document.getElementById("host-name-ellipsis");
-
-      if (hostNameShort) {
-        hostNameShort.textContent = hostName.slice(0, 10);
-      }
-
-      if (hostNameFull) {
-        hostNameFull.textContent = hostName;
-      }
-
-      if (hostNameEllipsis) {
-        hostNameEllipsis.style.display = hostName.length > 10 ? "inline" : "none";
-      }
+      // Emit custom event for header components to listen to
+      globalThis.dispatchEvent(
+        new CustomEvent("headerUpdate", {
+          detail: { 
+            playerCount: updatedGameState.players.length,
+            hostName: updatedGameState.players.find((p) => p.isHost)?.name || "Unknown"
+          },
+        }),
+      );
     } catch (error) {
-      console.error("Error updating header info:", error);
+      console.error("Error emitting header update:", error);
     }
   };
 
@@ -121,12 +93,8 @@ export default function Scoreboard({
     setClientTimeRemaining(localGameState.timeRemaining);
     setLastServerUpdate(Date.now());
 
-    // Update player count in header if element exists
-    const playerCountElement = document.getElementById("player-count-display");
-    if (playerCountElement && localGameState.players) {
-      const maxPlayers = 8; // Default max players, could be passed as prop
-      playerCountElement.textContent = `${localGameState.players.length}/${maxPlayers} players`;
-    }
+    // Emit header update event instead of direct DOM manipulation
+    emitHeaderUpdate(localGameState);
   }, [localGameState, previousRound]);
 
   // Detect phase transitions separately to avoid dependency issues
@@ -333,7 +301,7 @@ export default function Scoreboard({
                   }
 
                   // Check if current player is missing from the game state
-                  const currentPlayerExists = updatedGameState.players.some(p => p.id === playerId);
+                  const currentPlayerExists = updatedGameState.players.some((p: any) => p.id === playerId);
                   if (!currentPlayerExists && playerId) {
                     console.warn(`Scoreboard: Current player ${playerId} missing from game state, requesting refresh`);
                     // Send another join-room message to ensure we're properly synced
@@ -363,20 +331,17 @@ export default function Scoreboard({
                     "Scoreboard: About to update local game state with",
                     newGameState.players.length,
                     "players:",
-                    newGameState.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost }))
+                    newGameState.players.map((p: any) => ({ id: p.id, name: p.name, isHost: p.isHost }))
                   );
 
                   setLocalGameState(newGameState);
-                  
-                  // Force re-render by updating renderKey directly
-                  setRenderKey(prev => prev + 1);
 
                   if (onGameStateUpdate) {
                     onGameStateUpdate(newGameState);
                   }
 
-                  // Update header information
-                  updateHeaderInfo(newGameState);
+                  // Emit header update event
+                  emitHeaderUpdate(newGameState);
 
                   // Emit custom event for other components
                   globalThis.dispatchEvent(
@@ -510,8 +475,8 @@ export default function Scoreboard({
     }
   };
 
-  // Get sorted players by score - force recalculation on every render to ensure updates
-  const getSortedPlayers = (): (PlayerState & { score: number })[] => {
+  // Get sorted players by score - memoized for performance
+  const sortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
     console.log("Scoreboard: Recalculating sorted players, player count:", localGameState.players.length);
     return localGameState.players
       .map((player) => ({
@@ -519,9 +484,7 @@ export default function Scoreboard({
         score: localGameState.scores[player.id] || 0,
       }))
       .sort((a, b) => b.score - a.score);
-  };
-  
-  const sortedPlayers = getSortedPlayers();
+  }, [localGameState.players, localGameState.scores]);
 
   // Get current drawer info
   const currentDrawer = useMemo((): PlayerState | null => {
@@ -705,7 +668,7 @@ export default function Scoreboard({
   };
 
   return (
-    <div key={`scoreboard-${renderKey}`} className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
+    <div className={`bg-white rounded-lg shadow-md p-4 ${className}`}>
       {/* Phase Transition Notification */}
       {phaseTransition && (
         <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition">
@@ -826,7 +789,7 @@ export default function Scoreboard({
       )}
 
       {/* Player Scores */}
-      <div key={`players-container-${renderKey}-${sortedPlayers.length}`} className="space-y-2 mb-4">
+      <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
         <h3 className="text-sm font-medium text-gray-700">Players ({sortedPlayers.length})</h3>
         {(() => {
           console.log("Scoreboard: About to render player list with", sortedPlayers.length, "players:", 
