@@ -37,8 +37,14 @@ export default function Scoreboard({
       "Scoreboard: Syncing with gameState prop:",
       gameState.players.map((p) => ({ id: p.id, name: p.name })),
     );
-    setLocalGameState(gameState);
-  }, [gameState]);
+    
+    // Create a new state object to ensure React detects the change
+    setLocalGameState({
+      ...gameState,
+      players: [...gameState.players],
+      scores: { ...gameState.scores },
+    });
+  }, [gameState.players.length, JSON.stringify(gameState.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost }))), gameState.phase, gameState.roundNumber]);
 
   // Force re-render when player list changes
   useEffect(() => {
@@ -58,8 +64,8 @@ export default function Scoreboard({
 
   const [clientTimeRemaining, setClientTimeRemaining] = useState<number>(gameState.timeRemaining);
   const [lastServerUpdate, setLastServerUpdate] = useState<number>(Date.now());
-  const [isStartingGame, setIsStartingGame] = useState(false);
   const [renderKey, setRenderKey] = useState(0);
+  const [isStartingGame, setIsStartingGame] = useState(false);
 
   // Helper function to update header information
   const updateHeaderInfo = (updatedGameState: GameState) => {
@@ -348,6 +354,13 @@ export default function Scoreboard({
                     scores: { ...updatedGameState.scores },
                   };
 
+                  console.log(
+                    "Scoreboard: About to update local game state with",
+                    newGameState.players.length,
+                    "players:",
+                    newGameState.players.map(p => ({ id: p.id, name: p.name, isHost: p.isHost }))
+                  );
+
                   setLocalGameState(newGameState);
 
                   if (onGameStateUpdate) {
@@ -490,7 +503,7 @@ export default function Scoreboard({
   };
 
   // Get sorted players by score - memoized to ensure proper re-renders
-  const getSortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
+  const sortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
     console.log("Scoreboard: Recalculating sorted players, player count:", localGameState.players.length);
     return localGameState.players
       .map((player) => ({
@@ -498,12 +511,17 @@ export default function Scoreboard({
         score: localGameState.scores[player.id] || 0,
       }))
       .sort((a, b) => b.score - a.score);
-  }, [localGameState.players, localGameState.scores]);
+  }, [
+    localGameState.players.length,
+    JSON.stringify(localGameState.players.map(p => ({ id: p.id, name: p.name }))),
+    localGameState.scores,
+    renderKey
+  ]);
 
   // Get current drawer info
-  const getCurrentDrawer = (): PlayerState | null => {
+  const currentDrawer = useMemo((): PlayerState | null => {
     return localGameState.players.find((p) => p.id === localGameState.currentDrawer) || null;
-  };
+  }, [localGameState.players, localGameState.currentDrawer]);
 
   // Get phase display text
   const getPhaseText = (): string => {
@@ -536,9 +554,6 @@ export default function Scoreboard({
         return "text-gray-600 bg-gray-50";
     }
   };
-
-  const sortedPlayers = getSortedPlayers;
-  const currentDrawer = getCurrentDrawer();
 
   // Debug logging for player list
   console.log(
@@ -806,11 +821,16 @@ export default function Scoreboard({
       )}
 
       {/* Player Scores */}
-      <div className="space-y-2 mb-4" key={`players-${localGameState.players.length}-${localGameState.players.map(p => p.id).join('-')}`}>
-        <h3 className="text-sm font-medium text-gray-700">Players</h3>
+      <div key={`players-container-${renderKey}-${sortedPlayers.length}`} className="space-y-2 mb-4">
+        <h3 className="text-sm font-medium text-gray-700">Players ({sortedPlayers.length})</h3>
+        {(() => {
+          console.log("Scoreboard: About to render player list with", sortedPlayers.length, "players:", 
+            sortedPlayers.map(p => ({ id: p.id, name: p.name })));
+          return null;
+        })()}
         {sortedPlayers.map((player, index) => (
           <div
-            key={player.id}
+            key={`player-${player.id}-${player.name}`}
             className="flex items-center justify-between p-2 bg-gray-50 rounded"
           >
             <div className="flex items-center space-x-2">

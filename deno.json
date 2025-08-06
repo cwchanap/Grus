@@ -27,7 +27,14 @@
     "test:e2e": "deno run -A --unstable-kv tests/e2e/run-tests.ts",
     "test:e2e:headed": "deno run -A --unstable-kv tests/e2e/run-tests.ts --headed",
     "test:e2e:debug": "deno run -A --unstable-kv tests/e2e/run-tests.ts --debug",
-    "playwright:install": "deno run -A npm:playwright@1.40.0 install"
+    "playwright:install": "deno run -A npm:playwright@1.40.0 install",
+    "db:cleanup": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts",
+    "db:cleanup:dry-run": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --dry-run",
+    "db:cleanup:all": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --all",
+    "db:cleanup:old": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --old-rooms",
+    "db:inspect": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/inspect-database.ts",
+    "db:inspect:rooms": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/inspect-database.ts --rooms",
+    "db:inspect:detailed": "deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/inspect-database.ts --detailed"
   },
   "lint": {
     "rules": {
