@@ -1,5 +1,5 @@
 // Chat message handling
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
@@ -20,7 +20,7 @@ export class ChatHandler implements MessageHandler {
     this.gameStateService = gameStateService;
   }
 
-  async handle(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  async handle(connection: WebSocketConnection, message: BaseClientMessage): Promise<void> {
     if (message.type !== "chat" && message.type !== "guess") {
       throw new Error(`Unsupported message type: ${message.type}`);
     }
@@ -30,7 +30,7 @@ export class ChatHandler implements MessageHandler {
 
   private async handleChatMessage(
     _connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId, data } = message;
     const { text } = data;

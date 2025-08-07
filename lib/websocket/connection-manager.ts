@@ -3,7 +3,7 @@
  */
 
 import { signal } from "@preact/signals";
-import type { ClientMessage, ServerMessage } from "../../types/game.ts";
+import type { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
 
 export type ConnectionStatus =
   | "connecting"
@@ -45,8 +45,8 @@ export class WebSocketConnectionManager {
   private options: Required<ConnectionManagerOptions>;
   private reconnectTimeout: number | null = null;
   private heartbeatInterval: number | null = null;
-  private messageQueue: ClientMessage[] = [];
-  private messageHandlers: Map<string, (message: ServerMessage) => void> = new Map();
+  private messageQueue: BaseClientMessage[] = [];
+  private messageHandlers: Map<string, (message: BaseServerMessage) => void> = new Map();
   private isDestroyed = false;
 
   constructor(
@@ -170,7 +170,7 @@ export class WebSocketConnectionManager {
 
     this.ws.onmessage = (event) => {
       try {
-        const message: ServerMessage = JSON.parse(event.data);
+        const message: BaseServerMessage = JSON.parse(event.data);
         this.handleMessage(message);
       } catch (error) {
         console.error("Error parsing WebSocket message:", error);
@@ -193,7 +193,7 @@ export class WebSocketConnectionManager {
     };
   }
 
-  private handleMessage(message: ServerMessage) {
+  private handleMessage(message: BaseServerMessage) {
     // Handle system messages
     if (message.type === "error") {
       this.updateConnectionState({ error: message.data?.message || "Unknown error" });
@@ -322,7 +322,7 @@ export class WebSocketConnectionManager {
   }
 
   // Public API
-  public sendMessage(message: ClientMessage): boolean {
+  public sendMessage(message: BaseClientMessage): boolean {
     if (typeof navigator !== "undefined" && !navigator.onLine) {
       this.updateConnectionState({ status: "offline" });
       return false;
@@ -350,7 +350,7 @@ export class WebSocketConnectionManager {
     }
   }
 
-  public onMessage(type: string, handler: (message: ServerMessage) => void) {
+  public onMessage(type: string, handler: (message: BaseServerMessage) => void) {
     this.messageHandlers.set(type, handler);
   }
 

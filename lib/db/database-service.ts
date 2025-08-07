@@ -1,6 +1,7 @@
 // Database service using local SQLite
 import { Database } from "https://deno.land/x/sqlite3@0.12.0/mod.ts";
-import type { Player, Room, Score } from "../../types/game.ts";
+import type { Player, Room } from "../../types/core/room.ts";
+import type { Score } from "../../types/core/game.ts";
 
 export interface DatabaseResult<T> {
   success: boolean;
@@ -46,14 +47,19 @@ export class DatabaseService {
   }
 
   // Room operations
-  createRoom(name: string, hostId: string, maxPlayers = 8): DatabaseResult<string> {
+  createRoom(
+    name: string,
+    hostId: string,
+    maxPlayers = 8,
+    gameType = "drawing",
+  ): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
-        `INSERT INTO rooms (id, name, host_id, max_players, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        `INSERT INTO rooms (id, name, host_id, max_players, game_type, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
       );
-      stmt.run(id, name, hostId, maxPlayers, true);
+      stmt.run(id, name, hostId, maxPlayers, gameType, true);
       stmt.finalize();
       return id;
     }, "Failed to create room");
@@ -72,6 +78,7 @@ export class DatabaseService {
         name: result.name,
         hostId: result.host_id,
         maxPlayers: result.max_players,
+        gameType: result.game_type || "drawing",
         isActive: Boolean(result.is_active),
         createdAt: result.created_at,
         updatedAt: result.updated_at,
@@ -99,6 +106,7 @@ export class DatabaseService {
         name: result.name,
         hostId: result.host_id,
         maxPlayers: result.max_players,
+        gameType: result.game_type || "drawing",
         isActive: Boolean(result.is_active),
         createdAt: result.created_at,
         updatedAt: result.updated_at,
@@ -113,6 +121,7 @@ export class DatabaseService {
       const fieldMapping: Record<string, string> = {
         hostId: "host_id",
         maxPlayers: "max_players",
+        gameType: "game_type",
         isActive: "is_active",
         createdAt: "created_at",
         updatedAt: "updated_at",
@@ -245,14 +254,14 @@ export class DatabaseService {
   }
 
   // Game session operations
-  createGameSession(roomId: string, totalRounds = 5): DatabaseResult<string> {
+  createGameSession(roomId: string, gameType: string, totalRounds = 5): DatabaseResult<string> {
     return this.executeQuery(() => {
       const id = this.generateId();
       const stmt = this.db.prepare(
-        `INSERT INTO game_sessions (id, room_id, total_rounds, started_at)
-         VALUES (?, ?, ?, datetime('now'))`,
+        `INSERT INTO game_sessions (id, room_id, game_type, total_rounds, started_at)
+         VALUES (?, ?, ?, ?, datetime('now'))`,
       );
-      stmt.run(id, roomId, totalRounds);
+      stmt.run(id, roomId, gameType, totalRounds);
       stmt.finalize();
       return id;
     }, "Failed to create game session");

@@ -1,5 +1,5 @@
 // Room join/leave operations handler
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 import type {
   MessageHandler,
   WebSocketConnection,
@@ -9,7 +9,7 @@ import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { PlayerService } from "../services/player-service.ts";
 import { GameStateService } from "../services/game-state-service.ts";
-import { RoomManager } from "../../room-manager.ts";
+import { RoomManager } from "../../core/room-manager.ts";
 
 export class RoomHandler implements MessageHandler {
   private connectionPool: ConnectionPool;
@@ -29,7 +29,7 @@ export class RoomHandler implements MessageHandler {
     this.gameStateService = gameStateService;
   }
 
-  async handle(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  async handle(connection: WebSocketConnection, message: BaseClientMessage): Promise<void> {
     switch (message.type) {
       case "join-room":
         await this.handleJoinRoom(connection, message);
@@ -44,7 +44,7 @@ export class RoomHandler implements MessageHandler {
 
   private async handleJoinRoom(
     connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId, data } = message;
     const { playerName } = data;
@@ -242,7 +242,7 @@ export class RoomHandler implements MessageHandler {
 
   private async handleLeaveRoom(
     connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId } = message;
     await this.removePlayerFromRoom(playerId, roomId);

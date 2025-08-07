@@ -4,11 +4,17 @@ import {
   DatabaseService as _DatabaseService,
   getDatabaseService as getService,
 } from "./db/index.ts";
-import type { Player, Room, Score } from "../types/game.ts";
+import type { Player, Room } from "../types/core/room.ts";
+import type { Score } from "../types/core/game.ts";
 
 // Database service interface
 export interface IDatabaseService {
-  createRoom(name: string, hostId: string, maxPlayers?: number): DatabaseResult<string>;
+  createRoom(
+    name: string,
+    hostId: string,
+    maxPlayers?: number,
+    gameType?: string,
+  ): DatabaseResult<string>;
   getRoomById(id: string): DatabaseResult<Room | null>;
   getActiveRooms(limit?: number): DatabaseResult<Room[]>;
   updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean>;
@@ -23,7 +29,7 @@ export interface IDatabaseService {
   ): DatabaseResult<boolean>;
   removePlayer(id: string): DatabaseResult<boolean>;
 
-  createGameSession(roomId: string, totalRounds?: number): DatabaseResult<string>;
+  createGameSession(roomId: string, gameType: string, totalRounds?: number): DatabaseResult<string>;
   endGameSession(id: string, winnerId?: string): DatabaseResult<boolean>;
 
   createScore(sessionId: string, playerId: string, points?: number): DatabaseResult<string>;

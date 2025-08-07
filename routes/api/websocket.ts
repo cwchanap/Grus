@@ -1,37 +1,25 @@
-// WebSocket API route for handling WebSocket connections
+// WebSocket API route using the new core handler
 import { Handlers } from "$fresh/server.ts";
-import { WebSocketManager } from "../../lib/websocket/websocket-manager.ts";
-import { Env } from "../../types/cloudflare.ts";
+import { CoreWebSocketHandler } from "../../lib/core/websocket-handler.ts";
+import "../../lib/games/index.ts"; // Ensure games are registered
 
-// Global WebSocket manager instance
-let wsManager: WebSocketManager | null = null;
+// Global WebSocket handler instance
+let wsHandler: CoreWebSocketHandler | null = null;
 
-function getWebSocketManager(env: Env): WebSocketManager {
-  if (!wsManager) {
-    wsManager = new WebSocketManager(env);
+function getWebSocketHandler(): CoreWebSocketHandler {
+  if (!wsHandler) {
+    wsHandler = new CoreWebSocketHandler();
   }
-  return wsManager;
+  return wsHandler;
 }
 
 export const handler: Handlers = {
-  GET(req, ctx) {
-    // Get Cloudflare environment from context
-    const env = (ctx.state as any).env as Env;
-
-    // In development mode, create a mock environment
-    const mockEnv: Env = env || {
-      DB: null as any,
-      GAME_STATE: null as any,
-    };
-
-    // WebSocket connection request received
-
-    const manager = getWebSocketManager(mockEnv);
-    return manager.handleRequest(req);
+  GET(req, _ctx) {
+    const handler = getWebSocketHandler();
+    return handler.handleWebSocketUpgrade(req);
   },
 
   POST(_req, _ctx) {
-    // Handle WebSocket-related POST requests (if needed)
     return new Response("Method not allowed", { status: 405 });
   },
 };

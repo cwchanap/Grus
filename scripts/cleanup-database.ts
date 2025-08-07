@@ -15,7 +15,7 @@
  *   --limit=N    Limit number of records to process (default: 100)
  */
 
-import { RoomManager } from "../lib/room-manager.ts";
+import { RoomManager } from "../lib/core/room-manager.ts";
 import { getDatabaseService } from "../lib/database-factory.ts";
 import { getKVService } from "../lib/db/index.ts";
 

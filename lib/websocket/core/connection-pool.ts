@@ -3,7 +3,7 @@ import type {
   RoomConnections as _RoomConnections,
   WebSocketConnection,
 } from "../types/websocket-internal.ts";
-import type { ServerMessage } from "../../../types/game.ts";
+import type { BaseServerMessage } from "../../../types/core/websocket.ts";
 
 export class ConnectionPool {
   private connections: Map<string, WebSocketConnection> = new Map();
@@ -81,7 +81,7 @@ export class ConnectionPool {
 
   broadcastToRoom(
     roomId: string,
-    message: ServerMessage,
+    message: BaseServerMessage,
     excludePlayerId?: string,
   ): void {
     console.log(`Broadcasting message to room ${roomId}:`, message);
@@ -114,7 +114,7 @@ export class ConnectionPool {
     }
   }
 
-  sendMessage(playerId: string, message: ServerMessage): boolean {
+  sendMessage(playerId: string, message: BaseServerMessage): boolean {
     const connection = this.connections.get(playerId);
     if (!connection || connection.ws.readyState !== WebSocket.OPEN) {
       return false;

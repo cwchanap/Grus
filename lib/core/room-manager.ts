@@ -1,0 +1,455 @@
+// Core room management - game agnostic
+import { getDatabaseService, IDatabaseService } from "../database-factory.ts";
+import { Player, Room } from "../../types/core/room.ts";
+
+export interface RoomSummary {
+  room: Room;
+  players: Player[];
+  playerCount: number;
+  canJoin: boolean;
+  host: Player | null;
+}
+
+export interface JoinRoomParams {
+  roomId: string;
+  playerName: string;
+}
+
+export interface JoinRoomResult {
+  success: boolean;
+  error?: string;
+  data?: {
+    playerId: string;
+    room: RoomSummary;
+  };
+}
+
+export interface CreateRoomParams {
+  hostName: string;
+  gameType: string;
+  maxPlayers?: number;
+}
+
+export interface CreateRoomResult {
+  success: boolean;
+  error?: string;
+  data?: {
+    roomId: string;
+    playerId: string;
+    room: RoomSummary;
+  };
+}
+
+export class RoomManager {
+  private db: IDatabaseService;
+
+  constructor() {
+    this.db = getDatabaseService();
+  }
+
+  async createRoom(params: CreateRoomParams): Promise<CreateRoomResult> {
+    try {
+      const { hostName, gameType, maxPlayers = 8 } = params;
+
+      if (!hostName?.trim()) {
+        return { success: false, error: "Host name is required" };
+      }
+
+      if (!gameType?.trim()) {
+        return { success: false, error: "Game type is required" };
+      }
+
+      // Generate room ID
+      const roomId = this.generateRoomId();
+
+      // First create a temporary room without foreign key constraint
+      const roomResult = await this.db.createRoom(roomId, "temp-host", maxPlayers, gameType);
+
+      if (!roomResult.success || !roomResult.data) {
+        return { success: false, error: roomResult.error || "Failed to create room" };
+      }
+
+      // Create host player
+      const playerResult = await this.db.createPlayer(
+        hostName.trim(),
+        roomId,
+        true,
+      );
+
+      if (!playerResult.success || !playerResult.data) {
+        // Clean up the room if player creation fails
+        await this.db.deleteRoom(roomId);
+        return { success: false, error: "Failed to create host player" };
+      }
+
+      const hostPlayerId = playerResult.data;
+
+      // Update the room with the actual host ID
+      const updateResult = await this.db.updateRoom(roomId, { hostId: hostPlayerId });
+      if (!updateResult.success) {
+        // Clean up if update fails
+        await this.db.removePlayer(hostPlayerId);
+        await this.db.deleteRoom(roomId);
+        return { success: false, error: "Failed to update room with host" };
+      }
+
+      // Get the created room with players
+      const roomSummary = await this.getRoomSummary(roomId);
+      if (!roomSummary.success || !roomSummary.data) {
+        return { success: false, error: "Failed to get room summary" };
+      }
+
+      return {
+        success: true,
+        data: {
+          roomId,
+          playerId: hostPlayerId,
+          room: roomSummary.data,
+        },
+      };
+    } catch (error) {
+      console.error("Error creating room:", error);
+      return { success: false, error: "Internal server error" };
+    }
+  }
+
+  async joinRoom(params: JoinRoomParams): Promise<JoinRoomResult> {
+    try {
+      const { roomId, playerName } = params;
+
+      if (!roomId?.trim()) {
+        return { success: false, error: "Room ID is required" };
+      }
+
+      if (!playerName?.trim()) {
+        return { success: false, error: "Player name is required" };
+      }
+
+      // Get room summary
+      const roomSummary = await this.getRoomSummary(roomId);
+      if (!roomSummary.success || !roomSummary.data) {
+        return { success: false, error: "Room not found" };
+      }
+
+      const { room, players } = roomSummary.data;
+
+      if (!room.isActive) {
+        return { success: false, error: "Room is not active" };
+      }
+
+      // Check if room is full
+      if (players.length >= room.maxPlayers) {
+        return { success: false, error: "Room is full" };
+      }
+
+      // Check if player name is already taken
+      const existingPlayer = players.find(
+        (p: any) => p.name.toLowerCase() === playerName.trim().toLowerCase(),
+      );
+
+      if (existingPlayer) {
+        return { success: false, error: "Player name is already taken" };
+      }
+
+      // Add player to room
+      const playerResult = await this.db.createPlayer(
+        playerName.trim(),
+        roomId,
+        false,
+      );
+
+      if (!playerResult.success || !playerResult.data) {
+        return { success: false, error: "Failed to join room" };
+      }
+
+      const playerId = playerResult.data;
+
+      // Get updated room summary
+      const updatedRoomSummary = await this.getRoomSummary(roomId);
+      if (!updatedRoomSummary.success || !updatedRoomSummary.data) {
+        return { success: false, error: "Failed to get updated room" };
+      }
+
+      return {
+        success: true,
+        data: {
+          playerId,
+          room: updatedRoomSummary.data,
+        },
+      };
+    } catch (error) {
+      console.error("Error joining room:", error);
+      return { success: false, error: "Internal server error" };
+    }
+  }
+
+  async leaveRoom(
+    roomId: string,
+    playerId: string,
+  ): Promise<
+    {
+      success: boolean;
+      data?: {
+        wasHost: boolean;
+        newHostId?: string;
+        newHostName?: string;
+        roomDeleted?: boolean;
+        remainingPlayers?: Player[];
+      };
+      error?: string;
+    }
+  > {
+    try {
+      const roomSummary = await this.getRoomSummary(roomId);
+      if (!roomSummary.success || !roomSummary.data) {
+        return { success: false, error: "Room not found" };
+      }
+
+      const { players } = roomSummary.data;
+      const player = players.find((p: any) => p.id === playerId);
+      if (!player) {
+        return { success: false, error: "Player not found in room" };
+      }
+
+      const wasHost = player.isHost;
+      let newHostId: string | undefined;
+      let newHostName: string | undefined;
+      let roomDeleted = false;
+
+      // If host is leaving and there are other players, transfer host
+      if (wasHost && players.length > 1) {
+        // Find the next player to become host (first player that joined after the current host)
+        const remainingPlayers = players.filter((p: any) => p.id !== playerId);
+        const newHost = remainingPlayers[0]; // Take the first remaining player
+
+        if (newHost) {
+          newHostId = newHost.id;
+          newHostName = newHost.name;
+
+          // Transfer host privileges to the new host
+          const updateResult = await this.db.updatePlayer(newHostId, { isHost: true });
+          if (!updateResult.success) {
+            console.error(`Failed to transfer host to ${newHostId}:`, updateResult.error);
+            return { success: false, error: "Failed to transfer host privileges" };
+          } else {
+            console.log(
+              `Host transferred from ${playerId} (${player.name}) to ${newHostId} (${newHostName}) in room ${roomId}`,
+            );
+          }
+        }
+      }
+
+      // Remove player from room
+      const removeResult = await this.db.removePlayer(playerId);
+      if (!removeResult.success) {
+        return { success: false, error: "Failed to remove player from room" };
+      }
+
+      // If no players left, delete the room entirely
+      if (players.length === 1) { // Only the leaving player
+        const deleteResult = await this.db.deleteRoom(roomId);
+        if (deleteResult.success) {
+          roomDeleted = true;
+          console.log(`Room ${roomId} deleted - no players remaining`);
+        } else {
+          console.error(`Failed to delete empty room ${roomId}:`, deleteResult.error);
+          // Fallback to deactivating the room
+          await this.db.updateRoom(roomId, { isActive: false });
+        }
+      }
+
+      // Get remaining players for the response
+      let remainingPlayers: Player[] = [];
+      if (!roomDeleted) {
+        const updatedRoomSummary = await this.getRoomSummary(roomId);
+        if (updatedRoomSummary.success && updatedRoomSummary.data) {
+          remainingPlayers = updatedRoomSummary.data.players;
+        }
+      }
+
+      return {
+        success: true,
+        data: {
+          wasHost,
+          newHostId,
+          newHostName,
+          roomDeleted,
+          remainingPlayers,
+        },
+      };
+    } catch (error) {
+      console.error("Error leaving room:", error);
+      return { success: false, error: "Internal server error" };
+    }
+  }
+
+  async getRoom(roomId: string): Promise<Room | null> {
+    try {
+      const result = await this.db.getRoomById(roomId);
+      return result.success ? result.data || null : null;
+    } catch (error) {
+      console.error("Error getting room:", error);
+      return null;
+    }
+  }
+
+  async getRoomSummary(
+    roomId: string,
+  ): Promise<{ success: boolean; data?: RoomSummary; error?: string }> {
+    try {
+      const roomResult = await this.db.getRoomById(roomId);
+      if (!roomResult.success || !roomResult.data) {
+        return { success: false, error: "Room not found" };
+      }
+
+      const playersResult = await this.db.getPlayersByRoom(roomId);
+      if (!playersResult.success) {
+        return { success: false, error: "Failed to get players" };
+      }
+
+      const room = roomResult.data;
+      const players = playersResult.data || [];
+      const host = players.find((p: any) => p.isHost) || null;
+
+      const roomSummary: RoomSummary = {
+        room,
+        players,
+        playerCount: players.length,
+        canJoin: players.length < room.maxPlayers && room.isActive,
+        host,
+      };
+
+      return { success: true, data: roomSummary };
+    } catch (error) {
+      console.error("Error getting room summary:", error);
+      return { success: false, error: "Internal server error" };
+    }
+  }
+
+  async updatePlayerActivity(roomId: string, playerId: string): Promise<boolean> {
+    try {
+      // For now, we don't have a last_activity field in the database
+      // This could be added later if needed for activity tracking
+      console.log(`Player activity updated: ${playerId} in room ${roomId}`);
+      return true;
+    } catch (error) {
+      console.error("Error updating player activity:", error);
+      return false;
+    }
+  }
+
+  async setPlayerDisconnected(roomId: string, playerId: string): Promise<boolean> {
+    try {
+      // For now, we don't have a connection status field in the database
+      // This could be added later if needed for connection tracking
+      console.log(`Player disconnected: ${playerId} in room ${roomId}`);
+      return true;
+    } catch (error) {
+      console.error("Error setting player disconnected:", error);
+      return false;
+    }
+  }
+
+  /**
+   * Clean up rooms that have no players
+   * @param limit Maximum number of rooms to check (default: 50)
+   * @returns Number of rooms cleaned up
+   */
+  async cleanupEmptyRooms(
+    limit = 50,
+  ): Promise<{ success: boolean; cleanedCount: number; error?: string }> {
+    try {
+      // Get active rooms
+      const roomsResult = await this.db.getActiveRooms(limit);
+      if (!roomsResult.success) {
+        return { success: false, cleanedCount: 0, error: roomsResult.error };
+      }
+
+      const rooms = roomsResult.data || [];
+      let cleanedCount = 0;
+
+      // Check each room for players
+      for (const room of rooms) {
+        const playersResult = await this.db.getPlayersByRoom(room.id);
+        if (playersResult.success) {
+          const players = playersResult.data || [];
+
+          // If room has no players, delete it
+          if (players.length === 0) {
+            const deleteResult = await this.db.deleteRoom(room.id);
+            if (deleteResult.success) {
+              cleanedCount++;
+              console.log(`Cleaned up empty room: ${room.id} (${room.name})`);
+            } else {
+              console.error(`Failed to delete empty room ${room.id}:`, deleteResult.error);
+            }
+          }
+        }
+      }
+
+      return { success: true, cleanedCount };
+    } catch (error) {
+      console.error("Error cleaning up empty rooms:", error);
+      return { success: false, cleanedCount: 0, error: "Internal server error" };
+    }
+  }
+
+  /**
+   * Get active rooms with automatic cleanup of empty rooms
+   * @param limit Maximum number of rooms to return
+   * @returns Array of RoomSummary objects for rooms with players
+   */
+  async getActiveRoomsWithCleanup(
+    limit = 20,
+  ): Promise<{ success: boolean; data?: RoomSummary[]; error?: string }> {
+    try {
+      // First, clean up empty rooms
+      await this.cleanupEmptyRooms(limit * 2); // Check more rooms than we need to return
+
+      // Get active rooms from database
+      const roomsResult = await this.db.getActiveRooms(limit);
+      if (!roomsResult.success) {
+        return { success: false, error: roomsResult.error };
+      }
+
+      const rooms = roomsResult.data || [];
+      const roomSummaries: RoomSummary[] = [];
+
+      // Convert each room to RoomSummary and filter out empty ones
+      for (const room of rooms) {
+        const summaryResult = await this.getRoomSummary(room.id);
+        if (summaryResult.success && summaryResult.data) {
+          const summary = summaryResult.data;
+
+          // Only include rooms with players
+          if (summary.playerCount > 0) {
+            roomSummaries.push(summary);
+          } else {
+            // Clean up this empty room
+            console.log(`Found empty room during fetch, cleaning up: ${room.id}`);
+            await this.db.deleteRoom(room.id);
+          }
+        }
+      }
+
+      return { success: true, data: roomSummaries };
+    } catch (error) {
+      console.error("Error getting active rooms with cleanup:", error);
+      return { success: false, error: "Internal server error" };
+    }
+  }
+
+  private generateRoomId(): string {
+    // Generate a 6-character room code
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let result = "";
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+  }
+
+  private generatePlayerId(): string {
+    return `player_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  }
+}

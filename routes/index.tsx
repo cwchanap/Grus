@@ -1,7 +1,7 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
-import GameLobby from "../islands/GameLobby.tsx";
+import MainLobby from "../islands/core/MainLobby.tsx";
 // import { getDatabaseService } from "../lib/database-factory.ts";
-import { RoomManager, RoomSummary } from "../lib/room-manager.ts";
+import { RoomManager, RoomSummary } from "../lib/core/room-manager.ts";
 
 interface LobbyData {
   rooms: RoomSummary[];
@@ -49,7 +49,7 @@ export default function Home({ data }: PageProps<LobbyData>) {
           </p>
         </div>
 
-        <GameLobby
+        <MainLobby
           initialRooms={data.rooms}
           error={data.error}
         />

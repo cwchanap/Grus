@@ -1,11 +1,8 @@
 // Internal WebSocket types and interfaces
 import type { Env } from "../../../types/cloudflare.ts";
-import type {
-  ClientMessage,
-  GameState,
-  PlayerState,
-  ServerMessage as _ServerMessage,
-} from "../../../types/game.ts";
+import type { BaseClientMessage, BaseServerMessage } from "../../../types/core/websocket.ts";
+import type { BaseGameState } from "../../../types/core/game.ts";
+import type { PlayerState } from "../../../types/core/room.ts";
 
 export interface WebSocketConnection {
   ws: WebSocket;
@@ -27,7 +24,7 @@ export interface RateLimitInfo {
 }
 
 export interface MessageHandler {
-  handle(connection: WebSocketConnection, message: ClientMessage): Promise<void>;
+  handle(connection: WebSocketConnection, message: BaseClientMessage): Promise<void>;
 }
 
 export interface WebSocketService {
@@ -42,8 +39,8 @@ export interface TimerManager {
 }
 
 export interface GameStateStorage {
-  getGameState(roomId: string): Promise<GameState | null>;
-  updateGameState(roomId: string, gameState: GameState): Promise<void>;
+  getGameState(roomId: string): Promise<BaseGameState | null>;
+  updateGameState(roomId: string, gameState: BaseGameState): Promise<void>;
   getPlayerState(playerId: string): Promise<PlayerState | null>;
   updatePlayerState(playerId: string, playerState: PlayerState): Promise<void>;
 }

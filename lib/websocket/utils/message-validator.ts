@@ -1,9 +1,9 @@
 // Message validation utilities
 import { validateChatMessage, validatePlayerName } from "../../config.ts";
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 
 export class MessageValidator {
-  validateClientMessage(message: unknown): message is ClientMessage {
+  validateClientMessage(message: unknown): message is BaseClientMessage {
     return (
       message !== null &&
       typeof message === "object" &&

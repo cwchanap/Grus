@@ -1,5 +1,5 @@
 // Message routing and validation
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
 import { RateLimiter } from "../utils/rate-limiter.ts";
@@ -29,7 +29,7 @@ export class MessageRouter {
         return;
       }
 
-      let message: ClientMessage;
+      let message: BaseClientMessage;
       try {
         message = JSON.parse(data);
       } catch (parseError) {

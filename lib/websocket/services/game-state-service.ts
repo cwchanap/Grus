@@ -1,20 +1,21 @@
 // Game state storage and management service
 import { getConfig } from "../../config.ts";
 import type { Env } from "../../../types/cloudflare.ts";
-import type { GameState, PlayerState } from "../../../types/game.ts";
+import type { BaseGameState } from "../../../types/core/game.ts";
+import type { PlayerState } from "../../../types/core/room.ts";
 import type { GameStateStorage } from "../types/websocket-internal.ts";
 
 export class GameStateService implements GameStateStorage {
   private env: Env;
   // Development mode in-memory storage
-  private devGameStates: Map<string, GameState> = new Map();
+  private devGameStates: Map<string, BaseGameState> = new Map();
   private devPlayerStates: Map<string, PlayerState> = new Map();
 
   constructor(env: Env) {
     this.env = env;
   }
 
-  async getGameState(roomId: string): Promise<GameState | null> {
+  async getGameState(roomId: string): Promise<BaseGameState | null> {
     try {
       // In development, use in-memory storage
       if (!this.env?.GAME_STATE) {
@@ -30,7 +31,7 @@ export class GameStateService implements GameStateStorage {
     }
   }
 
-  async updateGameState(roomId: string, gameState: GameState): Promise<void> {
+  async updateGameState(roomId: string, gameState: BaseGameState): Promise<void> {
     try {
       // In development, use in-memory storage
       if (!this.env?.GAME_STATE) {

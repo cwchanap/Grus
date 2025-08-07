@@ -1,5 +1,5 @@
 // Game state management handler
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { PlayerService } from "../services/player-service.ts";
@@ -28,7 +28,7 @@ export class GameHandler implements MessageHandler {
     this.wordGenerator = wordGenerator;
   }
 
-  async handle(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  async handle(connection: WebSocketConnection, message: BaseClientMessage): Promise<void> {
     switch (message.type) {
       case "start-game":
         await this.handleStartGame(connection, message);
@@ -49,7 +49,7 @@ export class GameHandler implements MessageHandler {
 
   private async handleStartGame(
     _connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId } = message;
 
@@ -186,7 +186,7 @@ export class GameHandler implements MessageHandler {
 
   private async handleNextRound(
     _connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId } = message;
 
@@ -264,7 +264,7 @@ export class GameHandler implements MessageHandler {
 
   private async handleEndGame(
     _connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId } = message;
 
@@ -305,7 +305,7 @@ export class GameHandler implements MessageHandler {
     }
   }
 
-  private handlePing(_connection: WebSocketConnection, message: ClientMessage): void {
+  private handlePing(_connection: WebSocketConnection, message: BaseClientMessage): void {
     const { roomId, playerId, data } = message;
 
     // Send pong response

@@ -1,6 +1,6 @@
 // API route for joining a specific room
 import { Handlers } from "$fresh/server.ts";
-import { RoomManager } from "../../../../lib/room-manager.ts";
+import { RoomManager } from "../../../../lib/core/room-manager.ts";
 import { WebSocketManager } from "../../../../lib/websocket/websocket-manager.ts";
 import { Env } from "../../../../types/cloudflare.ts";
 

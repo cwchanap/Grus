@@ -1,10 +1,12 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
-import { RoomManager } from "../../lib/room-manager.ts";
+import { RoomManager } from "../../lib/core/room-manager.ts";
+import { GameRegistry } from "../../lib/core/game-registry.ts";
 import { Env } from "../../types/cloudflare.ts";
-import type { RoomSummary } from "../../lib/room-manager.ts";
-import type { GameState } from "../../types/game.ts";
-import ChatRoom from "../../islands/ChatRoom.tsx";
-import DrawingBoard from "../../islands/DrawingBoard.tsx";
+import type { RoomSummary } from "../../lib/core/room-manager.ts";
+import type { BaseGameState } from "../../types/core/game.ts";
+import "../../lib/games/index.ts"; // Ensure games are registered
+import ChatRoom from "../../islands/core/ChatRoom.tsx";
+import DrawingBoard from "../../islands/games/drawing/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
@@ -16,7 +18,16 @@ interface GameRoomData {
 }
 
 // Helper function to create initial game state from room data
-function createInitialGameState(room: RoomSummary, playerId?: string | null): GameState {
+function createInitialGameState(room: RoomSummary, playerId?: string | null): BaseGameState {
+  const gameRegistry = GameRegistry.getInstance();
+  const gameType = room.room.gameType || "drawing";
+
+  // Get default settings for the game type
+  const defaultSettings = gameRegistry.getDefaultSettings(gameType) || {
+    maxRounds: 5,
+    roundTimeSeconds: 75,
+  };
+
   // Ensure the current player is included in the players list
   const players = room.players.map((player: any) => ({
     id: player.id,
@@ -36,23 +47,18 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ga
 
   return {
     roomId: room.room.id,
-    currentDrawer: "", // No drawer initially
-    currentWord: "", // No word initially
+    gameType,
     roundNumber: 0, // Game hasn't started
-    timeRemaining: 75000, // Default 75 seconds as per product rules
+    timeRemaining: defaultSettings.roundTimeSeconds * 1000, // Convert to milliseconds
     phase: "waiting", // Waiting for game to start
     players,
     scores: players.reduce((acc: any, player: any) => {
       acc[player.id] = 0; // Initialize all scores to 0
       return acc;
     }, {} as Record<string, number>),
-    drawingData: [], // No drawing data initially
-    correctGuesses: [], // No correct guesses initially
+    gameData: {}, // Game-specific data will be initialized by the game engine
     chatMessages: [], // No chat messages initially
-    settings: {
-      maxRounds: 5,
-      roundTimeSeconds: 75, // Default 75 seconds as per product rules
-    },
+    settings: defaultSettings,
   };
 }
 
@@ -164,15 +170,25 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
             {/* Drawing board area - takes 70% on desktop */}
             <div class="lg:w-[70%] bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
               <div class="drawing-area overflow-hidden">
-                <DrawingBoard
-                  roomId={room.room.id}
-                  playerId={playerId || ""}
-                  gameState={gameState}
-                  width={960}
-                  height={600}
-                  className="w-full drawing-area"
-                  responsive
-                />
+                {room.room.gameType === "drawing"
+                  ? (
+                    <DrawingBoard
+                      width={960}
+                      height={600}
+                      onDrawCommand={(command) => {
+                        // Handle drawing command via WebSocket
+                        console.log("Drawing command:", command);
+                      }}
+                      drawingData={[]} // Will be populated from game state
+                      isDrawer={false} // Will be determined from game state
+                      disabled={gameState.phase === "waiting"}
+                    />
+                  )
+                  : (
+                    <div class="flex items-center justify-center h-64 text-gray-500">
+                      Game type "{room.room.gameType}" not yet implemented
+                    </div>
+                  )}
               </div>
             </div>
 
@@ -193,11 +209,14 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex-1 min-h-0 flex flex-col">
             <div class="flex-1 min-h-0">
               <ChatRoom
-                roomId={room.room.id}
-                playerId={playerId || ""}
-                playerName={room.players.find((p: any) => p.id === playerId)?.name || "Unknown"}
-                currentWord={gameState.currentWord}
-                isCurrentDrawer={gameState.currentDrawer === playerId}
+                messages={gameState.chatMessages}
+                onSendMessage={(message) => {
+                  // Handle chat message via WebSocket
+                  console.log("Chat message:", message);
+                }}
+                currentPlayerId={playerId || ""}
+                disabled={false}
+                placeholder="Type a message..."
               />
             </div>
           </div>

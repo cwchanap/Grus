@@ -3,14 +3,16 @@
  */
 
 import { signal } from "@preact/signals";
-import type { ChatMessage, DrawingCommand, GameState } from "../types/game.ts";
+import type { ChatMessage } from "../types/core/room.ts";
+import type { DrawingCommand } from "../types/games/drawing.ts";
+import type { BaseGameState } from "../types/core/game.ts";
 
 export interface OfflineState {
   isOffline: boolean;
   lastSyncTime: number | null;
   pendingMessages: ChatMessage[];
   pendingDrawingCommands: DrawingCommand[];
-  localGameState: Partial<GameState> | null;
+  localGameState: Partial<BaseGameState> | null;
   queuedActions: Array<{
     id: string;
     type: string;
@@ -158,7 +160,7 @@ export class OfflineManager {
   }
 
   // Update local game state
-  public updateLocalGameState(gameState: Partial<GameState>) {
+  public updateLocalGameState(gameState: Partial<BaseGameState>) {
     offlineState.value = {
       ...offlineState.value,
       localGameState: {

@@ -11,7 +11,7 @@ import {
   unbatchDrawingCommands,
   validateDrawingCommand,
 } from "../drawing-utils.ts";
-import { DrawingCommand } from "../../types/game.ts";
+import { DrawingCommand } from "../../types/games/drawing.ts";
 
 Deno.test("Drawing Utils - Serialization", () => {
   const command: DrawingCommand = {

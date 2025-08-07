@@ -1,5 +1,5 @@
 // Game settings handler
-import type { ClientMessage } from "../../../types/game.ts";
+import type { BaseClientMessage } from "../../../types/core/websocket.ts";
 import type { MessageHandler, WebSocketConnection } from "../types/websocket-internal.ts";
 import { ConnectionPool } from "../core/connection-pool.ts";
 import { MessageValidator } from "../utils/message-validator.ts";
@@ -20,7 +20,7 @@ export class SettingsHandler implements MessageHandler {
     this.gameStateService = gameStateService;
   }
 
-  async handle(connection: WebSocketConnection, message: ClientMessage): Promise<void> {
+  async handle(connection: WebSocketConnection, message: BaseClientMessage): Promise<void> {
     if (message.type !== "update-settings") {
       throw new Error(`Unsupported message type: ${message.type}`);
     }
@@ -30,7 +30,7 @@ export class SettingsHandler implements MessageHandler {
 
   private async handleUpdateSettings(
     _connection: WebSocketConnection,
-    message: ClientMessage,
+    message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId, data: settings } = message;
 
@@ -68,7 +68,7 @@ export class SettingsHandler implements MessageHandler {
     }
 
     // Check if player is the host
-    const player = gameState.players.find((p) => p.id === playerId);
+    const player = gameState.players.find((p: any) => p.id === playerId);
     if (!player || !player.isHost) {
       throw new Error("Only the host can update game settings");
     }

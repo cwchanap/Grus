@@ -1,6 +1,6 @@
 // API endpoint for room cleanup operations
 import { Handlers } from "$fresh/server.ts";
-import { RoomManager } from "../../../lib/room-manager.ts";
+import { RoomManager } from "../../../lib/core/room-manager.ts";
 
 export const handler: Handlers = {
   // DELETE /api/rooms/cleanup - Clean up empty rooms
