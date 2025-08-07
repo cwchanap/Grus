@@ -132,12 +132,16 @@ export class ConnectionPool {
   }
 
   sendError(playerId: string, error: string): void {
+    const connection = this.connections.get(playerId);
+    const roomId = connection?.roomId || "";
+
     this.sendMessage(playerId, {
       type: "room-update",
-      roomId: "",
+      roomId,
       data: {
         type: "error",
         message: error,
+        roomId, // Include roomId in data for component filtering
       },
     });
   }

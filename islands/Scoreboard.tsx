@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "preact/hooks";
+import { useEffect, useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import type { GameState, PlayerState } from "../types/game.ts";
 // import type { JSX } from "preact";
@@ -37,16 +37,19 @@ export default function Scoreboard({
       "Scoreboard: Syncing with gameState prop:",
       gameState.players.map((p) => ({ id: p.id, name: p.name })),
     );
-    
+
     // Always update local state when gameState prop changes
     setLocalGameState(gameState);
   }, [gameState]);
 
   // Log player list changes for debugging
   useEffect(() => {
-    console.log("Scoreboard: Player list changed, new player count:", localGameState.players.length);
-    console.log("Scoreboard: Player IDs:", localGameState.players.map(p => p.id));
-    console.log("Scoreboard: Player names:", localGameState.players.map(p => p.name));
+    console.log(
+      "Scoreboard: Player list changed, new player count:",
+      localGameState.players.length,
+    );
+    console.log("Scoreboard: Player IDs:", localGameState.players.map((p) => p.id));
+    console.log("Scoreboard: Player names:", localGameState.players.map((p) => p.name));
   }, [localGameState.players.length]);
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -67,9 +70,9 @@ export default function Scoreboard({
       // Emit custom event for header components to listen to
       globalThis.dispatchEvent(
         new CustomEvent("headerUpdate", {
-          detail: { 
+          detail: {
             playerCount: updatedGameState.players.length,
-            hostName: updatedGameState.players.find((p) => p.isHost)?.name || "Unknown"
+            hostName: updatedGameState.players.find((p) => p.isHost)?.name || "Unknown",
           },
         }),
       );
@@ -301,9 +304,13 @@ export default function Scoreboard({
                   }
 
                   // Check if current player is missing from the game state
-                  const currentPlayerExists = updatedGameState.players.some((p: any) => p.id === playerId);
+                  const currentPlayerExists = updatedGameState.players.some((p: any) =>
+                    p.id === playerId
+                  );
                   if (!currentPlayerExists && playerId) {
-                    console.warn(`Scoreboard: Current player ${playerId} missing from game state, requesting refresh`);
+                    console.warn(
+                      `Scoreboard: Current player ${playerId} missing from game state, requesting refresh`,
+                    );
                     // Send another join-room message to ensure we're properly synced
                     const currentPlayer = localGameState.players.find((p) => p.id === playerId);
                     const playerName = currentPlayer?.name;
@@ -331,7 +338,11 @@ export default function Scoreboard({
                     "Scoreboard: About to update local game state with",
                     newGameState.players.length,
                     "players:",
-                    newGameState.players.map((p: any) => ({ id: p.id, name: p.name, isHost: p.isHost }))
+                    newGameState.players.map((p: any) => ({
+                      id: p.id,
+                      name: p.name,
+                      isHost: p.isHost,
+                    })),
                   );
 
                   setLocalGameState(newGameState);
@@ -477,7 +488,10 @@ export default function Scoreboard({
 
   // Get sorted players by score - memoized for performance
   const sortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
-    console.log("Scoreboard: Recalculating sorted players, player count:", localGameState.players.length);
+    console.log(
+      "Scoreboard: Recalculating sorted players, player count:",
+      localGameState.players.length,
+    );
     return localGameState.players
       .map((player) => ({
         ...player,
@@ -792,8 +806,12 @@ export default function Scoreboard({
       <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
         <h3 className="text-sm font-medium text-gray-700">Players ({sortedPlayers.length})</h3>
         {(() => {
-          console.log("Scoreboard: About to render player list with", sortedPlayers.length, "players:", 
-            sortedPlayers.map(p => ({ id: p.id, name: p.name })));
+          console.log(
+            "Scoreboard: About to render player list with",
+            sortedPlayers.length,
+            "players:",
+            sortedPlayers.map((p) => ({ id: p.id, name: p.name })),
+          );
           return null;
         })()}
         {sortedPlayers.map((player, index) => (

@@ -85,4 +85,36 @@ export class GameStateService implements GameStateStorage {
       console.error("Error updating player state:", error);
     }
   }
+
+  async deleteGameState(roomId: string): Promise<void> {
+    try {
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Deleting game state from memory");
+        this.devGameStates.delete(`game:${roomId}`);
+        return;
+      }
+
+      await this.env.GAME_STATE.delete(`game:${roomId}`);
+      console.log(`Deleted game state for room ${roomId}`);
+    } catch (error) {
+      console.error("Error deleting game state:", error);
+    }
+  }
+
+  async deletePlayerState(playerId: string): Promise<void> {
+    try {
+      // In development, use in-memory storage
+      if (!this.env?.GAME_STATE) {
+        console.log("Development mode: Deleting player state from memory");
+        this.devPlayerStates.delete(`player:${playerId}`);
+        return;
+      }
+
+      await this.env.GAME_STATE.delete(`player:${playerId}`);
+      console.log(`Deleted player state for ${playerId}`);
+    } catch (error) {
+      console.error("Error deleting player state:", error);
+    }
+  }
 }

@@ -130,19 +130,25 @@ export class RoomHandler implements MessageHandler {
       let allPlayers = null;
       let retryCount = 0;
       const maxRetries = 5;
-      
+
       while (retryCount < maxRetries) {
         allPlayers = await this.playerService.getPlayersFromDatabase(roomId);
-        const playerExists = allPlayers?.some(p => p.id === playerId);
-        
+        const playerExists = allPlayers?.some((p) => p.id === playerId);
+
         if (playerExists) {
-          console.log(`Room ${roomId}: Player ${playerId} found in database on attempt ${retryCount + 1}`);
+          console.log(
+            `Room ${roomId}: Player ${playerId} found in database on attempt ${retryCount + 1}`,
+          );
           break;
         }
-        
-        console.log(`Room ${roomId}: Player ${playerId} not found in database, attempt ${retryCount + 1}/${maxRetries}`);
+
+        console.log(
+          `Room ${roomId}: Player ${playerId} not found in database, attempt ${
+            retryCount + 1
+          }/${maxRetries}`,
+        );
         retryCount++;
-        
+
         if (retryCount < maxRetries) {
           // Wait before retrying, with exponential backoff
           await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, retryCount)));
@@ -161,8 +167,10 @@ export class RoomHandler implements MessageHandler {
         }
       }
 
-      console.log(`Room ${roomId}: Final player list has ${allPlayers?.length || 0} players:`, 
-        allPlayers?.map(p => ({ id: p.id, name: p.name })) || []);
+      console.log(
+        `Room ${roomId}: Final player list has ${allPlayers?.length || 0} players:`,
+        allPlayers?.map((p) => ({ id: p.id, name: p.name })) || [],
+      );
 
       // If no game state exists, create initial waiting state
       if (!gameState) {
@@ -307,9 +315,17 @@ export class RoomHandler implements MessageHandler {
 
       const { wasHost, newHostId, newHostName, roomDeleted, remainingPlayers } = leaveData;
 
-      // If room was deleted, no need to broadcast
+      // If room was deleted, clean up game state and don't broadcast
       if (roomDeleted) {
         console.log(`Room ${roomId} was deleted after player ${playerId} left`);
+        // Clean up game state for deleted room
+        try {
+          await this.gameStateService.deleteGameState(roomId);
+          await this.gameStateService.deletePlayerState(playerId);
+          console.log(`Cleaned up game state for deleted room ${roomId}`);
+        } catch (error) {
+          console.error(`Error cleaning up game state for room ${roomId}:`, error);
+        }
         return;
       }
 

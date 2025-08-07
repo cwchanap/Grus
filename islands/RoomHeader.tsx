@@ -243,14 +243,16 @@ export default function RoomHeader(
     const handleHeaderUpdate = (event: Event) => {
       const customEvent = event as CustomEvent;
       const { playerCount, hostName } = customEvent.detail;
-      
+
       setRoom((prevRoom) => ({
         ...prevRoom,
         playerCount,
-        host: prevRoom.host ? {
-          ...prevRoom.host,
-          name: hostName
-        } : prevRoom.host
+        host: prevRoom.host
+          ? {
+            ...prevRoom.host,
+            name: hostName,
+          }
+          : prevRoom.host,
       }));
     };
 

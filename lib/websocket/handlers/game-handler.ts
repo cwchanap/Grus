@@ -40,7 +40,7 @@ export class GameHandler implements MessageHandler {
         await this.handleEndGame(connection, message);
         break;
       case "ping":
-        await this.handlePing(connection, message);
+        this.handlePing(connection, message);
         break;
       default:
         throw new Error(`Unsupported message type: ${message.type}`);
@@ -68,11 +68,45 @@ export class GameHandler implements MessageHandler {
         return;
       }
 
-      // Check if game is already started
+      // Check if game is already started with retry logic to handle race conditions
       let gameState = await this.gameStateService.getGameState(roomId);
+      console.log(
+        `Game state check for room ${roomId}:`,
+        gameState
+          ? {
+            phase: gameState.phase,
+            roundNumber: gameState.roundNumber,
+            playerCount: gameState.players?.length,
+          }
+          : "No existing game state",
+      );
+
+      // Double-check after a small delay to prevent race conditions
       if (gameState && gameState.phase !== "waiting" && gameState.phase !== "finished") {
-        this.connectionPool.sendError(playerId, "Game is already in progress");
-        return;
+        console.log(`Game appears to be in progress, double-checking after delay...`);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        gameState = await this.gameStateService.getGameState(roomId);
+
+        if (gameState && gameState.phase !== "waiting" && gameState.phase !== "finished") {
+          console.warn(
+            `Cannot start game in room ${roomId}: game is in phase "${gameState.phase}"`,
+          );
+          this.connectionPool.sendError(playerId, "Game is already in progress");
+          return;
+        }
+      }
+
+      // If game is finished, we can restart it - reset to waiting state
+      if (gameState && gameState.phase === "finished") {
+        console.log(`Restarting finished game in room ${roomId}`);
+        gameState.phase = "waiting";
+        gameState.roundNumber = 0;
+        gameState.currentDrawer = "";
+        gameState.currentWord = "";
+        gameState.timeRemaining = 0;
+        gameState.drawingData = [];
+        gameState.correctGuesses = [];
+        // Keep existing players and scores for restart
       }
 
       // Initialize new game state
@@ -112,7 +146,7 @@ export class GameHandler implements MessageHandler {
       console.log(`Game started in room ${roomId} by host ${playerId}`);
 
       // Broadcast game state to all players
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: {
@@ -201,7 +235,7 @@ export class GameHandler implements MessageHandler {
       });
 
       // Broadcast new round state
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: {
@@ -256,7 +290,7 @@ export class GameHandler implements MessageHandler {
       this.timerService.clearRoundTimer(roomId);
 
       // Broadcast final results
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: {
@@ -302,7 +336,7 @@ export class GameHandler implements MessageHandler {
       await this.gameStateService.updateGameState(roomId, gameState);
 
       // Broadcast time update
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: {
@@ -332,7 +366,7 @@ export class GameHandler implements MessageHandler {
       await this.gameStateService.updateGameState(roomId, gameState);
 
       // Broadcast round ended
-      await this.connectionPool.broadcastToRoom(roomId, {
+      this.connectionPool.broadcastToRoom(roomId, {
         type: "game-state",
         roomId,
         data: {
@@ -345,7 +379,7 @@ export class GameHandler implements MessageHandler {
 
       // If game is complete, broadcast final results
       if (gameState.phase === "results" && gameState.roundNumber >= 5) {
-        await this.connectionPool.broadcastToRoom(roomId, {
+        this.connectionPool.broadcastToRoom(roomId, {
           type: "game-state",
           roomId,
           data: {
