@@ -12,6 +12,7 @@ export default function CreateRoomModal(
   const [formData, setFormData] = useState({
     roomName: "",
     hostName: "",
+    gameType: "drawing",
     maxPlayers: 8,
   });
   const [loading, setLoading] = useState(false);
@@ -42,6 +43,7 @@ export default function CreateRoomModal(
         body: JSON.stringify({
           name: formData.roomName.trim(),
           hostName: formData.hostName.trim(),
+          gameType: formData.gameType,
           maxPlayers: formData.maxPlayers,
         }),
       });
@@ -64,7 +66,7 @@ export default function CreateRoomModal(
 
   const handleClose = () => {
     if (!loading) {
-      setFormData({ roomName: "", hostName: "", maxPlayers: 8 });
+      setFormData({ roomName: "", hostName: "", gameType: "drawing", maxPlayers: 8 });
       setError("");
       onClose();
     }
@@ -138,6 +140,25 @@ export default function CreateRoomModal(
             <div class="text-xs text-gray-500 mt-1">
               {formData.hostName.length}/30 characters
             </div>
+          </div>
+
+          <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+              Game Type
+            </label>
+            <select
+              value={formData.gameType}
+              onChange={(e) =>
+                setFormData((prev) => ({
+                  ...prev,
+                  gameType: (e.target as HTMLSelectElement).value,
+                }))}
+              disabled={loading}
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
+            >
+              <option value="drawing">🎨 Drawing & Guessing</option>
+              {/* Future game types can be added here */}
+            </select>
           </div>
 
           <div class="mb-6">

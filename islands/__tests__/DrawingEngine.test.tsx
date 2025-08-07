@@ -4,7 +4,7 @@ import {
   deserializeDrawingCommand,
   serializeDrawingCommand,
   validateDrawingCommand,
-} from "../../lib/drawing-utils.ts";
+} from "../../lib/games/drawing/drawing-utils.ts";
 
 Deno.test("DrawingEngine Integration - Drawing command flow", () => {
   // Test the complete flow of drawing commands

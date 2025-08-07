@@ -1,13 +1,13 @@
 import { useEffect, useState } from "preact/hooks";
-import type { RoomSummary } from "../lib/room-manager.ts";
-import type { GameSettings, GameState } from "../types/game.ts";
+import type { RoomSummary } from "../lib/core/room-manager.ts";
+import type { BaseGameState } from "../types/core/game.ts";
 import LeaveRoomButton from "./LeaveRoomButton.tsx";
 import GameSettingsModal from "../components/GameSettingsModal.tsx";
 
 interface RoomHeaderProps {
   room: RoomSummary;
   playerId: string;
-  gameState: GameState;
+  gameState: BaseGameState;
 }
 
 export default function RoomHeader(

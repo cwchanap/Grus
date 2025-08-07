@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import type { RoomSummary } from "../lib/room-manager.ts";
+import type { RoomSummary } from "../lib/core/room-manager.ts";
 
 interface JoinRoomModalProps {
   show: boolean;

@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
-import type { GameState, PlayerState } from "../types/game.ts";
+import type { BaseGameState } from "../types/core/game.ts";
+import type { PlayerState } from "../types/core/room.ts";
 // import type { JSX } from "preact";
 import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
 interface ScoreboardProps {
   roomId: string;
   playerId: string;
-  gameState: GameState;
-  onGameStateUpdate?: (gameState: GameState) => void;
+  gameState: BaseGameState;
+  onGameStateUpdate?: (gameState: BaseGameState) => void;
   className?: string;
 }
 
@@ -24,7 +25,7 @@ export default function Scoreboard({
   className = "",
 }: ScoreboardProps) {
   console.log("Scoreboard component rendered with roomId:", roomId, "playerId:", playerId);
-  const [localGameState, setLocalGameState] = useState<GameState>(gameState);
+  const [localGameState, setLocalGameState] = useState<BaseGameState>(gameState);
 
   // Sync local state with gameState prop changes - simplified dependencies
   useEffect(() => {
@@ -65,7 +66,7 @@ export default function Scoreboard({
   const [isStartingGame, setIsStartingGame] = useState(false);
 
   // Helper function to emit header update events (instead of direct DOM manipulation)
-  const emitHeaderUpdate = (updatedGameState: GameState) => {
+  const emitHeaderUpdate = (updatedGameState: BaseGameState) => {
     try {
       // Emit custom event for header components to listen to
       globalThis.dispatchEvent(

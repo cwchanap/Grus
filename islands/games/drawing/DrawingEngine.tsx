@@ -1,13 +1,13 @@
 import { useEffect, useImperativeHandle, useRef, useState } from "preact/hooks";
 import { forwardRef } from "preact/compat";
 import * as PIXI from "pixi.js";
-import { DrawingCommand } from "../types/game.ts";
+import { DrawingCommand } from "../../../types/games/drawing.ts";
 import {
   DrawingCommandBuffer,
   DrawingCommandThrottler,
   validateDrawingCommand,
-} from "../lib/drawing-utils.ts";
-import MobileDrawingTools from "../components/MobileDrawingTools.tsx";
+} from "../../../lib/games/drawing/drawing-utils.ts";
+import MobileDrawingTools from "../../../components/MobileDrawingTools.tsx";
 
 export interface DrawingEngineProps {
   isDrawer: boolean;

@@ -5,8 +5,7 @@
 import * as $_404 from "./routes/_404.tsx";
 import * as $_app from "./routes/_app.tsx";
 import * as $_middleware from "./routes/_middleware.ts";
-import * as $api_game_start from "./routes/api/game/start.ts";
-import * as $api_game_state from "./routes/api/game/state.ts";
+import * as $api_games from "./routes/api/games.ts";
 import * as $api_health from "./routes/api/health.ts";
 import * as $api_joke from "./routes/api/joke.ts";
 import * as $api_rooms from "./routes/api/rooms.ts";
@@ -15,22 +14,21 @@ import * as $api_rooms_id_leave from "./routes/api/rooms/[id]/leave.ts";
 import * as $api_rooms_cleanup from "./routes/api/rooms/cleanup.ts";
 import * as $api_websocket_test from "./routes/api/websocket-test.ts";
 import * as $api_websocket from "./routes/api/websocket.ts";
-import * as $drawing_demo from "./routes/drawing-demo.tsx";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
 import * as $websocket_test from "./routes/websocket-test.tsx";
-import * as $ChatRoom from "./islands/ChatRoom.tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
-import * as $DrawingBoard_example from "./islands/DrawingBoard.example.tsx";
-import * as $DrawingBoard from "./islands/DrawingBoard.tsx";
-import * as $DrawingEngine from "./islands/DrawingEngine.tsx";
-import * as $GameLobby from "./islands/GameLobby.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
 import * as $LeaveRoomButton from "./islands/LeaveRoomButton.tsx";
 import * as $RoomHeader from "./islands/RoomHeader.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
+import * as $core_ChatRoom from "./islands/core/ChatRoom.tsx";
+import * as $core_GameLobby from "./islands/core/GameLobby.tsx";
+import * as $core_MainLobby from "./islands/core/MainLobby.tsx";
+import * as $games_drawing_DrawingBoard from "./islands/games/drawing/DrawingBoard.tsx";
+import * as $games_drawing_DrawingEngine from "./islands/games/drawing/DrawingEngine.tsx";
 import type { Manifest } from "$fresh/server.ts";
 
 const manifest = {
@@ -38,8 +36,7 @@ const manifest = {
     "./routes/_404.tsx": $_404,
     "./routes/_app.tsx": $_app,
     "./routes/_middleware.ts": $_middleware,
-    "./routes/api/game/start.ts": $api_game_start,
-    "./routes/api/game/state.ts": $api_game_state,
+    "./routes/api/games.ts": $api_games,
     "./routes/api/health.ts": $api_health,
     "./routes/api/joke.ts": $api_joke,
     "./routes/api/rooms.ts": $api_rooms,
@@ -48,24 +45,23 @@ const manifest = {
     "./routes/api/rooms/cleanup.ts": $api_rooms_cleanup,
     "./routes/api/websocket-test.ts": $api_websocket_test,
     "./routes/api/websocket.ts": $api_websocket,
-    "./routes/drawing-demo.tsx": $drawing_demo,
     "./routes/greet/[name].tsx": $greet_name_,
     "./routes/index.tsx": $index,
     "./routes/room/[id].tsx": $room_id_,
     "./routes/websocket-test.tsx": $websocket_test,
   },
   islands: {
-    "./islands/ChatRoom.tsx": $ChatRoom,
     "./islands/Counter.tsx": $Counter,
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
-    "./islands/DrawingBoard.example.tsx": $DrawingBoard_example,
-    "./islands/DrawingBoard.tsx": $DrawingBoard,
-    "./islands/DrawingEngine.tsx": $DrawingEngine,
-    "./islands/GameLobby.tsx": $GameLobby,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
     "./islands/LeaveRoomButton.tsx": $LeaveRoomButton,
     "./islands/RoomHeader.tsx": $RoomHeader,
     "./islands/Scoreboard.tsx": $Scoreboard,
+    "./islands/core/ChatRoom.tsx": $core_ChatRoom,
+    "./islands/core/GameLobby.tsx": $core_GameLobby,
+    "./islands/core/MainLobby.tsx": $core_MainLobby,
+    "./islands/games/drawing/DrawingBoard.tsx": $games_drawing_DrawingBoard,
+    "./islands/games/drawing/DrawingEngine.tsx": $games_drawing_DrawingEngine,
   },
   baseUrl: import.meta.url,
 } satisfies Manifest;

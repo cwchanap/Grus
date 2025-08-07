@@ -1,10 +1,11 @@
+// Main lobby component for showing available rooms
 import { useEffect, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
-import type { RoomSummary } from "../lib/room-manager.ts";
-import CreateRoomModal from "./CreateRoomModal.tsx";
-import JoinRoomModal from "./JoinRoomModal.tsx";
+import type { RoomSummary } from "../../lib/core/room-manager.ts";
+import CreateRoomModal from "../CreateRoomModal.tsx";
+import JoinRoomModal from "../JoinRoomModal.tsx";
 
-interface GameLobbyProps {
+interface MainLobbyProps {
   initialRooms: RoomSummary[];
   error?: string;
 }
@@ -14,7 +15,7 @@ const showCreateModal = signal(false);
 const showJoinModal = signal(false);
 const selectedRoom = signal<RoomSummary | null>(null);
 
-export default function GameLobby({ initialRooms, error }: GameLobbyProps) {
+export default function MainLobby({ initialRooms, error }: MainLobbyProps) {
   const [rooms, setRooms] = useState<RoomSummary[]>(initialRooms);
   const [loading, setLoading] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
