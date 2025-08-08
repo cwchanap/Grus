@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
-import type { ChatMessage, ClientMessage, ServerMessage } from "../../types/game.ts";
+import type { ChatMessage } from "../../types/core/room.ts";
+import type { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
 
 // Mock WebSocket for integration testing
 class MockWebSocket {
@@ -84,7 +85,7 @@ Deno.test({
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Simulate joining room
-    const joinMessage: ClientMessage = {
+    const joinMessage: BaseClientMessage = {
       type: "join-room",
       roomId: "test-room",
       playerId: "player1",
@@ -113,7 +114,7 @@ Deno.test({
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Simulate sending chat message
-    const chatMessage: ClientMessage = {
+    const chatMessage: BaseClientMessage = {
       type: "chat",
       roomId: "test-room",
       playerId: "player1",
@@ -153,7 +154,7 @@ Deno.test({
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Simulate receiving a chat message
-    const incomingMessage: ServerMessage = {
+    const incomingMessage: BaseServerMessage = {
       type: "chat-message",
       roomId: "test-room",
       data: {
@@ -199,7 +200,7 @@ Deno.test({
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     // Simulate receiving a correct guess
-    const correctGuessMessage: ServerMessage = {
+    const correctGuessMessage: BaseServerMessage = {
       type: "chat-message",
       roomId: "test-room",
       data: {

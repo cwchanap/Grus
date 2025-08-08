@@ -1,18 +1,7 @@
 // API route for joining a specific room
 import { Handlers } from "$fresh/server.ts";
 import { RoomManager } from "../../../../lib/core/room-manager.ts";
-import { WebSocketManager } from "../../../../lib/websocket/websocket-manager.ts";
 import { Env } from "../../../../types/cloudflare.ts";
-
-// Global WebSocket manager instance
-let wsManager: WebSocketManager | null = null;
-
-function getWebSocketManager(env: Env): WebSocketManager {
-  if (!wsManager) {
-    wsManager = new WebSocketManager(env);
-  }
-  return wsManager;
-}
 
 export const handler: Handlers = {
   // POST /api/rooms/[id]/join - Join a room
@@ -53,16 +42,8 @@ export const handler: Handlers = {
         });
       }
 
-      // Only broadcast WebSocket updates in production with proper env
-      if (!isDevelopment && env?.DB) {
-        try {
-          const wsManager = getWebSocketManager(env);
-          await wsManager.broadcastLobbyUpdate();
-        } catch (wsError) {
-          console.error("WebSocket broadcast error:", wsError);
-          // Don't fail the request if WebSocket fails
-        }
-      }
+      // Note: WebSocket updates are now handled by the CoreWebSocketHandler
+      // through real-time connections, so no need for explicit broadcasting here
 
       return new Response(
         JSON.stringify({

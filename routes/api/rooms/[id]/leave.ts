@@ -1,18 +1,7 @@
 // API route for leaving a specific room
 import { Handlers } from "$fresh/server.ts";
 import { RoomManager } from "../../../../lib/core/room-manager.ts";
-import { WebSocketManager } from "../../../../lib/websocket/websocket-manager.ts";
 import { Env } from "../../../../types/cloudflare.ts";
-
-// Global WebSocket manager instance
-let wsManager: WebSocketManager | null = null;
-
-function getWebSocketManager(env: Env): WebSocketManager {
-  if (!wsManager) {
-    wsManager = new WebSocketManager(env);
-  }
-  return wsManager;
-}
 
 export const handler: Handlers = {
   // POST /api/rooms/[id]/leave - Leave a room
@@ -50,42 +39,8 @@ export const handler: Handlers = {
         });
       }
 
-      // Only broadcast WebSocket updates in production with proper env
-      if (!isDevelopment && env?.DB) {
-        try {
-          const wsManager = getWebSocketManager(env);
-          await wsManager.broadcastLobbyUpdate();
-
-          // If room was deleted, no need to broadcast room updates
-          if (!result.data?.roomDeleted) {
-            // If there was a host transfer, broadcast room update
-            if (result.data?.newHostId) {
-              await wsManager.broadcastToRoomPublic(roomId, {
-                type: "room-update",
-                roomId,
-                data: {
-                  type: "host-transferred",
-                  newHostId: result.data.newHostId,
-                  leftPlayerId: playerId,
-                },
-              });
-            } else {
-              // Broadcast player left
-              await wsManager.broadcastToRoomPublic(roomId, {
-                type: "room-update",
-                roomId,
-                data: {
-                  type: "player-left",
-                  playerId,
-                },
-              });
-            }
-          }
-        } catch (wsError) {
-          console.error("WebSocket broadcast error:", wsError);
-          // Don't fail the request if WebSocket fails
-        }
-      }
+      // Note: WebSocket updates are now handled by the CoreWebSocketHandler
+      // through real-time connections, so no need for explicit broadcasting here
 
       return new Response(
         JSON.stringify({

@@ -32,7 +32,7 @@ export default function RoomHeader(
   }, [room.host, playerId]);
 
   // Handle settings save
-  const handleSettingsSave = (settings: GameSettings) => {
+  const handleSettingsSave = (settings: import("../components/GameSettingsModal.tsx").GameSettings) => {
     console.log("RoomHeader: Saving game settings:", settings);
 
     // Send settings update via WebSocket

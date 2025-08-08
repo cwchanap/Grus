@@ -6,14 +6,10 @@
  */
 
 import { assert, assertEquals } from "$std/assert/mod.ts";
-import type {
-  ChatMessage,
-  ClientMessage,
-  DrawingCommand,
-  GameState,
-  // PlayerState,
-  ServerMessage,
-} from "../../types/game.ts";
+import type { ChatMessage } from "../../types/core/room.ts";
+import type { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
+import type { DrawingCommand } from "../../types/games/drawing.ts";
+import type { BaseGameState } from "../../types/core/game.ts";
 
 // Mock WebSocket implementation for testing
 class MockWebSocket {
@@ -70,7 +66,7 @@ class MockWebSocket {
     return this.sentMessages[this.sentMessages.length - 1];
   }
 
-  private handleAutoResponse(message: ClientMessage) {
+  private handleAutoResponse(message: BaseClientMessage) {
     // Auto-respond to join-room messages
     if (message.type === "join-room") {
       setTimeout(() => {
@@ -89,7 +85,7 @@ class MockWebSocket {
 }
 
 // Mock game state factory
-function createMockGameState(overrides: Partial<GameState> = {}): GameState {
+function createMockGameState(overrides: Partial<BaseGameState> = {}): BaseGameState {
   return {
     roomId: "test-room-123",
     currentDrawer: "player1",
@@ -136,11 +132,11 @@ function createMockGameState(overrides: Partial<GameState> = {}): GameState {
 // Simulate complete game session
 class GameSessionSimulator {
   private players: Map<string, MockWebSocket> = new Map();
-  private gameState: GameState;
+  private gameState: BaseGameState;
   private chatMessages: ChatMessage[] = [];
   private drawingCommands: DrawingCommand[] = [];
 
-  constructor(gameState: GameState) {
+  constructor(gameState: BaseGameState) {
     this.gameState = gameState;
   }
 
@@ -163,7 +159,7 @@ class GameSessionSimulator {
 
     await new Promise((resolve) => setTimeout(resolve, 20)); // Wait for connection
 
-    const joinMessage: ClientMessage = {
+    const joinMessage: BaseClientMessage = {
       type: "join-room",
       roomId: this.gameState.roomId,
       playerId,
@@ -178,7 +174,7 @@ class GameSessionSimulator {
     const ws = this.players.get(hostPlayerId);
     if (!ws) throw new Error(`Host ${hostPlayerId} not found`);
 
-    const startMessage: ClientMessage = {
+    const startMessage: BaseClientMessage = {
       type: "start-game",
       roomId: this.gameState.roomId,
       playerId: hostPlayerId,
@@ -207,7 +203,7 @@ class GameSessionSimulator {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
-    const chatMessage: ClientMessage = {
+    const chatMessage: BaseClientMessage = {
       type: "chat",
       roomId: this.gameState.roomId,
       playerId,
@@ -255,7 +251,7 @@ class GameSessionSimulator {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
-    const drawCommand: ClientMessage = {
+    const drawCommand: BaseClientMessage = {
       type: "draw",
       roomId: this.gameState.roomId,
       playerId,
@@ -300,7 +296,7 @@ class GameSessionSimulator {
     });
   }
 
-  private handleServerMessage(_playerId: string, message: ServerMessage): void {
+  private handleServerMessage(_playerId: string, message: BaseServerMessage): void {
     // Handle server messages that would affect client state
     switch (message.type) {
       case "game-state":

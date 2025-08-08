@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "preact/hooks";
 import { signal } from "@preact/signals";
 import type { BaseGameState } from "../types/core/game.ts";
 import type { PlayerState } from "../types/core/room.ts";
+import type { DrawingGameState } from "../types/games/drawing.ts";
 // import type { JSX } from "preact";
 import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
@@ -107,11 +108,8 @@ export default function Scoreboard({
     let transitionMessage = "";
 
     switch (currentPhase) {
-      case "drawing":
-        transitionMessage = "Drawing phase started!";
-        break;
-      case "guessing":
-        transitionMessage = "Guessing time!";
+      case "playing":
+        transitionMessage = "Game started!";
         break;
       case "results":
         transitionMessage = "Round complete!";
@@ -129,7 +127,7 @@ export default function Scoreboard({
 
   // Client-side timer countdown for smooth updates
   useEffect(() => {
-    if (localGameState.phase !== "drawing" && localGameState.phase !== "guessing") {
+    if (localGameState.phase !== "playing") {
       return;
     }
 
@@ -501,20 +499,22 @@ export default function Scoreboard({
       .sort((a, b) => b.score - a.score);
   }, [localGameState.players, localGameState.scores]);
 
-  // Get current drawer info
+  // Get current drawer info (for drawing game)
   const currentDrawer = useMemo((): PlayerState | null => {
-    return localGameState.players.find((p) => p.id === localGameState.currentDrawer) || null;
-  }, [localGameState.players, localGameState.currentDrawer]);
+    const drawingState = localGameState as DrawingGameState;
+    if (drawingState.gameData?.currentDrawer) {
+      return localGameState.players.find((p) => p.id === drawingState.gameData.currentDrawer) || null;
+    }
+    return null;
+  }, [localGameState.players, localGameState]);
 
   // Get phase display text
   const getPhaseText = (): string => {
     switch (localGameState.phase) {
       case "waiting":
         return "Waiting for game to start";
-      case "drawing":
-        return "Drawing in progress";
-      case "guessing":
-        return "Guessing time";
+      case "playing":
+        return "Game in progress";
       case "results":
         return "Round complete";
       default:
@@ -527,10 +527,8 @@ export default function Scoreboard({
     switch (localGameState.phase) {
       case "waiting":
         return "text-yellow-600 bg-yellow-50";
-      case "drawing":
+      case "playing":
         return "text-blue-600 bg-blue-50";
-      case "guessing":
-        return "text-green-600 bg-green-50";
       case "results":
         return "text-purple-600 bg-purple-50";
       default:
@@ -720,7 +718,7 @@ export default function Scoreboard({
         </div>
 
         {/* Enhanced Timer Display */}
-        {(localGameState.phase === "drawing" || localGameState.phase === "guessing") && (
+        {localGameState.phase === "playing" && (
           <div className="mt-3">
             <div
               className={`inline-flex items-center px-4 py-2 rounded-lg border-2 font-mono text-lg font-bold ${
@@ -795,7 +793,7 @@ export default function Scoreboard({
       </div>
 
       {/* Current Drawer */}
-      {currentDrawer && localGameState.phase === "drawing" && (
+      {currentDrawer && localGameState.phase === "playing" && (
         <div className="mb-4 p-2 bg-blue-50 rounded-lg">
           <div className="text-sm font-medium text-blue-800">
             {currentDrawer.name} is drawing
@@ -828,7 +826,7 @@ export default function Scoreboard({
                   Host
                 </span>
               )}
-              {player.id === localGameState.currentDrawer && (
+              {player.id === (localGameState as DrawingGameState).gameData?.currentDrawer && (
                 <span className="text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">Drawing</span>
               )}
               <div
@@ -889,7 +887,7 @@ export default function Scoreboard({
           )}
 
           {/* End Round Button (during drawing phase) */}
-          {localGameState.phase === "drawing" && (
+          {localGameState.phase === "playing" && (
             <button
               type="button"
               onClick={handleNextRound}
@@ -911,7 +909,7 @@ export default function Scoreboard({
           )}
 
           {/* End Game Button */}
-          {(localGameState.phase === "drawing" || localGameState.phase === "results") && (
+          {(localGameState.phase === "playing" || localGameState.phase === "results") && (
             <button
               type="button"
               onClick={handleEndGame}

@@ -1,6 +1,6 @@
 import { assertEquals } from "$std/assert/mod.ts";
 // import { signal } from "@preact/signals";
-import type { GameState } from "../../types/game.ts";
+import type { BaseGameState } from "../../types/core/game.ts";
 
 // Test WebSocket message handling logic that would be used in Scoreboard
 const createMockGameState = (overrides: Partial<GameState> = {}): GameState => ({

@@ -27,7 +27,7 @@
 ### Business Logic Organization
 - **lib/**: Core application logic separated from UI
 - **lib/dao/**: Database access layer with separate DAOs for each entity
-- **lib/websocket/**: WebSocket handling and real-time communication
+- **lib/core/**: Core application logic including WebSocket handling
 - **types/**: Centralized type definitions shared across the application
 
 ### Configuration Management

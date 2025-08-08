@@ -6,7 +6,9 @@
  */
 
 import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
-import type { ChatMessage, DrawingCommand, GameState, PlayerState } from "../../types/game.ts";
+import type { ChatMessage, PlayerState } from "../../types/core/room.ts";
+import type { DrawingCommand } from "../../types/games/drawing.ts";
+import type { BaseGameState } from "../../types/core/game.ts";
 
 // Test data factories
 function createTestGameState(overrides: Partial<GameState> = {}): GameState {

@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "$std/assert/mod.ts";
-import { DrawingCommand, GameState } from "../../types/game.ts";
+import { DrawingCommand } from "../../types/games/drawing.ts";
+import { BaseGameState } from "../../types/core/game.ts";
 
 /**
  * Integration tests for DrawingBoard component
@@ -15,7 +16,7 @@ function createGameRoomScenario() {
     { id: "player3", name: "Charlie", isHost: false, isConnected: true, lastActivity: Date.now() },
   ];
 
-  const gameState: GameState = {
+  const gameState: BaseGameState = {
     roomId,
     currentDrawer: "player1",
     currentWord: "house",
@@ -144,11 +145,11 @@ Deno.test("DrawingBoard Integration - Turn-based drawing permissions", () => {
   // Test drawing permissions for each game phase
   const testDrawingPermissions = (
     currentDrawer: string,
-    phase: GameState["phase"],
+    phase: BaseGameState["phase"],
     playerId: string,
   ) => {
     const _testGameState = { ...gameState, currentDrawer, phase };
-    return currentDrawer === playerId && phase === "drawing";
+    return currentDrawer === playerId && phase === "playing";
   };
 
   // Test during drawing phase

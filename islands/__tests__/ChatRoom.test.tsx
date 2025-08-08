@@ -1,7 +1,7 @@
 import { assertEquals } from "$std/assert/mod.ts";
 // import { signal } from "@preact/signals";
 // import ChatRoom from "../ChatRoom.tsx";
-import type { ChatMessage } from "../../types/game.ts";
+import type { ChatMessage } from "../../types/core/room.ts";
 
 // Mock WebSocket for testing
 class MockWebSocket {

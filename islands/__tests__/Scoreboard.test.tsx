@@ -1,6 +1,6 @@
 import { assertEquals, assertExists } from "$std/assert/mod.ts";
 // import { signal } from "@preact/signals";
-import type { GameState } from "../../types/game.ts";
+import type { BaseGameState } from "../../types/core/game.ts";
 
 // Test helper functions that would be used in the Scoreboard component
 const createMockGameState = (overrides: Partial<GameState> = {}): GameState => ({
