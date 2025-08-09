@@ -1,6 +1,6 @@
 ---
 trigger: model_decision
-description: This rules contains a overview structure for the project and development command. 
+description: This rules contains a overview structure for the project, development command and testing stregegy
 ---
 
 ## Development Commands
@@ -127,3 +127,7 @@ Follow `BaseClientMessage`/`BaseServerMessage` patterns with `type`, `roomId`, a
 
 ### Game State Updates
 Game engines receive immutable state and return new state - no direct mutations.
+
+### Testing
+
+Remember to perform UI e2e testing with playwright mcp server instead of windsurf built in browser. Server should always be available at http://localhost:3000/, only attempt to start it if you find it is not started

@@ -137,6 +137,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
 
   const { room, playerId } = data;
   const gameState = createInitialGameState(room, playerId);
+  const currentPlayerName = room.players.find((p) => p.id === playerId)?.name || "Unknown";
 
   return (
     <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">
@@ -209,12 +210,10 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex-1 min-h-0 flex flex-col">
             <div class="flex-1 min-h-0">
               <ChatRoom
+                roomId={room.room.id}
                 messages={gameState.chatMessages}
-                onSendMessage={(message) => {
-                  // Handle chat message via WebSocket
-                  console.log("Chat message:", message);
-                }}
                 currentPlayerId={playerId || ""}
+                currentPlayerName={currentPlayerName}
                 disabled={false}
                 placeholder="Type a message..."
               />

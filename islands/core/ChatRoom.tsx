@@ -3,36 +3,100 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { ChatMessage } from "../../types/core/room.ts";
 
 interface ChatRoomProps {
-  messages: ChatMessage[];
-  onSendMessage: (message: string) => void;
+  roomId: string;
+  messages?: ChatMessage[];
+  onSendMessage?: (message: string) => void;
   currentPlayerId: string;
+  currentPlayerName?: string;
   disabled?: boolean;
   placeholder?: string;
 }
 
 export default function ChatRoom({
+  roomId,
   messages,
   onSendMessage,
   currentPlayerId,
+  currentPlayerName,
   disabled = false,
   placeholder = "Type a message...",
 }: ChatRoomProps) {
   const [inputValue, setInputValue] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(messages ?? []);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const didInitFromProp = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  // Initialize from messages prop once (if provided)
+  useEffect(() => {
+    if (!didInitFromProp.current && messages && messages.length) {
+      setChatMessages(messages);
+      didInitFromProp.current = true;
+    }
+  }, [messages]);
+
+  // Auto-scroll on new messages
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [chatMessages]);
+
+  // Listen for forwarded WebSocket chat messages from Scoreboard
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const ce = e as CustomEvent;
+      const payload = ce.detail?.data;
+      if (payload?.type === "chat-message" && payload?.data) {
+        console.log("ChatRoom: received chat-message via event", payload.data);
+        const incoming = payload.data as ChatMessage;
+        setChatMessages((prev) => [...prev, incoming]);
+      }
+    };
+    globalThis.addEventListener("websocket-message", handler as EventListener);
+    return () => globalThis.removeEventListener("websocket-message", handler as EventListener);
+  }, []);
 
   const handleSubmit = (e: Event) => {
     e.preventDefault();
     if (inputValue.trim() && !disabled) {
-      onSendMessage(inputValue.trim());
+      const text = inputValue.trim();
+
+      if (typeof onSendMessage === "function") {
+        try {
+          onSendMessage(text);
+        } catch (err) {
+          console.error("ChatRoom: onSendMessage threw:", err);
+        }
+      } else {
+        // Fallback: send via global WebSocket set by Scoreboard
+        const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          if (!currentPlayerId) {
+            console.warn("ChatRoom: currentPlayerId is empty; message will use empty playerId");
+          }
+          console.log("ChatRoom: sending chat via WebSocket", {
+            roomId,
+            playerId: currentPlayerId,
+            playerName: currentPlayerName,
+            text,
+            readyState: ws.readyState,
+          });
+          ws.send(
+            JSON.stringify({
+              type: "chat",
+              roomId,
+              playerId: currentPlayerId,
+              data: { text, playerName: currentPlayerName },
+            }),
+          );
+        } else {
+          console.warn("ChatRoom: WebSocket not available for sending chat message");
+        }
+      }
+
       setInputValue("");
     }
   };
@@ -53,14 +117,14 @@ export default function ChatRoom({
 
       {/* Messages */}
       <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
-        {messages.length === 0
+        {chatMessages.length === 0
           ? (
             <div class="text-center text-gray-500 text-sm py-8">
               No messages yet. Start the conversation!
             </div>
           )
           : (
-            messages.map((message) => (
+            chatMessages.map((message) => (
               <div
                 key={message.id}
                 class={`flex ${

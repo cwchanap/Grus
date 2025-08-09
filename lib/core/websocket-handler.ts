@@ -162,10 +162,51 @@ export class CoreWebSocketHandler {
     message: BaseClientMessage,
   ): Promise<void> {
     const { roomId, playerId } = message;
-    const { playerName } = message.data;
+    const { playerName } = message.data || {};
 
     try {
-      // Join room via room manager
+      // Get current room summary to detect existing players
+      const roomSummary = this.roomManager.getRoomSummary(roomId);
+      if (!roomSummary.success || !roomSummary.data) {
+        this.sendError(connection, roomSummary.error || "Room not found");
+        return;
+      }
+
+      const players = roomSummary.data.players || [];
+      const byId = playerId ? players.find((p: any) => p.id === playerId) : undefined;
+      const byName = !byId && playerName
+        ? players.find((p: any) => p.name?.trim().toLowerCase() === playerName.trim().toLowerCase())
+        : undefined;
+
+      if (byId || byName) {
+        // Existing player connecting (or reconnecting) — register this socket without creating a new player
+        const effectiveId = (byId || byName)!.id as string;
+        connection.playerId = effectiveId;
+        connection.roomId = roomId;
+
+        // Register in connection pools
+        this.connections.set(effectiveId, connection);
+        if (!this.roomConnections.has(roomId)) {
+          this.roomConnections.set(roomId, new Set());
+        }
+        this.roomConnections.get(roomId)!.add(effectiveId);
+
+        // Send current room summary directly to this client
+        this.sendMessage(connection, {
+          type: "room-update",
+          roomId,
+          data: roomSummary.data,
+        });
+        // Also broadcast to ensure all clients have a consistent, up-to-date player list
+        await this.broadcastToRoom(roomId, {
+          type: "room-update",
+          roomId,
+          data: roomSummary.data,
+        });
+        return;
+      }
+
+      // No existing player matched — create a new player entry via RoomManager
       const result = this.roomManager.joinRoom({ roomId, playerName });
 
       if (!result.success || !result.data) {
@@ -184,7 +225,13 @@ export class CoreWebSocketHandler {
       }
       this.roomConnections.get(roomId)!.add(result.data.playerId);
 
-      // Send room update to all players
+      // Send room update to the joining player immediately
+      this.sendMessage(connection, {
+        type: "room-update",
+        roomId,
+        data: result.data.room,
+      });
+      // Broadcast room update to all players as well
       await this.broadcastToRoom(roomId, {
         type: "room-update",
         roomId,
@@ -212,16 +259,17 @@ export class CoreWebSocketHandler {
 
         // Broadcast room update if room still exists
         if (!result.data.roomDeleted) {
-          await this.broadcastToRoom(roomId, {
-            type: "room-update",
-            roomId,
-            data: {
-              type: "player-left",
-              playerId,
-              newHostId: result.data.newHostId,
-              remainingPlayers: result.data.remainingPlayers,
-            },
-          });
+          // Send a full room summary to keep clients in sync with a consistent payload shape
+          const updatedRoom = this.roomManager.getRoomSummary(roomId);
+          if (updatedRoom.success && updatedRoom.data) {
+            await this.broadcastToRoom(roomId, {
+              type: "room-update",
+              roomId,
+              data: updatedRoom.data,
+            });
+          } else {
+            console.error("Failed to get updated room after leave:", updatedRoom.error);
+          }
         }
       }
 
@@ -255,6 +303,18 @@ export class CoreWebSocketHandler {
       roomId,
       data: chatMessage,
     });
+
+    // Ensure the sender receives the message even if join hasn't fully completed yet
+    // (race between client sending chat and server adding the connection to room membership)
+    const roomSet = this.roomConnections.get(roomId);
+    const senderInRoom = !!(connection.playerId && roomSet && roomSet.has(connection.playerId));
+    if (!senderInRoom) {
+      this.sendMessage(connection, {
+        type: "chat-message",
+        roomId,
+        data: chatMessage,
+      });
+    }
   }
 
   private async handleStartGame(
@@ -525,14 +585,30 @@ export class CoreWebSocketHandler {
     const playerIds = this.roomConnections.get(roomId);
     if (!playerIds) return;
 
-    const promises = Array.from(playerIds).map((playerId) => {
-      const connection = this.connections.get(playerId);
-      if (connection) {
-        this.sendMessage(connection, message);
-      }
-    });
+    try {
+      console.log(
+        `[WS] Broadcast ${message.type} to room ${roomId} -> recipients: ${playerIds.size}`,
+        Array.from(playerIds),
+      );
 
-    await Promise.all(promises);
+      const promises = Array.from(playerIds).map((pid) => {
+        const conn = this.connections.get(pid);
+        if (!conn) {
+          console.warn(`[WS] No active connection found for player ${pid} in room ${roomId}`);
+          return Promise.resolve();
+        }
+        try {
+          this.sendMessage(conn, message);
+        } catch (err) {
+          console.error(`[WS] Failed to send to ${pid} in room ${roomId}:`, err);
+        }
+        return Promise.resolve();
+      });
+
+      await Promise.all(promises);
+    } catch (e) {
+      console.error(`[WS] Broadcast error for room ${roomId}:`, e);
+    }
   }
 
   // Public utility methods

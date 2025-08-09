@@ -368,7 +368,7 @@ export default function Scoreboard({
                 }
               }
             } else if (message.type === "room-update") {
-              // Handle room updates that don't require game state changes
+              // Handle room updates (pre-game join/leave, host change)
               if (message.data) {
                 const updateData = message.data;
 
@@ -379,9 +379,74 @@ export default function Scoreboard({
                   }),
                 );
 
-                // Note: All actual game state changes are now handled via game-state messages
-                // Room-update messages are only used for non-state UI feedback
-                console.log("Scoreboard: Received room-update message:", updateData.type);
+                // Update local game state when server sends room membership data
+                // Two possible shapes:
+                // 1) Room summary (from join): { room, players, playerCount, canJoin, host }
+                // 2) Player left (from leave): { type: 'player-left', playerId, newHostId, remainingPlayers }
+                const summaryPlayers = Array.isArray(updateData?.players) ? updateData.players : null;
+                const remainingPlayers = Array.isArray(updateData?.remainingPlayers)
+                  ? updateData.remainingPlayers
+                  : null;
+
+                let updatedPlayers: PlayerState[] | null = null;
+                if (summaryPlayers) {
+                  updatedPlayers = summaryPlayers.map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    isHost: !!p.isHost,
+                    isConnected: true,
+                    lastActivity: Date.now(),
+                  }));
+                } else if (remainingPlayers) {
+                  updatedPlayers = remainingPlayers.map((p: any) => ({
+                    id: p.id,
+                    name: p.name,
+                    isHost: !!p.isHost,
+                    isConnected: true,
+                    lastActivity: Date.now(),
+                  }));
+                }
+
+                // Apply host change if provided only as IDs
+                const newHostId: string | undefined = updateData?.host?.id || updateData?.newHostId;
+                if (updatedPlayers && newHostId) {
+                  updatedPlayers = updatedPlayers.map((p) => ({ ...p, isHost: p.id === newHostId }));
+                }
+
+                if (updatedPlayers) {
+                  // Merge scores: keep existing where possible, default to 0 for new players
+                  const newScores: Record<string, number> = { ...localGameState.scores };
+                  const validIds = new Set(updatedPlayers.map((p) => p.id));
+                  for (const id of Object.keys(newScores)) {
+                    if (!validIds.has(id)) delete newScores[id];
+                  }
+                  for (const p of updatedPlayers) {
+                    if (newScores[p.id] === undefined) newScores[p.id] = 0;
+                  }
+
+                  const newGameState = {
+                    ...localGameState,
+                    players: updatedPlayers,
+                    scores: newScores,
+                  } as BaseGameState;
+
+                  console.log(
+                    "Scoreboard: Processed room-update -> updating players:",
+                    newGameState.players.map((p) => ({ id: p.id, name: p.name })),
+                  );
+
+                  setLocalGameState(newGameState);
+                  onGameStateUpdate?.(newGameState);
+                  emitHeaderUpdate(newGameState);
+                  globalThis.dispatchEvent(
+                    new CustomEvent("gameStateUpdate", { detail: { gameState: newGameState } }),
+                  );
+                } else {
+                  console.log(
+                    "Scoreboard: Received room-update message:",
+                    updateData.type || "(room summary)",
+                  );
+                }
               }
             } else if (message.type === "chat-message") {
               // Handle chat messages and forward to ChatRoom component
