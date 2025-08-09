@@ -456,6 +456,14 @@ export default function Scoreboard({
                   detail: { data: message },
                 }),
               );
+            } else if (message.type === "draw-update") {
+              // Forward drawing updates for DrawingBoard to consume
+              console.log("Scoreboard: Received draw-update, forwarding to DrawingBoard");
+              globalThis.dispatchEvent(
+                new CustomEvent("websocket-message", {
+                  detail: { data: message },
+                }),
+              );
             }
           } catch (error) {
             console.error("Scoreboard: Error parsing message:", error);

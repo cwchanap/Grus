@@ -10,6 +10,7 @@ interface DrawingBoardProps {
   drawingData: DrawingCommand[];
   isDrawer: boolean;
   disabled?: boolean;
+  playerId: string;
 }
 
 export default function DrawingBoard({
@@ -19,12 +20,18 @@ export default function DrawingBoard({
   drawingData,
   isDrawer,
   disabled = false,
+  playerId,
 }: DrawingBoardProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentColor, setCurrentColor] = useState("#000000");
   const [currentSize, setCurrentSize] = useState(5);
   const throttlerRef = useRef<DrawingCommandThrottler | null>(null);
+
+  // Live state driven by server game-state updates
+  const [liveDisabled, setLiveDisabled] = useState<boolean>(disabled);
+  const [liveIsDrawer, setLiveIsDrawer] = useState<boolean>(isDrawer);
+  const [liveDrawingData, setLiveDrawingData] = useState<DrawingCommand[]>(drawingData);
 
   const colors = [
     "#000000",
@@ -40,18 +47,71 @@ export default function DrawingBoard({
   const sizes = [2, 5, 10];
 
   useEffect(() => {
-    if (isDrawer && !disabled) {
+    if (liveIsDrawer && !liveDisabled) {
       throttlerRef.current = new DrawingCommandThrottler(16); // ~60fps
     }
 
     return () => {
       throttlerRef.current?.destroy();
     };
-  }, [isDrawer, disabled]);
+  }, [liveIsDrawer, liveDisabled]);
 
   useEffect(() => {
     redrawCanvas();
-  }, [drawingData]);
+  }, [liveDrawingData]);
+
+  // Listen for global game state updates dispatched by Scoreboard
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const anyEvt = evt as CustomEvent;
+      const gs = anyEvt.detail?.gameState as any;
+      if (!gs || typeof gs !== "object") return;
+
+      // Enable canvas when game is not in waiting phase
+      setLiveDisabled(gs.phase === "waiting");
+
+      // Determine if current player is the drawer (for drawing game)
+      const currentDrawer = gs?.gameData?.currentDrawer as string | undefined;
+      if (playerId) {
+        setLiveIsDrawer(!!currentDrawer && currentDrawer === playerId);
+      }
+
+      // Sync drawing data when provided in full game-state
+      const data = gs?.gameData?.drawingData;
+      if (Array.isArray(data)) {
+        setLiveDrawingData(data as DrawingCommand[]);
+      }
+    };
+
+    globalThis.addEventListener("gameStateUpdate", handler as EventListener);
+    return () => {
+      globalThis.removeEventListener("gameStateUpdate", handler as EventListener);
+    };
+  }, [playerId]);
+
+  // Listen for draw updates forwarded by Scoreboard via global websocket-message
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const anyEvt = evt as CustomEvent;
+      const msg = anyEvt.detail?.data as any;
+      if (!msg || msg.type !== "draw-update") return;
+
+      const payload = msg.data || {};
+      const commands: DrawingCommand[] | undefined = payload.commands;
+      const command: DrawingCommand | undefined = payload.command;
+
+      if (Array.isArray(commands)) {
+        setLiveDrawingData((prev) => [...prev, ...commands]);
+      } else if (command && typeof command === "object") {
+        setLiveDrawingData((prev) => [...prev, command]);
+      }
+    };
+
+    globalThis.addEventListener("websocket-message", handler as EventListener);
+    return () => {
+      globalThis.removeEventListener("websocket-message", handler as EventListener);
+    };
+  }, []);
 
   const redrawCanvas = () => {
     const canvas = canvasRef.current;
@@ -66,7 +126,7 @@ export default function DrawingBoard({
     // Redraw all commands
     let currentPath: Path2D | null = null;
 
-    for (const command of drawingData) {
+    for (const command of liveDrawingData) {
       switch (command.type) {
         case "start":
           currentPath = new Path2D();
@@ -123,7 +183,7 @@ export default function DrawingBoard({
   };
 
   const startDrawing = (e: MouseEvent | TouchEvent) => {
-    if (!isDrawer || disabled) return;
+    if (!liveIsDrawer || liveDisabled) return;
 
     e.preventDefault();
     setIsDrawing(true);
@@ -146,7 +206,7 @@ export default function DrawingBoard({
   };
 
   const draw = (e: MouseEvent | TouchEvent) => {
-    if (!isDrawing || !isDrawer || disabled) return;
+    if (!isDrawing || !liveIsDrawer || liveDisabled) return;
 
     e.preventDefault();
     const { x, y } = getCanvasCoordinates(e);
@@ -165,7 +225,7 @@ export default function DrawingBoard({
   };
 
   const stopDrawing = (e: MouseEvent | TouchEvent) => {
-    if (!isDrawing || !isDrawer || disabled) return;
+    if (!isDrawing || !liveIsDrawer || liveDisabled) return;
 
     e.preventDefault();
     setIsDrawing(false);
@@ -183,7 +243,7 @@ export default function DrawingBoard({
   };
 
   const clearCanvas = () => {
-    if (!isDrawer || disabled) return;
+    if (!liveIsDrawer || liveDisabled) return;
 
     const command: DrawingCommand = {
       type: "clear",
@@ -204,6 +264,7 @@ export default function DrawingBoard({
             <div class="flex space-x-1">
               {colors.map((color) => (
                 <button
+                  type="button"
                   key={color}
                   onClick={() => setCurrentColor(color)}
                   class={`w-8 h-8 rounded-full border-2 ${
@@ -221,6 +282,7 @@ export default function DrawingBoard({
             <div class="flex space-x-2">
               {sizes.map((size) => (
                 <button
+                  type="button"
                   key={size}
                   onClick={() => setCurrentSize(size)}
                   class={`px-3 py-1 text-sm rounded-md border ${
@@ -238,6 +300,7 @@ export default function DrawingBoard({
           {/* Clear Button */}
           <div>
             <button
+              type="button"
               onClick={clearCanvas}
               class="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
             >
@@ -254,7 +317,7 @@ export default function DrawingBoard({
           width={width}
           height={height}
           class={`border border-gray-300 rounded-md ${
-            isDrawer && !disabled ? "cursor-crosshair" : "cursor-default"
+            liveIsDrawer && !liveDisabled ? "cursor-crosshair" : "cursor-default"
           }`}
           style={{ maxWidth: "100%", height: "auto" }}
           onMouseDown={startDrawing}
@@ -266,10 +329,10 @@ export default function DrawingBoard({
           onTouchEnd={stopDrawing}
         />
 
-        {(!isDrawer || disabled) && (
+        {(!liveIsDrawer || liveDisabled) && (
           <div class="absolute inset-0 bg-gray-100 bg-opacity-50 flex items-center justify-center rounded-md">
             <p class="text-gray-600 text-sm">
-              {disabled ? "Game not started" : "Watch others draw"}
+              {liveDisabled ? "Game not started" : "Watch others draw"}
             </p>
           </div>
         )}

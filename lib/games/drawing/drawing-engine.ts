@@ -218,9 +218,10 @@ export class DrawingGameEngine extends BaseGameEngine<
   calculateScore(gameState: DrawingGameState, playerId: string, action: any): number {
     if (action.type === "correct_guess") {
       // Score based on how quickly the guess was made
-      const timeElapsed = gameState.settings.roundTimeSeconds - gameState.timeRemaining;
-      const totalTime = gameState.settings.roundTimeSeconds;
-      return Math.max(0, 100 - Math.floor(timeElapsed / totalTime * 100));
+      // Use milliseconds consistently
+      const totalTimeMs = gameState.settings.roundTimeSeconds * 1000;
+      const timeElapsedMs = totalTimeMs - gameState.timeRemaining;
+      return Math.max(0, 100 - Math.floor(timeElapsedMs / totalTimeMs * 100));
     }
 
     return 0;
@@ -242,7 +243,8 @@ export class DrawingGameEngine extends BaseGameEngine<
     return {
       ...gameState,
       roundNumber: gameState.roundNumber + 1,
-      timeRemaining: gameState.settings.roundTimeSeconds,
+      // Reset timer in milliseconds for the new round
+      timeRemaining: gameState.settings.roundTimeSeconds * 1000,
       phase: "playing",
       drawingPhase: "drawing",
       gameData: {

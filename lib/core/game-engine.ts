@@ -50,7 +50,8 @@ export abstract class BaseGameEngine<
       ...gameState,
       phase: "playing" as any,
       roundNumber: 1,
-      timeRemaining: gameState.settings.roundTimeSeconds,
+      // Standardize to milliseconds for client compatibility
+      timeRemaining: gameState.settings.roundTimeSeconds * 1000,
     };
   }
 
