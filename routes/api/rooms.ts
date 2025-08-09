@@ -14,7 +14,7 @@ export const handler: Handlers = {
       const roomManager = new RoomManager();
 
       // Get active rooms with automatic cleanup
-      const result = await roomManager.getActiveRoomsWithCleanup(limit);
+      const result = roomManager.getActiveRoomsWithCleanup(limit);
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
@@ -51,7 +51,8 @@ export const handler: Handlers = {
       const roomManager = new RoomManager();
 
       // Create room using room manager
-      const result = await roomManager.createRoom({
+      const result = roomManager.createRoom({
+        name: name.trim(),
         hostName: hostName.trim(),
         gameType: gameType || "drawing",
         maxPlayers: maxPlayers || 8,

@@ -107,14 +107,24 @@ export class CoreWebSocketHandler {
 
       const message: BaseClientMessage = JSON.parse(data);
 
-      // Validate message structure
-      if (!message.type || !message.roomId) {
+      // Validate message structure - some messages like subscribe-lobby don't need roomId
+      if (!message.type) {
+        console.error("Invalid message structure:", message);
+        return;
+      }
+
+      // Messages that don't require roomId
+      const noRoomIdRequired = ["subscribe-lobby", "ping"];
+      if (!noRoomIdRequired.includes(message.type) && !message.roomId) {
         console.error("Invalid message structure:", message);
         return;
       }
 
       // Handle core messages
       switch (message.type) {
+        case "subscribe-lobby":
+          await this.handleSubscribeLobby(connection, message);
+          break;
         case "join-room":
           await this.handleJoinRoom(connection, message);
           break;
@@ -156,7 +166,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Join room via room manager
-      const result = await this.roomManager.joinRoom({ roomId, playerName });
+      const result = this.roomManager.joinRoom({ roomId, playerName });
 
       if (!result.success || !result.data) {
         this.sendError(connection, result.error || "Failed to join room");
@@ -193,7 +203,7 @@ export class CoreWebSocketHandler {
     const { roomId, playerId } = message;
 
     try {
-      const result = await this.roomManager.leaveRoom(roomId, playerId);
+      const result = this.roomManager.leaveRoom(roomId, playerId);
 
       if (result.success && result.data) {
         // Remove from connection pools
@@ -255,7 +265,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Get room info
-      const room = await this.roomManager.getRoom(roomId);
+      const room = this.roomManager.getRoom(roomId);
       if (!room) {
         this.sendError(connection, "Room not found");
         return;
@@ -269,7 +279,7 @@ export class CoreWebSocketHandler {
       }
 
       // Get room summary for players
-      const roomSummary = await this.roomManager.getRoomSummary(roomId);
+      const roomSummary = this.roomManager.getRoomSummary(roomId);
       if (!roomSummary.success || !roomSummary.data) {
         this.sendError(connection, "Failed to get room info");
         return;
@@ -363,7 +373,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Get room and verify host
-      const roomSummary = await this.roomManager.getRoomSummary(roomId);
+      const roomSummary = this.roomManager.getRoomSummary(roomId);
       if (!roomSummary.success || !roomSummary.data) {
         this.sendError(connection, "Room not found");
         return;
@@ -394,6 +404,34 @@ export class CoreWebSocketHandler {
     }
   }
 
+  private async handleSubscribeLobby(
+    connection: WebSocketConnection,
+    message: BaseClientMessage,
+  ): Promise<void> {
+    try {
+      // Get active rooms from room manager
+      const result = this.roomManager.getActiveRoomsWithCleanup(20);
+
+      if (!result.success) {
+        this.sendError(connection, result.error || "Failed to get lobby data");
+        return;
+      }
+
+      // Send lobby data to client
+      this.sendMessage(connection, {
+        type: "lobby-data",
+        roomId: "", // No specific room for lobby data
+        data: {
+          rooms: result.data || [],
+          timestamp: Date.now(),
+        },
+      });
+    } catch (error) {
+      console.error("Error handling subscribe-lobby:", error);
+      this.sendError(connection, "Failed to subscribe to lobby");
+    }
+  }
+
   private async handlePing(
     connection: WebSocketConnection,
     message: BaseClientMessage,
@@ -401,7 +439,7 @@ export class CoreWebSocketHandler {
     // Send pong response
     this.sendMessage(connection, {
       type: "pong",
-      roomId: message.roomId,
+      roomId: message.roomId || "",
       data: { timestamp: Date.now() },
     });
   }
@@ -447,7 +485,7 @@ export class CoreWebSocketHandler {
 
     if (playerId && roomId) {
       try {
-        await this.handleLeaveRoom(connection, {
+        this.handleLeaveRoom(connection, {
           type: "leave-room",
           roomId,
           playerId,

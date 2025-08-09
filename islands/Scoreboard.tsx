@@ -503,7 +503,8 @@ export default function Scoreboard({
   const currentDrawer = useMemo((): PlayerState | null => {
     const drawingState = localGameState as DrawingGameState;
     if (drawingState.gameData?.currentDrawer) {
-      return localGameState.players.find((p) => p.id === drawingState.gameData.currentDrawer) || null;
+      return localGameState.players.find((p) => p.id === drawingState.gameData.currentDrawer) ||
+        null;
     }
     return null;
   }, [localGameState.players, localGameState]);

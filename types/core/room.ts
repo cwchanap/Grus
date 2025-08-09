@@ -3,7 +3,7 @@
 export interface Room {
   id: string;
   name: string;
-  hostId: string;
+  hostId: string | null;
   maxPlayers: number;
   isActive: boolean;
   gameType: string; // New field to support multiple game types

@@ -49,7 +49,7 @@ export class DatabaseService {
   // Room operations
   createRoom(
     name: string,
-    hostId: string,
+    hostId: string | null = null,
     maxPlayers = 8,
     gameType = "drawing",
   ): DatabaseResult<string> {

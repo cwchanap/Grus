@@ -11,7 +11,7 @@ import type { Score } from "../types/core/game.ts";
 export interface IDatabaseService {
   createRoom(
     name: string,
-    hostId: string,
+    hostId: string | null,
     maxPlayers?: number,
     gameType?: string,
   ): DatabaseResult<string>;
