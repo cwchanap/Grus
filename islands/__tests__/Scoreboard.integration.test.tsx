@@ -76,8 +76,8 @@ Deno.test("Scoreboard Integration - WebSocket URL construction", () => {
   assertEquals(httpsUrl, "wss://example.com/api/websocket?roomId=test-room");
 
   // Test HTTP protocol
-  const httpUrl = constructWebSocketUrl(roomId, "localhost:8000", "http:");
-  assertEquals(httpUrl, "ws://localhost:8000/api/websocket?roomId=test-room");
+  const httpUrl = constructWebSocketUrl(roomId, "localhost:3000", "http:");
+  assertEquals(httpUrl, "ws://localhost:3000/api/websocket?roomId=test-room");
 });
 
 Deno.test("Scoreboard Integration - subscription message creation", () => {

@@ -1,7 +1,7 @@
-// Drawing game specific drawing board component
+// Drawing game specific drawing board component (PixiJS wrapper)
 import { useEffect, useRef, useState } from "preact/hooks";
 import { DrawingCommand } from "../../../types/games/drawing.ts";
-import { DrawingCommandThrottler } from "../../../lib/games/drawing/drawing-utils.ts";
+import DrawingEngine, { DrawingEngineRef } from "./DrawingEngine.tsx";
 
 interface DrawingBoardProps {
   width: number;
@@ -22,43 +22,22 @@ export default function DrawingBoard({
   disabled = false,
   playerId,
 }: DrawingBoardProps) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [currentColor, setCurrentColor] = useState("#000000");
-  const [currentSize, setCurrentSize] = useState(5);
-  const throttlerRef = useRef<DrawingCommandThrottler | null>(null);
+  const engineRef = useRef<DrawingEngineRef | null>(null);
 
   // Live state driven by server game-state updates
   const [liveDisabled, setLiveDisabled] = useState<boolean>(disabled);
   const [liveIsDrawer, setLiveIsDrawer] = useState<boolean>(isDrawer);
-  const [liveDrawingData, setLiveDrawingData] = useState<DrawingCommand[]>(drawingData);
-
-  const colors = [
-    "#000000",
-    "#FF0000",
-    "#00FF00",
-    "#0000FF",
-    "#FFFF00",
-    "#FF00FF",
-    "#00FFFF",
-    "#FFA500",
-  ];
-
-  const sizes = [2, 5, 10];
-
+  
+  // Replay initial drawing data when engine becomes ready or data changes
   useEffect(() => {
-    if (liveIsDrawer && !liveDisabled) {
-      throttlerRef.current = new DrawingCommandThrottler(16); // ~60fps
+    const ref = engineRef.current;
+    if (!ref || !drawingData?.length) return;
+    // Clear before replay to avoid duplicates
+    ref.applyDrawingCommand({ type: "clear", timestamp: Date.now() });
+    for (const cmd of drawingData) {
+      ref.applyDrawingCommand(cmd);
     }
-
-    return () => {
-      throttlerRef.current?.destroy();
-    };
-  }, [liveIsDrawer, liveDisabled]);
-
-  useEffect(() => {
-    redrawCanvas();
-  }, [liveDrawingData]);
+  }, [engineRef.current, drawingData]);
 
   // Listen for global game state updates dispatched by Scoreboard
   useEffect(() => {
@@ -75,11 +54,12 @@ export default function DrawingBoard({
       if (playerId) {
         setLiveIsDrawer(!!currentDrawer && currentDrawer === playerId);
       }
-
-      // Sync drawing data when provided in full game-state
-      const data = gs?.gameData?.drawingData;
-      if (Array.isArray(data)) {
-        setLiveDrawingData(data as DrawingCommand[]);
+      // Optionally, if full drawing data is sent, replay it
+      const data = gs?.gameData?.drawingData as DrawingCommand[] | undefined;
+      if (Array.isArray(data) && engineRef.current) {
+        // Clear before replay to avoid duplicates
+        engineRef.current.applyDrawingCommand({ type: "clear", timestamp: Date.now() });
+        for (const cmd of data) engineRef.current.applyDrawingCommand(cmd);
       }
     };
 
@@ -101,9 +81,9 @@ export default function DrawingBoard({
       const command: DrawingCommand | undefined = payload.command;
 
       if (Array.isArray(commands)) {
-        setLiveDrawingData((prev) => [...prev, ...commands]);
+        for (const cmd of commands) engineRef.current?.applyDrawingCommand(cmd);
       } else if (command && typeof command === "object") {
-        setLiveDrawingData((prev) => [...prev, command]);
+        engineRef.current?.applyDrawingCommand(command);
       }
     };
 
@@ -113,230 +93,16 @@ export default function DrawingBoard({
     };
   }, []);
 
-  const redrawCanvas = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    // Clear canvas
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Redraw all commands
-    let currentPath: Path2D | null = null;
-
-    for (const command of liveDrawingData) {
-      switch (command.type) {
-        case "start":
-          currentPath = new Path2D();
-          ctx.strokeStyle = command.color || "#000000";
-          ctx.lineWidth = command.size || 5;
-          ctx.lineCap = "round";
-          ctx.lineJoin = "round";
-          if (command.x !== undefined && command.y !== undefined) {
-            currentPath.moveTo(command.x, command.y);
-          }
-          break;
-
-        case "move":
-          if (currentPath && command.x !== undefined && command.y !== undefined) {
-            currentPath.lineTo(command.x, command.y);
-            ctx.stroke(currentPath);
-          }
-          break;
-
-        case "end":
-          currentPath = null;
-          break;
-
-        case "clear":
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-          break;
-      }
-    }
-  };
-
-  const getCanvasCoordinates = (e: MouseEvent | TouchEvent): { x: number; y: number } => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-
-    let clientX: number, clientY: number;
-
-    if (e instanceof MouseEvent) {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    } else {
-      const touch = e.touches[0] || e.changedTouches[0];
-      clientX = touch.clientX;
-      clientY = touch.clientY;
-    }
-
-    return {
-      x: (clientX - rect.left) * scaleX,
-      y: (clientY - rect.top) * scaleY,
-    };
-  };
-
-  const startDrawing = (e: MouseEvent | TouchEvent) => {
-    if (!liveIsDrawer || liveDisabled) return;
-
-    e.preventDefault();
-    setIsDrawing(true);
-
-    const { x, y } = getCanvasCoordinates(e);
-    const command: DrawingCommand = {
-      type: "start",
-      x,
-      y,
-      color: currentColor,
-      size: currentSize,
-      timestamp: Date.now(),
-    };
-
-    if (throttlerRef.current) {
-      throttlerRef.current.throttle(command, onDrawCommand);
-    } else {
-      onDrawCommand(command);
-    }
-  };
-
-  const draw = (e: MouseEvent | TouchEvent) => {
-    if (!isDrawing || !liveIsDrawer || liveDisabled) return;
-
-    e.preventDefault();
-    const { x, y } = getCanvasCoordinates(e);
-    const command: DrawingCommand = {
-      type: "move",
-      x,
-      y,
-      timestamp: Date.now(),
-    };
-
-    if (throttlerRef.current) {
-      throttlerRef.current.throttle(command, onDrawCommand);
-    } else {
-      onDrawCommand(command);
-    }
-  };
-
-  const stopDrawing = (e: MouseEvent | TouchEvent) => {
-    if (!isDrawing || !liveIsDrawer || liveDisabled) return;
-
-    e.preventDefault();
-    setIsDrawing(false);
-
-    const command: DrawingCommand = {
-      type: "end",
-      timestamp: Date.now(),
-    };
-
-    if (throttlerRef.current) {
-      throttlerRef.current.throttle(command, onDrawCommand);
-    } else {
-      onDrawCommand(command);
-    }
-  };
-
-  const clearCanvas = () => {
-    if (!liveIsDrawer || liveDisabled) return;
-
-    const command: DrawingCommand = {
-      type: "clear",
-      timestamp: Date.now(),
-    };
-
-    onDrawCommand(command);
-  };
-
   return (
     <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-      {/* Drawing Tools */}
-      {isDrawer && !disabled && (
-        <div class="mb-4 space-y-3">
-          {/* Colors */}
-          <div class="flex items-center space-x-2">
-            <span class="text-sm font-medium text-gray-700">Color:</span>
-            <div class="flex space-x-1">
-              {colors.map((color) => (
-                <button
-                  type="button"
-                  key={color}
-                  onClick={() => setCurrentColor(color)}
-                  class={`w-8 h-8 rounded-full border-2 ${
-                    currentColor === color ? "border-gray-800" : "border-gray-300"
-                  }`}
-                  style={{ backgroundColor: color }}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Brush Sizes */}
-          <div class="flex items-center space-x-2">
-            <span class="text-sm font-medium text-gray-700">Size:</span>
-            <div class="flex space-x-2">
-              {sizes.map((size) => (
-                <button
-                  type="button"
-                  key={size}
-                  onClick={() => setCurrentSize(size)}
-                  class={`px-3 py-1 text-sm rounded-md border ${
-                    currentSize === size
-                      ? "bg-blue-500 text-white border-blue-500"
-                      : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
-                  }`}
-                >
-                  {size}px
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Clear Button */}
-          <div>
-            <button
-              type="button"
-              onClick={clearCanvas}
-              class="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-md hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 transition-colors"
-            >
-              Clear Canvas
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Canvas */}
-      <div class="relative">
-        <canvas
-          ref={canvasRef}
-          width={width}
-          height={height}
-          class={`border border-gray-300 rounded-md ${
-            liveIsDrawer && !liveDisabled ? "cursor-crosshair" : "cursor-default"
-          }`}
-          style={{ maxWidth: "100%", height: "auto" }}
-          onMouseDown={startDrawing}
-          onMouseMove={draw}
-          onMouseUp={stopDrawing}
-          onMouseLeave={stopDrawing}
-          onTouchStart={startDrawing}
-          onTouchMove={draw}
-          onTouchEnd={stopDrawing}
-        />
-
-        {(!liveIsDrawer || liveDisabled) && (
-          <div class="absolute inset-0 bg-gray-100 bg-opacity-50 flex items-center justify-center rounded-md">
-            <p class="text-gray-600 text-sm">
-              {liveDisabled ? "Game not started" : "Watch others draw"}
-            </p>
-          </div>
-        )}
-      </div>
+      <DrawingEngine
+        ref={engineRef}
+        isDrawer={liveIsDrawer}
+        onDrawingCommand={onDrawCommand}
+        width={width}
+        height={height}
+        disabled={liveDisabled}
+      />
     </div>
   );
 }

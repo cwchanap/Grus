@@ -60,7 +60,7 @@ test.describe("Smoke Tests", () => {
     // Should navigate somewhere (not stay on homepage)
     await page.waitForTimeout(1000);
     const currentUrl = page.url();
-    expect(currentUrl).not.toBe("http://localhost:8000/");
+    expect(currentUrl).not.toBe("http://localhost:3000/");
   });
 
   test("room page loads basic elements", async ({ page }) => {

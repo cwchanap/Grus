@@ -31,7 +31,7 @@ tests/
    ```bash
    deno task start
    ```
-   The server should be running on `http://localhost:8000`
+   The server should be running on `http://localhost:3000`
 
 ### Running Tests
 
@@ -174,7 +174,7 @@ test("multiplayer test", async ({ browser }) => {
 ## Configuration
 
 ### Playwright Configuration (`playwright.config.ts`)
-- **Base URL**: `http://localhost:8000`
+- **Base URL**: `http://localhost:3000`
 - **Browsers**: Chrome, Firefox, Safari, Mobile Chrome, Mobile Safari
 - **Retries**: 2 retries in CI, 0 locally
 - **Screenshots**: On failure only

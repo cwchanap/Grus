@@ -101,7 +101,7 @@ Deno.test("API Integration - Health Check", async () => {
   setupMockEnv();
   mockCloudflareAPI();
 
-  const request = new Request("http://localhost:8000/api/health");
+  const request = new Request("http://localhost:3000/api/health");
   const response = await healthHandler.GET!(request, {} as any);
 
   assertEquals(response.status, 200);
@@ -121,7 +121,7 @@ Deno.test("API Integration - Get Rooms", async () => {
   setupMockEnv();
   mockCloudflareAPI();
 
-  const request = new Request("http://localhost:8000/api/rooms");
+  const request = new Request("http://localhost:3000/api/rooms");
   const response = await roomsHandler.GET!(request, {} as any);
 
   assertEquals(response.status, 200);
@@ -151,7 +151,7 @@ Deno.test("API Integration - Create Room", async () => {
     maxPlayers: 6,
   };
 
-  const request = new Request("http://localhost:8000/api/rooms", {
+  const request = new Request("http://localhost:3000/api/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
@@ -182,7 +182,7 @@ Deno.test("API Integration - Create Room Validation Error", async () => {
     hostName: "Test Host",
   };
 
-  const request = new Request("http://localhost:8000/api/rooms", {
+  const request = new Request("http://localhost:3000/api/rooms", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
@@ -211,7 +211,7 @@ Deno.test("API Integration - Health Check Database Error", async () => {
     return new Response("", { status: 200 });
   };
 
-  const request = new Request("http://localhost:8000/api/health");
+  const request = new Request("http://localhost:3000/api/health");
   const response = await healthHandler.GET!(request, {} as any);
 
   assertEquals(response.status, 503);

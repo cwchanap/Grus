@@ -62,7 +62,7 @@ Start the development server:
 deno task start
 ```
 
-The application will be available at `http://localhost:8000`.
+The application will be available at `http://localhost:3000`.
 
 ### Environment Variables
 
