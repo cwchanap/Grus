@@ -25,7 +25,6 @@ export default function Scoreboard({
   onGameStateUpdate,
   className = "",
 }: ScoreboardProps) {
-  console.log("Scoreboard component rendered with roomId:", roomId, "playerId:", playerId);
   const [localGameState, setLocalGameState] = useState<BaseGameState>(gameState);
 
   // Sync local state with gameState prop changes - simplified dependencies
@@ -35,24 +34,11 @@ export default function Scoreboard({
       return;
     }
 
-    console.log(
-      "Scoreboard: Syncing with gameState prop:",
-      gameState.players.map((p) => ({ id: p.id, name: p.name })),
-    );
-
     // Always update local state when gameState prop changes
     setLocalGameState(gameState);
   }, [gameState]);
 
-  // Log player list changes for debugging
-  useEffect(() => {
-    console.log(
-      "Scoreboard: Player list changed, new player count:",
-      localGameState.players.length,
-    );
-    console.log("Scoreboard: Player IDs:", localGameState.players.map((p) => p.id));
-    console.log("Scoreboard: Player names:", localGameState.players.map((p) => p.name));
-  }, [localGameState.players.length]);
+ 
 
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
@@ -173,7 +159,6 @@ export default function Scoreboard({
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log(`Scoreboard: WebSocket connected for room ${roomId}`);
           connectionStatus.value = "connected";
 
           // Store WebSocket globally for game control messages
@@ -192,9 +177,6 @@ export default function Scoreboard({
 
           // Only send join-room message if we have a valid player name and playerId
           if (playerName && playerName !== "Unknown" && playerId) {
-            console.log(
-              `Scoreboard: Sending join-room message for player ${playerId} (${playerName}) to room ${roomId}`,
-            );
             ws?.send(JSON.stringify({
               type: "join-room",
               roomId,
@@ -205,17 +187,6 @@ export default function Scoreboard({
             console.warn(
               `Scoreboard: Cannot join room ${roomId} - playerId: ${playerId}, playerName: ${playerName}`,
             );
-            console.log(
-              "Available players in game state:",
-              localGameState.players.map((p) => ({ id: p.id, name: p.name })),
-            );
-
-            // If we have a playerId but no playerName, we might need to wait for the room data to load
-            if (playerId && !playerName) {
-              console.log(
-                "Scoreboard: Player ID exists but name not found. This might be a timing issue.",
-              );
-            }
           }
         };
 
@@ -267,10 +238,6 @@ export default function Scoreboard({
                   }
                 } else if (updatedGameState.players) {
                   // Regular game state update - this handles all player changes
-                  console.log(
-                    "Scoreboard: Received game state update with players:",
-                    updatedGameState.players.map((p: any) => ({ id: p.id, name: p.name })),
-                  );
 
                   // Show transition messages for player changes
                   if (
@@ -333,17 +300,6 @@ export default function Scoreboard({
                     scores: { ...updatedGameState.scores },
                   };
 
-                  console.log(
-                    "Scoreboard: About to update local game state with",
-                    newGameState.players.length,
-                    "players:",
-                    newGameState.players.map((p: any) => ({
-                      id: p.id,
-                      name: p.name,
-                      isHost: p.isHost,
-                    })),
-                  );
-
                   setLocalGameState(newGameState);
 
                   if (onGameStateUpdate) {
@@ -358,12 +314,6 @@ export default function Scoreboard({
                     new CustomEvent("gameStateUpdate", {
                       detail: { gameState: newGameState },
                     }),
-                  );
-
-                  console.log(
-                    "Scoreboard: Local game state updated with",
-                    newGameState.players.length,
-                    "players",
                   );
                 }
               }
@@ -430,27 +380,16 @@ export default function Scoreboard({
                     scores: newScores,
                   } as BaseGameState;
 
-                  console.log(
-                    "Scoreboard: Processed room-update -> updating players:",
-                    newGameState.players.map((p) => ({ id: p.id, name: p.name })),
-                  );
-
                   setLocalGameState(newGameState);
                   onGameStateUpdate?.(newGameState);
                   emitHeaderUpdate(newGameState);
                   globalThis.dispatchEvent(
                     new CustomEvent("gameStateUpdate", { detail: { gameState: newGameState } }),
                   );
-                } else {
-                  console.log(
-                    "Scoreboard: Received room-update message:",
-                    updateData.type || "(room summary)",
-                  );
                 }
               }
             } else if (message.type === "chat-message") {
               // Handle chat messages and forward to ChatRoom component
-              console.log("Scoreboard: Received chat message, forwarding to ChatRoom");
               globalThis.dispatchEvent(
                 new CustomEvent("websocket-message", {
                   detail: { data: message },
@@ -458,7 +397,6 @@ export default function Scoreboard({
               );
             } else if (message.type === "draw-update") {
               // Forward drawing updates for DrawingBoard to consume
-              console.log("Scoreboard: Received draw-update, forwarding to DrawingBoard");
               globalThis.dispatchEvent(
                 new CustomEvent("websocket-message", {
                   detail: { data: message },
@@ -554,16 +492,12 @@ export default function Scoreboard({
       oscillator.stop(audioContext.currentTime + 0.2);
     } catch (_error) {
       // Silently fail if audio is not supported
-      console.log("Audio notification not supported");
+ 
     }
   };
 
   // Get sorted players by score - memoized for performance
   const sortedPlayers = useMemo((): (PlayerState & { score: number })[] => {
-    console.log(
-      "Scoreboard: Recalculating sorted players, player count:",
-      localGameState.players.length,
-    );
     return localGameState.players
       .map((player) => ({
         ...player,
@@ -610,23 +544,8 @@ export default function Scoreboard({
     }
   };
 
-  // Debug logging for player list
-  console.log(
-    "Scoreboard: Current players in localGameState:",
-    localGameState.players.map((p) => ({ id: p.id, name: p.name })),
-  );
-  console.log(
-    "Scoreboard: Sorted players for rendering:",
-    sortedPlayers.map((p) => ({ id: p.id, name: p.name })),
-  );
-
   // Check if current player is host
   const isHost = localGameState.players.find((p) => p.id === playerId)?.isHost || false;
-
-  // Debug logging for host status
-  useEffect(() => {
-    console.log(`Scoreboard: Player ${playerId} host status: ${isHost}`);
-  }, [isHost, playerId]);
 
   // Send WebSocket message
   const sendGameControlMessage = (
@@ -644,7 +563,6 @@ export default function Scoreboard({
     }
 
     if (ws && ws.readyState === WebSocket.OPEN) {
-      console.log(`Sending ${type} message via WebSocket`);
       ws.send(JSON.stringify({
         type,
         roomId,
@@ -670,7 +588,6 @@ export default function Scoreboard({
       if (connectionStatus.value === "connected") {
         const success = sendGameControlMessage("start-game");
         if (success) {
-          console.log("Start game message sent via WebSocket");
           // WebSocket response will be handled in the message handler
           // Set a timeout to reset the starting state if no response comes
           setTimeout(() => {
@@ -878,15 +795,7 @@ export default function Scoreboard({
       {/* Player Scores */}
       <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
         <h3 className="text-sm font-medium text-gray-700">Players ({sortedPlayers.length})</h3>
-        {(() => {
-          console.log(
-            "Scoreboard: About to render player list with",
-            sortedPlayers.length,
-            "players:",
-            sortedPlayers.map((p) => ({ id: p.id, name: p.name })),
-          );
-          return null;
-        })()}
+ 
         {sortedPlayers.map((player, index) => (
           <div
             key={`player-${player.id}-${player.name}`}

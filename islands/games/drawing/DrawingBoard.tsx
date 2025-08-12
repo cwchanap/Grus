@@ -76,14 +76,23 @@ export default function DrawingBoard({
       const msg = anyEvt.detail?.data as any;
       if (!msg || msg.type !== "draw-update") return;
 
-      const payload = msg.data || {};
-      const commands: DrawingCommand[] | undefined = payload.commands;
-      const command: DrawingCommand | undefined = payload.command;
-
-      if (Array.isArray(commands)) {
-        for (const cmd of commands) engineRef.current?.applyDrawingCommand(cmd);
-      } else if (command && typeof command === "object") {
-        engineRef.current?.applyDrawingCommand(command);
+      const payload = msg.data;
+      // Support multiple payload shapes:
+      // 1) data is a single DrawingCommand (server current behavior)
+      // 2) data.command is a single command
+      // 3) data.commands is an array of commands
+      if (payload) {
+        if (Array.isArray((payload as any).commands)) {
+          for (const cmd of (payload as any).commands as DrawingCommand[]) {
+            engineRef.current?.applyDrawingCommand(cmd);
+          }
+        } else if ((payload as any).command) {
+          const cmd = (payload as any).command as DrawingCommand;
+          engineRef.current?.applyDrawingCommand(cmd);
+        } else if (typeof payload === "object" && (payload as any).type) {
+          const cmd = payload as DrawingCommand;
+          engineRef.current?.applyDrawingCommand(cmd);
+        }
       }
     };
 

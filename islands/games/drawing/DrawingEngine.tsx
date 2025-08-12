@@ -47,6 +47,13 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
   // For applying external (remote) drawing commands from other players
   const externalPathRef = useRef<PIXI.Graphics | null>(null);
+  // Track latest permission flags to avoid stale closures during async Pixi init
+  const isDrawerRef = useRef<boolean>(isDrawer);
+  const disabledRef = useRef<boolean>(disabled);
+  useEffect(() => {
+    isDrawerRef.current = isDrawer;
+    disabledRef.current = disabled;
+  }, [isDrawer, disabled]);
   // 2D canvas fallback when Pixi is not ready
   const twoDRef = useRef<CanvasRenderingContext2D | null>(null);
   // 2D fallback for remote (external) strokes
@@ -342,7 +349,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       app.stage.eventMode = "static";
       app.stage.hitArea = new PIXI.Rectangle(0, 0, width, height);
 
-      if (isDrawer && !disabled) {
+      // Attach drawing events using the latest permission flags
+      if (isDrawerRef.current && !disabledRef.current) {
         setupDrawingEvents(app, drawingContainer);
       }
     };
@@ -727,21 +735,34 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     app.stage.on("pointermove", onPointerMove);
     app.stage.on("pointerup", onPointerUp);
     app.stage.on("pointerupoutside", onPointerUp);
+
+    // Save handlers so we can remove them precisely later
+    (setupDrawingEvents as any)._handlers = {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp,
+      onTouchStart,
+      onTouchMove,
+      onTouchEnd,
+    };
   };
 
   const removeDrawingEvents = (app: PIXI.Application) => {
-    // Remove touch event prevention from canvas
+    // Remove touch event prevention from canvas using stored handlers
     const canvas = app.canvas;
+    const h = (setupDrawingEvents as any)._handlers || {};
     if (canvas) {
-      canvas.removeEventListener("touchstart", () => {});
-      canvas.removeEventListener("touchmove", () => {});
-      canvas.removeEventListener("touchend", () => {});
+      try { canvas.removeEventListener("touchstart", h.onTouchStart); } catch (_e) { /* ignore */ }
+      try { canvas.removeEventListener("touchmove", h.onTouchMove); } catch (_e) { /* ignore */ }
+      try { canvas.removeEventListener("touchend", h.onTouchEnd); } catch (_e) { /* ignore */ }
+      try { canvas.removeEventListener("touchcancel", h.onTouchEnd); } catch (_e) { /* ignore */ }
     }
 
-    app.stage.off("pointerdown");
-    app.stage.off("pointermove");
-    app.stage.off("pointerup");
-    app.stage.off("pointerupoutside");
+    // Remove stage pointer listeners
+    try { app.stage.off("pointerdown", h.onPointerDown); } catch (_e) { /* ignore */ }
+    try { app.stage.off("pointermove", h.onPointerMove); } catch (_e) { /* ignore */ }
+    try { app.stage.off("pointerup", h.onPointerUp); } catch (_e) { /* ignore */ }
+    try { app.stage.off("pointerupoutside", h.onPointerUp); } catch (_e) { /* ignore */ }
   };
 
   const startDrawing = (x: number, y: number) => {

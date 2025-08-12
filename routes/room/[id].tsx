@@ -181,11 +181,12 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                         try {
                           const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
                           if (ws && ws.readyState === WebSocket.OPEN) {
+                            // Server expects message.data to be a single DrawingCommand
                             ws.send(JSON.stringify({
                               type: "draw",
                               roomId: room.room.id,
                               playerId: playerId || "",
-                              data: { command },
+                              data: command,
                             }));
                           } else {
                             console.log("WS not ready for draw command", command);
@@ -194,8 +195,8 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                           console.error("Failed to send draw command", err);
                         }
                       }}
-                      drawingData={[]} // Will be populated from game state
-                      isDrawer={false} // Will be determined from live game state
+                      drawingData={(gameState as any)?.gameData?.drawingData || []}
+                      isDrawer={(gameState as any)?.gameData?.currentDrawer === (playerId || "")}
                       disabled={gameState.phase === "waiting"}
                       playerId={playerId || ""}
                     />
