@@ -8,6 +8,7 @@ import JoinRoomModal from "../JoinRoomModal.tsx";
 interface MainLobbyProps {
   initialRooms: RoomSummary[];
   error?: string;
+  isDev: boolean;
 }
 
 // Global signals for modals
@@ -15,10 +16,11 @@ const showCreateModal = signal(false);
 const showJoinModal = signal(false);
 const selectedRoom = signal<RoomSummary | null>(null);
 
-export default function MainLobby({ initialRooms, error }: MainLobbyProps) {
+export default function MainLobby({ initialRooms, error, isDev }: MainLobbyProps) {
   const [rooms, setRooms] = useState<RoomSummary[]>(initialRooms);
   const [loading, setLoading] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
 
   // WebSocket connection for real-time updates
   useEffect(() => {
@@ -129,6 +131,24 @@ export default function MainLobby({ initialRooms, error }: MainLobbyProps) {
     globalThis.location.href = `/room/${roomId}?playerId=${playerId}`;
   };
 
+  const handleCleanupDanglingRooms = async () => {
+    try {
+      setCleanupLoading(true);
+      const response = await fetch("/api/admin/cleanup-rooms", { method: "POST" });
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Cleaned dangling rooms: ${data.cleanedCount}`);
+        await refreshRooms();
+      } else {
+        console.error("Failed to clean dangling rooms");
+      }
+    } catch (err) {
+      console.error("Cleanup error:", err);
+    } finally {
+      setCleanupLoading(false);
+    }
+  };
+
   if (error) {
     return (
       <div class="max-w-4xl mx-auto">
@@ -170,19 +190,32 @@ export default function MainLobby({ initialRooms, error }: MainLobbyProps) {
             <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-500" : "bg-yellow-500"}`}>
             </div>
             <span class="text-xs sm:text-sm text-gray-600">
-              {wsConnected ? "Connected" : "Dev Mode"}
+              {wsConnected ? "Connected" : (isDev ? "Dev Mode" : "")}
             </span>
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={handleCreateRoom}
-          class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
-        >
-          <span class="sm:hidden">+ New Room</span>
-          <span class="hidden sm:inline">+ Create Room</span>
-        </button>
+        <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+          {isDev && (
+            <button
+              type="button"
+              onClick={handleCleanupDanglingRooms}
+              disabled={cleanupLoading}
+              class="w-full sm:w-auto px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 active:bg-amber-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch disabled:opacity-60"
+              title="Delete rooms with no players"
+            >
+              {cleanupLoading ? "Cleaning…" : "Clear Dangling Rooms"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleCreateRoom}
+            class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
+          >
+            <span class="sm:hidden">+ New Room</span>
+            <span class="hidden sm:inline">+ Create Room</span>
+          </button>
+        </div>
       </div>
 
       {/* Room list - Enhanced mobile grid */}

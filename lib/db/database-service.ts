@@ -115,6 +115,40 @@ export class DatabaseService {
     }, "Failed to get active rooms");
   }
 
+  getAllRooms(limit?: number): DatabaseResult<Room[]> {
+    return this.executeQuery(() => {
+      const baseSql = `
+        SELECT r.*, COUNT(p.id) as player_count
+        FROM rooms r
+        LEFT JOIN players p ON r.id = p.room_id
+        GROUP BY r.id
+        ORDER BY r.created_at DESC
+      `;
+      let results: any[] = [];
+      if (typeof limit === "number") {
+        const stmt = this.db.prepare(`${baseSql} LIMIT ?`);
+        results = stmt.all(limit) as any[];
+        stmt.finalize();
+      } else {
+        const stmt = this.db.prepare(baseSql);
+        results = stmt.all() as any[];
+        stmt.finalize();
+      }
+
+      return results.map((result) => ({
+        id: result.id,
+        name: result.name,
+        hostId: result.host_id,
+        maxPlayers: result.max_players,
+        gameType: result.game_type || "drawing",
+        isActive: Boolean(result.is_active),
+        createdAt: result.created_at,
+        updatedAt: result.updated_at,
+        player_count: result.player_count,
+      })) as Room[];
+    }, "Failed to get all rooms");
+  }
+
   updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean> {
     return this.executeQuery(() => {
       // Map camelCase to snake_case for database fields
@@ -156,6 +190,22 @@ export class DatabaseService {
       stmt.finalize();
       return true;
     }, `Failed to delete room with id: ${id}`);
+  }
+
+  deleteAllRooms(): DatabaseResult<number> {
+    return this.executeQuery(() => {
+      // Get count before deletion
+      const countStmt = this.db.prepare("SELECT COUNT(*) as cnt FROM rooms");
+      const countRow = countStmt.get() as any;
+      countStmt.finalize();
+      const before = (countRow && (countRow.cnt as number)) || 0;
+
+      const delStmt = this.db.prepare("DELETE FROM rooms");
+      delStmt.run();
+      delStmt.finalize();
+
+      return before;
+    }, "Failed to delete all rooms");
   }
 
   // Player operations

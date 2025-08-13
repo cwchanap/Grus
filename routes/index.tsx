@@ -6,12 +6,14 @@ import { RoomManager, RoomSummary } from "../lib/core/room-manager.ts";
 interface LobbyData {
   rooms: RoomSummary[];
   error?: string;
+  isDev: boolean;
 }
 
 export const handler: Handlers<LobbyData> = {
   async GET(_req, ctx) {
     try {
       const roomManager = new RoomManager();
+      const isDev = Deno.env.get("DENO_ENV") !== "production";
 
       // Get active rooms with automatic cleanup
       const result = await roomManager.getActiveRoomsWithCleanup(20);
@@ -20,17 +22,20 @@ export const handler: Handlers<LobbyData> = {
         return ctx.render({
           rooms: [],
           error: result.error || "Failed to load rooms",
+          isDev,
         });
       }
 
       return ctx.render({
         rooms: result.data || [],
+        isDev,
       });
     } catch (error) {
       console.error("Error loading lobby:", error);
       return ctx.render({
         rooms: [],
         error: "Failed to load lobby",
+        isDev: Deno.env.get("DENO_ENV") !== "production",
       });
     }
   },
@@ -52,6 +57,7 @@ export default function Home({ data }: PageProps<LobbyData>) {
         <MainLobby
           initialRooms={data.rooms}
           error={data.error}
+          isDev={data.isDev}
         />
       </div>
     </div>

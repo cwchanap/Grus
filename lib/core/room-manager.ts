@@ -353,16 +353,16 @@ export class RoomManager {
   }
 
   /**
-   * Clean up rooms that have no players
-   * @param limit Maximum number of rooms to check (default: 50)
+   * Clean up rooms that have no players (checks all rooms, not just active)
+   * @param limit Optional maximum number of rooms to check. Omit to scan all rooms.
    * @returns Number of rooms cleaned up
    */
   cleanupEmptyRooms(
-    limit = 50,
+    limit?: number,
   ): { success: boolean; cleanedCount: number; error?: string } {
     try {
-      // Get active rooms
-      const roomsResult = this.db.getActiveRooms(limit);
+      // Get rooms (active and inactive)
+      const roomsResult = this.db.getAllRooms(limit);
       if (!roomsResult.success) {
         return { success: false, cleanedCount: 0, error: roomsResult.error };
       }
@@ -392,6 +392,35 @@ export class RoomManager {
       return { success: true, cleanedCount };
     } catch (error) {
       console.error("Error cleaning up empty rooms:", error);
+      return { success: false, cleanedCount: 0, error: "Internal server error" };
+    }
+  }
+
+  /**
+   * Purge all rooms from the database (regardless of players)
+   * Dev-only admin utility
+   */
+  purgeAllRooms(): { success: boolean; cleanedCount: number; error?: string } {
+    try {
+      const roomsResult = this.db.getAllRooms();
+      if (!roomsResult.success) {
+        return { success: false, cleanedCount: 0, error: roomsResult.error };
+      }
+
+      const rooms = roomsResult.data || [];
+      let cleanedCount = 0;
+      for (const room of rooms) {
+        const deleteResult = this.db.deleteRoom(room.id);
+        if (deleteResult.success) {
+          cleanedCount++;
+        } else {
+          console.error(`Failed to delete room ${room.id}:`, deleteResult.error);
+        }
+      }
+
+      return { success: true, cleanedCount };
+    } catch (error) {
+      console.error("Error purging all rooms:", error);
       return { success: false, cleanedCount: 0, error: "Internal server error" };
     }
   }

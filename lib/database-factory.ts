@@ -16,9 +16,11 @@ export interface IDatabaseService {
     gameType?: string,
   ): DatabaseResult<string>;
   getRoomById(id: string): DatabaseResult<Room | null>;
+  getAllRooms(limit?: number): DatabaseResult<Room[]>;
   getActiveRooms(limit?: number): DatabaseResult<Room[]>;
   updateRoom(id: string, updates: Partial<Room>): DatabaseResult<boolean>;
   deleteRoom(id: string): DatabaseResult<boolean>;
+  deleteAllRooms(): DatabaseResult<number>;
 
   createPlayer(name: string, roomId: string, isHost?: boolean): DatabaseResult<string>;
   getPlayerById(id: string): DatabaseResult<Player | null>;
