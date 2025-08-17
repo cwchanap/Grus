@@ -166,7 +166,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Get current room summary to detect existing players
-      const roomSummary = this.roomManager.getRoomSummary(roomId);
+      const roomSummary = await this.roomManager.getRoomSummary(roomId);
       if (!roomSummary.success || !roomSummary.data) {
         this.sendError(connection, roomSummary.error || "Room not found");
         return;
@@ -207,7 +207,7 @@ export class CoreWebSocketHandler {
       }
 
       // No existing player matched — create a new player entry via RoomManager
-      const result = this.roomManager.joinRoom({ roomId, playerName });
+      const result = await this.roomManager.joinRoom({ roomId, playerName });
 
       if (!result.success || !result.data) {
         this.sendError(connection, result.error || "Failed to join room");
@@ -250,7 +250,7 @@ export class CoreWebSocketHandler {
     const { roomId, playerId } = message;
 
     try {
-      const result = this.roomManager.leaveRoom(roomId, playerId);
+      const result = await this.roomManager.leaveRoom(roomId, playerId);
 
       if (result.success && result.data) {
         // Remove from connection pools
@@ -260,7 +260,7 @@ export class CoreWebSocketHandler {
         // Broadcast room update if room still exists
         if (!result.data.roomDeleted) {
           // Send a full room summary to keep clients in sync with a consistent payload shape
-          const updatedRoom = this.roomManager.getRoomSummary(roomId);
+          const updatedRoom = await this.roomManager.getRoomSummary(roomId);
           if (updatedRoom.success && updatedRoom.data) {
             await this.broadcastToRoom(roomId, {
               type: "room-update",
@@ -325,7 +325,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Get room info
-      const room = this.roomManager.getRoom(roomId);
+      const room = await this.roomManager.getRoom(roomId);
       if (!room) {
         this.sendError(connection, "Room not found");
         return;
@@ -339,7 +339,7 @@ export class CoreWebSocketHandler {
       }
 
       // Get room summary for players
-      const roomSummary = this.roomManager.getRoomSummary(roomId);
+      const roomSummary = await this.roomManager.getRoomSummary(roomId);
       if (!roomSummary.success || !roomSummary.data) {
         this.sendError(connection, "Failed to get room info");
         return;
@@ -433,7 +433,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Get room and verify host
-      const roomSummary = this.roomManager.getRoomSummary(roomId);
+      const roomSummary = await this.roomManager.getRoomSummary(roomId);
       if (!roomSummary.success || !roomSummary.data) {
         this.sendError(connection, "Room not found");
         return;
@@ -466,11 +466,11 @@ export class CoreWebSocketHandler {
 
   private async handleSubscribeLobby(
     connection: WebSocketConnection,
-    message: BaseClientMessage,
+    _message: BaseClientMessage,
   ): Promise<void> {
     try {
       // Get active rooms from room manager
-      const result = this.roomManager.getActiveRoomsWithCleanup(20);
+      const result = await this.roomManager.getActiveRoomsWithCleanup(20);
 
       if (!result.success) {
         this.sendError(connection, result.error || "Failed to get lobby data");
@@ -492,10 +492,10 @@ export class CoreWebSocketHandler {
     }
   }
 
-  private async handlePing(
+  private handlePing(
     connection: WebSocketConnection,
     message: BaseClientMessage,
-  ): Promise<void> {
+  ): void {
     // Send pong response
     this.sendMessage(connection, {
       type: "pong",
@@ -545,7 +545,7 @@ export class CoreWebSocketHandler {
 
     if (playerId && roomId) {
       try {
-        this.handleLeaveRoom(connection, {
+        await this.handleLeaveRoom(connection, {
           type: "leave-room",
           roomId,
           playerId,

@@ -14,7 +14,7 @@ export const handler: Handlers = {
     try {
       const roomManager = new RoomManager();
       // Purge the entire rooms table (dev-only)
-      const result = roomManager.purgeAllRooms();
+      const result = await roomManager.purgeAllRooms();
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error || "Cleanup failed" }), {
@@ -37,7 +37,7 @@ export const handler: Handlers = {
   },
 
   // Disallow other methods explicitly
-  async GET() {
+  GET() {
     return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
       status: 405,
       headers: { "Content-Type": "application/json" },

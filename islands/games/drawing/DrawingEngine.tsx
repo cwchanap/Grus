@@ -827,7 +827,11 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       const onDomPointerDown = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current) return;
         try {
-          console.debug("[DrawingEngine] dom pointerdown", { type: e.pointerType, x: e.clientX, y: e.clientY });
+          console.debug("[DrawingEngine] dom pointerdown", {
+            type: e.pointerType,
+            x: e.clientX,
+            y: e.clientY,
+          });
         } catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }

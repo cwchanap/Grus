@@ -1,7 +1,5 @@
 // API routes for room operations
 import { Handlers } from "$fresh/server.ts";
-import { getDatabaseService } from "../../lib/database-factory.ts";
-// import { getKVService } from "../../lib/db/index.ts";
 import { RoomManager } from "../../lib/core/room-manager.ts";
 
 export const handler: Handlers = {
@@ -14,7 +12,7 @@ export const handler: Handlers = {
       const roomManager = new RoomManager();
 
       // Get active rooms with automatic cleanup
-      const result = roomManager.getActiveRoomsWithCleanup(limit);
+      const result = await roomManager.getActiveRoomsWithCleanup(limit);
 
       if (!result.success) {
         return new Response(JSON.stringify({ error: result.error }), {
@@ -51,7 +49,7 @@ export const handler: Handlers = {
       const roomManager = new RoomManager();
 
       // Create room using room manager
-      const result = roomManager.createRoom({
+      const result = await roomManager.createRoom({
         name: name.trim(),
         hostName: hostName.trim(),
         gameType: gameType || "drawing",
