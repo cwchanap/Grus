@@ -75,7 +75,12 @@ export default function CreateRoomModal(
   if (!show) return null;
 
   return (
-    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      role="dialog"
+      aria-modal="true"
+      data-testid="create-room-modal"
+    >
       <div class="bg-white rounded-lg shadow-xl max-w-md w-full">
         <div class="flex justify-between items-center p-6 border-b border-gray-200">
           <h2 class="text-xl font-semibold text-gray-800">Create New Room</h2>
@@ -112,6 +117,7 @@ export default function CreateRoomModal(
               maxLength={50}
               disabled={loading}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
+              data-testid="room-name-input"
               required
             />
             <div class="text-xs text-gray-500 mt-1">
@@ -135,6 +141,7 @@ export default function CreateRoomModal(
               maxLength={30}
               disabled={loading}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
+              data-testid="host-name-input"
               required
             />
             <div class="text-xs text-gray-500 mt-1">
@@ -196,6 +203,7 @@ export default function CreateRoomModal(
               type="submit"
               disabled={loading || !formData.roomName.trim() || !formData.hostName.trim()}
               class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              data-testid="create-room-submit"
             >
               {loading
                 ? (

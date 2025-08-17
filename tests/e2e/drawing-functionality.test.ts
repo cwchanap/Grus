@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { GameTestHelpers } from "./utils/test-helpers.ts";
 
 /**
  * Tests for drawing canvas functionality and interactions
@@ -6,14 +7,9 @@ import { test, expect } from "@playwright/test";
 
 test.describe("Drawing Functionality", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto("/");
-    
-    // Navigate to a room for testing
-    const createRoomButton = page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-    if (await createRoomButton.isVisible()) {
-      await createRoomButton.click();
-      await page.waitForTimeout(2000);
-    }
+    // Navigate to a room for testing using helper (fills modal if present)
+    const helper = new GameTestHelpers(page);
+    await helper.navigateToRoom();
   });
 
   test("should display drawing canvas", async ({ page }) => {

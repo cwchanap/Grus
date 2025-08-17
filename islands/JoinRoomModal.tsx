@@ -80,7 +80,12 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
   if (!show || !room) return null;
 
   return (
-    <div class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div
+      class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4"
+      role="dialog"
+      aria-modal="true"
+      data-testid="join-room-modal"
+    >
       <div class="bg-white rounded-lg shadow-xl max-w-md w-full">
         <div class="flex justify-between items-center p-6 border-b border-gray-200">
           <h2 class="text-xl font-semibold text-gray-800">Join Room</h2>
@@ -165,6 +170,7 @@ export default function JoinRoomModal({ show, room, onClose, onSuccess }: JoinRo
                 type="submit"
                 disabled={loading || !playerName.trim() || !room.canJoin}
                 class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                data-testid="join-room-submit"
               >
                 {loading
                   ? (

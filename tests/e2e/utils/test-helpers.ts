@@ -25,10 +25,24 @@ export class GameTestHelpers {
     
     if (await createRoomButton.isVisible()) {
       await createRoomButton.click();
-      await this.page.waitForTimeout(2000);
       
+      // If modal appears, fill it
+      const modal = this.page.locator('[data-testid="create-room-modal"]');
+      const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false);
+      if (modalVisible) {
+        const roomNameInput = this.page.locator('[data-testid="room-name-input"]');
+        const hostNameInput = this.page.locator('[data-testid="host-name-input"]');
+        const submitBtn = this.page.locator('[data-testid="create-room-submit"]');
+        
+        await roomNameInput.fill(`Test Room ${Date.now()}`);
+        await hostNameInput.fill("Tester");
+        await submitBtn.click();
+      }
+      
+      // Wait for navigation to room
+      await this.page.waitForURL(/\/room\//, { timeout: 10000 });
       const roomUrl = this.page.url();
-      const extractedRoomCode = roomUrl.match(/\/room\/([^\/]+)/)?.[1];
+      const extractedRoomCode = roomUrl.match(/\/room\/([^\/\?]+)/)?.[1];
       return extractedRoomCode || null;
     }
     
@@ -211,7 +225,7 @@ export async function createMultiplePlayersInRoom(
 ): Promise<{ contexts: any[], pages: Page[], roomCode: string | null }> {
   const contexts = [];
   const pages = [];
-  let actualRoomCode = roomCode;
+  let actualRoomCode: string | null = roomCode ?? null;
 
   try {
     // Create first player and room if needed
@@ -221,7 +235,7 @@ export async function createMultiplePlayersInRoom(
     pages.push(player1);
 
     const helper1 = new GameTestHelpers(player1);
-    actualRoomCode = await helper1.navigateToRoom(roomCode);
+    actualRoomCode = await helper1.navigateToRoom(roomCode ?? undefined);
 
     if (!actualRoomCode) {
       throw new Error("Failed to create or join room");
@@ -235,10 +249,10 @@ export async function createMultiplePlayersInRoom(
       pages.push(page);
 
       const helper = new GameTestHelpers(page);
-      await helper.navigateToRoom(actualRoomCode);
+      await helper.navigateToRoom(actualRoomCode ?? undefined);
     }
 
-    return { contexts, pages, roomCode: actualRoomCode };
+    return { contexts, pages, roomCode: actualRoomCode ?? null };
   } catch (error) {
     // Clean up on error
     for (const context of contexts) {

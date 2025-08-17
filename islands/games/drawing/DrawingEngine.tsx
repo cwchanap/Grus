@@ -346,7 +346,14 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       };
 
       // Set up interaction
-      app.stage.eventMode = "static";
+      // Support Pixi v8 (eventMode) and v7 (interactive) for reliable pointer events
+      if ("eventMode" in (app.stage as any)) {
+        (app.stage as any).eventMode = "static";
+      } else {
+        // Pixi v7 fallback
+        (app.stage as any).interactive = true;
+        (app.stage as any).interactiveChildren = true;
+      }
       app.stage.hitArea = new PIXI.Rectangle(0, 0, width, height);
 
       // Attach drawing events using the latest permission flags
@@ -536,7 +543,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Enhanced pointer down with mobile optimizations
     const onPointerDown = (event: PIXI.FederatedPointerEvent) => {
-      if (!isDrawer || disabled) return;
+      // Use refs to avoid stale closures when permissions change
+      if (!isDrawerRef.current || disabledRef.current) return;
 
       // Prevent default touch behavior
       if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -555,7 +563,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Enhanced pointer move with mobile optimizations
     const onPointerMove = (event: PIXI.FederatedPointerEvent) => {
-      if (!isDrawer || disabled || !isDrawingRef.current) return;
+      if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
 
       // Prevent default touch behavior
       if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -577,7 +585,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Enhanced pointer up with mobile optimizations
     const onPointerUp = (event?: PIXI.FederatedPointerEvent) => {
-      if (!isDrawer || disabled) return;
+      if (!isDrawerRef.current || disabledRef.current) return;
 
       // Prevent default touch behavior
       if (event?.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -624,7 +632,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Mobile-specific touch event handlers
     const onTouchStart = (e: TouchEvent) => {
-      if (!isDrawer || disabled) return;
+      if (!isDrawerRef.current || disabledRef.current) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -646,7 +654,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!isDrawer || disabled || !isDrawingRef.current) return;
+      if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
 
       e.preventDefault();
       e.stopPropagation();
@@ -666,7 +674,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     };
 
     const onTouchEnd = (e: TouchEvent) => {
-      if (!isDrawer || disabled) return;
+      if (!isDrawerRef.current || disabledRef.current) return;
 
       e.preventDefault();
       e.stopPropagation();
