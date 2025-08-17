@@ -27,7 +27,7 @@ export default function DrawingBoard({
   // Live state driven by server game-state updates
   const [liveDisabled, setLiveDisabled] = useState<boolean>(disabled);
   const [liveIsDrawer, setLiveIsDrawer] = useState<boolean>(isDrawer);
-  
+
   // Replay initial drawing data when engine becomes ready or data changes
   useEffect(() => {
     const ref = engineRef.current;

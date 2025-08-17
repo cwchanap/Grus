@@ -38,8 +38,6 @@ export default function Scoreboard({
     setLocalGameState(gameState);
   }, [gameState]);
 
- 
-
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [gameSettings, setGameSettings] = useState<GameSettings>({
     maxRounds: 5,
@@ -333,7 +331,9 @@ export default function Scoreboard({
                 // Two possible shapes:
                 // 1) Room summary (from join): { room, players, playerCount, canJoin, host }
                 // 2) Player left (from leave): { type: 'player-left', playerId, newHostId, remainingPlayers }
-                const summaryPlayers = Array.isArray(updateData?.players) ? updateData.players : null;
+                const summaryPlayers = Array.isArray(updateData?.players)
+                  ? updateData.players
+                  : null;
                 const remainingPlayers = Array.isArray(updateData?.remainingPlayers)
                   ? updateData.remainingPlayers
                   : null;
@@ -360,7 +360,10 @@ export default function Scoreboard({
                 // Apply host change if provided only as IDs
                 const newHostId: string | undefined = updateData?.host?.id || updateData?.newHostId;
                 if (updatedPlayers && newHostId) {
-                  updatedPlayers = updatedPlayers.map((p) => ({ ...p, isHost: p.id === newHostId }));
+                  updatedPlayers = updatedPlayers.map((p) => ({
+                    ...p,
+                    isHost: p.id === newHostId,
+                  }));
                 }
 
                 if (updatedPlayers) {
@@ -492,7 +495,6 @@ export default function Scoreboard({
       oscillator.stop(audioContext.currentTime + 0.2);
     } catch (_error) {
       // Silently fail if audio is not supported
- 
     }
   };
 
@@ -795,7 +797,7 @@ export default function Scoreboard({
       {/* Player Scores */}
       <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
         <h3 className="text-sm font-medium text-gray-700">Players ({sortedPlayers.length})</h3>
- 
+
         {sortedPlayers.map((player, index) => (
           <div
             key={`player-${player.id}-${player.name}`}

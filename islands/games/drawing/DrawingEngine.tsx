@@ -205,11 +205,19 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       // Expose a small test helper to fetch PNG data for hashing in Playwright
       (globalThis as any).__drawing = {
         // Force a render on demand
-        renderNow: () => { try { renderNow(); return true; } catch { return false; } },
+        renderNow: () => {
+          try {
+            renderNow();
+            return true;
+          } catch {
+            return false;
+          }
+        },
         // Readiness helpers for tests
-        isReady: () => !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
+        isReady: () =>
+          !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
         waitUntilReady: async (timeoutMs: number = 3000) => {
-          const start = (globalThis.performance?.now?.() ?? Date.now());
+          const start = globalThis.performance?.now?.() ?? Date.now();
           while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
             if ((globalThis as any).__drawing.isReady()) return true;
             await new Promise((r) => setTimeout(r, 25));
@@ -294,7 +302,13 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           }
         },
         // Test helper: draw a filled rectangle to validate rendering pipeline
-        debugRect: (x: number, y: number, w: number, h: number, color: string | number = 0xff0000) => {
+        debugRect: (
+          x: number,
+          y: number,
+          w: number,
+          h: number,
+          color: string | number = 0xff0000,
+        ) => {
           try {
             const app = pixiAppRef.current;
             // Fallback to 2D canvas when Pixi isn't ready
@@ -302,7 +316,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
               const cvs = canvasRef.current;
               const ctx = cvs?.getContext("2d");
               if (!ctx) return false;
-              ctx.fillStyle = typeof color === "string" ? color : `#${(color as number).toString(16).padStart(6, "0")}`;
+              ctx.fillStyle = typeof color === "string"
+                ? color
+                : `#${(color as number).toString(16).padStart(6, "0")}`;
               ctx.fillRect(x, y, w, h);
               return true;
             }
@@ -311,7 +327,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
               const cvs = canvasRef.current;
               const ctx = cvs?.getContext("2d");
               if (!ctx) return false;
-              const chex = typeof color === "string" ? color : `#${(color as number).toString(16).padStart(6, "0")}`;
+              const chex = typeof color === "string"
+                ? color
+                : `#${(color as number).toString(16).padStart(6, "0")}`;
               ctx.fillStyle = chex;
               ctx.fillRect(x, y, w, h);
               return true;
@@ -336,7 +354,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         canDraw: () => !!(isDrawer && !disabled),
         status: () => ({ isDrawer: !!isDrawer, disabled: !!disabled }),
         waitUntilCanDraw: async (timeoutMs: number = 5000) => {
-          const start = (globalThis.performance?.now?.() ?? Date.now());
+          const start = globalThis.performance?.now?.() ?? Date.now();
           while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
             if (isDrawer && !disabled) return true;
             await new Promise((r) => setTimeout(r, 50));
@@ -375,10 +393,18 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   // Ensure test helper exists early and updates with permissions
   useEffect(() => {
     (globalThis as any).__drawing = {
-      renderNow: () => { try { renderNow(); return true; } catch { return false; } },
-      isReady: () => !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
+      renderNow: () => {
+        try {
+          renderNow();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      isReady: () =>
+        !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
       waitUntilReady: async (timeoutMs: number = 3000) => {
-        const start = (globalThis.performance?.now?.() ?? Date.now());
+        const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
           if ((globalThis as any).__drawing.isReady()) return true;
           await new Promise((r) => setTimeout(r, 25));
@@ -461,14 +487,22 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         }
       },
       // Test helper: draw a filled rectangle to validate rendering pipeline
-      debugRect: (x: number, y: number, w: number, h: number, color: string | number = 0xff0000) => {
+      debugRect: (
+        x: number,
+        y: number,
+        w: number,
+        h: number,
+        color: string | number = 0xff0000,
+      ) => {
         try {
           const app = pixiAppRef.current;
           if (!app) {
             const cvs = canvasRef.current;
             const ctx = cvs?.getContext("2d");
             if (!ctx) return false;
-            ctx.fillStyle = typeof color === "string" ? color : `#${(color >>> 0).toString(16).padStart(6, "0")}`;
+            ctx.fillStyle = typeof color === "string"
+              ? color
+              : `#${(color >>> 0).toString(16).padStart(6, "0")}`;
             ctx.fillRect(x, y, w, h);
             return true;
           }
@@ -477,7 +511,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
             const cvs = canvasRef.current;
             const ctx = cvs?.getContext("2d");
             if (!ctx) return false;
-            ctx.fillStyle = typeof color === "string" ? color : `#${(color >>> 0).toString(16).padStart(6, "0")}`;
+            ctx.fillStyle = typeof color === "string"
+              ? color
+              : `#${(color >>> 0).toString(16).padStart(6, "0")}`;
             ctx.fillRect(x, y, w, h);
             return true;
           }
@@ -501,7 +537,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       canDraw: () => !!(isDrawer && !disabled),
       status: () => ({ isDrawer: !!isDrawer, disabled: !!disabled }),
       waitUntilCanDraw: async (timeoutMs: number = 5000) => {
-        const start = (globalThis.performance?.now?.() ?? Date.now());
+        const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
           if (isDrawer && !disabled) return true;
           await new Promise((r) => setTimeout(r, 50));
@@ -760,17 +796,33 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     const canvas = app.canvas;
     const h = (setupDrawingEvents as any)._handlers || {};
     if (canvas) {
-      try { canvas.removeEventListener("touchstart", h.onTouchStart); } catch (_e) { /* ignore */ }
-      try { canvas.removeEventListener("touchmove", h.onTouchMove); } catch (_e) { /* ignore */ }
-      try { canvas.removeEventListener("touchend", h.onTouchEnd); } catch (_e) { /* ignore */ }
-      try { canvas.removeEventListener("touchcancel", h.onTouchEnd); } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("touchstart", h.onTouchStart);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("touchmove", h.onTouchMove);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("touchend", h.onTouchEnd);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("touchcancel", h.onTouchEnd);
+      } catch (_e) { /* ignore */ }
     }
 
     // Remove stage pointer listeners
-    try { app.stage.off("pointerdown", h.onPointerDown); } catch (_e) { /* ignore */ }
-    try { app.stage.off("pointermove", h.onPointerMove); } catch (_e) { /* ignore */ }
-    try { app.stage.off("pointerup", h.onPointerUp); } catch (_e) { /* ignore */ }
-    try { app.stage.off("pointerupoutside", h.onPointerUp); } catch (_e) { /* ignore */ }
+    try {
+      app.stage.off("pointerdown", h.onPointerDown);
+    } catch (_e) { /* ignore */ }
+    try {
+      app.stage.off("pointermove", h.onPointerMove);
+    } catch (_e) { /* ignore */ }
+    try {
+      app.stage.off("pointerup", h.onPointerUp);
+    } catch (_e) { /* ignore */ }
+    try {
+      app.stage.off("pointerupoutside", h.onPointerUp);
+    } catch (_e) { /* ignore */ }
   };
 
   const startDrawing = (x: number, y: number) => {
@@ -887,7 +939,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     // Close any 2D path if we were using the fallback
     if (twoDRef.current) {
-      try { (twoDRef.current as any).closePath?.(); } catch {}
+      try {
+        (twoDRef.current as any).closePath?.();
+      } catch {}
       twoDRef.current = null;
     }
 
@@ -1019,7 +1073,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           container.addChild(g);
           externalPathRef.current = g;
           // Ensure a render so initial moveTo is visible when capturing PNG
-          try { renderNow(); } catch {}
+          try {
+            renderNow();
+          } catch {}
         } else {
           // 2D fallback
           const ctx = canvasRef.current?.getContext("2d");
@@ -1027,7 +1083,11 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
             const chex = typeof command.color === "string"
               ? (command.color as string)
               : `#${(toPixiColor(command.color as any) >>> 0).toString(16).padStart(6, "0")}`;
-            try { (ctx as any).strokeStyle = chex ?? "#000000"; } catch { ctx.strokeStyle = "#000000"; }
+            try {
+              (ctx as any).strokeStyle = chex ?? "#000000";
+            } catch {
+              ctx.strokeStyle = "#000000";
+            }
             ctx.lineWidth = command.size ?? 5;
             ctx.lineCap = "round";
             ctx.beginPath();
@@ -1051,13 +1111,19 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
             g.lineTo(command.x!, command.y!);
           }
           // Force render so PNG reflects changes immediately
-          try { renderNow(); } catch {}
+          try {
+            renderNow();
+          } catch {}
         } else if (external2DRef.current) {
           const ctx = external2DRef.current;
           const chex = typeof command.color === "string"
             ? (command.color as string)
             : `#${(toPixiColor(command.color as any) >>> 0).toString(16).padStart(6, "0")}`;
-          try { (ctx as any).strokeStyle = chex ?? "#000000"; } catch { ctx.strokeStyle = "#000000"; }
+          try {
+            (ctx as any).strokeStyle = chex ?? "#000000";
+          } catch {
+            ctx.strokeStyle = "#000000";
+          }
           ctx.lineWidth = command.size ?? 5;
           ctx.lineCap = "round";
           ctx.lineTo(command.x!, command.y!);
@@ -1071,12 +1137,16 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         // Finish external stroke
         externalPathRef.current = null;
         if (external2DRef.current) {
-          try { (external2DRef.current as any).closePath?.(); } catch {}
+          try {
+            (external2DRef.current as any).closePath?.();
+          } catch {}
           external2DRef.current = null;
           lastExternalPointRef.current = null;
         }
         // Ensure final state is rendered
-        try { renderNow(); } catch {}
+        try {
+          renderNow();
+        } catch {}
         break;
       }
 
@@ -1096,7 +1166,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         }
         external2DRef.current = null;
         lastExternalPointRef.current = null;
-        try { renderNow(); } catch {}
+        try {
+          renderNow();
+        } catch {}
         break;
       }
     }

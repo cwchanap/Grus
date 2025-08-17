@@ -43,7 +43,13 @@ export default function GameSettingsModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent onClose={onClose} className="sm:max-w-md">
+      <DialogContent
+        onClose={onClose}
+        className="sm:max-w-md"
+        role="dialog"
+        aria-modal="true"
+        data-testid="game-settings-modal"
+      >
         <DialogHeader>
           <DialogTitle>Game Settings</DialogTitle>
           <DialogDescription>
@@ -51,7 +57,7 @@ export default function GameSettingsModal({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="px-6 py-4 space-y-4">
           {/* Max Rounds */}
           <div className="space-y-2">
             <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">

@@ -26,15 +26,22 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
   );
 }
 
-interface DialogContentProps {
+type DivProps = JSX.HTMLAttributes<HTMLDivElement>;
+
+interface DialogContentProps extends Omit<DivProps, "className" | "children"> {
   children: ComponentChildren;
   className?: string;
   onClose?: () => void;
 }
 
-export function DialogContent({ children, className = "", onClose }: DialogContentProps) {
+export function DialogContent(
+  { children, className = "", onClose: _onClose, ...rest }: DialogContentProps,
+) {
   return (
-    <div className={`bg-white rounded-lg shadow-lg max-w-md w-full mx-4 ${className}`}>
+    <div
+      {...rest}
+      className={`bg-white rounded-lg shadow-lg max-w-md w-full mx-4 ${className}`}
+    >
       {children}
     </div>
   );
