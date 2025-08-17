@@ -45,6 +45,14 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
     );
   }
 
+  // Initialize game-specific data so clients can render correctly before real-time updates
+  const gameData: any = {};
+  if (gameType === "drawing") {
+    // Make the current player the initial drawer and start with empty drawing history
+    gameData.currentDrawer = playerId || null;
+    gameData.drawingData = [] as any[];
+  }
+
   return {
     roomId: room.room.id,
     gameType,
@@ -56,7 +64,7 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
       acc[player.id] = 0; // Initialize all scores to 0
       return acc;
     }, {} as Record<string, number>),
-    gameData: {}, // Game-specific data will be initialized by the game engine
+    gameData,
     chatMessages: [], // No chat messages initially
     settings: defaultSettings,
   };
@@ -197,7 +205,6 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                       }}
                       drawingData={(gameState as any)?.gameData?.drawingData || []}
                       isDrawer={(gameState as any)?.gameData?.currentDrawer === (playerId || "")}
-                      disabled={gameState.phase === "waiting"}
                       playerId={playerId || ""}
                     />
                   )

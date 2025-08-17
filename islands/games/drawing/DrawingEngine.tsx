@@ -59,6 +59,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   // 2D fallback for remote (external) strokes
   const external2DRef = useRef<CanvasRenderingContext2D | null>(null);
   const lastExternalPointRef = useRef<{ x: number; y: number } | null>(null);
+  // When true, DOM-level pointer handlers are active; used to prevent double-handling with Pixi stage events
+  const domPointerActiveRef = useRef<boolean>(false);
 
   // Normalize color to Pixi's expected numeric format (0xRRGGBB)
   const toPixiColor = (c: string | number | undefined): number => {
@@ -216,7 +218,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         // Readiness helpers for tests
         isReady: () =>
           !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
-        waitUntilReady: async (timeoutMs: number = 3000) => {
+        waitUntilReady: async (timeoutMs = 3000) => {
           const start = globalThis.performance?.now?.() ?? Date.now();
           while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
             if ((globalThis as any).__drawing.isReady()) return true;
@@ -252,7 +254,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
             return null;
           }
         },
-        drawLine: (x1: number, y1: number, x2: number, y2: number, steps: number = 12) => {
+        drawLine: (x1: number, y1: number, x2: number, y2: number, steps = 12) => {
           try {
             if (!isDrawer || disabled) return false;
             // Use internal drawing helpers for deterministic strokes in tests
@@ -270,7 +272,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           }
         },
         // Test helper: bypass permission checks to draw deterministically
-        forceDrawLine: (x1: number, y1: number, x2: number, y2: number, steps: number = 12) => {
+        forceDrawLine: (x1: number, y1: number, x2: number, y2: number, steps = 12) => {
           try {
             const app = pixiAppRef.current;
             const container = drawingContainerRef.current ?? app?.stage ?? null;
@@ -353,7 +355,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         },
         canDraw: () => !!(isDrawer && !disabled),
         status: () => ({ isDrawer: !!isDrawer, disabled: !!disabled }),
-        waitUntilCanDraw: async (timeoutMs: number = 5000) => {
+        waitUntilCanDraw: async (timeoutMs = 5000) => {
           const start = globalThis.performance?.now?.() ?? Date.now();
           while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
             if (isDrawer && !disabled) return true;
@@ -403,7 +405,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       },
       isReady: () =>
         !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
-      waitUntilReady: async (timeoutMs: number = 3000) => {
+      waitUntilReady: async (timeoutMs = 3000) => {
         const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
           if ((globalThis as any).__drawing.isReady()) return true;
@@ -438,7 +440,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           return null;
         }
       },
-      drawLine: (x1: number, y1: number, x2: number, y2: number, steps: number = 12) => {
+      drawLine: (x1: number, y1: number, x2: number, y2: number, steps = 12) => {
         try {
           if (!isDrawer || disabled) return false;
           startDrawing(x1, y1);
@@ -455,7 +457,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         }
       },
       // Test helper: bypass permission checks
-      forceDrawLine: (x1: number, y1: number, x2: number, y2: number, steps: number = 12) => {
+      forceDrawLine: (x1: number, y1: number, x2: number, y2: number, steps = 12) => {
         try {
           const app = pixiAppRef.current;
           const container = drawingContainerRef.current ?? app?.stage ?? null;
@@ -536,7 +538,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       },
       canDraw: () => !!(isDrawer && !disabled),
       status: () => ({ isDrawer: !!isDrawer, disabled: !!disabled }),
-      waitUntilCanDraw: async (timeoutMs: number = 5000) => {
+      waitUntilCanDraw: async (timeoutMs = 5000) => {
         const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
           if (isDrawer && !disabled) return true;
@@ -581,6 +583,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     const onPointerDown = (event: PIXI.FederatedPointerEvent) => {
       // Use refs to avoid stale closures when permissions change
       if (!isDrawerRef.current || disabledRef.current) return;
+      // If DOM-level pointer handlers are active, skip Pixi handler to avoid double-processing
+      if (domPointerActiveRef.current) return;
 
       // Prevent default touch behavior
       if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -588,6 +592,17 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
       if (event.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
+      }
+
+      try {
+        console.debug("[DrawingEngine] stage pointerdown", {
+          x: (event as any)?.global?.x,
+          y: (event as any)?.global?.y,
+          isDrawer: isDrawerRef.current,
+          disabled: disabledRef.current,
+        });
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
       }
 
       const point = event.global;
@@ -600,6 +615,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Enhanced pointer move with mobile optimizations
     const onPointerMove = (event: PIXI.FederatedPointerEvent) => {
       if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
+      if (domPointerActiveRef.current) return; // Avoid double-processing when DOM handlers active
 
       // Prevent default touch behavior
       if (event.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -607,6 +623,15 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
       if (event.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
+      }
+
+      try {
+        console.debug("[DrawingEngine] stage pointermove", {
+          x: (event as any)?.global?.x,
+          y: (event as any)?.global?.y,
+        });
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
       }
 
       const point = event.global;
@@ -622,6 +647,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Enhanced pointer up with mobile optimizations
     const onPointerUp = (event?: PIXI.FederatedPointerEvent) => {
       if (!isDrawerRef.current || disabledRef.current) return;
+      if (domPointerActiveRef.current) return; // DOM handler will finalize the stroke
 
       // Prevent default touch behavior
       if (event?.nativeEvent && "preventDefault" in event.nativeEvent) {
@@ -629,6 +655,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
       if (event?.nativeEvent && "stopPropagation" in event.nativeEvent) {
         event.nativeEvent.stopPropagation();
+      }
+
+      try {
+        console.debug("[DrawingEngine] stage pointerup");
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
       }
 
       // Mobile optimization: detect tap vs draw
@@ -673,6 +705,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       e.preventDefault();
       e.stopPropagation();
 
+      try {
+        console.debug("[DrawingEngine] dom touchstart", { touches: e.touches.length });
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
+      }
+
       // Handle multi-touch gestures
       if (e.touches.length > 1) {
         // Multi-touch detected - could implement zoom/pan here
@@ -695,6 +733,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       e.preventDefault();
       e.stopPropagation();
 
+      try {
+        console.debug("[DrawingEngine] dom touchmove");
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
+      }
+
       if (e.touches.length > 1) return; // Ignore multi-touch
 
       const now = Date.now();
@@ -714,6 +758,12 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
       e.preventDefault();
       e.stopPropagation();
+
+      try {
+        console.debug("[DrawingEngine] dom touchend");
+      } catch (_e) {
+        // Intentionally ignore console errors in restricted environments
+      }
 
       // Handle tap vs draw detection
       if (touchStartPoint && e.changedTouches.length > 0) {
@@ -772,6 +822,67 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
       // Optimize for touch
       canvas.style.touchAction = "none";
+
+      // DOM-level pointer fallback (capture phase) to ensure input works even if Pixi events don't fire
+      const onDomPointerDown = (e: PointerEvent) => {
+        if (!isDrawerRef.current || disabledRef.current) return;
+        try {
+          console.debug("[DrawingEngine] dom pointerdown", { type: e.pointerType, x: e.clientX, y: e.clientY });
+        } catch (_e) {
+          // Intentionally ignore console errors in restricted environments
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        domPointerActiveRef.current = true;
+        const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (app.canvas.width / rect.width);
+        const y = (e.clientY - rect.top) * (app.canvas.height / rect.height);
+        touchStartPoint = { x, y };
+        lastTouchTime = Date.now();
+        startDrawing(x, y);
+      };
+      const onDomPointerMove = (e: PointerEvent) => {
+        if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
+        try {
+          console.debug("[DrawingEngine] dom pointermove");
+        } catch (_e) {
+          // Intentionally ignore console errors in restricted environments
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        const now = Date.now();
+        if (now - lastTouchTime < 16) return;
+        lastTouchTime = now;
+        const rect = (e.target as HTMLCanvasElement).getBoundingClientRect();
+        const x = (e.clientX - rect.left) * (app.canvas.width / rect.width);
+        const y = (e.clientY - rect.top) * (app.canvas.height / rect.height);
+        continueDrawing(x, y);
+      };
+      const onDomPointerUp = (e: PointerEvent) => {
+        if (!isDrawerRef.current || disabledRef.current) return;
+        try {
+          console.debug("[DrawingEngine] dom pointerup");
+        } catch (_e) {
+          // Intentionally ignore console errors in restricted environments
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        touchStartPoint = null;
+        endDrawing();
+        domPointerActiveRef.current = false;
+      };
+
+      canvas.addEventListener("pointerdown", onDomPointerDown, { passive: false, capture: true });
+      canvas.addEventListener("pointermove", onDomPointerMove, { passive: false, capture: true });
+      canvas.addEventListener("pointerup", onDomPointerUp, { passive: false, capture: true });
+      canvas.addEventListener("pointercancel", onDomPointerUp, { passive: false, capture: true });
+
+      // Store DOM handlers for precise removal later
+      (setupDrawingEvents as any)._domHandlers = {
+        onDomPointerDown,
+        onDomPointerMove,
+        onDomPointerUp,
+      };
     }
 
     // Standard pointer events (fallback for non-touch devices)
@@ -795,6 +906,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Remove touch event prevention from canvas using stored handlers
     const canvas = app.canvas;
     const h = (setupDrawingEvents as any)._handlers || {};
+    const dh = (setupDrawingEvents as any)._domHandlers || {};
     if (canvas) {
       try {
         canvas.removeEventListener("touchstart", h.onTouchStart);
@@ -807,6 +919,18 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       } catch (_e) { /* ignore */ }
       try {
         canvas.removeEventListener("touchcancel", h.onTouchEnd);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("pointerdown", dh.onDomPointerDown, { capture: true } as any);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("pointermove", dh.onDomPointerMove, { capture: true } as any);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("pointerup", dh.onDomPointerUp, { capture: true } as any);
+      } catch (_e) { /* ignore */ }
+      try {
+        canvas.removeEventListener("pointercancel", dh.onDomPointerUp, { capture: true } as any);
       } catch (_e) { /* ignore */ }
     }
 
@@ -941,7 +1065,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (twoDRef.current) {
       try {
         (twoDRef.current as any).closePath?.();
-      } catch {}
+      } catch (_e) {
+        // Silent close failure is acceptable for cleanup
+      }
       twoDRef.current = null;
     }
 
@@ -1075,7 +1201,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           // Ensure a render so initial moveTo is visible when capturing PNG
           try {
             renderNow();
-          } catch {}
+          } catch (_e) {
+            // Render failures are non-critical for external apply
+          }
         } else {
           // 2D fallback
           const ctx = canvasRef.current?.getContext("2d");
@@ -1113,7 +1241,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           // Force render so PNG reflects changes immediately
           try {
             renderNow();
-          } catch {}
+          } catch (_e) {
+            // Render failures are non-critical for external apply
+          }
         } else if (external2DRef.current) {
           const ctx = external2DRef.current;
           const chex = typeof command.color === "string"
@@ -1139,14 +1269,18 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         if (external2DRef.current) {
           try {
             (external2DRef.current as any).closePath?.();
-          } catch {}
+          } catch (_e) {
+            // Silent close failure is acceptable for cleanup
+          }
           external2DRef.current = null;
           lastExternalPointRef.current = null;
         }
         // Ensure final state is rendered
         try {
           renderNow();
-        } catch {}
+        } catch (_e) {
+          // Render failures are non-critical for external apply
+        }
         break;
       }
 
@@ -1168,7 +1302,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         lastExternalPointRef.current = null;
         try {
           renderNow();
-        } catch {}
+        } catch (_e) {
+          // Render failures are non-critical for external apply
+        }
         break;
       }
     }
@@ -1185,18 +1321,17 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   return (
     <div class="drawing-engine">
       {/* Drawing Tools */}
-      {isDrawer && !disabled && (
-        <div class="drawing-tools mb-4">
-          <MobileDrawingTools
-            currentTool={currentTool}
-            onToolChange={setCurrentTool}
-            onClear={clearCanvas}
-            onUndo={undo}
-            canUndo={undoStack.length > 0}
-            disabled={disabled}
-          />
-        </div>
-      )}
+      {/* Drawing Tools (always rendered; disabled when not drawer or when globally disabled) */}
+      <div class="drawing-tools mb-4" data-testid="drawing-tools">
+        <MobileDrawingTools
+          currentTool={currentTool}
+          onToolChange={setCurrentTool}
+          onClear={clearCanvas}
+          onUndo={undo}
+          canUndo={undoStack.length > 0}
+          disabled={!isDrawer || disabled}
+        />
+      </div>
 
       {/* Canvas */}
       <div class="drawing-canvas border-2 border-gray-300 rounded-lg overflow-hidden bg-white">
