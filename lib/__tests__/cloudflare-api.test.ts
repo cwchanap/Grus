@@ -15,7 +15,7 @@ function mockFetch(responses: Array<{ url?: string; response: Response }>) {
       throw new Error(`Unexpected URL: ${urlString}`);
     }
 
-    return mockResponse.response;
+    return Promise.resolve(mockResponse.response);
   };
 }
 

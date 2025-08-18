@@ -100,7 +100,7 @@ Deno.test("Room Manager - Player Leave and Host Migration", async (t) => {
     assertEquals(roomSummary.error, "Room not found");
   });
 
-  await t.step("cleanup", async () => {
+  await t.step("cleanup", () => {
     // Close the in-memory database
     roomManager.close();
   });
@@ -136,7 +136,7 @@ Deno.test("Room Manager - Edge Cases for Player Leave", async (t) => {
     await roomManager.leaveRoom(roomId, hostPlayerId);
   });
 
-  await t.step("cleanup", async () => {
+  await t.step("cleanup", () => {
     // Close the in-memory database
     roomManager.close();
   });

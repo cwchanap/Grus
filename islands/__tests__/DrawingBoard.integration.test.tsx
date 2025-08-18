@@ -1,6 +1,29 @@
 import { assert, assertEquals } from "$std/assert/mod.ts";
 import { DrawingCommand } from "../../types/games/drawing.ts";
-import { BaseGameState } from "../../types/core/game.ts";
+
+// Minimal local test types to avoid coupling to core types
+type Player = {
+  id: string;
+  name: string;
+  isHost: boolean;
+  isConnected: boolean;
+  lastActivity: number;
+};
+
+type TestGameState = {
+  roomId: string;
+  currentDrawer: string;
+  currentWord: string;
+  roundNumber: number;
+  timeRemaining: number;
+  phase: "waiting" | "drawing" | "results" | "finished";
+  players: Player[];
+  scores: Record<string, number>;
+  drawingData: DrawingCommand[];
+  correctGuesses: string[];
+  chatMessages: unknown[];
+  settings: { maxRounds: number; roundTimeSeconds: number };
+};
 
 /**
  * Integration tests for DrawingBoard component
@@ -16,7 +39,7 @@ function createGameRoomScenario() {
     { id: "player3", name: "Charlie", isHost: false, isConnected: true, lastActivity: Date.now() },
   ];
 
-  const gameState: BaseGameState = {
+  const gameState: TestGameState = {
     roomId,
     currentDrawer: "player1",
     currentWord: "house",
@@ -145,11 +168,11 @@ Deno.test("DrawingBoard Integration - Turn-based drawing permissions", () => {
   // Test drawing permissions for each game phase
   const testDrawingPermissions = (
     currentDrawer: string,
-    phase: BaseGameState["phase"],
+    phase: TestGameState["phase"],
     playerId: string,
   ) => {
     const _testGameState = { ...gameState, currentDrawer, phase };
-    return currentDrawer === playerId && phase === "playing";
+    return currentDrawer === playerId && phase === "drawing";
   };
 
   // Test during drawing phase

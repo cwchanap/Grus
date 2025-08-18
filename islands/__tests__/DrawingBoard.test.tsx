@@ -1,7 +1,43 @@
 import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
 import { DrawingCommand } from "../../types/games/drawing.ts";
-import { BaseGameState } from "../../types/core/game.ts";
-import { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
+
+// Local message types for tests
+type ClientMessage = {
+  type: string;
+  roomId: string;
+  playerId: string;
+  data: any;
+};
+
+type ServerMessage = {
+  type: string;
+  roomId: string;
+  data: any;
+};
+
+// Local game state types for tests
+type TestPlayer = {
+  id: string;
+  name: string;
+  isHost: boolean;
+  isConnected: boolean;
+  lastActivity: number;
+};
+
+type TestGameState = {
+  roomId: string;
+  currentDrawer: string;
+  currentWord: string;
+  roundNumber: number;
+  timeRemaining: number;
+  phase: "waiting" | "drawing" | "results";
+  players: TestPlayer[];
+  scores: Record<string, number>;
+  drawingData: any[];
+  correctGuesses: string[];
+  chatMessages: any[];
+  settings: { maxRounds: number; roundTimeSeconds: number };
+};
 
 // Mock WebSocket for testing
 class MockWebSocket {
@@ -61,7 +97,7 @@ class MockWebSocket {
 }
 
 // Test utilities
-function createMockGameState(overrides: Partial<BaseGameState> = {}): BaseGameState {
+function createMockGameState(overrides: Partial<TestGameState> = {}): TestGameState {
   return {
     roomId: "test-room",
     currentDrawer: "player1",
@@ -259,9 +295,9 @@ Deno.test("DrawingBoard - Drawing permissions based on game state", () => {
   });
 
   // Mock permission checking logic
-  const checkDrawingPermissions = (playerId: string, gameState: BaseGameState) => {
+  const checkDrawingPermissions = (_playerId: string, gameState: TestGameState) => {
     // Note: Drawing permissions would be handled by the drawing game engine
-    return gameState.phase === "playing";
+    return gameState.phase === "drawing";
   };
 
   // Test permissions

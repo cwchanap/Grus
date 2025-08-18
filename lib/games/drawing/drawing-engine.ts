@@ -161,7 +161,7 @@ export class DrawingGameEngine extends BaseGameEngine<
         }
         break;
 
-      case "chat":
+      case "chat": {
         // Handle regular chat messages
         const chatMessage = {
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -180,6 +180,7 @@ export class DrawingGameEngine extends BaseGameEngine<
           data: chatMessage,
         });
         break;
+      }
     }
 
     return { updatedState, serverMessages };
@@ -215,7 +216,7 @@ export class DrawingGameEngine extends BaseGameEngine<
     return validateDrawingCommand(drawCommand);
   }
 
-  calculateScore(gameState: DrawingGameState, playerId: string, action: any): number {
+  calculateScore(gameState: DrawingGameState, _playerId: string, action: any): number {
     if (action.type === "correct_guess") {
       // Score based on how quickly the guess was made
       // Use milliseconds consistently

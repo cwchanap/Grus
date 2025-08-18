@@ -1,6 +1,30 @@
 import { assertEquals } from "$std/assert/mod.ts";
 // import { signal } from "@preact/signals";
-import type { BaseGameState } from "../../types/core/game.ts";
+import type { BaseGameState as _BaseGameState } from "../../types/core/game.ts";
+
+// Minimal local GameState type for tests
+type Player = {
+  id: string;
+  name: string;
+  isHost: boolean;
+  isConnected: boolean;
+  lastActivity: number;
+};
+
+type GameState = {
+  roomId: string;
+  currentDrawer: string;
+  currentWord: string;
+  roundNumber: number;
+  timeRemaining: number;
+  phase: "waiting" | "drawing" | "guessing" | "results";
+  players: Player[];
+  scores: Record<string, number>;
+  drawingData: any[];
+  correctGuesses: string[];
+  chatMessages: any[];
+  settings: { maxRounds: number; roundTimeSeconds: number };
+};
 
 // Test WebSocket message handling logic that would be used in Scoreboard
 const createMockGameState = (overrides: Partial<GameState> = {}): GameState => ({

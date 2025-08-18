@@ -10,7 +10,7 @@ import {
   serializeDrawingCommand,
   unbatchDrawingCommands,
   validateDrawingCommand,
-} from "../drawing-utils.ts";
+} from "../games/drawing/drawing-utils.ts";
 import { DrawingCommand } from "../../types/games/drawing.ts";
 
 Deno.test("Drawing Utils - Serialization", () => {
@@ -160,7 +160,7 @@ Deno.test("Drawing Utils - Throttler", async () => {
 Deno.test("Drawing Utils - Buffer", () => {
   const flushedBatches: DrawingCommand[][] = [];
   const buffer = new DrawingCommandBuffer(
-    (commands) => flushedBatches.push(commands),
+    (commands: DrawingCommand[]) => flushedBatches.push(commands),
     3, // maxBufferSize
     50, // flushInterval
   );

@@ -34,4 +34,7 @@ export interface ChatMessage {
   message: string;
   timestamp: number;
   isSystemMessage?: boolean;
+  // Optional flags used by tests and some UIs
+  isGuess?: boolean;
+  isCorrect?: boolean;
 }

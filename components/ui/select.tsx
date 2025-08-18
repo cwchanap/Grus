@@ -2,6 +2,7 @@ import { ComponentChildren } from "preact";
 import { JSX } from "preact/jsx-runtime";
 
 interface SelectProps {
+  id?: string;
   value: string;
   onChange: (e: JSX.TargetedEvent<HTMLSelectElement>) => void;
   children: ComponentChildren;
@@ -10,10 +11,11 @@ interface SelectProps {
 }
 
 export function Select(
-  { value, onChange, children, className = "", disabled = false }: SelectProps,
+  { id, value, onChange, children, className = "", disabled = false }: SelectProps,
 ) {
   return (
     <select
+      id={id}
       value={value}
       onChange={onChange}
       disabled={disabled}

@@ -6,10 +6,42 @@
  */
 
 import { assert, assertEquals } from "$std/assert/mod.ts";
-import type { ChatMessage } from "../../types/core/room.ts";
 import type { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
 import type { DrawingCommand } from "../../types/games/drawing.ts";
-import type { BaseGameState } from "../../types/core/game.ts";
+
+// Local test-only types to align with test phases and fields
+type TestPlayer = {
+  id: string;
+  name: string;
+  isHost: boolean;
+  isConnected: boolean;
+  lastActivity: number;
+};
+
+type TestChatMessage = {
+  id: string;
+  playerId: string;
+  playerName: string;
+  message: string;
+  timestamp: number;
+  isGuess?: boolean;
+  isCorrect?: boolean;
+};
+
+type TestGameState = {
+  roomId: string;
+  currentDrawer: string;
+  currentWord: string;
+  roundNumber: number;
+  timeRemaining: number;
+  phase: "waiting" | "drawing" | "results" | "finished";
+  players: TestPlayer[];
+  scores: Record<string, number>;
+  drawingData: DrawingCommand[];
+  correctGuesses: string[];
+  chatMessages: TestChatMessage[];
+  settings: { maxRounds: number; roundTimeSeconds: number };
+};
 
 // Mock WebSocket implementation for testing
 class MockWebSocket {
@@ -25,7 +57,6 @@ class MockWebSocket {
   onerror: ((event: Event) => void) | null = null;
 
   private sentMessages: string[] = [];
-  private messageHandlers: Map<string, (data: any) => void> = new Map();
 
   constructor(public url: string) {
     // Simulate connection opening
@@ -85,7 +116,7 @@ class MockWebSocket {
 }
 
 // Mock game state factory
-function createMockGameState(overrides: Partial<BaseGameState> = {}): BaseGameState {
+function createMockGameState(overrides: Partial<TestGameState> = {}): TestGameState {
   return {
     roomId: "test-room-123",
     currentDrawer: "player1",
@@ -132,11 +163,11 @@ function createMockGameState(overrides: Partial<BaseGameState> = {}): BaseGameSt
 // Simulate complete game session
 class GameSessionSimulator {
   private players: Map<string, MockWebSocket> = new Map();
-  private gameState: BaseGameState;
-  private chatMessages: ChatMessage[] = [];
+  private gameState: TestGameState;
+  private chatMessages: TestChatMessage[] = [];
   private drawingCommands: DrawingCommand[] = [];
 
-  constructor(gameState: BaseGameState) {
+  constructor(gameState: TestGameState) {
     this.gameState = gameState;
   }
 
@@ -170,7 +201,7 @@ class GameSessionSimulator {
     await new Promise((resolve) => setTimeout(resolve, 10)); // Wait for response
   }
 
-  startGame(hostPlayerId: string): void {
+  async startGame(hostPlayerId: string): Promise<void> {
     const ws = this.players.get(hostPlayerId);
     if (!ws) throw new Error(`Host ${hostPlayerId} not found`);
 
@@ -197,9 +228,12 @@ class GameSessionSimulator {
       roomId: this.gameState.roomId,
       data: this.gameState,
     });
+
+    // Minimal await to satisfy require-await without altering behavior
+    await Promise.resolve();
   }
 
-  sendChatMessage(playerId: string, message: string): void {
+  async sendChatMessage(playerId: string, message: string): Promise<void> {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
 
@@ -215,7 +249,7 @@ class GameSessionSimulator {
     // Simulate chat message broadcast
     const player = this.gameState.players.find((p) => p.id === playerId);
     if (player) {
-      const chatMsg: ChatMessage = {
+      const chatMsg: TestChatMessage = {
         id: crypto.randomUUID(),
         playerId,
         playerName: player.name,
@@ -238,12 +272,15 @@ class GameSessionSimulator {
         this.handleCorrectGuess(playerId);
       }
     }
+
+    // Minimal await to satisfy require-await without altering behavior
+    await Promise.resolve();
   }
 
-  sendDrawingCommand(
+  async sendDrawingCommand(
     playerId: string,
     command: Omit<DrawingCommand, "timestamp">,
-  ): void {
+  ): Promise<void> {
     if (playerId !== this.gameState.currentDrawer) {
       throw new Error(`Player ${playerId} is not the current drawer`);
     }
@@ -271,6 +308,9 @@ class GameSessionSimulator {
       roomId: this.gameState.roomId,
       data: { command: fullCommand },
     }, playerId);
+
+    // Minimal await to satisfy require-await without altering behavior
+    await Promise.resolve();
   }
 
   private handleCorrectGuess(playerId: string): void {
@@ -320,18 +360,18 @@ class GameSessionSimulator {
     }
   }
 
-  private broadcastToAllPlayers(message: ServerMessage, excludePlayerId?: string): void {
+  private broadcastToAllPlayers(message: BaseServerMessage, excludePlayerId?: string): void {
     this.players.forEach((ws, playerId) => {
       if (excludePlayerId && playerId === excludePlayerId) return;
       ws.simulateMessage(message);
     });
   }
 
-  getGameState(): GameState {
+  getGameState(): TestGameState {
     return this.gameState;
   }
 
-  getChatMessages(): ChatMessage[] {
+  getChatMessages(): TestChatMessage[] {
     return this.chatMessages;
   }
 

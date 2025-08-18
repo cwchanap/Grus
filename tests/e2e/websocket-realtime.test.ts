@@ -4,6 +4,14 @@ import { test, expect } from "@playwright/test";
  * Tests for WebSocket connectivity and real-time features
  */
 
+// Helper to normalize WebSocket payloads that can be string | Buffer
+function payloadToString(payload: unknown): string {
+  if (typeof payload === "string") return payload;
+  // Support Node Buffer-like objects
+  const anyPayload = payload as { toString?: (enc?: string) => string } | undefined;
+  return anyPayload?.toString ? anyPayload.toString("utf-8") : String(payload);
+}
+
 test.describe("WebSocket and Real-time Features", () => {
   test("should establish WebSocket connection", async ({ page }) => {
     // Monitor WebSocket connections
@@ -13,11 +21,11 @@ test.describe("WebSocket and Real-time Features", () => {
       wsConnections.push(ws);
       
       ws.on("framesent", (event) => {
-        console.log("WebSocket frame sent:", event.payload);
+        console.log("WebSocket frame sent:", payloadToString(event.payload));
       });
       
       ws.on("framereceived", (event) => {
-        console.log("WebSocket frame received:", event.payload);
+        console.log("WebSocket frame received:", payloadToString(event.payload));
       });
     });
     
@@ -77,13 +85,13 @@ test.describe("WebSocket and Real-time Features", () => {
     
     player1.on("websocket", (ws) => {
       ws.on("framereceived", (event) => {
-        player1Messages.push(event.payload);
+        player1Messages.push(payloadToString(event.payload));
       });
     });
     
     player2.on("websocket", (ws) => {
       ws.on("framereceived", (event) => {
-        player2Messages.push(event.payload);
+        player2Messages.push(payloadToString(event.payload));
       });
     });
     

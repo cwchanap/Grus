@@ -55,6 +55,7 @@ export default function GameLobby({
             <p class="text-gray-600 capitalize">{gameType.replace("-", " ")} Game</p>
           </div>
           <button
+            type="button"
             onClick={onLeaveRoom}
             class="px-4 py-2 text-red-600 hover:text-red-700 hover:bg-red-50 rounded-md transition-colors"
           >
@@ -111,6 +112,7 @@ export default function GameLobby({
           <h2 class="text-lg font-semibold text-gray-900">Game Settings</h2>
           {isHost && (
             <button
+              type="button"
               onClick={() => setShowSettings(!showSettings)}
               class="px-3 py-1 text-sm text-blue-600 hover:text-blue-700 hover:bg-blue-50 rounded-md transition-colors"
             >
@@ -191,6 +193,7 @@ export default function GameLobby({
           ? (
             <div class="space-y-3">
               <button
+                type="button"
                 onClick={onStartGame}
                 disabled={!canStartGame}
                 class="w-full px-6 py-3 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"

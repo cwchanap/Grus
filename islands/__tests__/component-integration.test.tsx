@@ -8,7 +8,26 @@
 import { assert, assertEquals, assertExists } from "$std/assert/mod.ts";
 import type { ChatMessage, PlayerState } from "../../types/core/room.ts";
 import type { DrawingCommand } from "../../types/games/drawing.ts";
-import type { BaseGameState } from "../../types/core/game.ts";
+import type { BaseGameState as _BaseGameState } from "../../types/core/game.ts";
+
+// Minimal local GameState type for tests
+type GameState = {
+  roomId: string;
+  currentDrawer: string;
+  currentWord: string;
+  roundNumber: number;
+  timeRemaining: number;
+  phase: "waiting" | "drawing" | "guessing" | "results";
+  players: PlayerState[];
+  scores: Record<string, number>;
+  drawingData: any[];
+  correctGuesses: string[];
+  chatMessages: ChatMessage[];
+  settings: { maxRounds: number; roundTimeSeconds: number };
+};
+
+// Test-only extension for chat messages used in these tests
+type TestChatMessage = ChatMessage & { isGuess: boolean; isCorrect: boolean };
 
 // Test data factories
 function createTestGameState(overrides: Partial<GameState> = {}): GameState {
@@ -47,7 +66,7 @@ function createTestGameState(overrides: Partial<GameState> = {}): GameState {
   };
 }
 
-function createTestChatMessage(overrides: Partial<ChatMessage> = {}): ChatMessage {
+function createTestChatMessage(overrides: Partial<TestChatMessage> = {}): TestChatMessage {
   return {
     id: crypto.randomUUID(),
     playerId: "player2",
@@ -111,7 +130,7 @@ Deno.test("Component Integration - Game state synchronization", () => {
 // Integration test: Chat message flow
 Deno.test("Component Integration - Chat message flow", () => {
   const _gameState = createTestGameState();
-  const messages: ChatMessage[] = [];
+  const messages: TestChatMessage[] = [];
 
   // Simulate regular chat message
   const regularMessage = createTestChatMessage({

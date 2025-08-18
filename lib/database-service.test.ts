@@ -68,7 +68,7 @@ Deno.test("Database Service - Basic Operations", async (t) => {
 
   // Test game session operations
   await t.step("create game session", async () => {
-    const result = await db.createGameSession(roomId, 5);
+    const result = await db.createGameSession(roomId, "drawing", 5);
     assertEquals(result.success, true);
     assertExists(result.data);
     sessionId = result.data!;

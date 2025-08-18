@@ -1,10 +1,10 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --unstable-kv
 
 /**
  * Database cleanup script for removing dangling rooms and orphaned data
  * 
  * Usage:
- *   deno run --allow-read --allow-write --allow-env scripts/cleanup-database.ts [options]
+ *   deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts [options]
  * 
  * Options:
  *   --dry-run    Show what would be cleaned up without making changes
@@ -15,9 +15,7 @@
  *   --limit=N    Limit number of records to process (default: 100)
  */
 
-import { RoomManager } from "../lib/core/room-manager.ts";
-import { getDatabaseService } from "../lib/database-factory.ts";
-import { getKVService } from "../lib/db/index.ts";
+import { getKVRoomService, KVRoomService } from "../lib/db/index.ts";
 
 interface CleanupOptions {
   dryRun: boolean;
@@ -43,14 +41,10 @@ interface CleanupStats {
 }
 
 class DatabaseCleanup {
-  private roomManager: RoomManager;
-  private db: ReturnType<typeof getDatabaseService>;
-  private kv: ReturnType<typeof getKVService>;
+  private db: KVRoomService;
 
   constructor() {
-    this.roomManager = new RoomManager();
-    this.db = getDatabaseService();
-    this.kv = getKVService();
+    this.db = getKVRoomService();
   }
 
   async cleanup(options: CleanupOptions): Promise<CleanupStats> {
@@ -275,7 +269,7 @@ class DatabaseCleanup {
     let totalProcessed = 0;
 
     try {
-      // Get all active room IDs from SQLite database
+      // Get all active room IDs from KV room store
       const roomsResult = await this.db.getActiveRooms(1000);
       const activeRoomIds = new Set<string>();
       
@@ -283,7 +277,7 @@ class DatabaseCleanup {
         roomsResult.data.forEach(room => activeRoomIds.add(room.id));
       }
 
-      console.log(`Found ${activeRoomIds.size} active rooms in database`);
+      console.log(`Found ${activeRoomIds.size} active rooms in KV store`);
 
       // Access the KV store directly to list all keys
       const kv = await Deno.openKv();
@@ -478,7 +472,7 @@ function printUsage() {
 🧹 Database Cleanup Script
 
 Usage:
-  deno run --allow-read --allow-write --allow-env scripts/cleanup-database.ts [options]
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts [options]
 
 Options:
   --dry-run      Show what would be cleaned up without making changes
@@ -492,19 +486,19 @@ Options:
 
 Examples:
   # Dry run to see what would be cleaned up
-  deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --dry-run
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts --dry-run
 
   # Clean up empty rooms (default behavior)
-  deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts
 
   # Clean up rooms older than 30 minutes (following product rules)
-  deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --old-rooms
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts --old-rooms
 
   # Clean up rooms older than 60 minutes
-  deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --old-rooms --max-age=60
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts --old-rooms --max-age=60
 
   # Clean up everything with a limit of 50 records
-  deno run --allow-read --allow-write --allow-env --allow-ffi --unstable-kv scripts/cleanup-database.ts --all --limit=50
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts --all --limit=50
 `);
 }
 
@@ -524,7 +518,7 @@ async function main() {
 
     console.log("\n📊 Cleanup Summary:");
     console.log("==================");
-    console.log(`📦 SQLite Database:`);
+    console.log(`🏠 KV Room Store:`);
     console.log(`  Empty rooms removed: ${stats.emptyRoomsRemoved}`);
     console.log(`  Old rooms removed: ${stats.oldRoomsRemoved}`);
     console.log(`  Inactive rooms deactivated: ${stats.inactiveRoomsDeactivated}`);

@@ -1,7 +1,7 @@
 import { assertEquals } from "$std/testing/asserts.ts";
 import { getDatabaseService } from "../database-service.ts";
 
-Deno.test("DatabaseService - updatePlayer functionality", async () => {
+Deno.test("DatabaseService - updatePlayer functionality", () => {
   const db = getDatabaseService();
 
   // Create a test room

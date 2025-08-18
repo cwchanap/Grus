@@ -1,10 +1,10 @@
-#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --allow-ffi
+#!/usr/bin/env -S deno run --allow-read --allow-write --allow-env --unstable-kv
 
 /**
  * Database inspection script for viewing database contents and statistics
  * 
  * Usage:
- *   deno run --allow-read --allow-write --allow-env --allow-ffi scripts/inspect-database.ts [options]
+ *   deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts [options]
  * 
  * Options:
  *   --stats      Show database statistics (default)
@@ -14,7 +14,7 @@
  *   --detailed   Show detailed information for all tables
  */
 
-import { getDatabaseService } from "../lib/database-factory.ts";
+import { getKVRoomService, KVRoomService } from "../lib/db/index.ts";
 
 interface DatabaseStats {
   totalRooms: number;
@@ -28,10 +28,10 @@ interface DatabaseStats {
 }
 
 class DatabaseInspector {
-  private db: ReturnType<typeof getDatabaseService>;
+  private db: KVRoomService;
 
   constructor() {
-    this.db = getDatabaseService();
+    this.db = getKVRoomService();
   }
 
   async getStats(): Promise<DatabaseStats> {
@@ -245,7 +245,7 @@ function printUsage() {
 🔍 Database Inspection Script
 
 Usage:
-  deno run --allow-read --allow-write --allow-env --allow-ffi scripts/inspect-database.ts [options]
+  deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts [options]
 
 Options:
   --stats      Show database statistics (default)

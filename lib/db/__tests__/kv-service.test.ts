@@ -7,7 +7,7 @@ function setupTest() {
   kvService = new KVService();
 }
 
-async function teardownTest() {
+function teardownTest() {
   // Clean up any test data and close the KV connection
   kvService.close();
 }

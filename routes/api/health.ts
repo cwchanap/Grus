@@ -1,7 +1,8 @@
 // Health check endpoint for monitoring
 
 import { Handlers } from "$fresh/server.ts";
-import { getDatabaseService, getKVService } from "../../lib/db/index.ts";
+import { getKVService } from "../../lib/db/index.ts";
+import { RoomManager } from "../../lib/core/room-manager.ts";
 
 interface HealthCheck {
   status: string;
@@ -25,11 +26,14 @@ interface HealthResponse {
   version?: string;
 }
 
+// Primary database check now uses RoomManager over KV to ensure the main
+// application storage path is healthy. This eliminates the legacy SQLite check.
 async function checkDatabase(): Promise<HealthCheck> {
   const startTime = Date.now();
   try {
-    const dbService = getDatabaseService();
-    const result = await dbService.healthCheck();
+    const rm = new RoomManager();
+    // Exercise a lightweight read path with built-in cleanup
+    const result = await rm.getActiveRoomsWithCleanup(1);
     const latency = Date.now() - startTime;
 
     return {
@@ -67,11 +71,15 @@ async function checkKVStorage(): Promise<HealthCheck> {
 
 function checkWebSocketSupport(): HealthCheck {
   try {
-    // Check if WebSocket is available
-    const pair = new WebSocketPair();
-    pair[0].close();
-    pair[1].close();
-    return { status: "ok" };
+    // Prefer Deno's server-side upgrade API
+    if (typeof Deno !== "undefined" && typeof Deno.upgradeWebSocket === "function") {
+      return { status: "ok" };
+    }
+    // Fallback: presence of WebSocket constructor in global scope
+    if (typeof WebSocket !== "undefined") {
+      return { status: "ok" };
+    }
+    return { status: "error", error: "WebSocket not supported in this runtime" };
   } catch (error) {
     return {
       status: "error",

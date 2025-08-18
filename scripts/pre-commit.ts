@@ -20,7 +20,8 @@ async function runCommand(command: string[]): Promise<{ success: boolean; output
     
     return { success: code === 0, output };
   } catch (error) {
-    return { success: false, output: error.message };
+    const msg = error instanceof Error ? error.message : String(error);
+    return { success: false, output: msg };
   }
 }
 

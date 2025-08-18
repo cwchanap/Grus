@@ -6,7 +6,7 @@ Deno.test("Database Service - Basic Operations", async (t) => {
   const db = getDatabaseService();
 
   // Test health check
-  await t.step("health check", async () => {
+  await t.step("health check", () => {
     const result = db.healthCheck();
     assertEquals(result.success, true);
     assertEquals(result.data, true);
@@ -18,14 +18,14 @@ Deno.test("Database Service - Basic Operations", async (t) => {
   let scoreId: string;
 
   // Test room operations
-  await t.step("create room", async () => {
+  await t.step("create room", () => {
     const result = db.createRoom("Test Room", "host-123", 8);
     assertEquals(result.success, true);
     assertExists(result.data);
     roomId = result.data!;
   });
 
-  await t.step("get room by id", async () => {
+  await t.step("get room by id", () => {
     const result = db.getRoomById(roomId);
     assertEquals(result.success, true);
     assertExists(result.data);
@@ -33,7 +33,7 @@ Deno.test("Database Service - Basic Operations", async (t) => {
     assertEquals(result.data?.hostId, "host-123");
   });
 
-  await t.step("get active rooms", async () => {
+  await t.step("get active rooms", () => {
     const result = db.getActiveRooms(10);
     assertEquals(result.success, true);
     assertExists(result.data);
@@ -41,14 +41,14 @@ Deno.test("Database Service - Basic Operations", async (t) => {
   });
 
   // Test player operations
-  await t.step("create player", async () => {
+  await t.step("create player", () => {
     const result = db.createPlayer("Test Player", roomId, false);
     assertEquals(result.success, true);
     assertExists(result.data);
     playerId = result.data!;
   });
 
-  await t.step("get player by id", async () => {
+  await t.step("get player by id", () => {
     const result = db.getPlayerById(playerId);
     assertEquals(result.success, true);
     assertExists(result.data);
@@ -57,7 +57,7 @@ Deno.test("Database Service - Basic Operations", async (t) => {
     assertEquals(result.data?.isHost, false);
   });
 
-  await t.step("get players by room", async () => {
+  await t.step("get players by room", () => {
     const result = db.getPlayersByRoom(roomId);
     assertEquals(result.success, true);
     assertExists(result.data);
@@ -66,34 +66,34 @@ Deno.test("Database Service - Basic Operations", async (t) => {
   });
 
   // Test game session operations
-  await t.step("create game session", async () => {
-    const result = db.createGameSession(roomId, 5);
+  await t.step("create game session", () => {
+    const result = db.createGameSession(roomId, "drawing", 5);
     assertEquals(result.success, true);
     assertExists(result.data);
     sessionId = result.data!;
   });
 
-  await t.step("end game session", async () => {
+  await t.step("end game session", () => {
     const result = db.endGameSession(sessionId, playerId);
     assertEquals(result.success, true);
     assertEquals(result.data, true);
   });
 
   // Test score operations
-  await t.step("create score", async () => {
+  await t.step("create score", () => {
     const result = db.createScore(sessionId, playerId, 100);
     assertEquals(result.success, true);
     assertExists(result.data);
     scoreId = result.data!;
   });
 
-  await t.step("update score", async () => {
+  await t.step("update score", () => {
     const result = db.updateScore(scoreId, 150, 3);
     assertEquals(result.success, true);
     assertEquals(result.data, true);
   });
 
-  await t.step("get scores by session", async () => {
+  await t.step("get scores by session", () => {
     const result = db.getScoresBySession(sessionId);
     assertEquals(result.success, true);
     assertExists(result.data);
@@ -102,7 +102,7 @@ Deno.test("Database Service - Basic Operations", async (t) => {
   });
 
   // Cleanup
-  await t.step("cleanup", async () => {
+  await t.step("cleanup", () => {
     db.removePlayer(playerId);
     db.deleteRoom(roomId);
     db.close();

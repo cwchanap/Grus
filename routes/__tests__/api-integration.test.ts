@@ -38,58 +38,66 @@ function mockCloudflareAPI() {
       const body = JSON.parse(options?.body as string || "{}");
 
       if (body.sql?.includes("SELECT 1 as test")) {
-        return new Response(
-          JSON.stringify({
-            result: [{ results: [{ test: 1 }], success: true }],
-          }),
-          { status: 200 },
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: [{ results: [{ test: 1 }], success: true }],
+            }),
+            { status: 200 },
+          ),
         );
       }
 
       if (body.sql?.includes("SELECT r.*, COUNT(p.id) as player_count")) {
-        return new Response(
-          JSON.stringify({
-            result: [{
-              results: [
-                {
-                  id: "room-1",
-                  name: "Test Room",
-                  host_id: "host-1",
-                  max_players: 8,
-                  is_active: true,
-                  player_count: 2,
-                  created_at: "2024-01-01T00:00:00Z",
-                },
-              ],
-              success: true,
-            }],
-          }),
-          { status: 200 },
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: [{
+                results: [
+                  {
+                    id: "room-1",
+                    name: "Test Room",
+                    host_id: "host-1",
+                    max_players: 8,
+                    is_active: true,
+                    player_count: 2,
+                    created_at: "2024-01-01T00:00:00Z",
+                  },
+                ],
+                success: true,
+              }],
+            }),
+            { status: 200 },
+          ),
         );
       }
 
       if (body.sql?.includes("INSERT INTO rooms")) {
-        return new Response(
-          JSON.stringify({
-            result: [{ results: [], success: true }],
-          }),
-          { status: 200 },
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: [{ results: [], success: true }],
+            }),
+            { status: 200 },
+          ),
         );
       }
 
       if (body.sql?.includes("INSERT INTO players")) {
-        return new Response(
-          JSON.stringify({
-            result: [{ results: [], success: true }],
-          }),
-          { status: 200 },
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              result: [{ results: [], success: true }],
+            }),
+            { status: 200 },
+          ),
         );
       }
     }
 
     // KV operations now handled by Deno KV - no mocking needed
 
-    return new Response("Not Found", { status: 404 });
+    return Promise.resolve(new Response("Not Found", { status: 404 }));
   };
 }
 
@@ -206,9 +214,9 @@ Deno.test("API Integration - Health Check Database Error", async () => {
   // Mock API to return error
   globalThis.fetch = (input: RequestInfo | URL) => {
     if (input.toString().includes("/d1/database/")) {
-      return new Response("Database Error", { status: 500 });
+      return Promise.resolve(new Response("Database Error", { status: 500 }));
     }
-    return new Response("", { status: 200 });
+    return Promise.resolve(new Response("", { status: 200 }));
   };
 
   const request = new Request("http://localhost:3000/api/health");

@@ -57,7 +57,8 @@ async function setupGitHooks() {
     console.log("  • Only process staged files");
     console.log("\n💡 To bypass hooks temporarily: git commit --no-verify");
   } catch (error) {
-    console.error("❌ Failed to setup Git hooks:", error.message);
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error("❌ Failed to setup Git hooks:", msg);
     Deno.exit(1);
   }
 }
