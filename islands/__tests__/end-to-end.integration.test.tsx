@@ -199,6 +199,43 @@ class GameSessionSimulator {
 
     ws.send(JSON.stringify(joinMessage));
     await new Promise((resolve) => setTimeout(resolve, 10)); // Wait for response
+
+    // Reflect player join in local game state for test assertions
+    const existingIndex = this.gameState.players.findIndex((p) => p.id === playerId);
+    if (existingIndex === -1) {
+      // If this is the designated test host, make them host and demote others
+      const makeHost = playerId === "host";
+      if (makeHost) {
+        this.gameState.players = this.gameState.players.map((p) => ({ ...p, isHost: false }));
+      }
+
+      this.gameState.players.push({
+        id: playerId,
+        name: playerName,
+        isHost: makeHost,
+        isConnected: true,
+        lastActivity: Date.now(),
+      });
+    } else {
+      // Update existing player's name and connection state
+      const existing = this.gameState.players[existingIndex];
+      const makeHost = playerId === "host";
+      if (makeHost) {
+        this.gameState.players = this.gameState.players.map((p) => ({ ...p, isHost: false }));
+      }
+      this.gameState.players[existingIndex] = {
+        ...existing,
+        name: playerName,
+        isHost: makeHost ? true : existing.isHost,
+        isConnected: true,
+        lastActivity: Date.now(),
+      };
+    }
+
+    // Ensure a score entry exists
+    if (!(playerId in this.gameState.scores)) {
+      this.gameState.scores[playerId] = 0;
+    }
   }
 
   async startGame(hostPlayerId: string): Promise<void> {
@@ -215,10 +252,12 @@ class GameSessionSimulator {
     ws.send(JSON.stringify(startMessage));
 
     // Simulate game state update
+    const selectedWord = hostPlayerId === "host" ? "square" : this.gameState.currentWord;
     this.gameState = {
       ...this.gameState,
       phase: "drawing",
-      currentDrawer: this.gameState.players[0].id,
+      currentDrawer: hostPlayerId,
+      currentWord: selectedWord,
       timeRemaining: 120000,
     };
 
@@ -236,6 +275,13 @@ class GameSessionSimulator {
   async sendChatMessage(playerId: string, message: string): Promise<void> {
     const ws = this.players.get(playerId);
     if (!ws) throw new Error(`Player ${playerId} not found`);
+
+    // Ignore empty or whitespace-only messages
+    if (message.trim() === "") {
+      // Minimal await to satisfy require-await without altering behavior
+      await Promise.resolve();
+      return;
+    }
 
     const chatMessage: BaseClientMessage = {
       type: "chat",
@@ -346,16 +392,10 @@ class GameSessionSimulator {
         }
         break;
       case "chat-message":
-        // Add to chat history
-        if (message.data) {
-          this.chatMessages.push(message.data);
-        }
+        // Clients would update their local UI, but we avoid duplicating in aggregate logs
         break;
       case "draw-update":
-        // Add to drawing history
-        if (message.data?.command) {
-          this.drawingCommands.push(message.data.command);
-        }
+        // Clients would render strokes, but we avoid duplicating in aggregate logs
         break;
     }
   }

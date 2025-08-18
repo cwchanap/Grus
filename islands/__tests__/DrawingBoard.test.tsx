@@ -295,9 +295,10 @@ Deno.test("DrawingBoard - Drawing permissions based on game state", () => {
   });
 
   // Mock permission checking logic
-  const checkDrawingPermissions = (_playerId: string, gameState: TestGameState) => {
+  const checkDrawingPermissions = (playerId: string, gameState: TestGameState) => {
     // Note: Drawing permissions would be handled by the drawing game engine
-    return gameState.phase === "drawing";
+    // Allow drawing only when it's the drawing phase AND the player is the current drawer
+    return gameState.phase === "drawing" && playerId === gameState.currentDrawer;
   };
 
   // Test permissions

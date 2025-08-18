@@ -1,113 +1,38 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
-// import { createHandler } from "$fresh/server.ts";
 import { handler as healthHandler } from "../api/health.ts";
 import { handler as roomsHandler } from "../api/rooms.ts";
+import { RoomManager } from "../../lib/core/room-manager.ts";
+import { getKVRoomService, getKVService } from "../../lib/db/index.ts";
 
-// Mock environment for testing
+// Minimal test environment setup
 const mockEnv = {
-  CLOUDFLARE_ACCOUNT_ID: "test-account",
-  CLOUDFLARE_API_TOKEN: "test-token",
-  DATABASE_ID: "test-db-id",
-
   ENVIRONMENT: "test",
 };
 
-// Set up mock environment
 function setupMockEnv() {
-  Object.entries(mockEnv).forEach(([key, value]) => {
-    Deno.env.set(key, value);
-  });
+  Object.entries(mockEnv).forEach(([key, value]) => Deno.env.set(key, value));
 }
 
 function teardownMockEnv() {
-  Object.keys(mockEnv).forEach((key) => {
-    Deno.env.delete(key);
-  });
+  Object.keys(mockEnv).forEach((key) => Deno.env.delete(key));
 }
 
-// Mock fetch for Cloudflare API calls
-const originalFetch = globalThis.fetch;
-
-function mockCloudflareAPI() {
-  globalThis.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
-    const urlString = input.toString();
-    const options = init;
-
-    // Mock D1 health check
-    if (urlString.includes("/d1/database/") && urlString.includes("/query")) {
-      const body = JSON.parse(options?.body as string || "{}");
-
-      if (body.sql?.includes("SELECT 1 as test")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              result: [{ results: [{ test: 1 }], success: true }],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-
-      if (body.sql?.includes("SELECT r.*, COUNT(p.id) as player_count")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              result: [{
-                results: [
-                  {
-                    id: "room-1",
-                    name: "Test Room",
-                    host_id: "host-1",
-                    max_players: 8,
-                    is_active: true,
-                    player_count: 2,
-                    created_at: "2024-01-01T00:00:00Z",
-                  },
-                ],
-                success: true,
-              }],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-
-      if (body.sql?.includes("INSERT INTO rooms")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              result: [{ results: [], success: true }],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-
-      if (body.sql?.includes("INSERT INTO players")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              result: [{ results: [], success: true }],
-            }),
-            { status: 200 },
-          ),
-        );
-      }
-    }
-
-    // KV operations now handled by Deno KV - no mocking needed
-
-    return Promise.resolve(new Response("Not Found", { status: 404 }));
-  };
-}
-
-function restoreFetch() {
-  globalThis.fetch = originalFetch;
+// Ensure Deno.Kv connections are closed to avoid resource leaks between tests
+function teardownResources() {
+  try {
+    getKVService().close();
+  } catch (_) {
+    // ignore
+  }
+  try {
+    getKVRoomService().close();
+  } catch (_) {
+    // ignore
+  }
 }
 
 Deno.test("API Integration - Health Check", async () => {
   setupMockEnv();
-  mockCloudflareAPI();
 
   const request = new Request("http://localhost:3000/api/health");
   const response = await healthHandler.GET!(request, {} as any);
@@ -121,13 +46,12 @@ Deno.test("API Integration - Health Check", async () => {
   assertExists(data.checks.kv_storage);
   assertExists(data.checks.websocket);
 
-  restoreFetch();
   teardownMockEnv();
+  teardownResources();
 });
 
 Deno.test("API Integration - Get Rooms", async () => {
   setupMockEnv();
-  mockCloudflareAPI();
 
   const request = new Request("http://localhost:3000/api/rooms");
   const response = await roomsHandler.GET!(request, {} as any);
@@ -139,19 +63,24 @@ Deno.test("API Integration - Get Rooms", async () => {
   assertEquals(Array.isArray(data.rooms), true);
 
   if (data.rooms.length > 0) {
-    const room = data.rooms[0];
-    assertExists(room.id);
-    assertExists(room.name);
-    assertExists(room.max_players);
+    const summary = data.rooms[0];
+    assertExists(summary.room);
+    assertExists(summary.players);
+    assertExists(summary.playerCount);
+    assertExists(summary.canJoin);
+
+    // Validate nested room fields
+    assertExists(summary.room.id);
+    assertExists(summary.room.name);
+    assertExists(summary.room.maxPlayers);
   }
 
-  restoreFetch();
   teardownMockEnv();
+  teardownResources();
 });
 
 Deno.test("API Integration - Create Room", async () => {
   setupMockEnv();
-  mockCloudflareAPI();
 
   const requestBody = {
     name: "Test Room",
@@ -172,18 +101,19 @@ Deno.test("API Integration - Create Room", async () => {
   const data = await response.json();
   assertExists(data.roomId);
   assertExists(data.playerId);
-  assertExists(data.code);
   assertEquals(typeof data.roomId, "string");
   assertEquals(typeof data.playerId, "string");
-  assertEquals(typeof data.code, "string");
+  assertExists(data.room);
+  assertExists(data.room.room.id);
+  assertExists(data.room.room.name);
+  assertExists(data.room.room.maxPlayers);
 
-  restoreFetch();
   teardownMockEnv();
+  teardownResources();
 });
 
 Deno.test("API Integration - Create Room Validation Error", async () => {
   setupMockEnv();
-  mockCloudflareAPI();
 
   const requestBody = {
     name: "", // Invalid: empty name
@@ -204,20 +134,16 @@ Deno.test("API Integration - Create Room Validation Error", async () => {
   assertExists(data.error);
   assertEquals(data.error, "Room name and host name are required");
 
-  restoreFetch();
   teardownMockEnv();
+  teardownResources();
 });
 
 Deno.test("API Integration - Health Check Database Error", async () => {
   setupMockEnv();
 
-  // Mock API to return error
-  globalThis.fetch = (input: RequestInfo | URL) => {
-    if (input.toString().includes("/d1/database/")) {
-      return Promise.resolve(new Response("Database Error", { status: 500 }));
-    }
-    return Promise.resolve(new Response("", { status: 200 }));
-  };
+  // Stub RoomManager to simulate a database error in the health check
+  const original = RoomManager.prototype.getActiveRoomsWithCleanup;
+  RoomManager.prototype.getActiveRoomsWithCleanup = () => ({ success: false, error: "Simulated DB error" } as any);
 
   const request = new Request("http://localhost:3000/api/health");
   const response = await healthHandler.GET!(request, {} as any);
@@ -228,6 +154,8 @@ Deno.test("API Integration - Health Check Database Error", async () => {
   assertEquals(data.status, "error");
   assertEquals(data.checks.database.status, "error");
 
-  restoreFetch();
+  // Restore
+  RoomManager.prototype.getActiveRoomsWithCleanup = original;
   teardownMockEnv();
+  teardownResources();
 });

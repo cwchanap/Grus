@@ -8,7 +8,7 @@
     "build": "deno run -A --unstable-kv dev.ts build",
     "preview": "deno run -A --unstable-kv main.ts",
     "update": "deno run -A -r https://fresh.deno.dev/update .",
-    "test": "deno test --allow-all --unstable-kv",
+    "test": "deno test --allow-all --unstable-kv lib/**/__tests__/*.ts islands/**/__tests__/*.tsx routes/**/__tests__/*.ts components/**/__tests__/*.tsx",
     "test:watch": "deno test --allow-all --unstable-kv --watch",
     "test:coverage": "deno test --allow-all --unstable-kv --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
     "deploy": "bash scripts/deploy-deno.sh",

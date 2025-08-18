@@ -1,9 +1,9 @@
-// Test file for database service
+// Test file for database service (KV)
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { getDatabaseService } from "./db/index.ts";
+import { getKVRoomService } from "./db/index.ts";
 
-Deno.test("Database Service - Basic Operations", async (t) => {
-  const db = getDatabaseService();
+Deno.test("Database Service (KV) - Basic Operations", async (t) => {
+  const db = getKVRoomService();
 
   // Test health check
   await t.step("health check", async () => {
@@ -106,11 +106,5 @@ Deno.test("Database Service - Basic Operations", async (t) => {
     await db.removePlayer(playerId);
     await db.deleteRoom(roomId);
     db.close();
-    // Clean up test database file
-    try {
-      Deno.removeSync("db/game.db");
-    } catch {
-      // Ignore if file doesn't exist
-    }
   });
 });
