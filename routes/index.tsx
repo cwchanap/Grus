@@ -1,6 +1,5 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
 import MainLobby from "../islands/core/MainLobby.tsx";
-// import { getDatabaseService } from "../lib/database-factory.ts";
 import { RoomManager, RoomSummary } from "../lib/core/room-manager.ts";
 
 interface LobbyData {
