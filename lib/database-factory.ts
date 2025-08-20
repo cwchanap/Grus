@@ -1,9 +1,5 @@
 // Database service factory - KV-backed (Deno KV) for all environments
-import {
-  type DatabaseResult,
-  getKVRoomService,
-  KVRoomService,
-} from "./db/index.ts";
+import { type DatabaseResult, getKVRoomService, KVRoomService } from "./db/index.ts";
 import type { Player, Room } from "../types/core/room.ts";
 import type { Score } from "../types/core/game.ts";
 

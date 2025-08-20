@@ -21,6 +21,15 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
+    // Stabilize Chromium on macOS (avoid SIGTRAP crashes) by disabling GPU
+    // and forcing ANGLE software rendering. Safe no-ops for Firefox/WebKit.
+    launchOptions: {
+      args: [
+        "--disable-gpu",
+        "--use-gl=angle",
+        "--use-angle=swiftshader",
+      ],
+    },
   },
 
   projects: [

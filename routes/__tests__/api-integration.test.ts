@@ -143,7 +143,8 @@ Deno.test("API Integration - Health Check Database Error", async () => {
 
   // Stub RoomManager to simulate a database error in the health check
   const original = RoomManager.prototype.getActiveRoomsWithCleanup;
-  RoomManager.prototype.getActiveRoomsWithCleanup = () => ({ success: false, error: "Simulated DB error" } as any);
+  RoomManager.prototype.getActiveRoomsWithCleanup =
+    () => ({ success: false, error: "Simulated DB error" } as any);
 
   const request = new Request("http://localhost:3000/api/health");
   const response = await healthHandler.GET!(request, {} as any);

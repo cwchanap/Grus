@@ -35,66 +35,33 @@ test.describe("Smoke Tests", () => {
   test("can navigate to create room", async ({ page }) => {
     await page.goto("/");
     
-    // Look for any way to create or join a room
-    const navigationElements = [
-      'button:has-text("Create Room")',
-      'a:has-text("Create Room")',
-      'button:has-text("Join Room")',
-      'a:has-text("Join Room")',
-      'button:has-text("Play")',
-      'a:has-text("Play")'
-    ];
+    // Use stable Create Room modal flow
+    await page.getByRole("button", { name: "+ Create Room" }).click();
+    await page.locator('[data-testid="room-name-input"]').fill("Smoke Room");
+    await page.locator('[data-testid="host-name-input"]').fill("Smoke Host");
+    await page.locator('[data-testid="create-room-submit"]').click();
+    await page.waitForURL(/\/room\/[a-f0-9-]+/);
     
-    let foundNavigation = false;
-    for (const selector of navigationElements) {
-      const element = page.locator(selector).first();
-      if (await element.isVisible({ timeout: 2000 })) {
-        await element.click();
-        foundNavigation = true;
-        break;
-      }
-    }
-    
-    expect(foundNavigation).toBe(true);
-    
-    // Should navigate somewhere (not stay on homepage)
-    await page.waitForTimeout(1000);
-    const currentUrl = page.url();
-    expect(currentUrl).not.toBe("http://localhost:3000/");
+    expect(page.url()).toMatch(/\/room\//);
   });
 
   test("room page loads basic elements", async ({ page }) => {
     await page.goto("/");
     
-    // Navigate to a room
-    const createRoomButton = page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-    if (await createRoomButton.isVisible({ timeout: 3000 })) {
-      await createRoomButton.click();
-      await page.waitForTimeout(3000);
-      
-      // Should be in a room
-      expect(page.url()).toMatch(/\/room\/|\/game\/|\/play\//);
-      
-      // Should have at least one of the essential game elements
-      const essentialElements = [
-        'canvas',
-        '[data-testid="drawing-board"]',
-        '[data-testid="chat"]',
-        '[data-testid="game"]',
-        '.game-container',
-        '.drawing-area'
-      ];
-      
-      let foundEssential = false;
-      for (const selector of essentialElements) {
-        if (await page.locator(selector).isVisible({ timeout: 5000 }).catch(() => false)) {
-          foundEssential = true;
-          break;
-        }
-      }
-      
-      expect(foundEssential).toBe(true);
-    }
+    // Create a room via modal
+    await page.getByRole("button", { name: "+ Create Room" }).click();
+    await page.locator('[data-testid="room-name-input"]').fill("Smoke Elements Room");
+    await page.locator('[data-testid="host-name-input"]').fill("Smoke Host");
+    await page.locator('[data-testid="create-room-submit"]').click();
+    await page.waitForURL(/\/room\/[a-f0-9-]+/);
+    
+    // Should be in a room
+    expect(page.url()).toMatch(/\/room\//);
+    
+    // Should have visible core areas
+    await expect(page.locator('[data-testid="drawing-canvas"]')).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Scoreboard" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Chat" })).toBeVisible();
   });
 
   test("no critical JavaScript errors", async ({ page }) => {
@@ -106,12 +73,12 @@ test.describe("Smoke Tests", () => {
     
     await page.goto("/");
     
-    // Navigate through the app
-    const createRoomButton = page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-    if (await createRoomButton.isVisible({ timeout: 3000 })) {
-      await createRoomButton.click();
-      await page.waitForTimeout(2000);
-    }
+    // Navigate through the app using Create Room modal
+    await page.getByRole("button", { name: "+ Create Room" }).click();
+    await page.locator('[data-testid="room-name-input"]').fill("Smoke Error Room");
+    await page.locator('[data-testid="host-name-input"]').fill("Smoke Host");
+    await page.locator('[data-testid="create-room-submit"]').click();
+    await page.waitForURL(/\/room\/[a-f0-9-]+/);
     
     // Filter out non-critical errors
     const criticalErrors = jsErrors.filter(error => 

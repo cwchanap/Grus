@@ -19,34 +19,36 @@ export class GameTestHelpers {
 
     // Create new room
     await this.page.goto("/");
-    const createRoomButton = this.page.locator(
-      'button:has-text("Create Room"), a:has-text("Create Room")'
-    ).first();
-    
-    if (await createRoomButton.isVisible()) {
-      await createRoomButton.click();
-      
-      // If modal appears, fill it
-      const modal = this.page.locator('[data-testid="create-room-modal"]');
-      const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false);
-      if (modalVisible) {
-        const roomNameInput = this.page.locator('[data-testid="room-name-input"]');
-        const hostNameInput = this.page.locator('[data-testid="host-name-input"]');
-        const submitBtn = this.page.locator('[data-testid="create-room-submit"]');
-        
-        await roomNameInput.fill(`Test Room ${Date.now()}`);
-        await hostNameInput.fill("Tester");
-        await submitBtn.click();
-      }
-      
-      // Wait for navigation to room
-      await this.page.waitForURL(/\/room\//, { timeout: 10000 });
-      const roomUrl = this.page.url();
-      const extractedRoomCode = roomUrl.match(/\/room\/([^\/\?]+)/)?.[1];
-      return extractedRoomCode || null;
+    // Prefer role-based "+ Create Room" button; fallback to legacy selectors
+    const plusCreateButton = this.page.getByRole("button", { name: "+ Create Room" });
+    const legacyCreateButton = this.page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
+
+    if (await plusCreateButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await plusCreateButton.click();
+    } else if (await legacyCreateButton.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await legacyCreateButton.click();
+    } else {
+      return null;
     }
-    
-    return null;
+
+    // If modal appears, fill it using stable data-testid selectors
+    const modal = this.page.locator('[data-testid="create-room-modal"]');
+    const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false);
+    if (modalVisible) {
+      const roomNameInput = this.page.locator('[data-testid="room-name-input"]');
+      const hostNameInput = this.page.locator('[data-testid="host-name-input"]');
+      const submitBtn = this.page.locator('[data-testid="create-room-submit"]');
+
+      await roomNameInput.fill(`Test Room ${Date.now()}`);
+      await hostNameInput.fill("Tester");
+      await submitBtn.click();
+    }
+
+    // Wait for navigation to room
+    await this.page.waitForURL(/\/room\/[a-f0-9-]+/, { timeout: 10000 });
+    const roomUrl = this.page.url();
+    const extractedRoomCode = roomUrl.match(/\/room\/([^\/\?]+)/)?.[1];
+    return extractedRoomCode || null;
   }
 
   /**

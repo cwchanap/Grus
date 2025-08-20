@@ -9,11 +9,12 @@ import { parseArgs } from "$std/cli/parse_args.ts";
 
 const args = parseArgs(Deno.args, {
   boolean: ["headed", "debug", "help"],
-  string: ["project", "grep"],
+  string: ["project", "grep", "reporter"],
   alias: {
     h: "help",
     p: "project",
     g: "grep",
+    r: "reporter",
   },
 });
 
@@ -56,9 +57,18 @@ if (args.grep) {
   playwrightArgs.push("--grep", args.grep);
 }
 
+// Ensure non-interactive execution and auto-quit behavior:
+// - Use `npx --yes` to avoid any install prompts
+// - Reporter handling: allow override via --reporter, otherwise default to 'line'
+if (args.reporter) {
+  playwrightArgs.push("--reporter", String(args.reporter));
+} else if (!playwrightArgs.some((a) => a.startsWith("--reporter"))) {
+  playwrightArgs.push("--reporter", "line");
+}
+
 // Run Playwright tests
 const command = new Deno.Command("npx", {
-  args: ["playwright", ...playwrightArgs],
+  args: ["--yes", "playwright", ...playwrightArgs],
   cwd: Deno.cwd(),
   stdout: "inherit",
   stderr: "inherit",

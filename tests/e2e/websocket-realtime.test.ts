@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { GameTestHelpers, createMultiplePlayersInRoom, cleanupMultiplePlayers } from "./utils/test-helpers.ts";
 
 /**
  * Tests for WebSocket connectivity and real-time features
@@ -30,16 +31,15 @@ test.describe("WebSocket and Real-time Features", () => {
     });
     
     await page.goto("/");
-    
-    // Navigate to a room to trigger WebSocket connection
-    const createRoomButton = page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-    if (await createRoomButton.isVisible()) {
-      await createRoomButton.click();
-      await page.waitForTimeout(3000);
-      
-      // Should have established at least one WebSocket connection
-      expect(wsConnections.length).toBeGreaterThan(0);
-    }
+    // Create a room via modal to trigger WebSocket connection
+    await page.getByRole("button", { name: "+ Create Room" }).click();
+    await page.locator('[data-testid="room-name-input"]').fill("WS Establish Room");
+    await page.locator('[data-testid="host-name-input"]').fill("WS Host");
+    await page.locator('[data-testid="create-room-submit"]').click();
+    await page.waitForURL(/\/room\/[a-f0-9-]+/);
+
+    // Should have established at least one WebSocket connection
+    expect(wsConnections.length).toBeGreaterThan(0);
   });
 
   test("should handle WebSocket reconnection", async ({ page }) => {
@@ -52,33 +52,28 @@ test.describe("WebSocket and Real-time Features", () => {
     });
     
     await page.goto("/");
-    
-    const createRoomButton = page.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-    if (await createRoomButton.isVisible()) {
-      await createRoomButton.click();
-      await page.waitForTimeout(2000);
-      
-      const initialConnections = connectionCount;
-      
-      // Simulate network interruption by going offline and back online
-      await page.context().setOffline(true);
-      await page.waitForTimeout(1000);
-      await page.context().setOffline(false);
-      await page.waitForTimeout(3000);
-      
-      // Should attempt to reconnect (may create new WebSocket connections)
-      // This is a basic test - in practice you'd check for specific reconnection behavior
-      expect(connectionCount).toBeGreaterThanOrEqual(initialConnections);
-    }
+    await page.getByRole("button", { name: "+ Create Room" }).click();
+    await page.locator('[data-testid="room-name-input"]').fill("WS Reconnect Room");
+    await page.locator('[data-testid="host-name-input"]').fill("WS Host");
+    await page.locator('[data-testid="create-room-submit"]').click();
+    await page.waitForURL(/\/room\/[a-f0-9-]+/);
+
+    const initialConnections = connectionCount;
+
+    // Simulate network interruption by going offline and back online
+    await page.context().setOffline(true);
+    await page.waitForTimeout(1000);
+    await page.context().setOffline(false);
+    await page.waitForTimeout(3000);
+
+    // Should attempt to reconnect (may create new WebSocket connections)
+    expect(connectionCount).toBeGreaterThanOrEqual(initialConnections);
   });
 
   test("should sync real-time messages between players", async ({ browser }) => {
-    const context1 = await browser.newContext();
-    const context2 = await browser.newContext();
-    
-    const player1 = await context1.newPage();
-    const player2 = await context2.newPage();
-    
+    const { contexts, pages, roomCode } = await createMultiplePlayersInRoom(browser, 2);
+    const [player1, player2] = pages;
+
     // Track WebSocket messages
     const player1Messages: string[] = [];
     const player2Messages: string[] = [];
@@ -96,41 +91,14 @@ test.describe("WebSocket and Real-time Features", () => {
     });
     
     try {
-      // Player 1 creates room
-      await player1.goto("/");
-      const createRoomButton = player1.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-      
-      if (await createRoomButton.isVisible()) {
-        await createRoomButton.click();
-        await player1.waitForTimeout(2000);
-        
-        const roomUrl = player1.url();
-        const roomCode = roomUrl.match(/\/room\/([^\/]+)/)?.[1];
-        
-        if (roomCode) {
-          // Player 2 joins the same room
-          await player2.goto(`/room/${roomCode}`);
-          await player2.waitForTimeout(2000);
-          
-          // Player 1 sends a chat message
-          const chatInput1 = player1.locator(
-            'input[placeholder*="guess"], input[placeholder*="chat"], ' +
-            '[data-testid="chat-input"] input'
-          ).first();
-          
-          if (await chatInput1.isVisible({ timeout: 3000 })) {
-            await chatInput1.fill("Hello from player 1!");
-            await chatInput1.press("Enter");
-            await player1.waitForTimeout(1000);
-            
-            // Player 2 should receive the message
-            await expect(player2.locator('text="Hello from player 1!"')).toBeVisible({ timeout: 5000 });
-          }
-        }
-      }
+      expect(roomCode).toBeTruthy();
+      // Player 1 sends a chat message using helper
+      const helper1 = new GameTestHelpers(player1);
+      const sent = await helper1.sendChatMessage("Hello from player 1!");
+      expect(sent).toBe(true);
+      await expect(player2.locator('text="Hello from player 1!"')).toBeVisible({ timeout: 5000 });
     } finally {
-      await context1.close();
-      await context2.close();
+      await cleanupMultiplePlayers(contexts);
     }
   });
 
@@ -144,42 +112,38 @@ test.describe("WebSocket and Real-time Features", () => {
     try {
       // Setup both players in the same room
       await player1.goto("/");
-      const createRoomButton = player1.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-      
-      if (await createRoomButton.isVisible()) {
-        await createRoomButton.click();
-        await player1.waitForTimeout(2000);
-        
-        const roomUrl = player1.url();
-        const roomCode = roomUrl.match(/\/room\/([^\/]+)/)?.[1];
-        
-        if (roomCode) {
-          await player2.goto(`/room/${roomCode}`);
-          await player2.waitForTimeout(2000);
-          
-          // Player 1 draws on canvas
-          const canvas1 = player1.locator('canvas').first();
-          if (await canvas1.isVisible({ timeout: 5000 })) {
-            const canvasBox = await canvas1.boundingBox();
-            if (canvasBox) {
-              // Draw a simple line
-              await player1.mouse.move(canvasBox.x + 50, canvasBox.y + 50);
-              await player1.mouse.down();
-              await player1.mouse.move(canvasBox.x + 100, canvasBox.y + 100);
-              await player1.mouse.up();
-              
-              // Wait for synchronization
-              await player1.waitForTimeout(2000);
-              
-              // Player 2's canvas should show the drawing
-              // This is a basic test - in practice you'd check canvas content
-              const canvas2 = player2.locator('canvas').first();
-              await expect(canvas2).toBeVisible();
-              
-              // Both canvases should exist and be visible
-              expect(await canvas1.isVisible()).toBe(true);
-              expect(await canvas2.isVisible()).toBe(true);
-            }
+      await player1.getByRole("button", { name: "+ Create Room" }).click();
+      await player1.locator('[data-testid="room-name-input"]').fill("Draw Sync Room");
+      await player1.locator('[data-testid="host-name-input"]').fill("Drawer1");
+      await player1.locator('[data-testid="create-room-submit"]').click();
+      await player1.waitForURL(/\/room\/[a-f0-9-]+/);
+
+      const roomCode = player1.url().match(/\/room\/([^\/]+)/)?.[1];
+      if (roomCode) {
+        await player2.goto(`/room/${roomCode}`);
+        await player2.waitForURL(new RegExp(`/room/${roomCode}`));
+
+        // Player 1 draws on canvas
+        const canvas1 = player1.locator('canvas').first();
+        if (await canvas1.isVisible({ timeout: 5000 })) {
+          const canvasBox = await canvas1.boundingBox();
+          if (canvasBox) {
+            // Draw a simple line
+            await player1.mouse.move(canvasBox.x + 50, canvasBox.y + 50);
+            await player1.mouse.down();
+            await player1.mouse.move(canvasBox.x + 100, canvasBox.y + 100);
+            await player1.mouse.up();
+
+            // Wait for synchronization
+            await player1.waitForTimeout(2000);
+
+            // Player 2's canvas should show the drawing
+            const canvas2 = player2.locator('canvas').first();
+            await expect(canvas2).toBeVisible();
+
+            // Both canvases should exist and be visible
+            expect(await canvas1.isVisible()).toBe(true);
+            expect(await canvas2.isVisible()).toBe(true);
           }
         }
       }
@@ -199,16 +163,14 @@ test.describe("WebSocket and Real-time Features", () => {
     try {
       // Player 1 creates room
       await player1.goto("/");
-      const createRoomButton = player1.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-      
-      if (await createRoomButton.isVisible()) {
-        await createRoomButton.click();
-        await player1.waitForTimeout(2000);
-        
-        const roomUrl = player1.url();
-        const roomCode = roomUrl.match(/\/room\/([^\/]+)/)?.[1];
-        
-        if (roomCode) {
+      await player1.getByRole("button", { name: "+ Create Room" }).click();
+      await player1.locator('[data-testid="room-name-input"]').fill("Join Leave Room");
+      await player1.locator('[data-testid="host-name-input"]').fill("Host1");
+      await player1.locator('[data-testid="create-room-submit"]').click();
+      await player1.waitForURL(/\/room\/[a-f0-9-]+/);
+
+      const roomCode = player1.url().match(/\/room\/([^\/]+)/)?.[1];
+      if (roomCode) {
           // Check initial player count
           const initialPlayerElements = await player1.locator(
             '[data-testid="players"] > *, .players > *, .player-list > *'
@@ -232,7 +194,6 @@ test.describe("WebSocket and Real-time Features", () => {
           
           // Player count should reflect the change (this is a basic test)
           expect(true).toBe(true);
-        }
       }
     } finally {
       await context1.close();
@@ -252,16 +213,14 @@ test.describe("WebSocket and Real-time Features", () => {
     try {
       // Setup both players in the same room
       await player1.goto("/");
-      const createRoomButton = player1.locator('button:has-text("Create Room"), a:has-text("Create Room")').first();
-      
-      if (await createRoomButton.isVisible()) {
-        await createRoomButton.click();
-        await player1.waitForTimeout(2000);
-        
-        const roomUrl = player1.url();
-        const roomCode = roomUrl.match(/\/room\/([^\/]+)/)?.[1];
-        
-        if (roomCode) {
+      await player1.getByRole("button", { name: "+ Create Room" }).click();
+      await player1.locator('[data-testid=\"room-name-input\"]').fill("Game State Room");
+      await player1.locator('[data-testid=\"host-name-input\"]').fill("Host1");
+      await player1.locator('[data-testid=\"create-room-submit\"]').click();
+      await player1.waitForURL(/\/room\/[a-f0-9-]+/);
+
+      const roomCode = player1.url().match(/\/room\/([^\/]+)/)?.[1];
+      if (roomCode) {
           await player2.goto(`/room/${roomCode}`);
           await player2.waitForTimeout(2000);
           
@@ -289,7 +248,6 @@ test.describe("WebSocket and Real-time Features", () => {
           
           // Both players should see synchronized game state
           expect(foundGameState || true).toBe(true); // Basic test passes
-        }
       }
     } finally {
       await context1.close();
