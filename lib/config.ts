@@ -1,14 +1,7 @@
-// Environment configuration for development and production
+// Application configuration - hardcoded settings instead of env variables
 
 export interface AppConfig {
   environment: "development" | "production";
-  database: {
-    name: string;
-    migrationPath: string;
-  };
-  kv: {
-    defaultTtl: number;
-  };
   game: {
     maxPlayersPerRoom: number;
     roundTimeLimit: number; // seconds
@@ -28,62 +21,29 @@ export interface AppConfig {
   };
 }
 
-export function getConfig(env?: string): AppConfig {
-  let environment: "development" | "production";
-  try {
-    environment = (env || Deno.env.get("ENVIRONMENT") || "development") as
-      | "development"
-      | "production";
-  } catch {
-    environment = "development";
-  }
-
-  // Helper function to get env var with fallback
-  const getEnvVar = (key: string, fallback: string | number): string | number => {
-    try {
-      const value = Deno.env.get(key);
-      if (value === undefined) return fallback;
-      return typeof fallback === "number" ? parseInt(value) || fallback : value;
-    } catch {
-      return fallback;
-    }
-  };
-
-  const baseConfig: AppConfig = {
-    environment,
-    database: {
-      name: getEnvVar(
-        "DATABASE_NAME",
-        environment === "production" ? "drawing-game-db" : "drawing-game-db-dev",
-      ) as string,
-      migrationPath: "./db/migrations",
-    },
-    kv: {
-      defaultTtl: 3600, // 1 hour
-    },
+export function getConfig(): AppConfig {
+  const isDev = Deno.env.get("DENO_ENV") === "development";
+  
+  return {
+    environment: isDev ? "development" : "production",
     game: {
-      maxPlayersPerRoom: getEnvVar("MAX_PLAYERS_PER_ROOM", 8) as number,
-      roundTimeLimit: getEnvVar("ROUND_TIME_LIMIT", 120) as number, // 2 minutes
-      maxRooms: getEnvVar("MAX_ROOMS", environment === "production" ? 1000 : 10) as number,
+      maxPlayersPerRoom: 8,
+      roundTimeLimit: 120, // 2 minutes
+      maxRooms: isDev ? 10 : 1000,
       chatMessageLimit: 100,
     },
     websocket: {
-      maxConnections: getEnvVar(
-        "MAX_CONNECTIONS",
-        environment === "production" ? 10000 : 100,
-      ) as number,
-      heartbeatInterval: getEnvVar("HEARTBEAT_INTERVAL", 30000) as number, // 30 seconds
-      connectionTimeout: getEnvVar("CONNECTION_TIMEOUT", 60000) as number, // 1 minute
+      maxConnections: isDev ? 100 : 10000,
+      heartbeatInterval: 30000, // 30 seconds
+      connectionTimeout: 60000, // 1 minute
     },
     security: {
-      rateLimitMessages: getEnvVar("RATE_LIMIT_MESSAGES", 30) as number, // 30 messages per minute
-      rateLimitDrawing: getEnvVar("RATE_LIMIT_DRAWING", 60) as number, // 60 drawing actions per second
-      maxMessageLength: getEnvVar("MAX_MESSAGE_LENGTH", 200) as number,
-      maxPlayerNameLength: getEnvVar("MAX_PLAYER_NAME_LENGTH", 20) as number,
+      rateLimitMessages: 30, // 30 messages per minute
+      rateLimitDrawing: 60, // 60 drawing actions per second
+      maxMessageLength: 200,
+      maxPlayerNameLength: 20,
     },
   };
-
-  return baseConfig;
 }
 
 // Validation functions
