@@ -7,12 +7,12 @@ export const handler: Handlers = {
       // Get token from cookie or Authorization header
       const cookie = req.headers.get("Cookie");
       const authHeader = req.headers.get("Authorization");
-      
+
       const cookieName = Deno.env.get("SESSION_COOKIE_NAME") || "grus_session";
       let token = cookie?.split(";")
-        .find(c => c.trim().startsWith(`${cookieName}=`))
+        .find((c) => c.trim().startsWith(`${cookieName}=`))
         ?.split("=")[1];
-      
+
       // If no cookie token, check Authorization header
       if (!token && authHeader?.startsWith("Bearer ")) {
         token = authHeader.substring(7);
@@ -21,7 +21,7 @@ export const handler: Handlers = {
       if (!token) {
         return new Response(
           JSON.stringify({ error: "Not authenticated" }),
-          { status: 401, headers: { "Content-Type": "application/json" } }
+          { status: 401, headers: { "Content-Type": "application/json" } },
         );
       }
 
@@ -29,7 +29,7 @@ export const handler: Handlers = {
       if (!session) {
         return new Response(
           JSON.stringify({ error: "Invalid or expired session" }),
-          { status: 401, headers: { "Content-Type": "application/json" } }
+          { status: 401, headers: { "Content-Type": "application/json" } },
         );
       }
 
@@ -41,13 +41,13 @@ export const handler: Handlers = {
         {
           status: 200,
           headers: { "Content-Type": "application/json" },
-        }
+        },
       );
     } catch (error) {
       console.error("Get user error:", error);
       return new Response(
         JSON.stringify({ error: "Internal server error" }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
+        { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
   },

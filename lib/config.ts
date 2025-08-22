@@ -23,7 +23,7 @@ export interface AppConfig {
 
 export function getConfig(): AppConfig {
   const isDev = Deno.env.get("DENO_ENV") === "development";
-  
+
   return {
     environment: isDev ? "development" : "production",
     game: {

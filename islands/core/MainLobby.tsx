@@ -203,29 +203,31 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
 
         <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto items-center">
           {/* User authentication status */}
-          {user ? (
-            <div class="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-800 rounded-lg">
-              <span class="text-sm font-medium">👤 {user.name || user.username}</span>
+          {user
+            ? (
+              <div class="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-800 rounded-lg">
+                <span class="text-sm font-medium">👤 {user.name || user.username}</span>
+                <a
+                  href="/api/auth/logout"
+                  onClick={async (e) => {
+                    e.preventDefault();
+                    await fetch("/api/auth/logout", { method: "POST" });
+                    globalThis.location.reload();
+                  }}
+                  class="text-xs underline hover:no-underline cursor-pointer"
+                >
+                  Logout
+                </a>
+              </div>
+            )
+            : (
               <a
-                href="/api/auth/logout"
-                onClick={async (e) => {
-                  e.preventDefault();
-                  await fetch('/api/auth/logout', { method: 'POST' });
-                  globalThis.location.reload();
-                }}
-                class="text-xs underline hover:no-underline cursor-pointer"
+                href="/login"
+                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
               >
-                Logout
+                Login
               </a>
-            </div>
-          ) : (
-            <a
-              href="/login"
-              class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
-            >
-              Login
-            </a>
-          )}
+            )}
           {isDev && (
             <button
               type="button"

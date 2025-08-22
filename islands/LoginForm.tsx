@@ -2,7 +2,14 @@ import { useState } from "preact/hooks";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Label } from "../components/ui/label.tsx";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card.tsx";
 
 export default function LoginForm() {
   const [formData, setFormData] = useState({
@@ -41,8 +48,8 @@ export default function LoginForm() {
       }
 
       // Redirect to home page after successful login
-      window.location.href = "/";
-    } catch (err) {
+      globalThis.location.href = "/";
+    } catch (_err) {
       setError("An error occurred. Please try again.");
     } finally {
       setLoading(false);

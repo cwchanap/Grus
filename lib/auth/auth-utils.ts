@@ -1,10 +1,10 @@
 import * as bcrypt from "bcryptjs";
-import { SignJWT, jwtVerify } from "jose";
+import { jwtVerify, SignJWT } from "jose";
 import { getPrismaClient } from "./prisma-client.ts";
 import type { User } from "@prisma/client";
 
 const JWT_SECRET = new TextEncoder().encode(
-  Deno.env.get("JWT_SECRET") || "default-secret-change-in-production"
+  Deno.env.get("JWT_SECRET") || "default-secret-change-in-production",
 );
 const JWT_EXPIRES_IN = Deno.env.get("JWT_EXPIRES_IN") || "7d";
 
@@ -39,7 +39,7 @@ export async function generateToken(user: UserPayload): Promise<string> {
     .setIssuedAt()
     .setExpirationTime(JWT_EXPIRES_IN)
     .sign(JWT_SECRET);
-  
+
   return token;
 }
 
@@ -47,7 +47,7 @@ export async function generateToken(user: UserPayload): Promise<string> {
 export async function verifyToken(token: string): Promise<UserPayload | null> {
   try {
     const { payload } = await jwtVerify(token, JWT_SECRET);
-    return payload as UserPayload;
+    return payload as unknown as UserPayload;
   } catch {
     return null;
   }
@@ -58,12 +58,12 @@ export async function createUser(
   email: string,
   username: string,
   password: string,
-  name?: string
+  name?: string,
 ): Promise<User> {
   const prisma = await getPrismaClient();
-  
+
   const hashedPassword = await hashPassword(password);
-  
+
   return await prisma.user.create({
     data: {
       email,
@@ -77,17 +77,17 @@ export async function createUser(
 // Create user session
 export async function createSession(user: User): Promise<SessionData> {
   const prisma = await getPrismaClient();
-  
+
   const userPayload: UserPayload = {
     id: user.id,
     email: user.email,
     username: user.username,
     name: user.name,
   };
-  
+
   const token = await generateToken(userPayload);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
-  
+
   // Store session in database
   await prisma.session.create({
     data: {
@@ -96,7 +96,7 @@ export async function createSession(user: User): Promise<SessionData> {
       expiresAt,
     },
   });
-  
+
   return {
     user: userPayload,
     token,
@@ -107,23 +107,23 @@ export async function createSession(user: User): Promise<SessionData> {
 // Get session from token
 export async function getSession(token: string): Promise<SessionData | null> {
   const prisma = await getPrismaClient();
-  
+
   const session = await prisma.session.findUnique({
     where: { token },
     include: { user: true },
   });
-  
+
   if (!session || session.expiresAt < new Date()) {
     return null;
   }
-  
+
   const userPayload: UserPayload = {
     id: session.user.id,
     email: session.user.email,
     username: session.user.username,
     name: session.user.name,
   };
-  
+
   return {
     user: userPayload,
     token: session.token,
@@ -134,7 +134,7 @@ export async function getSession(token: string): Promise<SessionData | null> {
 // Delete session
 export async function deleteSession(token: string): Promise<void> {
   const prisma = await getPrismaClient();
-  
+
   await prisma.session.delete({
     where: { token },
   }).catch(() => {
@@ -144,8 +144,8 @@ export async function deleteSession(token: string): Promise<void> {
 
 // Clean up expired sessions
 export async function cleanupExpiredSessions(): Promise<void> {
-  const prisma = getPrismaClient();
-  
+  const prisma = await getPrismaClient();
+
   await prisma.session.deleteMany({
     where: {
       expiresAt: {

@@ -14,13 +14,6 @@ try {
 } catch (error) {
   const msg = error instanceof Error ? error.message : String(error);
   console.warn("Warning: Could not load .env file:", msg);
-  // Set default values for development
-  if (!Deno.env.get("CLOUDFLARE_ACCOUNT_ID")) {
-    Deno.env.set("CLOUDFLARE_ACCOUNT_ID", "dev-account-id");
-  }
-  if (!Deno.env.get("CLOUDFLARE_API_TOKEN")) {
-    Deno.env.set("CLOUDFLARE_API_TOKEN", "dev-api-token");
-  }
 }
 
 await dev(import.meta.url, "./main.ts", config);

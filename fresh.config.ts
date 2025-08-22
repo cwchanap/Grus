@@ -4,7 +4,7 @@ import tailwind from "$fresh/plugins/tailwind.ts";
 export default defineConfig({
   plugins: [tailwind()],
   server: {
-    // Configure for Cloudflare Workers compatibility
+    // Server configuration
     port: 3000,
   },
   build: {

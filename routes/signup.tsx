@@ -2,7 +2,7 @@ import { PageProps } from "$fresh/server.ts";
 import { Head } from "$fresh/runtime.ts";
 import SignupForm from "../islands/SignupForm.tsx";
 
-export default function SignupPage(props: PageProps) {
+export default function SignupPage(_props: PageProps) {
   return (
     <>
       <Head>

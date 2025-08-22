@@ -26,7 +26,7 @@ export const handler: Handlers<LobbyData> = {
       const cookie = req.headers.get("Cookie");
       const cookieName = Deno.env.get("SESSION_COOKIE_NAME") || "grus_session";
       const token = cookie?.split(";")
-        .find(c => c.trim().startsWith(`${cookieName}=`))
+        .find((c) => c.trim().startsWith(`${cookieName}=`))
         ?.split("=")[1];
 
       if (token) {
@@ -44,7 +44,12 @@ export const handler: Handlers<LobbyData> = {
       const result = await roomManager.getActiveRoomsWithCleanup(20);
 
       if (!result.success) {
-        return ctx.render({ rooms: [], error: result.error || "Failed to load rooms", isDev, user });
+        return ctx.render({
+          rooms: [],
+          error: result.error || "Failed to load rooms",
+          isDev,
+          user,
+        });
       }
 
       return ctx.render({
@@ -76,7 +81,7 @@ export default function Home({ data }: PageProps<LobbyData>) {
           </p>
         </div>
 
-        <MainLobby 
+        <MainLobby
           initialRooms={data.rooms}
           error={data.error}
           isDev={data.isDev}

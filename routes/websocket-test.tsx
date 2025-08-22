@@ -91,8 +91,9 @@ export default function WebSocketTest() {
 
           connectBtn.addEventListener('click', () => {
             try {
-              const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-              const wsUrl = protocol + '//' + window.location.host + '/api/websocket-test';
+              const protocol = (globalThis && globalThis.location && globalThis.location.protocol === 'https:') ? 'wss:' : 'ws:';
+              const host = (globalThis && globalThis.location && globalThis.location.host) || '';
+              const wsUrl = protocol + '//' + host + '/api/websocket-test';
               
               addMessage('Connecting to: ' + wsUrl);
               ws = new WebSocket(wsUrl);

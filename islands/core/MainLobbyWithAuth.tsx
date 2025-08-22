@@ -1,31 +1,27 @@
 import { useEffect, useState } from "preact/hooks";
 import { Button } from "../../components/ui/button.tsx";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../components/ui/card.tsx";
 import { ScrollArea } from "../../components/ui/scroll-area.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
-import { Users, Gamepad2, Plus, LogIn, LogOut, User } from "lucide-react";
+import { Gamepad2, LogIn, LogOut, Plus, User, Users } from "lucide-react";
 import CreateRoomModal from "../CreateRoomModal.tsx";
 import JoinRoomModal from "../JoinRoomModal.tsx";
 import ConnectionStatus from "../../components/ConnectionStatus.tsx";
 import type { UserPayload } from "../../lib/auth/auth-utils.ts";
-
-interface Room {
-  id: string;
-  hostName: string;
-  players: string[];
-  maxPlayers: number;
-  state: "waiting" | "in_progress" | "finished";
-  gameType: string;
-}
+import type { RoomSummary } from "../../lib/core/room-manager.ts";
 
 interface MainLobbyWithAuthProps {
-  rooms: Room[];
+  rooms: RoomSummary[];
 }
 
 export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWithAuthProps) {
-  const [rooms, setRooms] = useState<Room[]>(initialRooms);
-  const [isConnected, setIsConnected] = useState(false);
-  const [ws, setWs] = useState<WebSocket | null>(null);
+  const [rooms, setRooms] = useState<RoomSummary[]>(initialRooms);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
@@ -56,71 +52,95 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
       await fetch("/api/auth/logout", { method: "POST" });
       setUser(null);
       // Optionally refresh the page
-      window.location.reload();
+      globalThis.location?.reload?.();
     } catch (error) {
       console.error("Error logging out:", error);
     }
   };
 
-  // WebSocket connection setup (existing code)
-  useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/api/ws/lobby`;
-    
-    const websocket = new WebSocket(wsUrl);
-    
-    websocket.onopen = () => {
-      console.log('Connected to lobby');
-      setIsConnected(true);
-    };
-    
-    websocket.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data);
-        if (message.type === 'room-list') {
-          setRooms(message.rooms);
-        } else if (message.type === 'room-update') {
-          const updatedRoom = message.room;
-          setRooms(prevRooms => {
-            const index = prevRooms.findIndex(r => r.id === updatedRoom.id);
-            if (index >= 0) {
-              const newRooms = [...prevRooms];
-              newRooms[index] = updatedRoom;
-              return newRooms;
-            } else {
-              return [...prevRooms, updatedRoom];
-            }
-          });
-        } else if (message.type === 'room-removed') {
-          setRooms(prevRooms => prevRooms.filter(r => r.id !== message.roomId));
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket message:', error);
+  // Helper: refresh rooms from API
+  const refreshRooms = async () => {
+    try {
+      const response = await fetch("/api/rooms");
+      if (response.ok) {
+        const data = await response.json();
+        setRooms(data.rooms || []);
+      } else {
+        console.error("Failed to refresh rooms");
       }
-    };
-    
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setIsConnected(false);
-    };
-    
-    websocket.onclose = () => {
-      console.log('Disconnected from lobby');
-      setIsConnected(false);
-    };
-    
-    setWs(websocket);
-    
-    return () => {
-      websocket.close();
-    };
+    } catch (err) {
+      console.error("Error refreshing rooms:", err);
+    }
+  };
+
+  // WebSocket connection setup
+  useEffect(() => {
+    try {
+      const protocol = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
+      const host = globalThis.location?.host ?? "";
+      const wsUrl = `${protocol}//${host}/api/websocket`;
+
+      const ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        console.log("Lobby WebSocket connected");
+        try {
+          ws.send(JSON.stringify({ type: "subscribe-lobby", data: {} }));
+        } catch (err) {
+          console.error("Failed to send subscribe-lobby:", err);
+        }
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.type === "lobby-data") {
+            const roomsFromServer = message?.data?.rooms;
+            if (Array.isArray(roomsFromServer)) {
+              setRooms(roomsFromServer as RoomSummary[]);
+            } else {
+              // Fallback to REST if payload missing
+              refreshRooms();
+            }
+          } else if (message.type === "lobby-update") {
+            // Refresh room list when lobby updates
+            refreshRooms();
+          }
+        } catch (err) {
+          console.error("Error parsing WebSocket message:", err);
+        }
+      };
+
+      ws.onerror = (err) => {
+        console.error("WebSocket error:", err);
+      };
+
+      ws.onclose = () => {
+        console.log("Lobby WebSocket disconnected");
+      };
+
+      return () => {
+        try {
+          ws.close();
+        } catch (_) {
+          // ignore
+        }
+      };
+    } catch (err) {
+      console.error("Failed to init WebSocket:", err);
+    }
   }, []);
 
   const handleRoomClick = (roomId: string) => {
-    if (rooms.find(r => r.id === roomId)?.state === 'waiting') {
+    const room = rooms.find((r) => r.room.id === roomId);
+    if (room?.canJoin) {
       setSelectedRoomId(roomId);
       setShowJoinModal(true);
     }
+  };
+
+  const handleRoomJoined = (roomId: string, playerId: string) => {
+    globalThis.location.href = `/room/${roomId}?playerId=${playerId}`;
   };
 
   return (
@@ -129,38 +149,40 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
         {/* Header with Auth Status */}
         <div className="mb-8 text-center">
           <div className="flex justify-between items-start mb-4">
-            <ConnectionStatus isConnected={isConnected} />
-            
+            <ConnectionStatus />
+
             {/* Auth Status */}
             <div className="flex items-center gap-2">
               {!loading && (
-                user ? (
-                  <div className="flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2">
-                    <User className="w-5 h-5 text-white" />
-                    <span className="text-white font-medium">
-                      {user.name || user.username}
-                    </span>
-                    <Button
-                      onClick={handleLogout}
-                      variant="ghost"
-                      size="sm"
-                      className="text-white hover:bg-white/20"
-                    >
-                      <LogOut className="w-4 h-4 mr-1" />
-                      Logout
-                    </Button>
-                  </div>
-                ) : (
-                  <a href="/login">
-                    <Button
-                      variant="default"
-                      className="bg-white text-purple-600 hover:bg-gray-100"
-                    >
-                      <LogIn className="w-4 h-4 mr-2" />
-                      Login
-                    </Button>
-                  </a>
-                )
+                user
+                  ? (
+                    <div className="flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2">
+                      <User className="w-5 h-5 text-white" />
+                      <span className="text-white font-medium">
+                        {user.name || user.username}
+                      </span>
+                      <Button
+                        onClick={handleLogout}
+                        variant="ghost"
+                        size="sm"
+                        className="text-white hover:bg-white/20"
+                      >
+                        <LogOut className="w-4 h-4 mr-1" />
+                        Logout
+                      </Button>
+                    </div>
+                  )
+                  : (
+                    <a href="/login">
+                      <Button
+                        variant="default"
+                        className="bg-white text-purple-600 hover:bg-gray-100"
+                      >
+                        <LogIn className="w-4 h-4 mr-2" />
+                        Login
+                      </Button>
+                    </a>
+                  )
               )}
             </div>
           </div>
@@ -190,58 +212,64 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
               </CardHeader>
               <CardContent>
                 <ScrollArea className="h-[400px] pr-4">
-                  {rooms.length === 0 ? (
-                    <div className="text-center py-12 text-gray-500">
-                      <Gamepad2 className="w-16 h-16 mx-auto mb-4 opacity-50" />
-                      <p>No active rooms yet.</p>
-                      <p className="text-sm mt-2">Be the first to create one!</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {rooms.map((room) => (
-                        <Card
-                          key={room.id}
-                          className={`cursor-pointer transition-all hover:shadow-lg ${
-                            room.state === 'waiting' 
-                              ? 'hover:scale-[1.02] hover:bg-purple-50' 
-                              : 'opacity-75 cursor-not-allowed'
-                          }`}
-                          onClick={() => handleRoomClick(room.id)}
-                        >
-                          <CardContent className="p-4">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                  <h3 className="font-semibold">{room.id}</h3>
-                                  <Badge 
-                                    variant={room.state === 'waiting' ? 'default' : 
-                                            room.state === 'in_progress' ? 'secondary' : 'outline'}
-                                  >
-                                    {room.state === 'waiting' ? 'Waiting' : 
-                                     room.state === 'in_progress' ? 'In Progress' : 'Finished'}
-                                  </Badge>
+                  {rooms.length === 0
+                    ? (
+                      <div className="text-center py-12 text-gray-500">
+                        <Gamepad2 className="w-16 h-16 mx-auto mb-4 opacity-50" />
+                        <p>No active rooms yet.</p>
+                        <p className="text-sm mt-2">Be the first to create one!</p>
+                      </div>
+                    )
+                    : (
+                      <div className="space-y-3">
+                        {rooms.map((summary) => (
+                          <Card
+                            key={summary.room.id}
+                            className={`transition-all hover:shadow-lg ${
+                              summary.canJoin
+                                ? "hover:scale-[1.02] hover:bg-purple-50 cursor-pointer"
+                                : "opacity-75"
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleRoomClick(summary.room.id)}
+                              disabled={!summary.canJoin}
+                              className="w-full text-left disabled:cursor-not-allowed"
+                            >
+                              <CardContent className="p-4">
+                                <div className="flex items-center justify-between">
+                                  <div>
+                                    <div className="flex items-center gap-2 mb-1">
+                                      <h3 className="font-semibold">{summary.room.id}</h3>
+                                      <Badge
+                                        variant={summary.canJoin ? "default" : "secondary"}
+                                      >
+                                        {summary.canJoin ? "Open" : "Full"}
+                                      </Badge>
+                                    </div>
+                                    <p className="text-sm text-gray-600">
+                                      Host: {summary.host?.name || "Unknown"}
+                                    </p>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="flex items-center gap-1 text-sm mb-1">
+                                      <Users className="w-4 h-4" />
+                                      <span className="font-medium">
+                                        {summary.playerCount}/{summary.room.maxPlayers}
+                                      </span>
+                                    </div>
+                                    <Badge variant="outline" className="text-xs">
+                                      {summary.room.gameType}
+                                    </Badge>
+                                  </div>
                                 </div>
-                                <p className="text-sm text-gray-600">
-                                  Host: {room.hostName}
-                                </p>
-                              </div>
-                              <div className="text-right">
-                                <div className="flex items-center gap-1 text-sm mb-1">
-                                  <Users className="w-4 h-4" />
-                                  <span className="font-medium">
-                                    {room.players.length}/{room.maxPlayers}
-                                  </span>
-                                </div>
-                                <Badge variant="outline" className="text-xs">
-                                  {room.gameType}
-                                </Badge>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      ))}
-                    </div>
-                  )}
+                              </CardContent>
+                            </button>
+                          </Card>
+                        ))}
+                      </div>
+                    )}
                 </ScrollArea>
               </CardContent>
             </Card>
@@ -254,7 +282,7 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
                 <CardTitle>Quick Actions</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <Button 
+                <Button
                   className="w-full"
                   size="lg"
                   onClick={() => setShowCreateModal(true)}
@@ -263,7 +291,7 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
                   <Plus className="w-5 h-5 mr-2" />
                   Create Room
                 </Button>
-                <Button 
+                <Button
                   className="w-full"
                   variant="outline"
                   size="lg"
@@ -289,15 +317,15 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
                   <div className="flex justify-between">
                     <span className="text-gray-600">Players Online</span>
                     <span className="font-semibold">
-                      {rooms.reduce((acc, room) => acc + room.players.length, 0)}
+                      {rooms.reduce((acc, r) => acc + r.playerCount, 0)}
                     </span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-gray-600">Available Slots</span>
                     <span className="font-semibold">
                       {rooms
-                        .filter(r => r.state === 'waiting')
-                        .reduce((acc, room) => acc + (room.maxPlayers - room.players.length), 0)}
+                        .filter((r) => r.canJoin)
+                        .reduce((acc, s) => acc + (s.room.maxPlayers - s.playerCount), 0)}
                     </span>
                   </div>
                 </div>
@@ -323,18 +351,23 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
       </div>
 
       {/* Modals */}
-      {showCreateModal && (
-        <CreateRoomModal onClose={() => setShowCreateModal(false)} />
-      )}
-      {showJoinModal && (
-        <JoinRoomModal 
-          onClose={() => {
-            setShowJoinModal(false);
-            setSelectedRoomId(null);
-          }}
-          prefilledRoomId={selectedRoomId}
-        />
-      )}
+      <CreateRoomModal
+        show={showCreateModal}
+        onClose={() => setShowCreateModal(false)}
+        onSuccess={() => {
+          setShowCreateModal(false);
+          refreshRooms();
+        }}
+      />
+      <JoinRoomModal
+        show={showJoinModal}
+        room={rooms.find((r) => r.room.id === selectedRoomId) ?? null}
+        onClose={() => {
+          setShowJoinModal(false);
+          setSelectedRoomId(null);
+        }}
+        onSuccess={handleRoomJoined}
+      />
     </div>
   );
 }

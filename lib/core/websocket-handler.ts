@@ -29,36 +29,8 @@ export class CoreWebSocketHandler {
       return new Response("Expected Upgrade: websocket", { status: 426 });
     }
 
-    // Check if we're in Cloudflare Workers environment
-    if (typeof (globalThis as any).WebSocketPair !== "undefined") {
-      return this.handleCloudflareWebSocket(request);
-    } else {
-      return this.handleDenoWebSocket(request);
-    }
-  }
-
-  private handleCloudflareWebSocket(_request: Request): Response {
-    const webSocketPair = new (globalThis as any).WebSocketPair();
-    const [client, server] = Object.values(webSocketPair) as [WebSocket, WebSocket];
-
-    (server as any).accept();
-
-    const connection: WebSocketConnection = {
-      ws: server,
-      playerId: "",
-      roomId: "",
-      lastActivity: Date.now(),
-    };
-
-    this.setupWebSocketEvents(connection);
-
-    return new Response(
-      null,
-      {
-        status: 101,
-        webSocket: client,
-      } as ResponseInit & { webSocket: WebSocket },
-    );
+    // Use Deno's native WebSocket upgrade exclusively
+    return this.handleDenoWebSocket(request);
   }
 
   private handleDenoWebSocket(request: Request): Response {

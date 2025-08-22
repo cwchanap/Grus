@@ -54,18 +54,16 @@ if [ $? -eq 0 ]; then
     echo -e "${GREEN}https://${PROJECT_NAME}.deno.dev${NC}"
     
     echo -e "\n${BLUE}💡 Next steps:${NC}"
-    echo -e "1. Set up environment variables in Deno Deploy dashboard"
-    echo -e "2. Configure your Cloudflare API credentials"
-    echo -e "3. Test the health endpoint: ${GREEN}https://${PROJECT_NAME}.deno.dev/api/health${NC}"
+    echo -e "1. Set up environment variables in Deno Deploy dashboard (e.g. JWT_SECRET, DATABASE_URL, ENVIRONMENT)"
+    echo -e "2. Test the health endpoint: ${GREEN}https://${PROJECT_NAME}.deno.dev/api/health${NC}"
 else
     echo -e "\n${RED}❌ Deployment failed${NC}"
     exit 1
 fi
 
-echo -e "\n${BLUE}🔧 Environment Variables to set in Deno Deploy:${NC}"
-echo -e "- CLOUDFLARE_ACCOUNT_ID: Your Cloudflare account ID"
-echo -e "- CLOUDFLARE_API_TOKEN: Your Cloudflare API token with D1 and KV permissions"
-echo -e "- DATABASE_ID: d616e1fe-17e6-4320-aba2-393a60167603"
-echo -e "- KV_NAMESPACE_ID: bea0c6d861e7477fae40b0e9c126ed30"
+echo -e "\n${BLUE}🔧 Example Environment Variables (configure as needed):${NC}"
+echo -e "- ENVIRONMENT: production"
+echo -e "- JWT_SECRET: (required for auth)"
+echo -e "- DATABASE_URL: (e.g. Postgres/Neon or file:./dev.db for local)"
 
 echo -e "\n${GREEN}✨ Deployment completed!${NC}"

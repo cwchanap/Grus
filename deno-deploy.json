@@ -15,10 +15,5 @@
     "HEARTBEAT_INTERVAL": "30000",
     "CONNECTION_TIMEOUT": "60000"
   },
-  "secrets": [
-    "CLOUDFLARE_ACCOUNT_ID",
-    "CLOUDFLARE_API_TOKEN",
-    "DATABASE_ID",
-    "KV_NAMESPACE_ID"
-  ]
+  "secrets": []
 }
