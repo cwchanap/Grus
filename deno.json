@@ -88,7 +88,17 @@
     "playwright": "npm:playwright@1.40.0",
     "@playwright/test": "npm:@playwright/test@1.40.0",
     "node:process": "data:application/javascript,export default {env:{}};",
-    "node:crypto": "data:application/javascript,export default {randomUUID:()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9)};"
+    "node:crypto": "data:application/javascript,export default {randomUUID:()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9)};",
+    "@prisma/client": "npm:@prisma/client@5.18.0",
+    "prisma": "npm:prisma@5.18.0",
+    "@neondatabase/serverless": "npm:@neondatabase/serverless@0.9.3",
+    "@prisma/adapter-neon": "npm:@prisma/adapter-neon@5.18.0",
+    "bcryptjs": "npm:bcryptjs@2.4.3",
+    "jsonwebtoken": "npm:jsonwebtoken@9.0.2",
+    "@types/bcryptjs": "npm:@types/bcryptjs@2.4.6",
+    "@types/jsonwebtoken": "npm:@types/jsonwebtoken@9.0.6",
+    "jose": "https://deno.land/x/jose@v4.14.4/index.ts",
+    "lucide-react": "https://esm.sh/lucide-react@0.263.1?alias=react:preact/compat&external=preact"
   },
   "compilerOptions": {
     "jsx": "react-jsx",

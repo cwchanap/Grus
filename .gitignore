@@ -17,3 +17,5 @@ db/*.db
 .wrangler
 test-results/
 playwright-report/
+
+*.db

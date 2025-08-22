@@ -6,6 +6,10 @@ import * as $_404 from "./routes/_404.tsx";
 import * as $_app from "./routes/_app.tsx";
 import * as $_middleware from "./routes/_middleware.ts";
 import * as $api_admin_cleanup_rooms from "./routes/api/admin/cleanup-rooms.ts";
+import * as $api_auth_login from "./routes/api/auth/login.ts";
+import * as $api_auth_logout from "./routes/api/auth/logout.ts";
+import * as $api_auth_me from "./routes/api/auth/me.ts";
+import * as $api_auth_signup from "./routes/api/auth/signup.ts";
 import * as $api_games from "./routes/api/games.ts";
 import * as $api_health from "./routes/api/health.ts";
 import * as $api_joke from "./routes/api/joke.ts";
@@ -17,17 +21,22 @@ import * as $api_websocket_test from "./routes/api/websocket-test.ts";
 import * as $api_websocket from "./routes/api/websocket.ts";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
+import * as $login from "./routes/login.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
+import * as $signup from "./routes/signup.tsx";
 import * as $websocket_test from "./routes/websocket-test.tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
 import * as $LeaveRoomButton from "./islands/LeaveRoomButton.tsx";
+import * as $LoginForm from "./islands/LoginForm.tsx";
 import * as $RoomHeader from "./islands/RoomHeader.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
+import * as $SignupForm from "./islands/SignupForm.tsx";
 import * as $core_ChatRoom from "./islands/core/ChatRoom.tsx";
 import * as $core_GameLobby from "./islands/core/GameLobby.tsx";
 import * as $core_MainLobby from "./islands/core/MainLobby.tsx";
+import * as $core_MainLobbyWithAuth from "./islands/core/MainLobbyWithAuth.tsx";
 import * as $games_drawing_DrawingBoard from "./islands/games/drawing/DrawingBoard.tsx";
 import * as $games_drawing_DrawingEngine from "./islands/games/drawing/DrawingEngine.tsx";
 import type { Manifest } from "$fresh/server.ts";
@@ -38,6 +47,10 @@ const manifest = {
     "./routes/_app.tsx": $_app,
     "./routes/_middleware.ts": $_middleware,
     "./routes/api/admin/cleanup-rooms.ts": $api_admin_cleanup_rooms,
+    "./routes/api/auth/login.ts": $api_auth_login,
+    "./routes/api/auth/logout.ts": $api_auth_logout,
+    "./routes/api/auth/me.ts": $api_auth_me,
+    "./routes/api/auth/signup.ts": $api_auth_signup,
     "./routes/api/games.ts": $api_games,
     "./routes/api/health.ts": $api_health,
     "./routes/api/joke.ts": $api_joke,
@@ -49,7 +62,9 @@ const manifest = {
     "./routes/api/websocket.ts": $api_websocket,
     "./routes/greet/[name].tsx": $greet_name_,
     "./routes/index.tsx": $index,
+    "./routes/login.tsx": $login,
     "./routes/room/[id].tsx": $room_id_,
+    "./routes/signup.tsx": $signup,
     "./routes/websocket-test.tsx": $websocket_test,
   },
   islands: {
@@ -57,11 +72,14 @@ const manifest = {
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
     "./islands/LeaveRoomButton.tsx": $LeaveRoomButton,
+    "./islands/LoginForm.tsx": $LoginForm,
     "./islands/RoomHeader.tsx": $RoomHeader,
     "./islands/Scoreboard.tsx": $Scoreboard,
+    "./islands/SignupForm.tsx": $SignupForm,
     "./islands/core/ChatRoom.tsx": $core_ChatRoom,
     "./islands/core/GameLobby.tsx": $core_GameLobby,
     "./islands/core/MainLobby.tsx": $core_MainLobby,
+    "./islands/core/MainLobbyWithAuth.tsx": $core_MainLobbyWithAuth,
     "./islands/games/drawing/DrawingBoard.tsx": $games_drawing_DrawingBoard,
     "./islands/games/drawing/DrawingEngine.tsx": $games_drawing_DrawingEngine,
   },

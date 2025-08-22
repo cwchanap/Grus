@@ -1,22 +1,12 @@
 // API route for leaving a specific room
 import { Handlers } from "$fresh/server.ts";
 import { RoomManager } from "../../../../lib/core/room-manager.ts";
-import { Env } from "../../../../types/cloudflare.ts";
 
 export const handler: Handlers = {
   // POST /api/rooms/[id]/leave - Leave a room
   async POST(req, ctx) {
     try {
-      // In development, we don't have Cloudflare env, so we skip the DB check
-      const env = (ctx.state as any).env as Env;
-      const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-
-      if (!isDevelopment && !env?.DB) {
-        return new Response(JSON.stringify({ error: "Database not available" }), {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+      const _isDevelopment = Deno.env.get("DENO_ENV") === "development";
 
       const roomId = ctx.params.id;
       const body = await req.json();

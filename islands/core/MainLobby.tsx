@@ -9,6 +9,12 @@ interface MainLobbyProps {
   initialRooms: RoomSummary[];
   error?: string;
   isDev: boolean;
+  user?: {
+    id: string;
+    email: string;
+    username: string;
+    name: string | null;
+  };
 }
 
 // Global signals for modals
@@ -16,7 +22,7 @@ const showCreateModal = signal(false);
 const showJoinModal = signal(false);
 const selectedRoom = signal<RoomSummary | null>(null);
 
-export default function MainLobby({ initialRooms, error, isDev }: MainLobbyProps) {
+export default function MainLobby({ initialRooms, error, isDev, user }: MainLobbyProps) {
   const [rooms, setRooms] = useState<RoomSummary[]>(initialRooms);
   const [loading, setLoading] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
@@ -195,7 +201,31 @@ export default function MainLobby({ initialRooms, error, isDev }: MainLobbyProps
           </div>
         </div>
 
-        <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto">
+        <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto items-center">
+          {/* User authentication status */}
+          {user ? (
+            <div class="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-800 rounded-lg">
+              <span class="text-sm font-medium">👤 {user.name || user.username}</span>
+              <a
+                href="/api/auth/logout"
+                onClick={async (e) => {
+                  e.preventDefault();
+                  await fetch('/api/auth/logout', { method: 'POST' });
+                  globalThis.location.reload();
+                }}
+                class="text-xs underline hover:no-underline cursor-pointer"
+              >
+                Logout
+              </a>
+            </div>
+          ) : (
+            <a
+              href="/login"
+              class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
+            >
+              Login
+            </a>
+          )}
           {isDev && (
             <button
               type="button"

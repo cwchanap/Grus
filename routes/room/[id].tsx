@@ -1,7 +1,6 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
 import { RoomManager } from "../../lib/core/room-manager.ts";
 import { GameRegistry } from "../../lib/core/game-registry.ts";
-import { Env } from "../../types/cloudflare.ts";
 import type { RoomSummary } from "../../lib/core/room-manager.ts";
 import type { BaseGameState } from "../../types/core/game.ts";
 import "../../lib/games/index.ts"; // Ensure games are registered
@@ -82,17 +81,7 @@ export const handler: Handlers<GameRoomData> = {
         console.warn(`Room ${roomId} accessed without playerId parameter`);
       }
 
-      // In development, we don't have Cloudflare env, so we skip the DB check
-      const env = (ctx.state as any).env as Env;
-      const isDevelopment = Deno.env.get("DENO_ENV") !== "production";
-
-      if (!isDevelopment && !env?.DB) {
-        return ctx.render({
-          room: null,
-          playerId,
-          error: "Database not available",
-        });
-      }
+      const _isDevelopment = Deno.env.get("DENO_ENV") === "development";
 
       const roomManager = new RoomManager();
       const result = await roomManager.getRoomSummary(roomId);
