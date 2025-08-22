@@ -85,39 +85,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Deno
-      uses: denoland/setup-deno@v1
-      with:
-        deno-version: ${{ env.DENO_VERSION }}
-        
-    - name: Setup Node.js for Wrangler
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        
-    - name: Install Wrangler
-      run: npm install -g wrangler
-      
-    - name: Download build artifacts
-      uses: actions/download-artifact@v3
-      with:
-        name: build-artifacts
-        path: _fresh/
-        
-    - name: Run pre-deployment checks
-      run: deno run -A scripts/pre-deploy-checks.ts
-      env:
-        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        
-    - name: Deploy to Cloudflare Workers (Staging)
-      run: wrangler deploy --env development
-      env:
-        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        
-    - name: Run smoke tests
-      run: deno run --allow-net scripts/smoke-tests.ts --env staging
-      env:
-        STAGING_URL: ${{ secrets.STAGING_URL }}
+    - name: No-op deploy
+      run: echo "Skipping deploy (deployment is user-managed). Configure your deployment (e.g., Deno Deploy) separately."
 
   deploy-production:
     name: Deploy to Production
@@ -130,39 +99,8 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Setup Deno
-      uses: denoland/setup-deno@v1
-      with:
-        deno-version: ${{ env.DENO_VERSION }}
-        
-    - name: Setup Node.js for Wrangler
-      uses: actions/setup-node@v4
-      with:
-        node-version: '18'
-        
-    - name: Install Wrangler
-      run: npm install -g wrangler
-      
-    - name: Download build artifacts
-      uses: actions/download-artifact@v3
-      with:
-        name: build-artifacts
-        path: _fresh/
-        
-    - name: Run pre-deployment checks
-      run: deno run -A scripts/pre-deploy-checks.ts
-      env:
-        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        
-    - name: Deploy to Cloudflare Workers (Production)
-      run: wrangler deploy --env production
-      env:
-        CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        
-    - name: Run smoke tests
-      run: deno run --allow-net scripts/smoke-tests.ts --env production
-      env:
-        PRODUCTION_URL: ${{ secrets.PRODUCTION_URL }}
+    - name: No-op deploy
+      run: echo "Skipping deploy (deployment is user-managed). Configure your deployment (e.g., Deno Deploy) separately."
         
     - name: Notify deployment success
       uses: 8398a7/action-slack@v3

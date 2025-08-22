@@ -14,7 +14,7 @@ node_modules/
 db/*.db
 
 *.log
-.wrangler
+
 test-results/
 playwright-report/
 

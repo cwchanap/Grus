@@ -20,8 +20,8 @@ A real-time multiplayer drawing and guessing game built with Fresh (Deno), featu
 - **Styling**: Tailwind CSS
 - **Drawing Engine**: Pixi.js v8
 - **Real-time Communication**: WebSockets
-- **Database**: Cloudflare D1 (via REST API)
-- **Cache/Session Storage**: Cloudflare KV (via REST API)
+- **State Storage**: Deno KV (built-in key-value store)
+- **Optional Relational DB**: Postgres (e.g., Neon) via Prisma for auth/user data
 - **Deployment**: Deno Deploy
 
 ## 🚀 Getting Started
@@ -29,8 +29,6 @@ A real-time multiplayer drawing and guessing game built with Fresh (Deno), featu
 ### Prerequisites
 
 - [Deno](https://deno.land/) (v2.1+)
-- Cloudflare account with D1 and KV access
-- Cloudflare API token with appropriate permissions
 
 ### Installation
 
@@ -45,7 +43,7 @@ cd grus
 
 ```bash
 cp .env.example .env
-# Edit .env with your Cloudflare credentials
+# Edit .env with your application secrets (e.g., JWT_SECRET, DATABASE_URL)
 ```
 
 3. Install dependencies (Deno handles this automatically):
@@ -69,13 +67,12 @@ The application will be available at `http://localhost:3000`.
 Required environment variables:
 
 ```bash
-# Cloudflare API Configuration
-CLOUDFLARE_ACCOUNT_ID=your-account-id-here
-CLOUDFLARE_API_TOKEN=your-api-token-here
+# Authentication
+JWT_SECRET=your-secret-key-here-minimum-32-chars
+JWT_EXPIRES_IN=7d
 
-# Cloudflare Resources (already created)
-DATABASE_ID=d616e1fe-17e6-4320-aba2-393a60167603
-KV_NAMESPACE_ID=bea0c6d861e7477fae40b0e9c126ed30
+# Optional: Relational database for auth/user data (e.g., Neon Postgres)
+DATABASE_URL=postgresql://[user]:[password]@[neon_hostname]/[dbname]?sslmode=require
 ```
 
 ## 🚀 Deployment
@@ -95,10 +92,8 @@ bash scripts/deploy-deno.sh
 ```
 
 3. Set environment variables in the Deno Deploy dashboard:
-   - `CLOUDFLARE_ACCOUNT_ID`
-   - `CLOUDFLARE_API_TOKEN`
-   - `DATABASE_ID`
-   - `KV_NAMESPACE_ID`
+   - `JWT_SECRET`
+   - `DATABASE_URL` (optional, if using Postgres/Prisma)
 
 ### Manual Deployment
 
@@ -110,12 +105,7 @@ deployctl deploy --project=grus-multiplayer-drawing-game ./main.ts
 
 ## 🏗️ Infrastructure
 
-The application uses existing Cloudflare resources:
-
-- **D1 Database**: `grus` (ID: `d616e1fe-17e6-4320-aba2-393a60167603`)
-- **KV Namespace**: `grus` (ID: `bea0c6d861e7477fae40b0e9c126ed30`)
-
-These resources are accessed via Cloudflare's REST API, not Workers bindings.
+The application stores transient and gameplay state in **Deno KV**. Optionally, authentication/user data can be stored in **Postgres** via Prisma (e.g., Neon on serverless).
 
 ## 📁 Project Structure
 
@@ -124,14 +114,12 @@ These resources are accessed via Cloudflare's REST API, not Workers bindings.
 ├── islands/            # Fresh Islands (client-side interactive components)
 ├── routes/             # Fresh file-based routing
 ├── lib/                # Core business logic and utilities
-│   ├── cloudflare-api.ts    # Cloudflare REST API client
-│   ├── db/                  # Database services
-│   │   ├── database-service.ts  # Database operations
-│   │   ├── kv-service.ts        # KV storage operations
-│   │   └── index.ts             # Database module exports
+│   ├── auth/prisma-client.ts   # Prisma client init (optional Postgres)
+│   ├── db/                     # Data services (Deno KV)
+│   │   ├── kv-service.ts       # KV storage operations
+│   │   └── index.ts            # DB module exports
 │   └── websocket/           # WebSocket handling
 ├── types/              # TypeScript type definitions
-├── db/                 # Database schema and seeds
 ├── static/             # Static assets
 └── scripts/            # Deployment scripts
 ```
@@ -141,7 +129,7 @@ These resources are accessed via Cloudflare's REST API, not Workers bindings.
 - `GET /api/health` - Health check endpoint
 - `GET /api/rooms` - List active game rooms
 - `POST /api/rooms` - Create a new game room
-- `WebSocket /ws` - Real-time game communication
+- `WebSocket /api/websocket` - Real-time game communication
 
 ## 🎮 Game Flow
 

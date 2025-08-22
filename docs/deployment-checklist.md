@@ -5,11 +5,10 @@ Use this checklist to ensure all deployment requirements are met before going li
 ## Pre-Deployment Checklist
 
 ### Environment Setup
-- [ ] Cloudflare account created and configured
-- [ ] Wrangler CLI installed and authenticated
+- [ ] Deno Deploy account created and project configured
+- [ ] deployctl installed and authenticated (if using CLI deploys)
 - [ ] Environment variables configured in CI/CD system
-- [ ] Database IDs updated in `wrangler.toml`
-- [ ] KV namespace IDs updated in `wrangler.toml`
+- [ ] Database URLs and secrets configured (if using Postgres)
 
 ### Code Quality
 - [ ] All tests passing (`deno task test`)
@@ -20,7 +19,7 @@ Use this checklist to ensure all deployment requirements are met before going li
 - [ ] Code coverage meets minimum requirements (80%)
 
 ### Configuration
-- [ ] `wrangler.toml` properly configured for all environments
+- [ ] `deno-deploy.json` or project settings configured for all environments
 - [ ] Database migrations are up to date
 - [ ] Environment-specific settings verified
 - [ ] Secrets and API keys properly configured
@@ -92,7 +91,7 @@ Use this checklist to ensure all deployment requirements are met before going li
 
 ### Rollback Process
 1. [ ] Identify the issue
-2. [ ] Execute rollback command (`wrangler rollback`)
+2. [ ] Roll back to a previous deployment via Deno Deploy dashboard
 3. [ ] Verify rollback successful
 4. [ ] Run smoke tests on rolled-back version
 5. [ ] Notify team of rollback
@@ -178,5 +177,4 @@ Use this checklist to ensure all deployment requirements are met before going li
 **Remember**: When in doubt, don't deploy. It's better to delay a deployment than to cause an outage.
 
 **Emergency Contact**: [Your on-call contact information]
-**Rollback Command**: `wrangler rollback`
-**Health Check**: `curl https://your-app.workers.dev/api/health`
+**Health Check**: `curl https://your-app.example.com/api/health`

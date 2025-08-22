@@ -1,101 +1,70 @@
 # Deployment Guide
 
-This document provides comprehensive instructions for deploying the Multiplayer Drawing Game to Cloudflare Workers.
+This document provides comprehensive instructions for deploying the Multiplayer Drawing Game to Deno Deploy.
 
 ## Prerequisites
 
 ### Required Tools
 - [Deno](https://deno.land/) v1.40.x or later
-- [Node.js](https://nodejs.org/) v18 or later (for Wrangler CLI)
-- [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) v3.x
+- [deployctl](https://deno.com/deploy/docs/deployctl) (Deno Deploy CLI):
+  ```bash
+  deno install -A --no-check -r -f https://deno.land/x/deploy/deployctl.ts
+  ```
 
-### Cloudflare Account Setup
-1. Create a [Cloudflare account](https://dash.cloudflare.com/sign-up)
-2. Obtain your API token from the Cloudflare dashboard
-3. Install and authenticate Wrangler CLI:
-   ```bash
-   npm install -g wrangler
-   wrangler login
-   ```
+### Deno Deploy Setup
+1. Create a [Deno Deploy account](https://dash.deno.com)
+2. Optionally install `deployctl` for CLI deployments (see above)
+3. Create a new project in the Deno Deploy dashboard
 
 ## Environment Configuration
 
-### 1. Database Setup
-
-Create Cloudflare D1 databases for each environment:
-
+### Environment Variables
+Set the following in your local `.env` and on Deno Deploy:
 ```bash
-# Development database
-wrangler d1 create drawing-game-db-dev
+# Authentication
+JWT_SECRET=your-secret-key-here-minimum-32-chars
+JWT_EXPIRES_IN=7d
 
-# Production database
-wrangler d1 create drawing-game-db-prod
+# Optional: Relational database for auth/user data
+DATABASE_URL=postgresql://[user]:[password]@[neon_hostname]/[dbname]?sslmode=require
+# For local development (optional): DATABASE_URL=file:./dev.db
 ```
-
-Update `wrangler.toml` with the database IDs returned from the commands above.
-
-### 2. KV Storage Setup
-
-Create KV namespaces:
-
-```bash
-# Development KV
-wrangler kv:namespace create "GAME_STATE" --preview
-
-# Production KV
-wrangler kv:namespace create "GAME_STATE"
-```
-
-Update `wrangler.toml` with the KV namespace IDs.
-
-### 3. Environment Variables
-
-Set up the following environment variables in your CI/CD system:
-
-#### Required Secrets
-- `CLOUDFLARE_API_TOKEN`: Your Cloudflare API token
-- `STAGING_URL`: URL of your staging deployment
-- `PRODUCTION_URL`: URL of your production deployment
-
-#### Optional Secrets
-- `SLACK_WEBHOOK_URL`: For deployment notifications
-- `CODECOV_TOKEN`: For code coverage reporting
+Notes:
+- Game and chat state is stored in Deno KV (no external setup required)
+- If you use Postgres via Prisma, provision it separately (e.g., Neon) and set `DATABASE_URL`
+- Optional CI secrets: `SLACK_WEBHOOK_URL`, `CODECOV_TOKEN`
 
 ## Deployment Methods
 
 ### 1. Automated Deployment (Recommended)
 
-The project includes GitHub Actions workflows for automated deployment:
+The project includes GitHub Actions workflows for CI (format, lint, type-check, tests, build). Deployment is managed via Deno Deploy (manual or GitHub integration).
 
 #### Staging Deployment
-- Triggered on pushes to `develop` branch
-- Runs tests, builds, and deploys to development environment
-- Runs smoke tests for validation
+- Triggered on pushes to `develop` branch (CI only by default)
+- You can connect Deno Deploy GitHub Integration to auto-deploy
+- Optionally run smoke tests against your staging URL
 
 #### Production Deployment
-- Triggered on pushes to `main` branch
-- Runs full test suite and builds
-- Deploys to production environment
-- Runs smoke tests and sends notifications
+- Triggered on pushes to `main` branch (CI only by default)
+- Use Deno Deploy dashboard or GitHub Integration to deploy
+- Optionally run smoke tests and notifications after deploy
 
 ### 2. Manual Deployment
 
 #### Quick Deployment
 ```bash
 # Deploy to development
-deno run -A scripts/deploy.ts --dev
+bash scripts/deploy-deno.sh
 
 # Deploy to production
-deno run -A scripts/deploy.ts
+bash scripts/deploy-deno.sh
 ```
 
 #### Step-by-Step Deployment
 
 1. **Setup Database**
-   ```bash
-   deno run -A scripts/setup-db.ts --dev  # for development
-   deno run -A scripts/setup-db.ts --prod # for production
-   ```
+   If using Postgres, ensure your database is provisioned and `DATABASE_URL` is configured.
 
 2. **Run Tests**
    ```bash
@@ -107,10 +76,10 @@ deno run -A scripts/deploy.ts
    deno task build
    ```
 
-4. **Deploy to Cloudflare**
+4. **Deploy to Deno Deploy**
    ```bash
-   wrangler deploy --env development  # for development
-   wrangler deploy --env production   # for production
+   # Using deployctl directly
+   deployctl deploy --project=grus-multiplayer-drawing-game ./main.ts
    ```
 
 5. **Run Smoke Tests**
@@ -119,69 +88,24 @@ deno run -A scripts/deploy.ts
    deno run -A scripts/smoke-tests.ts --env=production
    ```
 
-### 3. Deployment Script Options
+### 3. Notes
+- The repository includes `scripts/deploy-deno.sh` which builds and deploys using `deployctl`
+- Configure environment variables in the Deno Deploy dashboard
 
-The deployment script supports various options:
-
-```bash
-# Dry run (validate without deploying)
-deno run -A scripts/deploy.ts --dry-run
-
-# Skip tests (faster deployment)
-deno run -A scripts/deploy.ts --skip-tests
-
-# Skip build (if already built)
-deno run -A scripts/deploy.ts --skip-build
-
-# Deploy to development
-deno run -A scripts/deploy.ts --dev
-```
-
-## Database Management
-
-### Running Migrations
-
-Migrations are automatically run during database setup, but can be run manually:
-
-```bash
-# List all migrations
-ls db/migrations/
-
-# Run specific migration
-wrangler d1 execute drawing-game-db-dev --file=db/migrations/001_initial_schema.sql
-```
-
-### Database Seeding
-
-Seed data is automatically applied during setup:
-
-```bash
-# Manual seeding
-wrangler d1 execute drawing-game-db-dev --file=db/seeds.sql
-```
-
-### Database Backup
-
-```bash
-# Export database
-wrangler d1 export drawing-game-db-prod --output=backup.sql
-
-# Import database
-wrangler d1 execute drawing-game-db-dev --file=backup.sql
-```
+## Database Notes (optional Postgres/Prisma)
+If you enable Postgres for auth/user data:
+- Manage schema and migrations using Prisma CLI
+- Provision your database (e.g., Neon) and set `DATABASE_URL`
 
 ## Monitoring and Alerting
 
 ### Setup Monitoring
-
 ```bash
 # Setup monitoring configuration
 deno run -A scripts/monitoring-setup.ts --prod
 ```
-
 This creates configuration files for:
-- Cloudflare Analytics alerts
-- Log aggregation settings
+- Log aggregation settings (if applicable)
 - Health check endpoints
 
 ### Health Checks
@@ -195,7 +119,7 @@ The application includes a health check endpoint at `/api/health` that monitors:
 
 ### Alerting
 
-Configure alerts in Cloudflare Dashboard for:
+Configure alerts in your monitoring tool for:
 - High error rates (>5% in production, >10% in development)
 - Slow response times (>1s in production, >2s in development)
 - High memory usage (>80%)
@@ -205,28 +129,19 @@ Configure alerts in Cloudflare Dashboard for:
 ### Common Issues
 
 #### 1. Database Connection Errors
-```bash
-# Check database status
-wrangler d1 info drawing-game-db-prod
-
-# Test database connection
-wrangler d1 execute drawing-game-db-prod --command="SELECT 1"
-```
+If using Postgres, verify `DATABASE_URL` and connectivity using your database tooling.
 
 #### 2. KV Storage Issues
+Use the built-in health endpoint and the provided scripts to inspect state:
 ```bash
-# List KV namespaces
-wrangler kv:namespace list
-
-# Test KV operations
-wrangler kv:key put --binding=GAME_STATE "test-key" "test-value"
-wrangler kv:key get --binding=GAME_STATE "test-key"
+deno task db:inspect
+deno task db:inspect:rooms
 ```
 
 #### 3. WebSocket Connection Problems
-- Ensure WebSocket support is enabled in Cloudflare Workers
-- Check that Durable Objects are properly configured
-- Verify WebSocket endpoints are correctly routed
+- Verify WebSocket endpoint `/api/websocket` is reachable
+- Check server logs in Deno Deploy dashboard
+- Ensure clients use WSS in production
 
 #### 4. Build Failures
 ```bash
@@ -243,22 +158,16 @@ deno info main.ts
 ### Rollback Procedures
 
 #### 1. Quick Rollback
-```bash
-# Deploy previous version
-wrangler rollback
-```
+Use the Deno Deploy dashboard to roll back to a previous deployment.
 
 #### 2. Database Rollback
-```bash
-# Restore from backup
-wrangler d1 execute drawing-game-db-prod --file=backup-previous.sql
-```
+If using Postgres, restore from your managed database backups.
 
 #### 3. Emergency Procedures
-1. Disable traffic routing in Cloudflare Dashboard
+1. Temporarily disable the production deployment in Deno Deploy if needed
 2. Restore previous deployment
 3. Verify health checks pass
-4. Re-enable traffic routing
+4. Re-enable production deployment
 
 ## Performance Optimization
 
@@ -276,7 +185,7 @@ wrangler d1 execute drawing-game-db-prod --file=backup-previous.sql
 - Track response times
 - Monitor memory usage
 - Analyze error rates
-- Review Cloudflare Analytics
+- Review Deno Deploy Insights or your monitoring dashboard
 
 ## Security Considerations
 
@@ -309,22 +218,21 @@ wrangler d1 execute drawing-game-db-prod --file=backup-previous.sql
 ## Support
 
 ### Getting Help
-- Check Cloudflare Workers documentation
-- Review application logs in Cloudflare Dashboard
+- Check Deno Deploy documentation
+- Review application logs in Deno Deploy dashboard
 - Use health check endpoints for diagnostics
 - Contact development team for application-specific issues
 
 ### Useful Commands
 ```bash
-# View deployment logs
-wrangler tail
+# Run locally
+deno task start
 
-# Check worker status
-wrangler dev --local
+# Build
+deno task build
 
 # Test locally
 deno task start
 
 # Run full test suite
 deno task test
-```

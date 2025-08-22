@@ -44,7 +44,7 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 
 - **Fresh (Deno)** - Full-stack web framework with file-based routing
 - **WebSocket communication** - Real-time multiplayer interactions
-- **SQLite database** - Persistent storage via `lib/db/database-service.ts`
+- **Deno KV** - Persistent storage via `lib/db/kv-room-service.ts` and `lib/db/kv-service.ts`
 - **Modular game engine** - Extensible system supporting multiple game types
 
 ### Key Architectural Components
@@ -58,9 +58,10 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 
 #### Database Layer (`lib/db/`)
 
-- **`database-service.ts`** - SQLite operations for rooms, players, scores
-- **`database-factory.ts`** - Service factory and interface definitions
-- Uses **local SQLite** in development, **Cloudflare D1** in production via REST API
+- **`kv-room-service.ts`** - Room and player persistence using Deno KV
+- **`kv-service.ts`** - Generic KV operations (game state, chat, drawing data)
+- **`database-factory.ts`** - KV-backed service factory and interface definitions
+- Uses **Deno KV** in all environments
 
 #### Game-Specific Implementations (`lib/games/`)
 
@@ -119,18 +120,14 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 
 ### Required Environment Variables
 
-```bash
-CLOUDFLARE_ACCOUNT_ID=your-account-id
-CLOUDFLARE_API_TOKEN=your-api-token  
-DATABASE_ID=d616e1fe-17e6-4320-aba2-393a60167603
-KV_NAMESPACE_ID=bea0c6d861e7477fae40b0e9c126ed30
-```
+- Core game requires no external DB configuration (uses Deno KV).
+- For optional authentication, see `docs/authentication-setup.md`.
 
 ### Development vs Production
 
-- **Development** - Uses local SQLite database at `db/game.db`
-- **Production** - Uses Cloudflare D1 and KV via REST API
-- Database service automatically detects environment via `lib/database-factory.ts`
+- **Development** - Uses Deno KV
+- **Production** - Uses Deno KV
+- Service access via `lib/database-factory.ts`
 
 ## Common Patterns
 
