@@ -105,6 +105,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
   const [drawingHistory, setDrawingHistory] = useState<DrawingCommand[]>([]);
   const [undoStack, setUndoStack] = useState<DrawingCommand[][]>([]);
+  const [fallbackMode, setFallbackMode] = useState<boolean>(false);
 
   // Network optimization
   const throttlerRef = useRef<DrawingCommandThrottler | null>(null);
@@ -157,24 +158,54 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       // ignore
     }
 
-    const app = new PIXI.Application();
-
     const initPixi = async () => {
       // Mark canvas for E2E tests to target reliably
       canvasRef.current!.setAttribute("data-testid", "drawing-canvas");
 
-      await app.init({
-        canvas: canvasRef.current!,
-        width,
-        height,
-        backgroundColor: 0xffffff,
-        backgroundAlpha: 1,
-        antialias: true,
-        resolution: globalThis.devicePixelRatio || 1,
-        autoDensity: true,
-        // Enable reliable image capture for tests (WebGL context)
-        preserveDrawingBuffer: true,
-      });
+      // Create application with explicit WebGL renderer to avoid WebGPU blend-mode conflicts
+      const app = new PIXI.Application();
+
+      try {
+        await app.init({
+          canvas: canvasRef.current!,
+          width,
+          height,
+          backgroundColor: 0xffffff,
+          backgroundAlpha: 1,
+          antialias: true,
+          resolution: globalThis.devicePixelRatio || 1,
+          autoDensity: true,
+          // Force WebGL renderer to avoid WebGPU blend-mode conflicts
+          preference: 'webgl',
+          // Enable reliable image capture for tests (WebGL context)
+          preserveDrawingBuffer: true,
+        });
+      } catch (error) {
+        console.warn('Pixi.js initialization failed, falling back to 2D canvas mode:', error);
+
+        // Set fallback mode - completely disable Pixi.js and use 2D canvas
+        setFallbackMode(true);
+
+        // Initialize 2D canvas context for fallback drawing
+        const ctx = canvasRef.current?.getContext("2d");
+        if (ctx) {
+          // Set up 2D canvas with proper scaling
+          const dpr = globalThis.devicePixelRatio || 1;
+          canvasRef.current!.width = width * dpr;
+          canvasRef.current!.height = height * dpr;
+          canvasRef.current!.style.width = `${width}px`;
+          canvasRef.current!.style.height = `${height}px`;
+          ctx.scale(dpr, dpr);
+
+          // Fill white background
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, width, height);
+
+          twoDRef.current = ctx;
+        }
+
+        return; // Exit early, don't set up Pixi.js
+      }
 
       // Ensure the canvas backing store size matches our logical size for reliable toDataURL
       try {
@@ -227,6 +258,14 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           return false;
         },
         png: () => {
+          if (fallbackMode) {
+            try {
+              return canvasRef.current?.toDataURL("image/png") ?? null;
+            } catch (_e) {
+              return null;
+            }
+          }
+
           const app = pixiAppRef.current;
           if (!app) {
             try {
@@ -404,7 +443,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         }
       },
       isReady: () =>
-        !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
+        fallbackMode ? !!twoDRef.current : !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
       waitUntilReady: async (timeoutMs = 3000) => {
         const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
@@ -567,6 +606,59 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       removeDrawingEvents(pixiAppRef.current);
     }
   }, [isDrawer, disabled]);
+
+  // Set up 2D canvas event handlers when in fallback mode
+  useEffect(() => {
+    if (!fallbackMode || !canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!isDrawerRef.current || disabledRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+      startDrawing(x, y);
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      const rect = canvas.getBoundingClientRect();
+      const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+      const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+
+      continueDrawing(x, y);
+    };
+
+    const onPointerUp = (e: PointerEvent) => {
+      if (!isDrawerRef.current || disabledRef.current) return;
+      e.preventDefault();
+      e.stopPropagation();
+
+      endDrawing();
+    };
+
+    // Add event listeners
+    canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
+    canvas.addEventListener('pointermove', onPointerMove, { passive: false });
+    canvas.addEventListener('pointerup', onPointerUp, { passive: false });
+    canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
+
+    // Cleanup function
+    return () => {
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointercancel', onPointerUp);
+    };
+  }, [fallbackMode, isDrawer, disabled]);
 
   const setupDrawingEvents = (app: PIXI.Application, _container: PIXI.Container) => {
     // Enhanced mobile touch support
@@ -954,6 +1046,11 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   };
 
   const startDrawing = (x: number, y: number) => {
+    if (fallbackMode) {
+      startDrawing2D(x, y);
+      return;
+    }
+
     const container = drawingContainerRef.current ?? pixiAppRef.current?.stage ?? null;
 
     isDrawingRef.current = true;
@@ -1011,6 +1108,11 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   const continueDrawing = (x: number, y: number) => {
     if (!isDrawingRef.current || !lastPointRef.current) return;
 
+    if (fallbackMode) {
+      continueDrawing2D(x, y);
+      return;
+    }
+
     // Draw line from last point to current point with correct API order per version
     const g = currentPathRef.current;
     if (g) {
@@ -1065,14 +1167,18 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   const endDrawing = () => {
     if (!isDrawingRef.current) return;
 
-    // Close any 2D path if we were using the fallback
-    if (twoDRef.current) {
-      try {
-        (twoDRef.current as any).closePath?.();
-      } catch (_e) {
-        // Silent close failure is acceptable for cleanup
+    if (fallbackMode) {
+      endDrawing2D();
+    } else {
+      // Close any 2D path if we were using the fallback
+      if (twoDRef.current) {
+        try {
+          (twoDRef.current as any).closePath?.();
+        } catch (_e) {
+          // Silent close failure is acceptable for cleanup
+        }
+        twoDRef.current = null;
       }
-      twoDRef.current = null;
     }
 
     isDrawingRef.current = false;
@@ -1099,6 +1205,42 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         onDrawingCommand(command);
       }
     }
+  };
+
+  // 2D Canvas fallback drawing methods
+  const startDrawing2D = (x: number, y: number) => {
+    if (!twoDRef.current) return;
+
+    isDrawingRef.current = true;
+    lastPointRef.current = { x, y };
+
+    const ctx = twoDRef.current;
+    ctx.strokeStyle = currentTool.color;
+    ctx.lineWidth = currentTool.size;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+  };
+
+  const continueDrawing2D = (x: number, y: number) => {
+    if (!isDrawingRef.current || !lastPointRef.current || !twoDRef.current) return;
+
+    const ctx = twoDRef.current;
+    ctx.lineTo(x, y);
+    ctx.stroke();
+
+    lastPointRef.current = { x, y };
+  };
+
+  const endDrawing2D = () => {
+    if (!isDrawingRef.current || !twoDRef.current) return;
+
+    const ctx = twoDRef.current;
+    ctx.closePath();
+
+    isDrawingRef.current = false;
+    lastPointRef.current = null;
   };
 
   const clearCanvas = () => {
@@ -1354,7 +1496,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
       {/* Status */}
       <div class="mt-2 text-sm text-gray-600">
-        {disabled ? "Drawing disabled" : isDrawer ? "You are drawing" : "Watching..."}
+        {disabled ? "Drawing disabled" :
+         fallbackMode ? "Drawing (2D mode)" :
+         isDrawer ? "You are drawing" : "Watching..."}
       </div>
     </div>
   );
