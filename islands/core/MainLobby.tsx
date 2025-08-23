@@ -250,6 +250,8 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
         </div>
       </div>
 
+      {isDev && <div class="text-red-500 font-bold">Dev Mode Enabled</div>}
+
       {/* Room list - Enhanced mobile grid */}
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {rooms.length === 0

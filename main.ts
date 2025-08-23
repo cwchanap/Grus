@@ -10,6 +10,7 @@ try {
   await load({
     allowEmptyValues: true,
     defaultsPath: null, // Don't require .env.example
+    examplePath: null, // Disable example validation to prevent warnings
     envPath: ".env",
   });
 } catch (error) {

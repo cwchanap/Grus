@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Essential Commands
 
-- `deno task start` - Start development server with hot reload on port 8000
+- `deno task start` - Start development server with hot reload on port 3000
 - `deno task build` - Build for production
 - `deno task preview` - Preview production build
 - `deno task ci` - Run all CI checks (format, lint, type-check, tests)

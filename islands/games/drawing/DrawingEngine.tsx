@@ -1221,6 +1221,26 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     ctx.lineJoin = "round";
     ctx.beginPath();
     ctx.moveTo(x, y);
+
+    // Create and broadcast drawing command
+    const command: DrawingCommand = {
+      type: "start",
+      x,
+      y,
+      color: currentTool.color,
+      size: currentTool.size,
+      timestamp: Date.now(),
+    };
+
+    if (validateDrawingCommand(command)) {
+      setDrawingHistory((prev) => [...prev, command]);
+
+      if (throttlerRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommand);
+      } else {
+        onDrawingCommand(command);
+      }
+    }
   };
 
   const continueDrawing2D = (x: number, y: number) => {
@@ -1231,6 +1251,26 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     ctx.stroke();
 
     lastPointRef.current = { x, y };
+
+    // Create and broadcast drawing command
+    const command: DrawingCommand = {
+      type: "move",
+      x,
+      y,
+      color: currentTool.color,
+      size: currentTool.size,
+      timestamp: Date.now(),
+    };
+
+    if (validateDrawingCommand(command)) {
+      setDrawingHistory((prev) => [...prev, command]);
+
+      if (throttlerRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommand);
+      } else {
+        onDrawingCommand(command);
+      }
+    }
   };
 
   const endDrawing2D = () => {
@@ -1241,6 +1281,23 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
     isDrawingRef.current = false;
     lastPointRef.current = null;
+
+    // Create and broadcast end command
+    const command: DrawingCommand = {
+      type: "end",
+      timestamp: Date.now(),
+    };
+
+    if (validateDrawingCommand(command)) {
+      setDrawingHistory((prev) => [...prev, command]);
+      setUndoStack((prev) => [...prev, [...drawingHistory]]);
+
+      if (throttlerRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommand);
+      } else {
+        onDrawingCommand(command);
+      }
+    }
   };
 
   const clearCanvas = () => {
