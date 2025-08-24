@@ -130,6 +130,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       (commands) => {
         if (onDrawingCommands) {
           onDrawingCommands(commands);
+        } else {
+          // Fallback to individual command sending
+          commands.forEach(cmd => onDrawingCommand(cmd));
         }
       },
       10, // buffer size
@@ -140,7 +143,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       throttlerRef.current?.destroy();
       bufferRef.current?.destroy();
     };
-  }, [onDrawingCommands]);
+  }, [onDrawingCommands, onDrawingCommand]);
 
   // Initialize Pixi.js application
   useEffect(() => {
@@ -777,9 +780,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
           if (validateDrawingCommand(dotCommand)) {
             setDrawingHistory((prev) => [...prev, dotCommand]);
-            if (throttlerRef.current) {
+            if (throttlerRef.current && onDrawingCommand) {
               throttlerRef.current.throttle(dotCommand, onDrawingCommand);
-            } else {
+            } else if (onDrawingCommand) {
               onDrawingCommand(dotCommand);
             }
           }
@@ -882,9 +885,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
           if (validateDrawingCommand(dotCommand)) {
             setDrawingHistory((prev) => [...prev, dotCommand]);
-            if (throttlerRef.current) {
+            if (throttlerRef.current && onDrawingCommand) {
               throttlerRef.current.throttle(dotCommand, onDrawingCommand);
-            } else {
+            } else if (onDrawingCommand) {
               onDrawingCommand(dotCommand);
             }
           }
@@ -1097,9 +1100,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory((prev) => [...prev, command]);
 
       // Send via throttler for network optimization
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1154,9 +1157,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory((prev) => [...prev, command]);
 
       // Send via throttler for network optimization
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1199,9 +1202,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory((prev) => [...prev, command]);
 
       // Send via throttler for network optimization
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1235,9 +1238,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
 
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1265,9 +1268,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
 
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1292,9 +1295,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory((prev) => [...prev, command]);
       setUndoStack((prev) => [...prev, [...drawingHistory]]);
 
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
@@ -1320,9 +1323,9 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory([command]);
 
       // Send via throttler for network optimization
-      if (throttlerRef.current) {
+      if (throttlerRef.current && onDrawingCommand) {
         throttlerRef.current.throttle(command, onDrawingCommand);
-      } else {
+      } else if (onDrawingCommand) {
         onDrawingCommand(command);
       }
     }
