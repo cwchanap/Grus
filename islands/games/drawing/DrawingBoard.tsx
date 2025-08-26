@@ -1,16 +1,17 @@
 // Drawing game specific drawing board component (PixiJS wrapper)
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { DrawingCommand } from "../../../types/games/drawing.ts";
 import DrawingEngine, { DrawingEngineRef } from "./DrawingEngine.tsx";
 
 interface DrawingBoardProps {
   width: number;
   height: number;
-  onDrawCommand: (command: DrawingCommand) => void;
+  onDrawCommand?: (command: DrawingCommand) => void;
   drawingData: DrawingCommand[];
   isDrawer: boolean;
   disabled?: boolean;
   playerId: string;
+  roomId?: string;
 }
 
 export default function DrawingBoard({
@@ -21,8 +22,52 @@ export default function DrawingBoard({
   isDrawer,
   disabled = false,
   playerId,
+  roomId,
 }: DrawingBoardProps) {
   const engineRef = useRef<DrawingEngineRef | null>(null);
+  
+  // Create a stable callback that always uses the latest onDrawCommand value.
+  // If onDrawCommand is not provided (e.g., cannot be serialized from SSR),
+  // fall back to sending over the global WebSocket managed by Scoreboard.
+  const stableOnDrawCommand = useCallback((command: DrawingCommand) => {
+    if (onDrawCommand) {
+      onDrawCommand(command);
+      return;
+    }
+
+    const send = () => {
+      try {
+        const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const message = {
+            type: "draw",
+            roomId,
+            playerId,
+            data: command,
+          };
+          ws.send(JSON.stringify(message));
+          return true;
+        } else {
+          return false;
+        }
+      } catch (err) {
+        return false;
+      }
+    };
+
+    // Immediate attempt + simple retries to handle short races on WS readiness
+    if (!send()) {
+      setTimeout(() => {
+        if (!send()) {
+          setTimeout(() => {
+            if (!send()) {
+              console.error("DrawingBoard: failed to send draw command after retries", command);
+            }
+          }, 500);
+        }
+      }, 100);
+    }
+  }, [onDrawCommand, roomId, playerId]); // Re-create when dependencies change
 
   // Live state driven by server game-state updates
   const [liveDisabled, setLiveDisabled] = useState<boolean>(disabled);
@@ -107,7 +152,7 @@ export default function DrawingBoard({
       <DrawingEngine
         ref={engineRef}
         isDrawer={liveIsDrawer}
-        onDrawingCommand={onDrawCommand}
+        onDrawingCommand={stableOnDrawCommand}
         width={width}
         height={height}
         disabled={liveDisabled}

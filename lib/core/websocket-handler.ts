@@ -78,6 +78,7 @@ export class CoreWebSocketHandler {
       }
 
       const message: BaseClientMessage = JSON.parse(data);
+      (Deno.env.get("DENO_ENV") !== "production") && console.log("Received WebSocket message:", message.type, message);
 
       // Validate message structure - some messages like subscribe-lobby don't need roomId
       if (!message.type) {
@@ -480,30 +481,32 @@ export class CoreWebSocketHandler {
     connection: WebSocketConnection,
     message: BaseClientMessage,
   ): Promise<void> {
+    (Deno.env.get("DENO_ENV") !== "production") && console.log("Received game-specific message:", message.type, message.data);
     const { roomId } = message;
     const gameState = this.gameStates.get(roomId);
-
+  
     if (!gameState) {
       this.sendError(connection, "No active game");
       return;
     }
-
+  
     // Get game engine for this game type
     const gameEngine = this.gameRegistry.getGameEngine(gameState.gameType);
     if (!gameEngine) {
       this.sendError(connection, "Game engine not found");
       return;
     }
-
+  
     try {
       // Handle message with game engine
       const result = gameEngine.handleClientMessage(gameState, message as any);
-
+  
       // Update game state
       this.gameStates.set(roomId, result.updatedState);
-
+  
       // Send server messages
       for (const serverMessage of result.serverMessages) {
+        (Deno.env.get("DENO_ENV") !== "production") && console.log("Broadcasting:", serverMessage.type, serverMessage.data);
         await this.broadcastToRoom(roomId, serverMessage);
       }
     } catch (error) {

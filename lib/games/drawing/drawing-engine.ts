@@ -76,13 +76,14 @@ export class DrawingGameEngine extends BaseGameEngine<
 
     switch (message.type) {
       case "draw":
+        (Deno.env.get("DENO_ENV") !== "production") && console.log("Received draw message:", message.data);
         if (this.validateDrawingAction(gameState, message.playerId, message.data)) {
           const drawCommand = message.data as DrawingCommand;
           updatedState.gameData = {
             ...updatedState.gameData,
             drawingData: [...updatedState.gameData.drawingData, drawCommand],
           };
-
+      
           serverMessages.push({
             type: "draw-update",
             roomId: gameState.roomId,

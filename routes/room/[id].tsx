@@ -9,6 +9,7 @@ import DrawingBoard from "../../islands/games/drawing/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
+import type { DrawingCommand } from "../../types/games/drawing.ts";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -66,6 +67,53 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
     gameData,
     chatMessages: [], // No chat messages initially
     settings: defaultSettings,
+  };
+}
+
+// Create a stable drawing command handler function
+function createDrawingCommandHandler(roomId: string, playerId: string) {
+  return (command: DrawingCommand) => {
+    // Forward drawing command via WebSocket with retry logic
+    const sendDrawCommand = () => {
+      try {
+        const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
+        console.log("Attempting to send draw command", { command, wsExists: !!ws, readyState: ws?.readyState });
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          // Server expects message.data to be a single DrawingCommand
+          const message = {
+            type: "draw",
+            roomId: roomId,
+            playerId: playerId,
+            data: command,
+          };
+          console.log("Sending draw message:", message);
+          ws.send(JSON.stringify(message));
+          return true;
+        } else {
+          console.warn("WS not ready for draw command", { command, readyState: ws?.readyState });
+          return false;
+        }
+      } catch (err) {
+        console.error("Failed to send draw command", err);
+        return false;
+      }
+    };
+
+    // Try to send immediately
+    if (!sendDrawCommand()) {
+      // If WebSocket not ready, wait a bit and retry
+      console.log("WebSocket not ready, retrying in 100ms...");
+      setTimeout(() => {
+        if (!sendDrawCommand()) {
+          console.log("WebSocket still not ready, retrying in 500ms...");
+          setTimeout(() => {
+            if (!sendDrawCommand()) {
+              console.error("Failed to send draw command after retries");
+            }
+          }, 500);
+        }
+      }, 100);
+    }
   };
 }
 
@@ -135,6 +183,9 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   const { room, playerId } = data;
   const gameState = createInitialGameState(room, playerId);
   const currentPlayerName = room.players.find((p) => p.id === playerId)?.name || "Unknown";
+  
+  // Create a stable drawing command handler
+  const drawingCommandHandler = createDrawingCommandHandler(room.room.id, playerId || "");
 
   return (
     <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">
@@ -173,28 +224,11 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                     <DrawingBoard
                       width={960}
                       height={600}
-                      onDrawCommand={(command) => {
-                        // Forward drawing command via WebSocket if available
-                        try {
-                          const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
-                          if (ws && ws.readyState === WebSocket.OPEN) {
-                            // Server expects message.data to be a single DrawingCommand
-                            ws.send(JSON.stringify({
-                              type: "draw",
-                              roomId: room.room.id,
-                              playerId: playerId || "",
-                              data: command,
-                            }));
-                          } else {
-                            console.log("WS not ready for draw command", command);
-                          }
-                        } catch (err) {
-                          console.error("Failed to send draw command", err);
-                        }
-                      }}
+                      onDrawCommand={drawingCommandHandler}
                       drawingData={(gameState as any)?.gameData?.drawingData || []}
                       isDrawer={(gameState as any)?.gameData?.currentDrawer === (playerId || "")}
                       playerId={playerId || ""}
+                      roomId={room.room.id}
                     />
                   )
                   : (

@@ -24,19 +24,12 @@ export default function RoomHeader(
 
   // Debug logging for host changes
   useEffect(() => {
-    console.log(
-      `RoomHeader: Current host is ${room.host?.name} (${room.host?.id}), current player is ${playerId}, isHost: ${
-        playerId === room.host?.id
-      }`,
-    );
-  }, [room.host, playerId]);
+    }, [room.host, playerId]);
 
   // Handle settings save
   const handleSettingsSave = (
     settings: import("../components/GameSettingsModal.tsx").GameSettings,
   ) => {
-    console.log("RoomHeader: Saving game settings:", settings);
-
     // Send settings update via WebSocket
     const ws = (globalThis as any).__gameWebSocket as WebSocket;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -62,9 +55,6 @@ export default function RoomHeader(
 
     // Always update player count from game state
     if (currentPlayerCount !== room.playerCount) {
-      console.log(
-        `RoomHeader: Updating player count from ${room.playerCount} to ${currentPlayerCount}`,
-      );
       setRoom((prevRoom) => ({
         ...prevRoom,
         playerCount: currentPlayerCount,
@@ -73,9 +63,6 @@ export default function RoomHeader(
 
     // Update host information if changed
     if (hostPlayer && hostPlayer.id !== room.host?.id) {
-      console.log(
-        `RoomHeader: Syncing host from game state - ${hostPlayer.name} (${hostPlayer.id})`,
-      );
       setRoom((prevRoom) => ({
         ...prevRoom,
         host: {
@@ -98,7 +85,6 @@ export default function RoomHeader(
       const customEvent = event as CustomEvent;
       const { gameState: updatedGameState } = customEvent.detail;
       if (updatedGameState && updatedGameState.roomId === room.room.id) {
-        console.log("RoomHeader: Received game state update from global WebSocket");
         setGameState(updatedGameState);
 
         // Update room host information from game state
@@ -124,8 +110,6 @@ export default function RoomHeader(
       const customEvent = event as CustomEvent;
       const { updateData } = customEvent.detail;
       if (updateData && updateData.roomId === room.room.id) {
-        console.log("RoomHeader: Received room update from global WebSocket", updateData);
-
         // Handle host migration
         if (updateData.type === "host-changed") {
           setRoom((prevRoom) => ({
@@ -148,8 +132,6 @@ export default function RoomHeader(
             })),
           }));
         } else if (updateData.type === "player-left") {
-          console.log("RoomHeader: Player left, updating player count");
-
           // Handle host migration if the leaving player was host
           if (updateData.wasHost && updateData.hostMigration) {
             setRoom((prevRoom) => ({
@@ -187,8 +169,6 @@ export default function RoomHeader(
             }));
           }
         } else if (updateData.type === "player-joined") {
-          console.log("RoomHeader: Player joined, updating player count");
-
           setRoom((prevRoom) => ({
             ...prevRoom,
             playerCount: prevRoom.playerCount + 1,
@@ -219,7 +199,6 @@ export default function RoomHeader(
 
         // If the update contains a complete game state, use it for most accurate data
         if (updateData.gameState && updateData.gameState.players) {
-          console.log("RoomHeader: Updating from complete game state in room update");
           setGameState(updateData.gameState);
 
           const hostPlayer = updateData.gameState.players.find((p: any) => p.isHost);

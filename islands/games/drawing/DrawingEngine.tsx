@@ -39,7 +39,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   height = 600,
   disabled = false,
 }: DrawingEngineProps, ref) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixiAppRef = useRef<PIXI.Application | null>(null);
   const drawingContainerRef = useRef<PIXI.Container | null>(null);
   const currentPathRef = useRef<PIXI.Graphics | null>(null);
@@ -50,10 +50,24 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   // Track latest permission flags to avoid stale closures during async Pixi init
   const isDrawerRef = useRef<boolean>(isDrawer);
   const disabledRef = useRef<boolean>(disabled);
+  // Store the callback in a ref to avoid stale closures
+  // Initialize with the initial prop values
+  const onDrawingCommandRef = useRef<((command: DrawingCommand) => void) | undefined>(onDrawingCommand);
+  const onDrawingCommandsRef = useRef<((commands: DrawingCommand[]) => void) | undefined>(onDrawingCommands);
+  
+  // Always update refs to the latest values to avoid stale closures
+  onDrawingCommandRef.current = onDrawingCommand;
+  onDrawingCommandsRef.current = onDrawingCommands;
+  
   useEffect(() => {
     isDrawerRef.current = isDrawer;
     disabledRef.current = disabled;
   }, [isDrawer, disabled]);
+  
+  useEffect(() => {
+onDrawingCommandRef.current = onDrawingCommand;
+    onDrawingCommandsRef.current = onDrawingCommands;
+  }, [onDrawingCommand, onDrawingCommands]);
   // 2D canvas fallback when Pixi is not ready
   const twoDRef = useRef<CanvasRenderingContext2D | null>(null);
   // 2D fallback for remote (external) strokes
@@ -128,15 +142,15 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     throttlerRef.current = new DrawingCommandThrottler(16); // ~60fps
     bufferRef.current = new DrawingCommandBuffer(
       (commands) => {
-        if (onDrawingCommands) {
-          onDrawingCommands(commands);
-        } else {
+        if (onDrawingCommandsRef.current) {
+          onDrawingCommandsRef.current(commands);
+        } else if (onDrawingCommandRef.current) {
           // Fallback to individual command sending
-          commands.forEach(cmd => onDrawingCommand(cmd));
+          commands.forEach(cmd => onDrawingCommandRef.current!(cmd));
         }
       },
       10, // buffer size
-      50, // flush interval
+      100 // timeout in ms
     );
 
     return () => {
@@ -184,9 +198,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
           preserveDrawingBuffer: true,
         });
       } catch (error) {
-        console.warn('Pixi.js initialization failed, falling back to 2D canvas mode:', error);
-
-        // Set fallback mode - completely disable Pixi.js and use 2D canvas
+// Set fallback mode - completely disable Pixi.js and use 2D canvas
         setFallbackMode(true);
 
         // Initialize 2D canvas context for fallback drawing
@@ -690,13 +702,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
 
       try {
-        console.debug("[DrawingEngine] stage pointerdown", {
-          x: (event as any)?.global?.x,
-          y: (event as any)?.global?.y,
-          isDrawer: isDrawerRef.current,
-          disabled: disabledRef.current,
-        });
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -721,11 +727,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
 
       try {
-        console.debug("[DrawingEngine] stage pointermove", {
-          x: (event as any)?.global?.x,
-          y: (event as any)?.global?.y,
-        });
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -753,8 +755,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       }
 
       try {
-        console.debug("[DrawingEngine] stage pointerup");
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -780,10 +781,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
           if (validateDrawingCommand(dotCommand)) {
             setDrawingHistory((prev) => [...prev, dotCommand]);
-            if (throttlerRef.current && onDrawingCommand) {
-              throttlerRef.current.throttle(dotCommand, onDrawingCommand);
-            } else if (onDrawingCommand) {
-              onDrawingCommand(dotCommand);
+            if (throttlerRef.current && onDrawingCommandRef.current) {
+              throttlerRef.current.throttle(dotCommand, onDrawingCommandRef.current);
+            } else if (onDrawingCommandRef.current) {
+              onDrawingCommandRef.current(dotCommand);
             }
           }
         }
@@ -801,8 +802,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       e.stopPropagation();
 
       try {
-        console.debug("[DrawingEngine] dom touchstart", { touches: e.touches.length });
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -829,8 +829,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       e.stopPropagation();
 
       try {
-        console.debug("[DrawingEngine] dom touchmove");
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -855,8 +854,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       e.stopPropagation();
 
       try {
-        console.debug("[DrawingEngine] dom touchend");
-      } catch (_e) {
+} catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -885,10 +883,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
           if (validateDrawingCommand(dotCommand)) {
             setDrawingHistory((prev) => [...prev, dotCommand]);
-            if (throttlerRef.current && onDrawingCommand) {
-              throttlerRef.current.throttle(dotCommand, onDrawingCommand);
-            } else if (onDrawingCommand) {
-              onDrawingCommand(dotCommand);
+            if (throttlerRef.current && onDrawingCommandRef.current) {
+              throttlerRef.current.throttle(dotCommand, onDrawingCommandRef.current);
+            } else if (onDrawingCommandRef.current) {
+              onDrawingCommandRef.current(dotCommand);
             }
           }
         }
@@ -922,12 +920,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       const onDomPointerDown = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current) return;
         try {
-          console.debug("[DrawingEngine] dom pointerdown", {
-            type: e.pointerType,
-            x: e.clientX,
-            y: e.clientY,
-          });
-        } catch (_e) {
+} catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -943,8 +936,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       const onDomPointerMove = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
         try {
-          console.debug("[DrawingEngine] dom pointermove");
-        } catch (_e) {
+} catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -960,8 +952,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       const onDomPointerUp = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current) return;
         try {
-          console.debug("[DrawingEngine] dom pointerup");
-        } catch (_e) {
+} catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -1098,24 +1089,25 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     // Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-
+    
       // Send via throttler for network optimization
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
-      }
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+onDrawingCommandRef.current(command);
+      } else {
+}
     }
   };
 
   const continueDrawing = (x: number, y: number) => {
-    if (!isDrawingRef.current || !lastPointRef.current) return;
-
+if (!isDrawingRef.current || !lastPointRef.current) return;
+  
     if (fallbackMode) {
       continueDrawing2D(x, y);
       return;
     }
-
+  
     // Draw line from last point to current point with correct API order per version
     const g = currentPathRef.current;
     if (g) {
@@ -1141,7 +1133,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       ctx.lineTo(x, y);
       ctx.stroke();
     }
-
+  
     // Create drawing command
     const command: DrawingCommand = {
       type: "move",
@@ -1151,25 +1143,26 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       size: currentTool.size,
       timestamp: Date.now(),
     };
-
-    // Validate and add to history
+  
+// Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-
+    
       // Send via throttler for network optimization
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
-      }
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
+      } else {
+}
     }
-
+  
     lastPointRef.current = { x, y };
   };
 
   const endDrawing = () => {
-    if (!isDrawingRef.current) return;
-
+if (!isDrawingRef.current) return;
+  
     if (fallbackMode) {
       endDrawing2D();
     } else {
@@ -1183,30 +1176,31 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
         twoDRef.current = null;
       }
     }
-
+  
     isDrawingRef.current = false;
     currentPathRef.current = null;
     lastPointRef.current = null;
-
+  
     // Create end command
     const command: DrawingCommand = {
       type: "end",
       timestamp: Date.now(),
     };
-
-    // Save current state for undo
+  
+// Save current state for undo
     setUndoStack((prev) => [...prev, [...drawingHistory]]);
-
+  
     // Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-
+    
       // Send via throttler for network optimization
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
-      }
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
+      } else {
+}
     }
   };
 
@@ -1238,10 +1232,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
 
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
       }
     }
   };
@@ -1268,10 +1262,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
 
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
       }
     }
   };
@@ -1295,10 +1289,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory((prev) => [...prev, command]);
       setUndoStack((prev) => [...prev, [...drawingHistory]]);
 
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
       }
     }
   };
@@ -1323,10 +1317,10 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
       setDrawingHistory([command]);
 
       // Send via throttler for network optimization
-      if (throttlerRef.current && onDrawingCommand) {
-        throttlerRef.current.throttle(command, onDrawingCommand);
-      } else if (onDrawingCommand) {
-        onDrawingCommand(command);
+      if (throttlerRef.current && onDrawingCommandRef.current) {
+        throttlerRef.current.throttle(command, onDrawingCommandRef.current);
+      } else if (onDrawingCommandRef.current) {
+        onDrawingCommandRef.current(command);
       }
     }
   };
@@ -1342,8 +1336,8 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
     redrawFromHistory(previousState);
 
     // Notify about the undo operation
-    if (onDrawingCommands) {
-      onDrawingCommands(previousState);
+    if (onDrawingCommandsRef.current) {
+      onDrawingCommandsRef.current(previousState);
     }
   };
 
