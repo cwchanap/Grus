@@ -69,6 +69,50 @@ export default function DrawingBoard({
     }
   }, [onDrawCommand, roomId, playerId]); // Re-create when dependencies change
 
+  // Also support batched draw commands (used by undo and network buffering)
+  const stableOnDrawCommands = useCallback((commands: DrawingCommand[]) => {
+    if (onDrawCommand) {
+      // If a single-command handler is provided, forward each command individually
+      for (const cmd of commands) {
+        onDrawCommand(cmd);
+      }
+      return;
+    }
+
+    const send = () => {
+      try {
+        const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const message = {
+            type: "draw",
+            roomId,
+            playerId,
+            data: { commands },
+          };
+          ws.send(JSON.stringify(message));
+          return true;
+        } else {
+          return false;
+        }
+      } catch (_err) {
+        return false;
+      }
+    };
+
+    // Immediate attempt + simple retries to handle short races on WS readiness
+    if (!send()) {
+      setTimeout(() => {
+        if (!send()) {
+          setTimeout(() => {
+            if (!send()) {
+              console.error("DrawingBoard: failed to send batched draw commands after retries", commands);
+            }
+          }, 500);
+        }
+      }, 100);
+    }
+  }, [onDrawCommand, roomId, playerId]);
+
   // Live state driven by server game-state updates
   const [liveDisabled, setLiveDisabled] = useState<boolean>(disabled);
   const [liveIsDrawer, setLiveIsDrawer] = useState<boolean>(isDrawer);
@@ -153,6 +197,7 @@ export default function DrawingBoard({
         ref={engineRef}
         isDrawer={liveIsDrawer}
         onDrawingCommand={stableOnDrawCommand}
+        onDrawingCommands={stableOnDrawCommands}
         width={width}
         height={height}
         disabled={liveDisabled}

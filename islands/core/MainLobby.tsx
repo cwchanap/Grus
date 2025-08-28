@@ -158,11 +158,11 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
   if (error) {
     return (
       <div class="max-w-4xl mx-auto">
-        <div class="bg-red-50 border border-red-200 rounded-lg p-6 text-center">
-          <div class="text-red-600 text-lg font-semibold mb-2">
+        <div class="bg-red-100/90 border border-red-300 rounded-lg p-6 text-center backdrop-blur-sm">
+          <div class="text-red-700 text-lg font-semibold mb-2">
             ⚠️ Error Loading Lobby
           </div>
-          <p class="text-red-700">{error}</p>
+          <p class="text-red-800">{error}</p>
           <button
             type="button"
             onClick={refreshRooms}
@@ -184,7 +184,7 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
             type="button"
             onClick={refreshRooms}
             disabled={loading}
-            class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
+            class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
           >
             <span class={`text-sm ${loading ? "animate-spin" : ""}`}>
               {loading ? "⟳" : "↻"}
@@ -193,9 +193,9 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
           </button>
 
           <div class="flex items-center space-x-2">
-            <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-500" : "bg-yellow-500"}`}>
+            <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-yellow-400"}`}>
             </div>
-            <span class="text-xs sm:text-sm text-gray-600">
+            <span class="text-xs sm:text-sm text-white/80">
               {wsConnected ? "Connected" : (isDev ? "Dev Mode" : "")}
             </span>
           </div>
@@ -205,7 +205,7 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
           {/* User authentication status */}
           {user
             ? (
-              <div class="flex items-center gap-2 px-3 py-2 bg-green-100 text-green-800 rounded-lg">
+              <div class="flex items-center gap-2 px-3 py-2 bg-white/20 text-white rounded-lg">
                 <span class="text-sm font-medium">👤 {user.name || user.username}</span>
                 <a
                   href="/api/auth/logout"
@@ -214,7 +214,7 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
                     await fetch("/api/auth/logout", { method: "POST" });
                     globalThis.location.reload();
                   }}
-                  class="text-xs underline hover:no-underline cursor-pointer"
+                  class="text-xs underline hover:no-underline cursor-pointer text-white/80"
                 >
                   Logout
                 </a>
@@ -223,7 +223,7 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
             : (
               <a
                 href="/login"
-                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium text-sm"
+                class="px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors font-medium text-sm"
               >
                 Login
               </a>
@@ -242,7 +242,7 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
           <button
             type="button"
             onClick={handleCreateRoom}
-            class="w-full sm:w-auto px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
+            class="w-full sm:w-auto px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
           >
             <span class="sm:hidden">+ New Room</span>
             <span class="hidden sm:inline">+ Create Room</span>
@@ -250,24 +250,24 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
         </div>
       </div>
 
-      {isDev && <div class="text-red-500 font-bold">Dev Mode Enabled</div>}
+      {isDev && <div class="text-yellow-300 font-bold">Dev Mode Enabled</div>}
 
       {/* Room list - Enhanced mobile grid */}
       <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {rooms.length === 0
           ? (
             <div class="col-span-full text-center py-12 px-4">
-              <div class="text-gray-400 text-4xl sm:text-6xl mb-4">🎨</div>
-              <h3 class="text-lg sm:text-xl font-semibold text-gray-600 mb-2">
+              <div class="text-white/60 text-4xl sm:text-6xl mb-4">🎨</div>
+              <h3 class="text-lg sm:text-xl font-semibold text-white mb-2">
                 No active rooms
               </h3>
-              <p class="text-sm sm:text-base text-gray-500 mb-6 max-w-md mx-auto">
+              <p class="text-sm sm:text-base text-white/80 mb-6 max-w-md mx-auto">
                 Be the first to create a room and start playing!
               </p>
               <button
                 type="button"
                 onClick={handleCreateRoom}
-                class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 active:bg-blue-800 transition-colors touch-manipulation no-tap-highlight"
+                class="px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors touch-manipulation no-tap-highlight"
               >
                 Create First Room
               </button>
@@ -313,23 +313,23 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
   const { room, playerCount, canJoin, host } = roomSummary;
 
   return (
-    <div class="bg-white rounded-lg shadow-md border border-gray-200 p-4 sm:p-6 hover:shadow-lg active:shadow-xl transition-all duration-200 touch-manipulation">
+    <div class="bg-white/10 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 p-4 sm:p-6 hover:bg-white/15 active:bg-white/20 transition-all duration-200 touch-manipulation">
       <div class="flex justify-between items-start mb-3 sm:mb-4">
         <div class="min-w-0 flex-1 mr-3">
-          <h3 class="text-base sm:text-lg font-semibold text-gray-800 mb-1 truncate">
+          <h3 class="text-base sm:text-lg font-semibold text-white mb-1 truncate">
             {room.name}
           </h3>
-          <p class="text-xs sm:text-sm text-gray-600 truncate">
+          <p class="text-xs sm:text-sm text-white/80 truncate">
             Host: {host?.name || "Unknown"}
           </p>
         </div>
         <div class="text-right flex-shrink-0">
-          <div class="text-sm text-gray-500 mb-1">
+          <div class="text-sm text-white/70 mb-1">
             {playerCount}/{room.maxPlayers}
           </div>
           <div
             class={`text-xs px-2 py-1 rounded-full font-medium ${
-              canJoin ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+              canJoin ? "bg-green-400/20 text-green-200" : "bg-red-400/20 text-red-200"
             }`}
           >
             {canJoin ? "Open" : "Full"}
@@ -338,13 +338,13 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
       </div>
 
       <div class="mb-4">
-        <div class="text-xs sm:text-sm text-gray-600 mb-2">Players:</div>
+        <div class="text-xs sm:text-sm text-white/70 mb-2">Players:</div>
         <div class="flex flex-wrap gap-1">
           {roomSummary.players.slice(0, 4).map((player: any) => (
             <span
               key={player.id}
               class={`text-xs px-2 py-1 rounded-full truncate max-w-20 sm:max-w-none ${
-                player.isHost ? "bg-yellow-100 text-yellow-800" : "bg-gray-100 text-gray-700"
+                player.isHost ? "bg-yellow-400/20 text-yellow-200" : "bg-white/15 text-white/90"
               }`}
               title={`${player.name}${player.isHost ? " (Host)" : ""}`}
             >
@@ -355,7 +355,7 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
             </span>
           ))}
           {roomSummary.players.length > 4 && (
-            <span class="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">
+            <span class="text-xs px-2 py-1 rounded-full bg-white/15 text-white/90">
               +{roomSummary.players.length - 4}
             </span>
           )}
@@ -368,8 +368,8 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
         disabled={!canJoin}
         class={`w-full py-3 px-4 rounded-lg font-medium transition-all duration-200 touch-manipulation no-tap-highlight text-touch ${
           canJoin
-            ? "bg-blue-600 text-white hover:bg-blue-700 active:bg-blue-800 active:scale-95"
-            : "bg-gray-300 text-gray-500 cursor-not-allowed"
+            ? "bg-white text-purple-600 hover:bg-white/90 active:bg-white/80 active:scale-95"
+            : "bg-white/20 text-white/50 cursor-not-allowed"
         }`}
       >
         {canJoin ? "Join Room" : "Room Full"}
