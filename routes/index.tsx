@@ -2,6 +2,7 @@ import { Handlers, PageProps } from "$fresh/server.ts";
 import MainLobby from "../islands/core/MainLobby.tsx";
 import { RoomManager, RoomSummary } from "../lib/core/room-manager.ts";
 import { getSession } from "../lib/auth/auth-utils.ts";
+import { getConfig } from "../lib/config.ts";
 
 interface LobbyData {
   rooms: RoomSummary[];
@@ -20,11 +21,12 @@ export const handler: Handlers<LobbyData> = {
     try {
       const roomManager = new RoomManager();
       const isDev = Deno.env.get("DENO_ENV") === "development";
+      const config = getConfig();
 
       // Check for user session
       let user = undefined;
       const cookie = req.headers.get("Cookie");
-      const cookieName = Deno.env.get("SESSION_COOKIE_NAME") || "grus_session";
+      const cookieName = config.auth.sessionCookie.name;
       const token = cookie?.split(";")
         .find((c) => c.trim().startsWith(`${cookieName}=`))
         ?.split("=")[1];

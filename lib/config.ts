@@ -2,6 +2,15 @@
 
 export interface AppConfig {
   environment: "development" | "production";
+  auth: {
+    jwtExpiresIn: string;
+    sessionCookie: {
+      name: string;
+      secure: boolean;
+      httpOnly: boolean;
+      sameSite: "Strict" | "Lax" | "None";
+    };
+  };
   game: {
     maxPlayersPerRoom: number;
     roundTimeLimit: number; // seconds
@@ -26,6 +35,15 @@ export function getConfig(): AppConfig {
 
   return {
     environment: isDev ? "development" : "production",
+    auth: {
+      jwtExpiresIn: "7d", // 7 days
+      sessionCookie: {
+        name: "grus_session",
+        secure: !isDev, // false in dev, true in production
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    },
     game: {
       maxPlayersPerRoom: 8,
       roundTimeLimit: 120, // 2 minutes
@@ -78,4 +96,21 @@ export function generateRoomCode(): string {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
+}
+
+// Parse JWT expiration time string to seconds for cookie Max-Age
+export function parseExpirationTimeToSeconds(expiresIn: string): number {
+  const match = expiresIn.match(/^(\d+)([dhms])$/);
+  if (!match) throw new Error(`Invalid expiration time format: ${expiresIn}`);
+  
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  
+  switch (unit) {
+    case 'd': return value * 24 * 60 * 60; // days to seconds
+    case 'h': return value * 60 * 60; // hours to seconds
+    case 'm': return value * 60; // minutes to seconds
+    case 's': return value; // seconds
+    default: throw new Error(`Invalid time unit: ${unit}`);
+  }
 }

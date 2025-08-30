@@ -15,14 +15,9 @@ DIRECT_URL="postgresql://user:password@host/database?sslmode=require"
 
 # JWT Configuration
 JWT_SECRET="your-secret-key-here-minimum-32-chars"
-JWT_EXPIRES_IN="7d"
-
-# Session Cookie Configuration
-SESSION_COOKIE_NAME="grus_session"
-SESSION_COOKIE_SECURE="false"  # Set to "true" in production with HTTPS
-SESSION_COOKIE_HTTPONLY="true"
-SESSION_COOKIE_SAMESITE="Lax"
 ```
+
+**Note**: JWT expiration time and session cookie settings (name, secure, httpOnly, sameSite) are now configured in the application config (`lib/config.ts`) rather than environment variables. This provides better defaults and makes configuration more maintainable.
 
 ### 2. Database Setup
 

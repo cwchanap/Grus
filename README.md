@@ -46,11 +46,35 @@ cp .env.example .env
 # Edit .env with your application secrets (e.g., JWT_SECRET, DATABASE_URL)
 ```
 
-3. Install dependencies (Deno handles this automatically):
+3. Set up the database (if using authentication):
+
+```bash
+deno run -A scripts/setup-prisma.ts
+```
+
+4. Install dependencies (Deno handles this automatically):
 
 ```bash
 deno task check
 ```
+
+## Test Accounts
+
+For testing and development purposes, you can use these test accounts:
+
+### Test Account 1
+- **Email**: test@example.com
+- **Username**: testuser
+- **Password**: password123
+- **Name**: Test User
+
+### Test Account 2 (Verified Working)
+- **Email**: test2@example.com
+- **Username**: testuser2
+- **Password**: password123
+- **Name**: Test User 2
+
+You can log in with either the email or username for both accounts. Both accounts have been tested and verified to work with the authentication system.
 
 ### Development
 
@@ -69,11 +93,12 @@ Required environment variables:
 ```bash
 # Authentication
 JWT_SECRET=your-secret-key-here-minimum-32-chars
-JWT_EXPIRES_IN=7d
 
 # Optional: Relational database for auth/user data (e.g., Neon Postgres)
 DATABASE_URL=postgresql://[user]:[password]@[neon_hostname]/[dbname]?sslmode=require
 ```
+
+**Note**: JWT expiration time and session cookie configuration are now managed in the application configuration (`lib/config.ts`) rather than environment variables for better maintainability.
 
 ## 🚀 Deployment
 

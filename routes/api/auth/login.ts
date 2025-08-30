@@ -1,6 +1,7 @@
 import { Handlers } from "$fresh/server.ts";
 import { getPrismaClient } from "../../../lib/auth/prisma-client.ts";
 import { createSession, verifyPassword } from "../../../lib/auth/auth-utils.ts";
+import { getConfig, parseExpirationTimeToSeconds } from "../../../lib/config.ts";
 
 export const handler: Handlers = {
   async POST(req) {
@@ -46,6 +47,18 @@ export const handler: Handlers = {
 
       // Create session
       const session = await createSession(user);
+      const config = getConfig();
+      const maxAge = parseExpirationTimeToSeconds(config.auth.jwtExpiresIn);
+
+      // Build cookie string based on config
+      const cookieOptions = [
+        `${config.auth.sessionCookie.name}=${session.token}`,
+        "Path=/",
+        config.auth.sessionCookie.httpOnly ? "HttpOnly" : "",
+        `SameSite=${config.auth.sessionCookie.sameSite}`,
+        config.auth.sessionCookie.secure ? "Secure" : "",
+        `Max-Age=${maxAge}`,
+      ].filter(Boolean).join("; ");
 
       return new Response(
         JSON.stringify({
@@ -57,9 +70,7 @@ export const handler: Handlers = {
           status: 200,
           headers: {
             "Content-Type": "application/json",
-            "Set-Cookie": `${
-              Deno.env.get("SESSION_COOKIE_NAME") || "grus_session"
-            }=${session.token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 60 * 60}`,
+            "Set-Cookie": cookieOptions,
           },
         },
       );

@@ -1,14 +1,17 @@
 import { Handlers } from "$fresh/server.ts";
 import { getSession } from "../../../lib/auth/auth-utils.ts";
+import { getConfig } from "../../../lib/config.ts";
 
 export const handler: Handlers = {
   async GET(req) {
     try {
+      const config = getConfig();
+      
       // Get token from cookie or Authorization header
       const cookie = req.headers.get("Cookie");
       const authHeader = req.headers.get("Authorization");
 
-      const cookieName = Deno.env.get("SESSION_COOKIE_NAME") || "grus_session";
+      const cookieName = config.auth.sessionCookie.name;
       let token = cookie?.split(";")
         .find((c) => c.trim().startsWith(`${cookieName}=`))
         ?.split("=")[1];

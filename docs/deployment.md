@@ -23,7 +23,6 @@ Set the following in your local `.env` and on Deno Deploy:
 ```bash
 # Authentication
 JWT_SECRET=your-secret-key-here-minimum-32-chars
-JWT_EXPIRES_IN=7d
 
 # Optional: Relational database for auth/user data
 DATABASE_URL=postgresql://[user]:[password]@[neon_hostname]/[dbname]?sslmode=require
@@ -32,6 +31,7 @@ DATABASE_URL=postgresql://[user]:[password]@[neon_hostname]/[dbname]?sslmode=req
 Notes:
 - Game and chat state is stored in Deno KV (no external setup required)
 - If you use Postgres via Prisma, provision it separately (e.g., Neon) and set `DATABASE_URL`
+- JWT expiration time and session cookie settings are configured in `lib/config.ts`
 - Optional CI secrets: `SLACK_WEBHOOK_URL`, `CODECOV_TOKEN`
 
 ## Deployment Methods

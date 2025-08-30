@@ -1,12 +1,11 @@
-import * as bcrypt from "bcryptjs";
 import { jwtVerify, SignJWT } from "jose";
 import { getPrismaClient } from "./prisma-client.ts";
+import { getConfig } from "../config.ts";
 import type { User } from "@prisma/client";
 
 const JWT_SECRET = new TextEncoder().encode(
   Deno.env.get("JWT_SECRET") || "default-secret-change-in-production",
 );
-const JWT_EXPIRES_IN = Deno.env.get("JWT_EXPIRES_IN") || "7d";
 
 export interface UserPayload {
   id: string;
@@ -21,23 +20,45 @@ export interface SessionData {
   expiresAt: Date;
 }
 
-// Hash password
+// Parse JWT expiration time string to milliseconds
+function parseExpirationTime(expiresIn: string): number {
+  const match = expiresIn.match(/^(\d+)([dhms])$/);
+  if (!match) throw new Error(`Invalid expiration time format: ${expiresIn}`);
+  
+  const value = parseInt(match[1]);
+  const unit = match[2];
+  
+  switch (unit) {
+    case 'd': return value * 24 * 60 * 60 * 1000; // days to ms
+    case 'h': return value * 60 * 60 * 1000; // hours to ms
+    case 'm': return value * 60 * 1000; // minutes to ms
+    case 's': return value * 1000; // seconds to ms
+    default: throw new Error(`Invalid time unit: ${unit}`);
+  }
+}
+
+// Hash password using Web Crypto API
 export async function hashPassword(password: string): Promise<string> {
-  const salt = await bcrypt.genSalt(10);
-  return await bcrypt.hash(password, salt);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(password);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  const hashArray = Array.from(new Uint8Array(hash));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // Verify password
 export async function verifyPassword(password: string, hashedPassword: string): Promise<boolean> {
-  return await bcrypt.compare(password, hashedPassword);
+  const hashedInput = await hashPassword(password);
+  return hashedInput === hashedPassword;
 }
 
 // Generate JWT token
 export async function generateToken(user: UserPayload): Promise<string> {
+  const config = getConfig();
   const token = await new SignJWT({ ...user })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
-    .setExpirationTime(JWT_EXPIRES_IN)
+    .setExpirationTime(config.auth.jwtExpiresIn)
     .sign(JWT_SECRET);
 
   return token;
@@ -77,6 +98,7 @@ export async function createUser(
 // Create user session
 export async function createSession(user: User): Promise<SessionData> {
   const prisma = await getPrismaClient();
+  const config = getConfig();
 
   const userPayload: UserPayload = {
     id: user.id,
@@ -86,7 +108,8 @@ export async function createSession(user: User): Promise<SessionData> {
   };
 
   const token = await generateToken(userPayload);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+  const expirationMs = parseExpirationTime(config.auth.jwtExpiresIn);
+  const expiresAt = new Date(Date.now() + expirationMs);
 
   // Store session in database
   await prisma.session.create({

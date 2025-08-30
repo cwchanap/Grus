@@ -5,6 +5,7 @@
  * Run with: deno run -A scripts/setup-prisma.ts
  */
 
+import "$std/dotenv/load.ts";
 import { getPrismaClient, closePrismaClient } from "../lib/auth/prisma-client.ts";
 
 async function setupPrisma() {
