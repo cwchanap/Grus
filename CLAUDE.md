@@ -140,7 +140,7 @@ The application supports **optional authentication** for enhanced features:
 
 2. **Test Account Credentials** (once authentication is set up):
    ```
-   Email:    test@grus.dev
+   Email:    test@example.com
    Username: testuser
    Password: testpass123
    Name:     Test User
