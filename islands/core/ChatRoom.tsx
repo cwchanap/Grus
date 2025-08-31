@@ -109,17 +109,17 @@ export default function ChatRoom({
   };
 
   return (
-    <div class="flex flex-col h-full bg-white rounded-lg shadow-sm border border-gray-200">
+    <div class="flex flex-col h-full w-full relative">
       {/* Chat Header */}
-      <div class="px-4 py-3 border-b border-gray-200 bg-gray-50 rounded-t-lg">
-        <h3 class="text-sm font-medium text-gray-900">Chat</h3>
+      <div class="px-4 py-3 border-b border-white/20 flex-shrink-0">
+        <h3 class="text-sm font-medium text-white">Chat</h3>
       </div>
 
-      {/* Messages */}
-      <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0">
+      {/* Messages - with bottom padding to account for fixed input */}
+      <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0 w-full pb-20">
         {chatMessages.length === 0
           ? (
-            <div class="text-center text-gray-500 text-sm py-8">
+            <div class="text-center text-white/60 text-sm py-8">
               No messages yet. Start the conversation!
             </div>
           )
@@ -127,7 +127,7 @@ export default function ChatRoom({
             chatMessages.map((message) => (
               <div
                 key={message.id}
-                class={`flex ${
+                class={`flex w-full ${
                   message.playerId === currentPlayerId ? "justify-end" : "justify-start"
                 }`}
               >
@@ -136,8 +136,8 @@ export default function ChatRoom({
                     message.playerId === currentPlayerId
                       ? "bg-blue-500 text-white"
                       : message.isSystemMessage
-                      ? "bg-yellow-100 text-yellow-800 border border-yellow-200"
-                      : "bg-gray-100 text-gray-900"
+                      ? "bg-yellow-400/20 text-yellow-100 border border-yellow-400/30"
+                      : "bg-white/20 text-white backdrop-blur-sm"
                   }`}
                 >
                   {message.playerId !== currentPlayerId && !message.isSystemMessage && (
@@ -157,9 +157,9 @@ export default function ChatRoom({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div class="p-4 border-t border-gray-200">
-        <form onSubmit={handleSubmit} class="flex space-x-2">
+      {/* Fixed Input at Bottom */}
+      <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-white/20 bg-white/5 backdrop-blur-md">
+        <form onSubmit={handleSubmit} class="flex space-x-2 w-full">
           <input
             ref={inputRef}
             type="text"
@@ -168,13 +168,13 @@ export default function ChatRoom({
             onKeyPress={handleKeyPress}
             placeholder={placeholder}
             disabled={disabled}
-            class="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed"
+            class="flex-1 px-3 py-2 bg-white/20 border border-white/30 rounded-md text-sm text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-white/50 focus:border-white/50 disabled:bg-white/10 disabled:cursor-not-allowed backdrop-blur-sm"
             maxLength={100}
           />
           <button
             type="submit"
             disabled={!inputValue.trim() || disabled}
-            class="px-4 py-2 bg-blue-500 text-white text-sm font-medium rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+            class="px-4 py-2 bg-white text-purple-600 text-sm font-medium rounded-md hover:bg-white/90 focus:outline-none focus:ring-2 focus:ring-white/50 focus:ring-offset-2 disabled:bg-white/20 disabled:text-white/50 disabled:cursor-not-allowed transition-colors"
           >
             Send
           </button>
