@@ -197,7 +197,7 @@ onDrawingCommandRef.current = onDrawingCommand;
           // Enable reliable image capture for tests (WebGL context)
           preserveDrawingBuffer: true,
         });
-      } catch (error) {
+      } catch (_error) {
 // Set fallback mode - completely disable Pixi.js and use 2D canvas
         setFallbackMode(true);
 
@@ -702,7 +702,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       }
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch start
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -727,7 +728,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       }
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch move
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -755,7 +757,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       }
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch end
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -802,7 +805,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       e.stopPropagation();
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch start
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -829,7 +833,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       e.stopPropagation();
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch move
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -854,7 +859,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       e.stopPropagation();
 
       try {
-} catch (_e) {
+        // Prevent console errors in restricted environments during touch end
+      } catch (_e) {
         // Intentionally ignore console errors in restricted environments
       }
 
@@ -920,7 +926,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       const onDomPointerDown = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current) return;
         try {
-} catch (_e) {
+          // Prevent console errors in restricted environments during pointer down
+        } catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -936,7 +943,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       const onDomPointerMove = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current || !isDrawingRef.current) return;
         try {
-} catch (_e) {
+          // Prevent console errors in restricted environments during pointer move
+        } catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -952,7 +960,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       const onDomPointerUp = (e: PointerEvent) => {
         if (!isDrawerRef.current || disabledRef.current) return;
         try {
-} catch (_e) {
+          // Prevent console errors in restricted environments during pointer up
+        } catch (_e) {
           // Intentionally ignore console errors in restricted environments
         }
         e.preventDefault();
@@ -1096,7 +1105,8 @@ onDrawingCommandRef.current = onDrawingCommand;
       } else if (onDrawingCommandRef.current) {
 onDrawingCommandRef.current(command);
       } else {
-}
+        // No drawing command handler available - this is expected during initialization
+      }
     }
   };
 
@@ -1154,7 +1164,8 @@ if (!isDrawingRef.current || !lastPointRef.current) return;
       } else if (onDrawingCommandRef.current) {
         onDrawingCommandRef.current(command);
       } else {
-}
+        // No drawing command handler available - this is expected during initialization
+      }
     }
   
     lastPointRef.current = { x, y };
@@ -1200,7 +1211,8 @@ if (!isDrawingRef.current) return;
       } else if (onDrawingCommandRef.current) {
         onDrawingCommandRef.current(command);
       } else {
-}
+        // No drawing command handler available - this is expected during initialization
+      }
     }
   };
 

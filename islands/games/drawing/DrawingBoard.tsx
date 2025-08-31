@@ -50,7 +50,7 @@ export default function DrawingBoard({
         } else {
           return false;
         }
-      } catch (err) {
+      } catch (_err) {
         return false;
       }
     };
