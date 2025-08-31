@@ -250,13 +250,13 @@ export default function RoomHeader(
   }, [room.room.id]);
 
   return (
-    <div class="bg-white rounded-lg shadow-md p-3 sm:p-4 lg:p-6 mb-3 sm:mb-4 lg:mb-6">
+    <div class="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 mb-4 lg:mb-6">
       <div class="flex flex-col xs:flex-row xs:justify-between xs:items-center gap-2 xs:gap-3">
         <div class="min-w-0 flex-1">
-          <h1 class="text-lg xs:text-xl sm:text-2xl font-bold text-gray-800 truncate">
+          <h1 class="text-lg xs:text-xl sm:text-2xl font-bold text-white truncate">
             {room.room.name}
           </h1>
-          <p class="text-xs sm:text-sm lg:text-base text-gray-600">
+          <p class="text-xs sm:text-sm lg:text-base text-white/80">
             <span class="inline xs:hidden">
               Host: <span>{(room.host?.name || "Unknown").slice(0, 10)}</span>
               {(room.host?.name || "").length > 10 && <span>...</span>}
@@ -265,7 +265,7 @@ export default function RoomHeader(
               Host: <span>{room.host?.name || "Unknown"}</span>
             </span>
             {playerId === room.host?.id && (
-              <span class="ml-1 text-yellow-600 font-semibold">(You)</span>
+              <span class="ml-1 text-yellow-300 font-semibold">(You)</span>
             )}
             <span class="mx-1">•</span>
             <span id="player-count-display">
@@ -279,7 +279,7 @@ export default function RoomHeader(
             <button
               type="button"
               onClick={() => setShowSettingsModal(true)}
-              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 active:bg-blue-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 active:bg-white/30 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight backdrop-blur-sm border border-white/20"
               title="Game Settings"
             >
               <span class="xs:hidden">⚙️</span>
@@ -290,13 +290,13 @@ export default function RoomHeader(
           <LeaveRoomButton
             roomId={room.room.id}
             playerId={playerId}
-            className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 active:bg-gray-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+            className="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 active:bg-white/30 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight backdrop-blur-sm border border-white/20"
           />
           {/* Fallback link in case the interactive button fails */}
           {(!playerId || playerId.trim() === "") && (
             <a
               href="/"
-              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 active:bg-blue-300 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight"
+              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-white/90 text-purple-600 rounded-lg hover:bg-white active:bg-white/80 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight font-semibold"
               title="Simple link back to lobby"
             >
               <span class="xs:hidden">← Home</span>

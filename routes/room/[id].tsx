@@ -160,17 +160,17 @@ export const handler: Handlers<GameRoomData> = {
 export default function GameRoom({ data }: PageProps<GameRoomData>) {
   if (data.error || !data.room) {
     return (
-      <div class="min-h-screen bg-gradient-to-br from-red-50 to-red-100 flex items-center justify-center">
+      <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center p-4">
         <div class="max-w-md mx-auto text-center">
-          <div class="bg-white rounded-lg shadow-lg p-8">
-            <div class="text-red-600 text-6xl mb-4">⚠️</div>
-            <h1 class="text-2xl font-bold text-gray-800 mb-2">Room Not Found</h1>
-            <p class="text-gray-600 mb-6">
+          <div class="bg-white/10 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 p-8">
+            <div class="text-white text-6xl mb-4">⚠️</div>
+            <h1 class="text-2xl font-bold text-white mb-2">Room Not Found</h1>
+            <p class="text-white/80 mb-6">
               {data.error || "The room you're looking for doesn't exist or is no longer available."}
             </p>
             <a
               href="/"
-              class="inline-block px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              class="inline-block px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 transition-colors font-semibold"
             >
               Back to Lobby
             </a>
@@ -188,13 +188,41 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   const drawingCommandHandler = createDrawingCommandHandler(room.room.id, playerId || "");
 
   return (
-    <div class="h-screen bg-gradient-to-br from-purple-50 to-pink-100 safe-area-inset flex flex-col">
-      <div class="container mx-auto px-2 sm:px-4 py-2 sm:py-4 lg:py-8 max-w-7xl flex flex-col flex-1 min-h-0 h-full">
+    <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 safe-area-inset">
+      {/* Fixed Top Navigation Bar */}
+      <div class="fixed top-0 left-0 right-0 z-50 bg-white/5 backdrop-blur-md border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 py-3">
+          <div class="flex justify-between items-center">
+            {/* Left side - Game Title */}
+            <div class="flex items-center space-x-3">
+              <h1 class="text-lg sm:text-xl font-bold text-white">
+                🎨 {room.room.name}
+              </h1>
+              <div class="text-xs text-white/60">
+                {gameState.players?.length || room.playerCount || 0}/{room.room.maxPlayers} players
+              </div>
+            </div>
+
+            {/* Right side - Room Actions */}
+            <div class="flex items-center gap-2">
+              <a
+                href="/"
+                class="px-4 py-2 bg-white/90 text-purple-600 rounded-lg hover:bg-white transition-colors font-medium text-sm shadow-lg backdrop-blur-sm"
+              >
+                ← Lobby
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content with top padding */}
+      <div class="pt-20 px-4 max-w-7xl mx-auto min-h-screen flex flex-col">
         {/* Player ID missing warning */}
         {(!playerId || playerId.trim() === "") && (
-          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3 mb-3 sm:mb-4">
-            <div class="flex items-center text-yellow-800">
-              <span class="text-yellow-600 mr-2">⚠️</span>
+          <div class="bg-yellow-400/20 border border-yellow-400/30 rounded-lg p-3 mb-4 backdrop-blur-sm">
+            <div class="flex items-center text-yellow-100">
+              <span class="text-yellow-200 mr-2">⚠️</span>
               <div class="text-sm">
                 <strong>Limited functionality:</strong>{" "}
                 Some features may not work properly because player information is missing.
@@ -213,11 +241,11 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
         />
 
         {/* Game area - Drawing board and scoreboard on same row, chat below */}
-        <div class="game-container flex flex-col gap-3 sm:gap-4 lg:gap-6 flex-1 min-h-0">
+        <div class="game-container flex flex-col gap-4 lg:gap-6 flex-1 min-h-0 pb-4">
           {/* Top row - Drawing board and scoreboard side by side */}
-          <div class="flex flex-col lg:flex-row gap-3 sm:gap-4 lg:gap-6 h-auto">
+          <div class="flex flex-col lg:flex-row gap-4 lg:gap-6 h-auto">
             {/* Drawing board area - takes 70% on desktop */}
-            <div class="lg:w-[70%] bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6">
+            <div class="lg:w-[70%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6">
               <div class="drawing-area overflow-hidden">
                 {room.room.gameType === "drawing"
                   ? (
@@ -232,7 +260,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                     />
                   )
                   : (
-                    <div class="flex items-center justify-center h-64 text-gray-500">
+                    <div class="flex items-center justify-center h-64 text-white/70">
                       Game type "{room.room.gameType}" not yet implemented
                     </div>
                   )}
@@ -240,7 +268,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
             </div>
 
             {/* Scoreboard - takes 30% on desktop, full width on mobile */}
-            <div class="lg:w-[30%] bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex flex-col">
+            <div class="lg:w-[30%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 flex flex-col">
               <div class="flex-1 min-h-0">
                 <Scoreboard
                   roomId={room.room.id}
@@ -253,7 +281,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
 
           {/* Bottom row - Chat stretches full width and remaining height */}
-          <div class="bg-white rounded-lg shadow-md p-2 sm:p-3 lg:p-6 flex-1 min-h-0 flex flex-col">
+          <div class="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 flex-1 min-h-0 flex flex-col">
             <div class="flex-1 min-h-0">
               <ChatRoom
                 roomId={room.room.id}
