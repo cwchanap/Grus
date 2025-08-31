@@ -22,9 +22,12 @@ export default function UserProfile({ user }: UserProfileProps) {
     newPassword: "",
     confirmPassword: "",
   });
+  const [displayName, setDisplayName] = useState(user.name || "");
+  const [isEditingName, setIsEditingName] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
+  const [nameLoading, setNameLoading] = useState(false);
 
   const handlePasswordChange = async (e: Event) => {
     e.preventDefault();
@@ -83,6 +86,50 @@ export default function UserProfile({ user }: UserProfileProps) {
       ...passwordData,
       [target.name]: target.value,
     });
+  };
+
+  const handleDisplayNameUpdate = async () => {
+    setError("");
+    setSuccess("");
+    setNameLoading(true);
+
+    try {
+      const response = await fetch("/api/auth/update-profile", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: displayName.trim(),
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setError(data.error || "Failed to update display name");
+        return;
+      }
+
+      setSuccess("Display name updated successfully!");
+      setIsEditingName(false);
+      
+      // Update the user object in the URL or reload to reflect changes
+      setTimeout(() => {
+        globalThis.location.reload();
+      }, 1000);
+    } catch (_err) {
+      setError("An error occurred. Please try again.");
+    } finally {
+      setNameLoading(false);
+    }
+  };
+
+  const handleCancelNameEdit = () => {
+    setDisplayName(user.name || "");
+    setIsEditingName(false);
+    setError("");
+    setSuccess("");
   };
 
   const generateAvatarUrl = (username: string) => {
@@ -174,11 +221,52 @@ export default function UserProfile({ user }: UserProfileProps) {
                   <Users className="w-4 h-4" />
                   Display Name
                 </Label>
-                <Input
-                  value={user.name || "Not set"}
-                  disabled
-                  className="bg-gray-50"
-                />
+                {isEditingName ? (
+                  <div className="space-y-2">
+                    <Input
+                      value={displayName}
+                      onInput={(e) => setDisplayName((e.target as HTMLInputElement).value)}
+                      placeholder="Enter display name"
+                      maxLength={100}
+                      disabled={nameLoading}
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleDisplayNameUpdate}
+                        disabled={nameLoading}
+                      >
+                        {nameLoading ? "Saving..." : "Save"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCancelNameEdit}
+                        disabled={nameLoading}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      value={user.name || "Not set"}
+                      disabled
+                      className="bg-gray-50 flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setIsEditingName(true)}
+                    >
+                      Edit
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           </CardContent>
