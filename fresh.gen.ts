@@ -6,6 +6,7 @@ import * as $_404 from "./routes/_404.tsx";
 import * as $_app from "./routes/_app.tsx";
 import * as $_middleware from "./routes/_middleware.ts";
 import * as $api_admin_cleanup_rooms from "./routes/api/admin/cleanup-rooms.ts";
+import * as $api_auth_change_password from "./routes/api/auth/change-password.ts";
 import * as $api_auth_login from "./routes/api/auth/login.ts";
 import * as $api_auth_logout from "./routes/api/auth/logout.ts";
 import * as $api_auth_me from "./routes/api/auth/me.ts";
@@ -22,6 +23,7 @@ import * as $api_websocket from "./routes/api/websocket.ts";
 import * as $greet_name_ from "./routes/greet/[name].tsx";
 import * as $index from "./routes/index.tsx";
 import * as $login from "./routes/login.tsx";
+import * as $profile from "./routes/profile.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
 import * as $signup from "./routes/signup.tsx";
 import * as $websocket_test from "./routes/websocket-test.tsx";
@@ -33,6 +35,7 @@ import * as $LoginForm from "./islands/LoginForm.tsx";
 import * as $RoomHeader from "./islands/RoomHeader.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
 import * as $SignupForm from "./islands/SignupForm.tsx";
+import * as $UserProfile from "./islands/UserProfile.tsx";
 import * as $core_ChatRoom from "./islands/core/ChatRoom.tsx";
 import * as $core_GameLobby from "./islands/core/GameLobby.tsx";
 import * as $core_MainLobby from "./islands/core/MainLobby.tsx";
@@ -47,6 +50,7 @@ const manifest = {
     "./routes/_app.tsx": $_app,
     "./routes/_middleware.ts": $_middleware,
     "./routes/api/admin/cleanup-rooms.ts": $api_admin_cleanup_rooms,
+    "./routes/api/auth/change-password.ts": $api_auth_change_password,
     "./routes/api/auth/login.ts": $api_auth_login,
     "./routes/api/auth/logout.ts": $api_auth_logout,
     "./routes/api/auth/me.ts": $api_auth_me,
@@ -63,6 +67,7 @@ const manifest = {
     "./routes/greet/[name].tsx": $greet_name_,
     "./routes/index.tsx": $index,
     "./routes/login.tsx": $login,
+    "./routes/profile.tsx": $profile,
     "./routes/room/[id].tsx": $room_id_,
     "./routes/signup.tsx": $signup,
     "./routes/websocket-test.tsx": $websocket_test,
@@ -76,6 +81,7 @@ const manifest = {
     "./islands/RoomHeader.tsx": $RoomHeader,
     "./islands/Scoreboard.tsx": $Scoreboard,
     "./islands/SignupForm.tsx": $SignupForm,
+    "./islands/UserProfile.tsx": $UserProfile,
     "./islands/core/ChatRoom.tsx": $core_ChatRoom,
     "./islands/core/GameLobby.tsx": $core_GameLobby,
     "./islands/core/MainLobby.tsx": $core_MainLobby,

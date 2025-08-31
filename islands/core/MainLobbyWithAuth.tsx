@@ -28,6 +28,22 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
   const [user, setUser] = useState<UserPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Generate avatar color based on username
+  const generateAvatarColor = (username: string) => {
+    const colors = [
+      "bg-red-500",
+      "bg-blue-500",
+      "bg-green-500", 
+      "bg-yellow-500",
+      "bg-purple-500",
+      "bg-pink-500",
+      "bg-indigo-500",
+      "bg-gray-500"
+    ];
+    const colorIndex = username.charCodeAt(0) % colors.length;
+    return colors[colorIndex];
+  };
+
   // Check authentication status on mount
   useEffect(() => {
     checkAuthStatus();
@@ -145,38 +161,60 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 p-4">
-      <div className="max-w-6xl mx-auto">
-        {/* Header with Auth Status */}
-        <div className="mb-8 text-center">
-          <div className="flex justify-between items-start mb-4">
+      {/* Fixed Top Navigation Bar */}
+      <div className="fixed top-0 left-0 right-0 z-50 bg-white/5 backdrop-blur-md border-b border-white/10">
+        <div className="max-w-6xl mx-auto px-4 py-3">
+          <div className="flex justify-between items-center">
+            {/* Left side - Connection Status */}
             <ConnectionStatus />
 
-            {/* Auth Status */}
+            {/* Right side - User Badge */}
             <div className="flex items-center gap-2">
               {!loading && (
                 user
                   ? (
-                    <div className="flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg px-4 py-2">
-                      <User className="w-5 h-5 text-white" />
-                      <span className="text-white font-medium">
-                        {user.name || user.username}
-                      </span>
-                      <Button
-                        onClick={handleLogout}
-                        variant="ghost"
-                        size="sm"
-                        className="text-white hover:bg-white/20"
-                      >
-                        <LogOut className="w-4 h-4 mr-1" />
-                        Logout
-                      </Button>
+                    <div className="flex items-center gap-2 bg-white/15 backdrop-blur-sm rounded-full px-4 py-2 border border-white/20 shadow-lg">
+                      {/* User Avatar - Larger and more prominent */}
+                      <div className={`w-10 h-10 rounded-full ${generateAvatarColor(user.username)} flex items-center justify-center text-white text-lg font-bold shadow-md ring-2 ring-white/30`}>
+                        {(user.name || user.username).charAt(0).toUpperCase()}
+                      </div>
+                      <div className="hidden sm:flex flex-col items-start">
+                        <span className="text-white font-semibold text-sm leading-tight">
+                          {user.name || user.username}
+                        </span>
+                        <span className="text-white/70 text-xs">
+                          {user.email}
+                        </span>
+                      </div>
+                      {/* Profile and Logout buttons */}
+                      <div className="flex items-center gap-1">
+                        <a href="/profile">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-white hover:bg-white/20 rounded-full h-8 w-8 p-0 sm:w-auto sm:px-3"
+                          >
+                            <User className="w-4 h-4" />
+                            <span className="hidden sm:inline sm:ml-1">Profile</span>
+                          </Button>
+                        </a>
+                        <Button
+                          onClick={handleLogout}
+                          variant="ghost"
+                          size="sm"
+                          className="text-white hover:bg-white/20 rounded-full h-8 w-8 p-0 sm:w-auto sm:px-3"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          <span className="hidden sm:inline sm:ml-1">Logout</span>
+                        </Button>
+                      </div>
                     </div>
                   )
                   : (
                     <a href="/login">
                       <Button
                         variant="default"
-                        className="bg-white text-purple-600 hover:bg-gray-100"
+                        className="bg-white/90 text-purple-600 hover:bg-white shadow-lg backdrop-blur-sm"
                       >
                         <LogIn className="w-4 h-4 mr-2" />
                         Login
@@ -186,7 +224,13 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
               )}
             </div>
           </div>
+        </div>
+      </div>
 
+      {/* Main Content with top padding to account for fixed nav */}
+      <div className="max-w-6xl mx-auto pt-20">
+        {/* Header */}
+        <div className="mb-8 text-center">
           <h1 className="text-5xl font-bold text-white mb-2 flex items-center justify-center gap-3">
             <Gamepad2 className="w-12 h-12" />
             Grus Drawing Game

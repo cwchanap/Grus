@@ -176,130 +176,158 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
   }
 
   return (
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-      {/* Header with connection status and create button - Mobile responsive */}
-      <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
-        <div class="flex items-center justify-between sm:justify-start sm:space-x-4">
-          <button
-            type="button"
-            onClick={refreshRooms}
-            disabled={loading}
-            class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
-          >
-            <span class={`text-sm ${loading ? "animate-spin" : ""}`}>
-              {loading ? "⟳" : "↻"}
-            </span>
-            <span class="hidden xs:inline">Refresh</span>
-          </button>
-
-          <div class="flex items-center space-x-2">
-            <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-yellow-400"}`}>
+    <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 p-4">
+      {/* Fixed Top Navigation Bar */}
+      <div class="fixed top-0 left-0 right-0 z-50 bg-white/5 backdrop-blur-md border-b border-white/10">
+        <div class="max-w-6xl mx-auto px-4 py-3">
+          <div class="flex justify-between items-center">
+            {/* Left side - App Title and Connection Status */}
+            <div class="flex items-center space-x-3">
+              <h1 class="text-lg sm:text-xl font-bold text-white">
+                🎨 Drawing Game
+              </h1>
+              <div class="flex items-center space-x-1">
+                <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-yellow-400"}`}>
+                </div>
+                <span class="text-xs text-white/60">
+                  {wsConnected ? "Connected" : (isDev ? "Dev" : "")}
+                </span>
+              </div>
             </div>
-            <span class="text-xs sm:text-sm text-white/80">
-              {wsConnected ? "Connected" : (isDev ? "Dev Mode" : "")}
-            </span>
+
+            {/* Right side - User Auth */}
+            <div class="flex items-center gap-2">
+              {user
+                ? (
+                  <div class="flex items-center gap-2 bg-white/15 backdrop-blur-sm rounded-full px-4 py-2 border border-white/20 shadow-lg">
+                    <span class="text-white font-semibold text-sm">
+                      👤 {user.name || user.username}
+                    </span>
+                    <a
+                      href="/api/auth/logout"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        await fetch("/api/auth/logout", { method: "POST" });
+                        globalThis.location.reload();
+                      }}
+                      class="text-xs text-white/80 hover:text-white transition-colors"
+                    >
+                      Logout
+                    </a>
+                  </div>
+                )
+                : (
+                  <a
+                    href="/login"
+                    class="px-4 py-2 bg-white/90 text-purple-600 rounded-lg hover:bg-white transition-colors font-medium text-sm shadow-lg backdrop-blur-sm"
+                  >
+                    Login
+                  </a>
+                )}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Content with top padding to account for fixed nav */}
+      <div class="max-w-6xl mx-auto pt-20 px-4 sm:px-6 lg:px-8">
+        {/* App description */}
+        <div class="text-center mb-6">
+          <p class="text-sm sm:text-base text-white/90 max-w-2xl mx-auto">
+            Join a room or create your own to start playing with friends!
+          </p>
+        </div>
+
+        {/* Header with refresh button and create button - Mobile responsive */}
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+          <div class="flex items-center justify-between sm:justify-start sm:space-x-4">
+            <button
+              type="button"
+              onClick={refreshRooms}
+              disabled={loading}
+              class="flex items-center space-x-2 px-3 py-2 sm:px-4 sm:py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors disabled:opacity-50 touch-manipulation no-tap-highlight"
+            >
+              <span class={`text-sm ${loading ? "animate-spin" : ""}`}>
+                {loading ? "⟳" : "↻"}
+              </span>
+              <span class="hidden xs:inline">Refresh</span>
+            </button>
+          </div>
+
+          <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto items-center">
+            {isDev && (
+              <button
+                type="button"
+                onClick={handleCleanupDanglingRooms}
+                disabled={cleanupLoading}
+                class="w-full sm:w-auto px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 active:bg-amber-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch disabled:opacity-60"
+                title="Delete rooms with no players"
+              >
+                {cleanupLoading ? "Cleaning…" : "Clear Dangling Rooms"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleCreateRoom}
+              class="w-full sm:w-auto px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
+            >
+              <span class="sm:hidden">+ New Room</span>
+              <span class="hidden sm:inline">+ Create Room</span>
+            </button>
           </div>
         </div>
 
-        <div class="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full sm:w-auto items-center">
-          {/* User authentication status */}
-          {user
+        {isDev && <div class="text-yellow-300 font-bold">Dev Mode Enabled</div>}
+
+        {/* Room list - Enhanced mobile grid */}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {rooms.length === 0
             ? (
-              <div class="flex items-center gap-2 px-3 py-2 bg-white/20 text-white rounded-lg">
-                <span class="text-sm font-medium">👤 {user.name || user.username}</span>
-                <a
-                  href="/api/auth/logout"
-                  onClick={async (e) => {
-                    e.preventDefault();
-                    await fetch("/api/auth/logout", { method: "POST" });
-                    globalThis.location.reload();
-                  }}
-                  class="text-xs underline hover:no-underline cursor-pointer text-white/80"
+              <div class="col-span-full text-center py-12 px-4">
+                <div class="text-white/60 text-4xl sm:text-6xl mb-4">🎨</div>
+                <h3 class="text-lg sm:text-xl font-semibold text-white mb-2">
+                  No active rooms
+                </h3>
+                <p class="text-sm sm:text-base text-white/80 mb-6 max-w-md mx-auto">
+                  Be the first to create a room and start playing!
+                </p>
+                <button
+                  type="button"
+                  onClick={handleCreateRoom}
+                  class="px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors touch-manipulation no-tap-highlight"
                 >
-                  Logout
-                </a>
+                  Create First Room
+                </button>
               </div>
             )
             : (
-              <a
-                href="/login"
-                class="px-4 py-2 bg-white/20 text-white rounded-lg hover:bg-white/30 transition-colors font-medium text-sm"
-              >
-                Login
-              </a>
+              rooms.map((roomSummary) => (
+                <RoomCard
+                  key={roomSummary.room.id}
+                  roomSummary={roomSummary}
+                  onJoin={() => handleJoinRoom(roomSummary)}
+                />
+              ))
             )}
-          {isDev && (
-            <button
-              type="button"
-              onClick={handleCleanupDanglingRooms}
-              disabled={cleanupLoading}
-              class="w-full sm:w-auto px-4 py-3 bg-amber-600 text-white rounded-lg hover:bg-amber-700 active:bg-amber-800 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch disabled:opacity-60"
-              title="Delete rooms with no players"
-            >
-              {cleanupLoading ? "Cleaning…" : "Clear Dangling Rooms"}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleCreateRoom}
-            class="w-full sm:w-auto px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors font-semibold touch-manipulation no-tap-highlight text-touch"
-          >
-            <span class="sm:hidden">+ New Room</span>
-            <span class="hidden sm:inline">+ Create Room</span>
-          </button>
         </div>
+
+        {/* Modals */}
+        <CreateRoomModal
+          show={showCreateModal.value}
+          onClose={() => showCreateModal.value = false}
+          onSuccess={handleRoomCreated}
+        />
+
+        <JoinRoomModal
+          show={showJoinModal.value}
+          room={selectedRoom.value}
+          onClose={() => {
+            showJoinModal.value = false;
+            selectedRoom.value = null;
+          }}
+          onSuccess={handleRoomJoined}
+        />
       </div>
-
-      {isDev && <div class="text-yellow-300 font-bold">Dev Mode Enabled</div>}
-
-      {/* Room list - Enhanced mobile grid */}
-      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {rooms.length === 0
-          ? (
-            <div class="col-span-full text-center py-12 px-4">
-              <div class="text-white/60 text-4xl sm:text-6xl mb-4">🎨</div>
-              <h3 class="text-lg sm:text-xl font-semibold text-white mb-2">
-                No active rooms
-              </h3>
-              <p class="text-sm sm:text-base text-white/80 mb-6 max-w-md mx-auto">
-                Be the first to create a room and start playing!
-              </p>
-              <button
-                type="button"
-                onClick={handleCreateRoom}
-                class="px-6 py-3 bg-white text-purple-600 rounded-lg hover:bg-white/90 active:bg-white/80 transition-colors touch-manipulation no-tap-highlight"
-              >
-                Create First Room
-              </button>
-            </div>
-          )
-          : (
-            rooms.map((roomSummary) => (
-              <RoomCard
-                key={roomSummary.room.id}
-                roomSummary={roomSummary}
-                onJoin={() => handleJoinRoom(roomSummary)}
-              />
-            ))
-          )}
-      </div>
-
-      {/* Modals */}
-      <CreateRoomModal
-        show={showCreateModal.value}
-        onClose={() => showCreateModal.value = false}
-        onSuccess={handleRoomCreated}
-      />
-
-      <JoinRoomModal
-        show={showJoinModal.value}
-        room={selectedRoom.value}
-        onClose={() => {
-          showJoinModal.value = false;
-          selectedRoom.value = null;
-        }}
-        onSuccess={handleRoomJoined}
-      />
     </div>
   );
 }

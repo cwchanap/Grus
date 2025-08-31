@@ -72,24 +72,11 @@ export const handler: Handlers<LobbyData> = {
 
 export default function Home({ data }: PageProps<LobbyData>) {
   return (
-    <div class="min-h-screen-safe bg-gradient-to-br from-purple-600 to-blue-600 safe-area-inset">
-      <div class="container mx-auto px-3 sm:px-4 lg:px-8 py-4 sm:py-6 lg:py-8 max-w-7xl">
-        <div class="text-center mb-6 sm:mb-8">
-          <h1 class="text-2xl xs:text-3xl sm:text-4xl lg:text-5xl font-bold text-white mb-2 sm:mb-4">
-            🎨 Drawing Game
-          </h1>
-          <p class="text-sm sm:text-base lg:text-lg text-white/90 max-w-2xl mx-auto px-4">
-            Join a room or create your own to start playing with friends!
-          </p>
-        </div>
-
-        <MainLobby
-          initialRooms={data.rooms}
-          error={data.error}
-          isDev={data.isDev}
-          user={data.user}
-        />
-      </div>
-    </div>
+    <MainLobby
+      initialRooms={data.rooms}
+      error={data.error}
+      isDev={data.isDev}
+      user={data.user}
+    />
   );
 }
