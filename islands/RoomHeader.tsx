@@ -24,7 +24,7 @@ export default function RoomHeader(
 
   // Debug logging for host changes
   useEffect(() => {
-    }, [room.host, playerId]);
+  }, [room.host, playerId]);
 
   // Handle settings save
   const handleSettingsSave = (

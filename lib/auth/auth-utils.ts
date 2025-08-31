@@ -24,16 +24,21 @@ export interface SessionData {
 function parseExpirationTime(expiresIn: string): number {
   const match = expiresIn.match(/^(\d+)([dhms])$/);
   if (!match) throw new Error(`Invalid expiration time format: ${expiresIn}`);
-  
+
   const value = parseInt(match[1]);
   const unit = match[2];
-  
+
   switch (unit) {
-    case 'd': return value * 24 * 60 * 60 * 1000; // days to ms
-    case 'h': return value * 60 * 60 * 1000; // hours to ms
-    case 'm': return value * 60 * 1000; // minutes to ms
-    case 's': return value * 1000; // seconds to ms
-    default: throw new Error(`Invalid time unit: ${unit}`);
+    case "d":
+      return value * 24 * 60 * 60 * 1000; // days to ms
+    case "h":
+      return value * 60 * 60 * 1000; // hours to ms
+    case "m":
+      return value * 60 * 1000; // minutes to ms
+    case "s":
+      return value * 1000; // seconds to ms
+    default:
+      throw new Error(`Invalid time unit: ${unit}`);
   }
 }
 
@@ -43,7 +48,7 @@ export async function hashPassword(password: string): Promise<string> {
   const data = encoder.encode(password);
   const hash = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hash));
-  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 // Verify password

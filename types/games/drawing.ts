@@ -56,6 +56,7 @@ export interface DrawingServerMessage extends BaseServerMessage {
     | "room-update"
     | "chat-message"
     | "draw-update"
+    | "draw-update-batch"
     | "game-state"
     | "score-update"
     | "host-changed"

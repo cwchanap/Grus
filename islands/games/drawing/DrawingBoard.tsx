@@ -25,7 +25,7 @@ export default function DrawingBoard({
   roomId,
 }: DrawingBoardProps) {
   const engineRef = useRef<DrawingEngineRef | null>(null);
-  
+
   // Create a stable callback that always uses the latest onDrawCommand value.
   // If onDrawCommand is not provided (e.g., cannot be serialized from SSR),
   // fall back to sending over the global WebSocket managed by Scoreboard.
@@ -105,7 +105,10 @@ export default function DrawingBoard({
         if (!send()) {
           setTimeout(() => {
             if (!send()) {
-              console.error("DrawingBoard: failed to send batched draw commands after retries", commands);
+              console.error(
+                "DrawingBoard: failed to send batched draw commands after retries",
+                commands,
+              );
             }
           }, 500);
         }
@@ -163,24 +166,36 @@ export default function DrawingBoard({
     const handler = (evt: Event) => {
       const anyEvt = evt as CustomEvent;
       const msg = anyEvt.detail?.data as any;
-      if (!msg || msg.type !== "draw-update") return;
+      if (!msg || (msg.type !== "draw-update" && msg.type !== "draw-update-batch")) return;
 
       const payload = msg.data;
-      // Support multiple payload shapes:
-      // 1) data is a single DrawingCommand (server current behavior)
-      // 2) data.command is a single command
-      // 3) data.commands is an array of commands
-      if (payload) {
-        if (Array.isArray((payload as any).commands)) {
-          for (const cmd of (payload as any).commands as DrawingCommand[]) {
+
+      if (msg.type === "draw-update-batch") {
+        // Handle batched commands
+        const commands = payload?.commands;
+        if (Array.isArray(commands)) {
+          for (const cmd of commands as DrawingCommand[]) {
             engineRef.current?.applyDrawingCommand(cmd);
           }
-        } else if ((payload as any).command) {
-          const cmd = (payload as any).command as DrawingCommand;
-          engineRef.current?.applyDrawingCommand(cmd);
-        } else if (typeof payload === "object" && (payload as any).type) {
-          const cmd = payload as DrawingCommand;
-          engineRef.current?.applyDrawingCommand(cmd);
+        }
+      } else {
+        // Handle single command (existing behavior)
+        // Support multiple payload shapes:
+        // 1) data is a single DrawingCommand (server current behavior)
+        // 2) data.command is a single command
+        // 3) data.commands is an array of commands
+        if (payload) {
+          if (Array.isArray((payload as any).commands)) {
+            for (const cmd of (payload as any).commands as DrawingCommand[]) {
+              engineRef.current?.applyDrawingCommand(cmd);
+            }
+          } else if ((payload as any).command) {
+            const cmd = (payload as any).command as DrawingCommand;
+            engineRef.current?.applyDrawingCommand(cmd);
+          } else if (typeof payload === "object" && (payload as any).type) {
+            const cmd = payload as DrawingCommand;
+            engineRef.current?.applyDrawingCommand(cmd);
+          }
         }
       }
     };

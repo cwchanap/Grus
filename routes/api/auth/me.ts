@@ -6,7 +6,7 @@ export const handler: Handlers = {
   async GET(req) {
     try {
       const config = getConfig();
-      
+
       // Get token from cookie or Authorization header
       const cookie = req.headers.get("Cookie");
       const authHeader = req.headers.get("Authorization");

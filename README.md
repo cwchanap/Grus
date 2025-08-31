@@ -63,12 +63,14 @@ deno task check
 For testing and development purposes, you can use these test accounts:
 
 ### Test Account 1
+
 - **Email**: test@example.com
 - **Username**: testuser
 - **Password**: password123
 - **Name**: Test User
 
 ### Test Account 2 (Verified Working)
+
 - **Email**: test2@example.com
 - **Username**: testuser2
 - **Password**: password123

@@ -187,7 +187,9 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
                 🎨 Drawing Game
               </h1>
               <div class="flex items-center space-x-1">
-                <div class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-yellow-400"}`}>
+                <div
+                  class={`w-2 h-2 rounded-full ${wsConnected ? "bg-green-400" : "bg-yellow-400"}`}
+                >
                 </div>
                 <span class="text-xs text-white/60">
                   {wsConnected ? "Connected" : (isDev ? "Dev" : "")}

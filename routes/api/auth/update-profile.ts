@@ -63,10 +63,10 @@ export const handler: Handlers = {
       });
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
+        JSON.stringify({
+          success: true,
           message: "Display name updated successfully",
-          user: updatedUser 
+          user: updatedUser,
         }),
         {
           status: 200,

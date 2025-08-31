@@ -323,6 +323,10 @@ Deno.test("DrawingBoard - Real-time synchronization flow", () => {
       } else if (message.data.commands) {
         receivedCommands.push(...message.data.commands);
       }
+    } else if (message.type === "draw-update-batch") {
+      if (message.data.commands) {
+        receivedCommands.push(...message.data.commands);
+      }
     }
   };
 

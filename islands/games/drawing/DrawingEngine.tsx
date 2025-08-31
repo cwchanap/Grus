@@ -39,7 +39,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
   height = 600,
   disabled = false,
 }: DrawingEngineProps, ref) => {
-const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const pixiAppRef = useRef<PIXI.Application | null>(null);
   const drawingContainerRef = useRef<PIXI.Container | null>(null);
   const currentPathRef = useRef<PIXI.Graphics | null>(null);
@@ -52,20 +52,24 @@ const canvasRef = useRef<HTMLCanvasElement>(null);
   const disabledRef = useRef<boolean>(disabled);
   // Store the callback in a ref to avoid stale closures
   // Initialize with the initial prop values
-  const onDrawingCommandRef = useRef<((command: DrawingCommand) => void) | undefined>(onDrawingCommand);
-  const onDrawingCommandsRef = useRef<((commands: DrawingCommand[]) => void) | undefined>(onDrawingCommands);
-  
+  const onDrawingCommandRef = useRef<((command: DrawingCommand) => void) | undefined>(
+    onDrawingCommand,
+  );
+  const onDrawingCommandsRef = useRef<((commands: DrawingCommand[]) => void) | undefined>(
+    onDrawingCommands,
+  );
+
   // Always update refs to the latest values to avoid stale closures
   onDrawingCommandRef.current = onDrawingCommand;
   onDrawingCommandsRef.current = onDrawingCommands;
-  
+
   useEffect(() => {
     isDrawerRef.current = isDrawer;
     disabledRef.current = disabled;
   }, [isDrawer, disabled]);
-  
+
   useEffect(() => {
-onDrawingCommandRef.current = onDrawingCommand;
+    onDrawingCommandRef.current = onDrawingCommand;
     onDrawingCommandsRef.current = onDrawingCommands;
   }, [onDrawingCommand, onDrawingCommands]);
   // 2D canvas fallback when Pixi is not ready
@@ -146,11 +150,11 @@ onDrawingCommandRef.current = onDrawingCommand;
           onDrawingCommandsRef.current(commands);
         } else if (onDrawingCommandRef.current) {
           // Fallback to individual command sending
-          commands.forEach(cmd => onDrawingCommandRef.current!(cmd));
+          commands.forEach((cmd) => onDrawingCommandRef.current!(cmd));
         }
       },
       10, // buffer size
-      100 // timeout in ms
+      100, // timeout in ms
     );
 
     return () => {
@@ -193,12 +197,12 @@ onDrawingCommandRef.current = onDrawingCommand;
           resolution: globalThis.devicePixelRatio || 1,
           autoDensity: true,
           // Force WebGL renderer to avoid WebGPU blend-mode conflicts
-          preference: 'webgl',
+          preference: "webgl",
           // Enable reliable image capture for tests (WebGL context)
           preserveDrawingBuffer: true,
         });
       } catch (_error) {
-// Set fallback mode - completely disable Pixi.js and use 2D canvas
+        // Set fallback mode - completely disable Pixi.js and use 2D canvas
         setFallbackMode(true);
 
         // Initialize 2D canvas context for fallback drawing
@@ -458,7 +462,9 @@ onDrawingCommandRef.current = onDrawingCommand;
         }
       },
       isReady: () =>
-        fallbackMode ? !!twoDRef.current : !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
+        fallbackMode
+          ? !!twoDRef.current
+          : !!(pixiAppRef.current && (drawingContainerRef.current || pixiAppRef.current!.stage)),
       waitUntilReady: async (timeoutMs = 3000) => {
         const start = globalThis.performance?.now?.() ?? Date.now();
         while (((globalThis.performance?.now?.() ?? Date.now()) - start) < timeoutMs) {
@@ -661,17 +667,17 @@ onDrawingCommandRef.current = onDrawingCommand;
     };
 
     // Add event listeners
-    canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
-    canvas.addEventListener('pointermove', onPointerMove, { passive: false });
-    canvas.addEventListener('pointerup', onPointerUp, { passive: false });
-    canvas.addEventListener('pointercancel', onPointerUp, { passive: false });
+    canvas.addEventListener("pointerdown", onPointerDown, { passive: false });
+    canvas.addEventListener("pointermove", onPointerMove, { passive: false });
+    canvas.addEventListener("pointerup", onPointerUp, { passive: false });
+    canvas.addEventListener("pointercancel", onPointerUp, { passive: false });
 
     // Cleanup function
     return () => {
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointermove', onPointerMove);
-      canvas.removeEventListener('pointerup', onPointerUp);
-      canvas.removeEventListener('pointercancel', onPointerUp);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
     };
   }, [fallbackMode, isDrawer, disabled]);
 
@@ -1098,12 +1104,12 @@ onDrawingCommandRef.current = onDrawingCommand;
     // Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-    
+
       // Send via throttler for network optimization
       if (throttlerRef.current && onDrawingCommandRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommandRef.current);
       } else if (onDrawingCommandRef.current) {
-onDrawingCommandRef.current(command);
+        onDrawingCommandRef.current(command);
       } else {
         // No drawing command handler available - this is expected during initialization
       }
@@ -1111,13 +1117,13 @@ onDrawingCommandRef.current(command);
   };
 
   const continueDrawing = (x: number, y: number) => {
-if (!isDrawingRef.current || !lastPointRef.current) return;
-  
+    if (!isDrawingRef.current || !lastPointRef.current) return;
+
     if (fallbackMode) {
       continueDrawing2D(x, y);
       return;
     }
-  
+
     // Draw line from last point to current point with correct API order per version
     const g = currentPathRef.current;
     if (g) {
@@ -1143,7 +1149,7 @@ if (!isDrawingRef.current || !lastPointRef.current) return;
       ctx.lineTo(x, y);
       ctx.stroke();
     }
-  
+
     // Create drawing command
     const command: DrawingCommand = {
       type: "move",
@@ -1153,11 +1159,11 @@ if (!isDrawingRef.current || !lastPointRef.current) return;
       size: currentTool.size,
       timestamp: Date.now(),
     };
-  
-// Validate and add to history
+
+    // Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-    
+
       // Send via throttler for network optimization
       if (throttlerRef.current && onDrawingCommandRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommandRef.current);
@@ -1167,13 +1173,13 @@ if (!isDrawingRef.current || !lastPointRef.current) return;
         // No drawing command handler available - this is expected during initialization
       }
     }
-  
+
     lastPointRef.current = { x, y };
   };
 
   const endDrawing = () => {
-if (!isDrawingRef.current) return;
-  
+    if (!isDrawingRef.current) return;
+
     if (fallbackMode) {
       endDrawing2D();
     } else {
@@ -1187,24 +1193,24 @@ if (!isDrawingRef.current) return;
         twoDRef.current = null;
       }
     }
-  
+
     isDrawingRef.current = false;
     currentPathRef.current = null;
     lastPointRef.current = null;
-  
+
     // Create end command
     const command: DrawingCommand = {
       type: "end",
       timestamp: Date.now(),
     };
-  
-// Save current state for undo
+
+    // Save current state for undo
     setUndoStack((prev) => [...prev, [...drawingHistory]]);
-  
+
     // Validate and add to history
     if (validateDrawingCommand(command)) {
       setDrawingHistory((prev) => [...prev, command]);
-    
+
       // Send via throttler for network optimization
       if (throttlerRef.current && onDrawingCommandRef.current) {
         throttlerRef.current.throttle(command, onDrawingCommandRef.current);
@@ -1562,9 +1568,13 @@ if (!isDrawingRef.current) return;
 
       {/* Status */}
       <div class="mt-2 text-sm text-gray-600">
-        {disabled ? "Drawing disabled" :
-         fallbackMode ? "Drawing (2D mode)" :
-         isDrawer ? "You are drawing" : "Watching..."}
+        {disabled
+          ? "Drawing disabled"
+          : fallbackMode
+          ? "Drawing (2D mode)"
+          : isDrawer
+          ? "You are drawing"
+          : "Watching..."}
       </div>
     </div>
   );

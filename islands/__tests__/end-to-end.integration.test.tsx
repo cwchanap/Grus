@@ -397,6 +397,9 @@ class GameSessionSimulator {
       case "draw-update":
         // Clients would render strokes, but we avoid duplicating in aggregate logs
         break;
+      case "draw-update-batch":
+        // Clients would render batched strokes, but we avoid duplicating in aggregate logs
+        break;
     }
   }
 

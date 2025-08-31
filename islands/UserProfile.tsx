@@ -113,7 +113,7 @@ export default function UserProfile({ user }: UserProfileProps) {
 
       setSuccess("Display name updated successfully!");
       setIsEditingName(false);
-      
+
       // Update the user object in the URL or reload to reflect changes
       setTimeout(() => {
         globalThis.location.reload();
@@ -137,12 +137,12 @@ export default function UserProfile({ user }: UserProfileProps) {
     const colors = [
       "bg-red-500",
       "bg-blue-500",
-      "bg-green-500", 
+      "bg-green-500",
       "bg-yellow-500",
       "bg-purple-500",
       "bg-pink-500",
       "bg-indigo-500",
-      "bg-gray-500"
+      "bg-gray-500",
     ];
     const colorIndex = username.charCodeAt(0) % colors.length;
     return colors[colorIndex];
@@ -179,7 +179,11 @@ export default function UserProfile({ user }: UserProfileProps) {
           <CardContent className="space-y-6">
             {/* Avatar Section */}
             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4">
-              <div className={`w-20 h-20 rounded-full ${generateAvatarUrl(user.username)} flex items-center justify-center text-white text-2xl font-bold flex-shrink-0`}>
+              <div
+                className={`w-20 h-20 rounded-full ${
+                  generateAvatarUrl(user.username)
+                } flex items-center justify-center text-white text-2xl font-bold flex-shrink-0`}
+              >
                 {(user.name || user.username).charAt(0).toUpperCase()}
               </div>
               <div className="text-center sm:text-left">
@@ -203,7 +207,7 @@ export default function UserProfile({ user }: UserProfileProps) {
                   className="bg-gray-50"
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <User className="w-4 h-4" />
@@ -215,58 +219,60 @@ export default function UserProfile({ user }: UserProfileProps) {
                   className="bg-gray-50"
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
                   <Users className="w-4 h-4" />
                   Display Name
                 </Label>
-                {isEditingName ? (
-                  <div className="space-y-2">
-                    <Input
-                      value={displayName}
-                      onInput={(e) => setDisplayName((e.target as HTMLInputElement).value)}
-                      placeholder="Enter display name"
-                      maxLength={100}
-                      disabled={nameLoading}
-                    />
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={handleDisplayNameUpdate}
+                {isEditingName
+                  ? (
+                    <div className="space-y-2">
+                      <Input
+                        value={displayName}
+                        onInput={(e) => setDisplayName((e.target as HTMLInputElement).value)}
+                        placeholder="Enter display name"
+                        maxLength={100}
                         disabled={nameLoading}
-                      >
-                        {nameLoading ? "Saving..." : "Save"}
-                      </Button>
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleDisplayNameUpdate}
+                          disabled={nameLoading}
+                        >
+                          {nameLoading ? "Saving..." : "Save"}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={handleCancelNameEdit}
+                          disabled={nameLoading}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                  : (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        value={user.name || "Not set"}
+                        disabled
+                        className="bg-gray-50 flex-1"
+                      />
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={handleCancelNameEdit}
-                        disabled={nameLoading}
+                        onClick={() => setIsEditingName(true)}
                       >
-                        Cancel
+                        Edit
                       </Button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={user.name || "Not set"}
-                      disabled
-                      className="bg-gray-50 flex-1"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setIsEditingName(true)}
-                    >
-                      Edit
-                    </Button>
-                  </div>
-                )}
+                  )}
               </div>
             </div>
           </CardContent>
@@ -290,7 +296,7 @@ export default function UserProfile({ user }: UserProfileProps) {
                   {error}
                 </div>
               )}
-              
+
               {success && (
                 <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded">
                   {success}

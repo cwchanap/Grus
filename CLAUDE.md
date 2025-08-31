@@ -123,17 +123,19 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 The application supports **optional authentication** for enhanced features:
 
 #### Without Authentication (Default)
+
 - Users can play as guests
 - No registration required
 - Core multiplayer functionality available
 - Username navigation limited (no profile page)
 
 #### With Authentication (Optional Setup)
+
 1. **Setup Requirements**:
    ```bash
    # Set up database (see docs/authentication-setup.md)
    deno run -A scripts/setup-prisma.ts
-   
+
    # Create test account
    deno task test:create-account
    ```
@@ -153,6 +155,7 @@ The application supports **optional authentication** for enhanced features:
    - Secure cookie handling
 
 #### Authentication Architecture Notes
+
 - **Database**: Uses Prisma with PostgreSQL (separate from Deno KV game data)
 - **Sessions**: JWT-based with HttpOnly cookies
 - **Security**: Password hashing, CSRF protection, automatic session cleanup
@@ -168,6 +171,7 @@ The application supports **optional authentication** for enhanced features:
 ### Recent Features
 
 #### Username Profile Navigation
+
 - **File**: `islands/core/MainLobby.tsx`
 - **Feature**: Username in top navigation is now clickable
 - **Navigation**: Links to `/profile` page for authenticated users

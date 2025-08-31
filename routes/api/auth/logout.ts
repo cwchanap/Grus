@@ -6,7 +6,7 @@ export const handler: Handlers = {
   async POST(req) {
     try {
       const config = getConfig();
-      
+
       // Get token from cookie
       const cookie = req.headers.get("Cookie");
       const cookieName = config.auth.sessionCookie.name;

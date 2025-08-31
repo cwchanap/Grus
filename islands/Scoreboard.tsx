@@ -812,7 +812,9 @@ export default function Scoreboard({
                 </span>
               )}
               {player.id === (localGameState as DrawingGameState).gameData?.currentDrawer && (
-                <span className="text-xs bg-blue-400/20 text-blue-200 px-2 py-1 rounded border border-blue-400/30">Drawing</span>
+                <span className="text-xs bg-blue-400/20 text-blue-200 px-2 py-1 rounded border border-blue-400/30">
+                  Drawing
+                </span>
               )}
               <div
                 className={`w-2 h-2 rounded-full bg-green-400`}

@@ -28,6 +28,10 @@ export interface AppConfig {
     maxMessageLength: number;
     maxPlayerNameLength: number;
   };
+  drawing: {
+    serverDebounceMs: number; // milliseconds to batch drawing commands on server
+    maxBatchSize: number; // maximum commands to batch before forcing flush
+  };
 }
 
 export function getConfig(): AppConfig {
@@ -60,6 +64,10 @@ export function getConfig(): AppConfig {
       rateLimitDrawing: 60, // 60 drawing actions per second
       maxMessageLength: 200,
       maxPlayerNameLength: 20,
+    },
+    drawing: {
+      serverDebounceMs: 500, // 500ms batching for drawing commands
+      maxBatchSize: 20, // maximum 20 commands per batch
     },
   };
 }
@@ -102,15 +110,20 @@ export function generateRoomCode(): string {
 export function parseExpirationTimeToSeconds(expiresIn: string): number {
   const match = expiresIn.match(/^(\d+)([dhms])$/);
   if (!match) throw new Error(`Invalid expiration time format: ${expiresIn}`);
-  
+
   const value = parseInt(match[1]);
   const unit = match[2];
-  
+
   switch (unit) {
-    case 'd': return value * 24 * 60 * 60; // days to seconds
-    case 'h': return value * 60 * 60; // hours to seconds
-    case 'm': return value * 60; // minutes to seconds
-    case 's': return value; // seconds
-    default: throw new Error(`Invalid time unit: ${unit}`);
+    case "d":
+      return value * 24 * 60 * 60; // days to seconds
+    case "h":
+      return value * 60 * 60; // hours to seconds
+    case "m":
+      return value * 60; // minutes to seconds
+    case "s":
+      return value; // seconds
+    default:
+      throw new Error(`Invalid time unit: ${unit}`);
   }
 }

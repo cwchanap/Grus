@@ -10,6 +10,64 @@ import {
 } from "../../../types/games/drawing.ts";
 import { PlayerState } from "../../../types/core/room.ts";
 import { validateDrawingCommand } from "./drawing-utils.ts";
+import { getConfig } from "../../config.ts";
+
+/**
+ * Server-side drawing command buffer for batching broadcasts
+ */
+class ServerDrawingCommandBuffer {
+  private buffer: DrawingCommand[] = [];
+  private roomId: string;
+  private flushCallback: (commands: DrawingCommand[]) => void;
+  private timeoutId: number | null = null;
+  private config = getConfig();
+
+  constructor(roomId: string, flushCallback: (commands: DrawingCommand[]) => void) {
+    this.roomId = roomId;
+    this.flushCallback = flushCallback;
+  }
+
+  add(command: DrawingCommand): void {
+    this.buffer.push(command);
+
+    // Flush immediately for critical commands or when buffer is full
+    if (
+      command.type === "start" ||
+      command.type === "end" ||
+      command.type === "clear" ||
+      this.buffer.length >= this.config.drawing.maxBatchSize
+    ) {
+      this.flush();
+    } else if (this.timeoutId === null) {
+      // Start debounce timer for non-critical commands
+      this.timeoutId = setTimeout(() => {
+        this.flush();
+      }, this.config.drawing.serverDebounceMs);
+    }
+  }
+
+  flush(): void {
+    if (this.buffer.length === 0) return;
+
+    const commands = [...this.buffer];
+    this.buffer = [];
+
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+
+    this.flushCallback(commands);
+  }
+
+  destroy(): void {
+    if (this.timeoutId !== null) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
+    this.flush(); // Flush any remaining commands
+  }
+}
 
 export class DrawingGameEngine extends BaseGameEngine<
   DrawingGameState,
@@ -17,6 +75,9 @@ export class DrawingGameEngine extends BaseGameEngine<
   DrawingClientMessage,
   DrawingServerMessage
 > {
+  private serverBuffer: ServerDrawingCommandBuffer | null = null;
+  private pendingServerMessages: DrawingServerMessage[] = [];
+
   getGameType(): string {
     return "drawing";
   }
@@ -74,21 +135,35 @@ export class DrawingGameEngine extends BaseGameEngine<
     const serverMessages: DrawingServerMessage[] = [];
     let updatedState = { ...gameState };
 
+    // Initialize server buffer if not exists
+    if (!this.serverBuffer) {
+      this.serverBuffer = new ServerDrawingCommandBuffer(
+        gameState.roomId,
+        (commands: DrawingCommand[]) => {
+          // Create batched draw-update message
+          const batchedMessage: DrawingServerMessage = {
+            type: "draw-update-batch",
+            roomId: gameState.roomId,
+            data: { commands },
+          };
+          this.pendingServerMessages.push(batchedMessage);
+        },
+      );
+    }
+
     switch (message.type) {
       case "draw":
-        (Deno.env.get("DENO_ENV") !== "production") && console.log("Received draw message:", message.data);
+        (Deno.env.get("DENO_ENV") !== "production") &&
+          console.log("Received draw message:", message.data);
         if (this.validateDrawingAction(gameState, message.playerId, message.data)) {
           const drawCommand = message.data as DrawingCommand;
           updatedState.gameData = {
             ...updatedState.gameData,
             drawingData: [...updatedState.gameData.drawingData, drawCommand],
           };
-      
-          serverMessages.push({
-            type: "draw-update",
-            roomId: gameState.roomId,
-            data: drawCommand,
-          });
+
+          // Add to server buffer for batched broadcasting
+          this.serverBuffer.add(drawCommand);
         }
         break;
 
@@ -184,7 +259,11 @@ export class DrawingGameEngine extends BaseGameEngine<
       }
     }
 
-    return { updatedState, serverMessages };
+    // Collect any pending batched messages from the server buffer
+    const batchedMessages = [...this.pendingServerMessages];
+    this.pendingServerMessages = [];
+
+    return { updatedState, serverMessages: [...serverMessages, ...batchedMessages] };
   }
 
   validateGameAction(gameState: DrawingGameState, playerId: string, action: any): boolean {
@@ -227,6 +306,17 @@ export class DrawingGameEngine extends BaseGameEngine<
     }
 
     return 0;
+  }
+
+  override endGame(gameState: DrawingGameState): DrawingGameState {
+    // Clean up server buffer
+    if (this.serverBuffer) {
+      this.serverBuffer.destroy();
+      this.serverBuffer = null;
+    }
+    this.pendingServerMessages = [];
+
+    return super.endGame(gameState);
   }
 
   private nextRound(gameState: DrawingGameState): DrawingGameState {

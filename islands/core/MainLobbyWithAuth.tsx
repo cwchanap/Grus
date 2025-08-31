@@ -33,12 +33,12 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
     const colors = [
       "bg-red-500",
       "bg-blue-500",
-      "bg-green-500", 
+      "bg-green-500",
       "bg-yellow-500",
       "bg-purple-500",
       "bg-pink-500",
       "bg-indigo-500",
-      "bg-gray-500"
+      "bg-gray-500",
     ];
     const colorIndex = username.charCodeAt(0) % colors.length;
     return colors[colorIndex];
@@ -175,7 +175,11 @@ export default function MainLobbyWithAuth({ rooms: initialRooms }: MainLobbyWith
                   ? (
                     <div className="flex items-center gap-2 bg-white/15 backdrop-blur-sm rounded-full px-4 py-2 border border-white/20 shadow-lg">
                       {/* User Avatar - Larger and more prominent */}
-                      <div className={`w-10 h-10 rounded-full ${generateAvatarColor(user.username)} flex items-center justify-center text-white text-lg font-bold shadow-md ring-2 ring-white/30`}>
+                      <div
+                        className={`w-10 h-10 rounded-full ${
+                          generateAvatarColor(user.username)
+                        } flex items-center justify-center text-white text-lg font-bold shadow-md ring-2 ring-white/30`}
+                      >
                         {(user.name || user.username).charAt(0).toUpperCase()}
                       </div>
                       <div className="hidden sm:flex flex-col items-start">

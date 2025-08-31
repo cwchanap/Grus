@@ -77,7 +77,11 @@ function createDrawingCommandHandler(roomId: string, playerId: string) {
     const sendDrawCommand = () => {
       try {
         const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
-        console.log("Attempting to send draw command", { command, wsExists: !!ws, readyState: ws?.readyState });
+        console.log("Attempting to send draw command", {
+          command,
+          wsExists: !!ws,
+          readyState: ws?.readyState,
+        });
         if (ws && ws.readyState === WebSocket.OPEN) {
           // Server expects message.data to be a single DrawingCommand
           const message = {
@@ -183,7 +187,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   const { room, playerId } = data;
   const gameState = createInitialGameState(room, playerId);
   const currentPlayerName = room.players.find((p) => p.id === playerId)?.name || "Unknown";
-  
+
   // Create a stable drawing command handler
   const drawingCommandHandler = createDrawingCommandHandler(room.room.id, playerId || "");
 
