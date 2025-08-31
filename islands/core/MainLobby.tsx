@@ -200,9 +200,13 @@ export default function MainLobby({ initialRooms, error, isDev, user }: MainLobb
               {user
                 ? (
                   <div class="flex items-center gap-2 bg-white/15 backdrop-blur-sm rounded-full px-4 py-2 border border-white/20 shadow-lg">
-                    <span class="text-white font-semibold text-sm">
+                    <a
+                      href="/profile"
+                      class="text-white font-semibold text-sm hover:text-white/80 transition-colors cursor-pointer"
+                      title="Go to profile"
+                    >
                       👤 {user.name || user.username}
-                    </span>
+                    </a>
                     <a
                       href="/api/auth/logout"
                       onClick={async (e) => {

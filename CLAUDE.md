@@ -25,6 +25,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `deno task test:coverage` - Run tests with coverage report
 - `deno task test:e2e` - Run end-to-end tests with Playwright
 - `deno task test:e2e:headed` - Run e2e tests in headed mode for debugging
+- `deno task test:create-account` - Create test account for authentication testing
+
+### Authentication (Optional)
+
+- `deno run -A scripts/setup-prisma.ts` - Set up Prisma and database schema
+- See `docs/authentication-setup.md` for full authentication setup guide
 
 ### Database Management
 
@@ -103,18 +109,70 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 3. Register in `lib/core/game-registry.ts`
 4. Add type definitions to `types/games/[gametype].ts`
 
-### Testing Strategy
+## Testing Strategy
+
+### Unit and Integration Tests
 
 - **Unit tests** - Core logic and utilities
 - **Integration tests** - Component interactions
 - **E2E tests** - Full user workflows with Playwright
 - **WebSocket tests** - Real-time communication scenarios
 
+### Test Account Setup
+
+The application supports **optional authentication** for enhanced features:
+
+#### Without Authentication (Default)
+- Users can play as guests
+- No registration required
+- Core multiplayer functionality available
+- Username navigation limited (no profile page)
+
+#### With Authentication (Optional Setup)
+1. **Setup Requirements**:
+   ```bash
+   # Set up database (see docs/authentication-setup.md)
+   deno run -A scripts/setup-prisma.ts
+   
+   # Create test account
+   deno task test:create-account
+   ```
+
+2. **Test Account Credentials** (once authentication is set up):
+   ```
+   Email:    test@grus.dev
+   Username: testuser
+   Password: testpass123
+   Name:     Test User
+   ```
+
+3. **Testing Authentication Features**:
+   - Login/logout functionality
+   - Username → profile navigation
+   - Persistent user sessions
+   - Secure cookie handling
+
+#### Authentication Architecture Notes
+- **Database**: Uses Prisma with PostgreSQL (separate from Deno KV game data)
+- **Sessions**: JWT-based with HttpOnly cookies
+- **Security**: Password hashing, CSRF protection, automatic session cleanup
+- **UI Integration**: Login status displayed in main lobby
+- **Profile Page**: Accessible via clicking username when authenticated
+
 ### Code Quality Enforcement
 
 - **Pre-commit hooks** - Automatic formatting and type checking
 - **Custom lint-staged** - Process only staged files for performance
 - **Deno built-in tools** - Fast formatting, linting, and type checking
+
+### Recent Features
+
+#### Username Profile Navigation
+- **File**: `islands/core/MainLobby.tsx`
+- **Feature**: Username in top navigation is now clickable
+- **Navigation**: Links to `/profile` page for authenticated users
+- **UX**: Hover effects and smooth transitions
+- **Security**: Automatic redirect to login if not authenticated
 
 ## Environment Configuration
 
@@ -130,6 +188,16 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 - Service access via `lib/database-factory.ts`
 
 ## Common Patterns
+
+### Profile Navigation Feature
+
+**Recent Implementation**: Username in main lobby navigation bar is now clickable:
+
+- **Location**: `islands/core/MainLobby.tsx` - top navigation bar
+- **Functionality**: Clicking username navigates to `/profile`
+- **Styling**: Hover effects and transition animations
+- **Requirements**: User must be authenticated to access profile
+- **Fallback**: Redirects to `/login` if not authenticated
 
 ### Error Handling
 

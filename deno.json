@@ -34,7 +34,8 @@
     "db:cleanup:old": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/cleanup-database.ts --old-rooms",
     "db:inspect": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts",
     "db:inspect:rooms": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts --rooms",
-    "db:inspect:detailed": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts --detailed"
+    "db:inspect:detailed": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/inspect-database.ts --detailed",
+    "test:create-account": "deno run --allow-read --allow-write --allow-env --unstable-kv scripts/create-test-account.ts"
   },
   "lint": {
     "rules": {
