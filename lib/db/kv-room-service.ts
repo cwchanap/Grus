@@ -58,6 +58,7 @@ export class KVRoomService {
     hostId: string | null = null,
     maxPlayers = 8,
     gameType = "drawing",
+    isPrivate = false,
   ): Promise<DatabaseResult<string>> {
     return await this.op(async () => {
       const kv = await this.getKv();
@@ -69,6 +70,7 @@ export class KVRoomService {
         hostId,
         maxPlayers,
         gameType,
+        isPrivate,
         isActive: true,
         createdAt: now,
         updatedAt: now,
@@ -102,7 +104,7 @@ export class KVRoomService {
   async getActiveRooms(limit = 20): Promise<DatabaseResult<Room[]>> {
     return await this.op(async () => {
       const all = (await this.getAllRooms()).data ?? [];
-      const active = all.filter((r) => r.isActive);
+      const active = all.filter((r) => r.isActive && !r.isPrivate);
       return active.slice(0, limit);
     }, "Failed to list active rooms");
   }

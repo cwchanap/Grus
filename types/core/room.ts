@@ -7,6 +7,7 @@ export interface Room {
   maxPlayers: number;
   isActive: boolean;
   gameType: string; // New field to support multiple game types
+  isPrivate?: boolean; // Whether the room is private and should not appear on dashboard
   createdAt: string;
   updatedAt: string;
 }

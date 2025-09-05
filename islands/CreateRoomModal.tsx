@@ -14,6 +14,7 @@ export default function CreateRoomModal(
     hostName: "",
     gameType: "drawing",
     maxPlayers: 8,
+    isPrivate: false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -45,6 +46,7 @@ export default function CreateRoomModal(
           hostName: formData.hostName.trim(),
           gameType: formData.gameType,
           maxPlayers: formData.maxPlayers,
+          isPrivate: formData.isPrivate,
         }),
       });
 
@@ -66,7 +68,7 @@ export default function CreateRoomModal(
 
   const handleClose = () => {
     if (!loading) {
-      setFormData({ roomName: "", hostName: "", gameType: "drawing", maxPlayers: 8 });
+      setFormData({ roomName: "", hostName: "", gameType: "drawing", maxPlayers: 8, isPrivate: false });
       setError("");
       onClose();
     }
@@ -188,6 +190,28 @@ export default function CreateRoomModal(
                 </option>
               ))}
             </select>
+          </div>
+
+          <div class="mb-6">
+            <label class="flex items-center space-x-3">
+              <input
+                type="checkbox"
+                checked={formData.isPrivate}
+                onChange={(e) =>
+                  setFormData((prev) => ({
+                    ...prev,
+                    isPrivate: (e.target as HTMLInputElement).checked,
+                  }))}
+                disabled={loading}
+                class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 disabled:opacity-50"
+              />
+              <div>
+                <span class="text-sm font-medium text-gray-700">Private Room</span>
+                <p class="text-xs text-gray-500 mt-1">
+                  Private rooms won't appear on the public dashboard and can only be joined via direct link
+                </p>
+              </div>
+            </label>
           </div>
 
           <div class="flex space-x-3">

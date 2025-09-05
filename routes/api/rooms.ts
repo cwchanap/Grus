@@ -37,7 +37,7 @@ export const handler: Handlers = {
   async POST(req, _ctx) {
     try {
       const body = await req.json();
-      const { name, hostName, gameType, maxPlayers } = body;
+      const { name, hostName, gameType, maxPlayers, isPrivate } = body;
 
       if (!name || !hostName) {
         return new Response(JSON.stringify({ error: "Room name and host name are required" }), {
@@ -54,6 +54,7 @@ export const handler: Handlers = {
         hostName: hostName.trim(),
         gameType: gameType || "drawing",
         maxPlayers: maxPlayers || 8,
+        isPrivate: isPrivate || false,
       });
 
       if (!result.success || !result.data) {

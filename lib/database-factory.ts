@@ -12,6 +12,7 @@ export interface IAsyncDatabaseService {
     hostId: string | null,
     maxPlayers?: number,
     gameType?: string,
+    isPrivate?: boolean,
   ): Promise<DatabaseResult<string>>;
   getRoomById(id: string): Promise<DatabaseResult<Room | null>>;
   getAllRooms(limit?: number): Promise<DatabaseResult<Room[]>>;

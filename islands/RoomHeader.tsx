@@ -26,6 +26,40 @@ export default function RoomHeader(
   useEffect(() => {
   }, [room.host, playerId]);
 
+  const handleShareRoom = () => {
+    const roomUrl = `${globalThis.location.origin}/room/${room.room.id}`;
+    
+    if (navigator.share) {
+      // Use native share API if available
+      navigator.share({
+        title: `Join ${room.room.name}`,
+        text: `Join me in ${room.room.name} for a drawing game!`,
+        url: roomUrl,
+      }).catch(() => {
+        // Fallback to clipboard if native share fails
+        copyToClipboard(roomUrl);
+      });
+    } else {
+      // Fallback to clipboard
+      copyToClipboard(roomUrl);
+    }
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      // Show a temporary success message
+      const event = new CustomEvent('showToast', {
+        detail: { message: 'Room link copied to clipboard!', type: 'success' }
+      });
+      globalThis.dispatchEvent(event);
+    } catch (error) {
+      console.error('Failed to copy to clipboard:', error);
+      // Fallback: show the URL in a prompt
+      globalThis.prompt('Copy this room link:', text);
+    }
+  };
+
   // Handle settings save
   const handleSettingsSave = (
     settings: import("../components/GameSettingsModal.tsx").GameSettings,
@@ -47,8 +81,6 @@ export default function RoomHeader(
       settings,
     }));
   };
-
-  // Sync with game state changes (in case parent component updates)
   useEffect(() => {
     const hostPlayer = gameState.players?.find((p) => p.isHost);
     const currentPlayerCount = gameState.players?.length || 0;
@@ -274,6 +306,17 @@ export default function RoomHeader(
           </p>
         </div>
         <div class="flex gap-2">
+          {/* Share button */}
+          <button
+            type="button"
+            onClick={handleShareRoom}
+            class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 active:bg-white/30 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight backdrop-blur-sm border border-white/20"
+            title="Share Room Link"
+          >
+            <span class="xs:hidden">📤</span>
+            <span class="hidden xs:inline">📤 Share</span>
+          </button>
+
           {/* Settings button - only show for host */}
           {playerId === room.host?.id && (
             <button
