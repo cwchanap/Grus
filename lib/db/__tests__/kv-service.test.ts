@@ -18,7 +18,7 @@ Deno.test("KVService - setGameState and getGameState", async () => {
   const gameState = {
     roomId: "room-123",
     currentRound: 2,
-    players: ["player-1", "player-2", "player-3"],
+    players: ["player-1", "player-2", "player-3", "player-4"],
     isActive: true,
   };
 
@@ -31,7 +31,7 @@ Deno.test("KVService - setGameState and getGameState", async () => {
   assertEquals(getResult.success, true);
   assertEquals(getResult.data?.roomId, "room-123");
   assertEquals(getResult.data?.currentRound, 2);
-  assertEquals(getResult.data?.players.length, 3);
+  assertEquals(getResult.data?.players.length, 4);
 
   await teardownTest();
 });
