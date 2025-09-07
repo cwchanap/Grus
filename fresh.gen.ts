@@ -11,6 +11,7 @@ import * as $api_auth_login from "./routes/api/auth/login.ts";
 import * as $api_auth_logout from "./routes/api/auth/logout.ts";
 import * as $api_auth_me from "./routes/api/auth/me.ts";
 import * as $api_auth_signup from "./routes/api/auth/signup.ts";
+import * as $api_auth_update_avatar from "./routes/api/auth/update-avatar.ts";
 import * as $api_auth_update_profile from "./routes/api/auth/update-profile.ts";
 import * as $api_games from "./routes/api/games.ts";
 import * as $api_health from "./routes/api/health.ts";
@@ -28,6 +29,7 @@ import * as $profile from "./routes/profile.tsx";
 import * as $room_id_ from "./routes/room/[id].tsx";
 import * as $signup from "./routes/signup.tsx";
 import * as $websocket_test from "./routes/websocket-test.tsx";
+import * as $AvatarModal from "./islands/AvatarModal.tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
@@ -56,6 +58,7 @@ const manifest = {
     "./routes/api/auth/logout.ts": $api_auth_logout,
     "./routes/api/auth/me.ts": $api_auth_me,
     "./routes/api/auth/signup.ts": $api_auth_signup,
+    "./routes/api/auth/update-avatar.ts": $api_auth_update_avatar,
     "./routes/api/auth/update-profile.ts": $api_auth_update_profile,
     "./routes/api/games.ts": $api_games,
     "./routes/api/health.ts": $api_health,
@@ -75,6 +78,7 @@ const manifest = {
     "./routes/websocket-test.tsx": $websocket_test,
   },
   islands: {
+    "./islands/AvatarModal.tsx": $AvatarModal,
     "./islands/Counter.tsx": $Counter,
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,

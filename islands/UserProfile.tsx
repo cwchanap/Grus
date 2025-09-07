@@ -11,6 +11,7 @@ import { Input } from "../components/ui/input.tsx";
 import { Label } from "../components/ui/label.tsx";
 import { ArrowLeft, Key, Mail, User, Users } from "lucide-react";
 import type { UserPayload } from "../lib/auth/auth-utils.ts";
+import AvatarModal from "./AvatarModal.tsx";
 
 interface UserProfileProps {
   user: UserPayload;
@@ -28,6 +29,7 @@ export default function UserProfile({ user }: UserProfileProps) {
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [nameLoading, setNameLoading] = useState(false);
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
 
   const handlePasswordChange = async (e: Event) => {
     e.preventDefault();
@@ -179,13 +181,32 @@ export default function UserProfile({ user }: UserProfileProps) {
           <CardContent className="space-y-6">
             {/* Avatar Section */}
             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4">
-              <div
-                className={`w-20 h-20 rounded-full ${
-                  generateAvatarUrl(user.username)
-                } flex items-center justify-center text-white text-2xl font-bold flex-shrink-0`}
+              <button
+                type="button"
+                onClick={() => setShowAvatarModal(true)}
+                className="group relative"
+                aria-label="Update avatar"
+                data-testid="profile-avatar"
               >
-                {(user.name || user.username).charAt(0).toUpperCase()}
-              </div>
+                {user.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt="User avatar"
+                    className="w-20 h-20 rounded-full object-cover border shadow"
+                  />
+                ) : (
+                  <div
+                    className={`w-20 h-20 rounded-full ${
+                      generateAvatarUrl(user.username)
+                    } flex items-center justify-center text-white text-2xl font-bold flex-shrink-0 border shadow`}
+                  >
+                    {(user.name || user.username).charAt(0).toUpperCase()}
+                  </div>
+                )}
+                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-xs text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                  Click to update
+                </span>
+              </button>
               <div className="text-center sm:text-left">
                 <h3 className="text-lg font-semibold text-gray-800">
                   {user.name || user.username}
@@ -359,6 +380,7 @@ export default function UserProfile({ user }: UserProfileProps) {
           </CardContent>
         </Card>
       </div>
+      <AvatarModal open={showAvatarModal} onClose={() => setShowAvatarModal(false)} />
     </div>
   );
 }

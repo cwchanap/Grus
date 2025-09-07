@@ -12,6 +12,7 @@ export interface UserPayload {
   email: string;
   username: string;
   name: string | null;
+  avatar?: string | null;
 }
 
 export interface SessionData {
@@ -110,6 +111,7 @@ export async function createSession(user: User): Promise<SessionData> {
     email: user.email,
     username: user.username,
     name: user.name,
+    avatar: (user as any).avatar ?? null,
   };
 
   const token = await generateToken(userPayload);
@@ -150,6 +152,7 @@ export async function getSession(token: string): Promise<SessionData | null> {
     email: session.user.email,
     username: session.user.username,
     name: session.user.name,
+    avatar: (session.user as any).avatar ?? null,
   };
 
   return {

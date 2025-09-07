@@ -40,7 +40,8 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: "deno task start",
+    // Use non-watching server to avoid restarts during tests
+    command: "deno task preview",
     url: "http://localhost:3000",
     reuseExistingServer: !isCI,
     timeout: 120 * 1000,
