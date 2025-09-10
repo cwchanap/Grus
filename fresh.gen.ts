@@ -38,6 +38,7 @@ import * as $LoginForm from "./islands/LoginForm.tsx";
 import * as $RoomHeader from "./islands/RoomHeader.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
 import * as $SignupForm from "./islands/SignupForm.tsx";
+import * as $Toast from "./islands/Toast.tsx";
 import * as $UserProfile from "./islands/UserProfile.tsx";
 import * as $core_ChatRoom from "./islands/core/ChatRoom.tsx";
 import * as $core_GameLobby from "./islands/core/GameLobby.tsx";
@@ -87,6 +88,7 @@ const manifest = {
     "./islands/RoomHeader.tsx": $RoomHeader,
     "./islands/Scoreboard.tsx": $Scoreboard,
     "./islands/SignupForm.tsx": $SignupForm,
+    "./islands/Toast.tsx": $Toast,
     "./islands/UserProfile.tsx": $UserProfile,
     "./islands/core/ChatRoom.tsx": $core_ChatRoom,
     "./islands/core/GameLobby.tsx": $core_GameLobby,

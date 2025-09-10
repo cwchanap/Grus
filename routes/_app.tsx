@@ -1,4 +1,5 @@
 import { type PageProps } from "$fresh/server.ts";
+import Toast from "../islands/Toast.tsx";
 
 export default function App({ Component }: PageProps) {
   return (
@@ -23,7 +24,7 @@ export default function App({ Component }: PageProps) {
                   return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
                 };
               }
-              
+
               // Prevent Node.js module resolution
               if (typeof globalThis.process === 'undefined') {
                 globalThis.process = { env: {} };
@@ -52,6 +53,7 @@ export default function App({ Component }: PageProps) {
       </head>
       <body>
         <Component />
+        <Toast />
       </body>
     </html>
   );

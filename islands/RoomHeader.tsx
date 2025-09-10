@@ -28,21 +28,9 @@ export default function RoomHeader(
 
   const handleShareRoom = () => {
     const roomUrl = `${globalThis.location.origin}/room/${room.room.id}`;
-    
-    if (navigator.share) {
-      // Use native share API if available
-      navigator.share({
-        title: `Join ${room.room.name}`,
-        text: `Join me in ${room.room.name} for a drawing game!`,
-        url: roomUrl,
-      }).catch(() => {
-        // Fallback to clipboard if native share fails
-        copyToClipboard(roomUrl);
-      });
-    } else {
-      // Fallback to clipboard
-      copyToClipboard(roomUrl);
-    }
+
+    // Copy to clipboard directly
+    copyToClipboard(roomUrl);
   };
 
   const copyToClipboard = async (text: string) => {

@@ -27,8 +27,8 @@ export default function CreateRoomModal(
       return;
     }
 
-    if (formData.maxPlayers < 2 || formData.maxPlayers > 16) {
-      setError("Max players must be between 2 and 16");
+    if (formData.maxPlayers < 2 || formData.maxPlayers > 8) {
+      setError("Max players must be between 2 and 8");
       return;
     }
 
@@ -184,7 +184,7 @@ export default function CreateRoomModal(
               disabled={loading}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
             >
-              {Array.from({ length: 15 }, (_, i) => i + 2).map((num) => (
+              {Array.from({ length: 7 }, (_, i) => i + 2).map((num) => (
                 <option key={num} value={num}>
                   {num} players
                 </option>
