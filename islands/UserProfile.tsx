@@ -9,7 +9,7 @@ import {
 } from "../components/ui/card.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Label } from "../components/ui/label.tsx";
-import { ArrowLeft, Key, Mail, User, Users } from "lucide-react";
+import { ArrowLeft, Camera, Key, Mail, User, Users } from "lucide-react";
 import type { UserPayload } from "../lib/auth/auth-utils.ts";
 import AvatarModal from "./AvatarModal.tsx";
 
@@ -203,8 +203,10 @@ export default function UserProfile({ user }: UserProfileProps) {
                     {(user.name || user.username).charAt(0).toUpperCase()}
                   </div>
                 )}
-                <span className="absolute -bottom-2 left-1/2 -translate-x-1/2 text-xs text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                  Click to update
+                <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="bg-white text-gray-700 rounded-full p-1.5 shadow border">
+                    <Camera className="w-4 h-4" />
+                  </span>
                 </span>
               </button>
               <div className="text-center sm:text-left">

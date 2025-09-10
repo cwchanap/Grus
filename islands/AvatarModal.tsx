@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.tsx";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.tsx";
 import { Button } from "../components/ui/button.tsx";
 
 interface AvatarModalProps {
@@ -61,7 +61,7 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
       ctx.fillStyle = "#9ca3af"; // gray-400
       ctx.font = "14px sans-serif";
       ctx.textAlign = "center";
-      ctx.fillText("Click or drop an image", VIEW_SIZE / 2, VIEW_SIZE / 2);
+      ctx.fillText("Click to upload image", VIEW_SIZE / 2, VIEW_SIZE / 2);
     }
 
     // Draw preview
@@ -269,13 +269,12 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
       <DialogContent className="max-w-2xl" onClose={onClose} data-testid="avatar-modal">
         <DialogHeader>
           <DialogTitle>Update Avatar</DialogTitle>
-          <DialogDescription>Upload an image, then drag and zoom to crop. The result will be saved at 64x64.</DialogDescription>
         </DialogHeader>
 
-        <div className="p-6 pt-0 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="p-6 pt-0">
           <div>
             <div
-              className="w-[256px] h-[256px] border rounded-md bg-gray-100 relative cursor-move select-none"
+              className={`w-[256px] h-[256px] border rounded-md bg-gray-100 relative ${image ? "cursor-move" : "cursor-pointer"} select-none`}
               onWheel={(e) => handleWheel(e as unknown as WheelEvent)}
               onMouseDown={(e) => startDrag(e as unknown as MouseEvent)}
               onMouseMove={(e) => onDrag(e as unknown as MouseEvent)}
@@ -286,41 +285,21 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
               onTouchEnd={endDrag}
               onDrop={(e) => handleDrop(e as unknown as DragEvent)}
               onDragOver={(e) => handleDragOver(e as unknown as DragEvent)}
+              onClick={() => { if (!image) fileInputRef.current?.click(); }}
             >
               <canvas ref={viewCanvasRef} className="absolute inset-0" width={VIEW_SIZE} height={VIEW_SIZE} data-testid="avatar-view-canvas" />
             </div>
-            <div className="mt-4 flex items-center gap-3">
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleFileChange}
-                className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none"
-                data-testid="avatar-file-input"
-              />
-            </div>
-            <div className="mt-3 flex items-center gap-2">
-              <label className="text-sm text-gray-600">Zoom</label>
-              <input
-                type="range"
-                min="0.3"
-                max="5"
-                step="0.01"
-                value={scale}
-                onInput={(e) => setScale(parseFloat((e.target as HTMLInputElement).value))}
-                data-testid="avatar-zoom-range"
-              />
-            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+              data-testid="avatar-file-input"
+            />
             {error && (
               <div className="mt-3 text-sm text-red-600">{error}</div>
             )}
-          </div>
-
-          <div>
-            <div className="text-sm text-gray-700 mb-2">Preview (64x64)</div>
-            <div className="w-[64px] h-[64px] overflow-hidden rounded-full border">
-              <canvas ref={previewCanvasRef} width={PREVIEW_SIZE} height={PREVIEW_SIZE} data-testid="avatar-preview-canvas" />
-            </div>
           </div>
         </div>
 

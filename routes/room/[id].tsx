@@ -221,7 +221,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
       </div>
 
       {/* Main Content with top padding */}
-      <div class="pt-20 px-4 max-w-7xl mx-auto min-h-screen flex flex-col">
+      <div class="pt-20 px-4 max-w-7xl mx-auto h-[calc(100vh-5rem)] flex flex-col overflow-hidden">
         {/* Player ID missing warning */}
         {(!playerId || playerId.trim() === "") && (
           <div class="bg-yellow-400/20 border border-yellow-400/30 rounded-lg p-3 mb-4 backdrop-blur-sm">
@@ -245,11 +245,11 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
         />
 
         {/* Game area - Drawing board and scoreboard on same row, chat below */}
-        <div class="game-container flex flex-col gap-4 lg:gap-6 flex-1 min-h-0 pb-4">
+        <div class="flex flex-col gap-4 lg:gap-6 flex-1 min-h-0 overflow-hidden">
           {/* Top row - Drawing board and scoreboard side by side */}
-          <div class="flex flex-col lg:flex-row gap-4 lg:gap-6 h-auto">
+          <div class="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0">
             {/* Drawing board area - takes 70% on desktop */}
-            <div class="lg:w-[70%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6">
+            <div class="flex-1 lg:flex-[0_0_70%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 min-h-0">
               <div class="drawing-area overflow-hidden">
                 {room.room.gameType === "drawing"
                   ? (
@@ -272,7 +272,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
             </div>
 
             {/* Scoreboard - takes 30% on desktop, full width on mobile */}
-            <div class="lg:w-[30%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 flex flex-col">
+            <div class="lg:w-[30%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 flex flex-col min-h-0">
               <div class="flex-1 min-h-0">
                 <Scoreboard
                   roomId={room.room.id}
@@ -285,17 +285,15 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
 
           {/* Bottom row - Chat stretches full width and remaining height */}
-          <div class="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 flex-1 min-h-0 flex flex-col">
-            <div class="flex-1 min-h-0">
-              <ChatRoom
-                roomId={room.room.id}
-                messages={gameState.chatMessages}
-                currentPlayerId={playerId || ""}
-                currentPlayerName={currentPlayerName}
-                disabled={false}
-                placeholder="Type a message..."
-              />
-            </div>
+          <div class="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg overflow-hidden flex flex-col flex-1 min-h-0">
+            <ChatRoom
+              roomId={room.room.id}
+              messages={gameState.chatMessages}
+              currentPlayerId={playerId || ""}
+              currentPlayerName={currentPlayerName}
+              disabled={false}
+              placeholder="Type a message..."
+            />
           </div>
         </div>
       </div>

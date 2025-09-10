@@ -109,14 +109,14 @@ export default function ChatRoom({
   };
 
   return (
-    <div class="flex flex-col h-full w-full relative">
+    <div class="flex flex-col h-full w-full">
       {/* Chat Header */}
       <div class="px-4 py-3 border-b border-white/20 flex-shrink-0">
         <h3 class="text-sm font-medium text-white">Chat</h3>
       </div>
 
-      {/* Messages - with bottom padding to account for fixed input */}
-      <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0 w-full pb-20">
+      {/* Messages container */}
+      <div class="flex-1 overflow-y-auto p-4 space-y-2 min-h-0 w-full flex flex-col">
         {chatMessages.length === 0
           ? (
             <div class="text-center text-white/60 text-sm py-8">
@@ -157,8 +157,8 @@ export default function ChatRoom({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Fixed Input at Bottom */}
-      <div class="absolute bottom-0 left-0 right-0 p-4 border-t border-white/20 bg-white/5 backdrop-blur-md">
+      {/* Input at Bottom - mt-auto pushes it to bottom */}
+      <div class="w-full p-4 bg-white/5 border-t border-white/10 mt-auto">
         <form onSubmit={handleSubmit} class="flex space-x-2 w-full">
           <input
             ref={inputRef}
