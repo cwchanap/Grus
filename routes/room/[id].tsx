@@ -193,35 +193,9 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
 
   return (
     <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 safe-area-inset">
-      {/* Fixed Top Navigation Bar */}
-      <div class="fixed top-0 left-0 right-0 z-50 bg-white/5 backdrop-blur-md border-b border-white/10">
-        <div class="max-w-7xl mx-auto px-4 py-3">
-          <div class="flex justify-between items-center">
-            {/* Left side - Game Title */}
-            <div class="flex items-center space-x-3">
-              <h1 class="text-lg sm:text-xl font-bold text-white">
-                🎨 {room.room.name}
-              </h1>
-              <div class="text-xs text-white/60">
-                {gameState.players?.length || room.playerCount || 0}/{room.room.maxPlayers} players
-              </div>
-            </div>
 
-            {/* Right side - Room Actions */}
-            <div class="flex items-center gap-2">
-              <a
-                href="/"
-                class="px-4 py-2 bg-white/90 text-purple-600 rounded-lg hover:bg-white transition-colors font-medium text-sm shadow-lg backdrop-blur-sm"
-              >
-                ← Lobby
-              </a>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Content with top padding */}
-      <div class="pt-20 px-4 max-w-7xl mx-auto h-[calc(100vh-5rem)] flex flex-col overflow-hidden">
+      {/* Main Content */}
+      <div class="pt-4 px-4 max-w-7xl mx-auto h-[calc(100vh-5rem)] flex flex-col overflow-hidden">
         {/* Player ID missing warning */}
         {(!playerId || playerId.trim() === "") && (
           <div class="bg-yellow-400/20 border border-yellow-400/30 rounded-lg p-3 mb-4 backdrop-blur-sm">

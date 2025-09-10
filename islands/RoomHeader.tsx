@@ -2,7 +2,6 @@ import { useEffect, useState } from "preact/hooks";
 import type { RoomSummary } from "../lib/core/room-manager.ts";
 import type { BaseGameState } from "../types/core/game.ts";
 import LeaveRoomButton from "./LeaveRoomButton.tsx";
-import GameSettingsModal from "../components/GameSettingsModal.tsx";
 
 interface RoomHeaderProps {
   room: RoomSummary;
@@ -15,7 +14,6 @@ export default function RoomHeader(
 ) {
   const [room, setRoom] = useState(initialRoom);
   const [gameState, setGameState] = useState(initialGameState);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Always sync with the latest game state from parent
   useEffect(() => {
@@ -48,27 +46,6 @@ export default function RoomHeader(
     }
   };
 
-  // Handle settings save
-  const handleSettingsSave = (
-    settings: import("../components/GameSettingsModal.tsx").GameSettings,
-  ) => {
-    // Send settings update via WebSocket
-    const ws = (globalThis as any).__gameWebSocket as WebSocket;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: "update-settings",
-        roomId: room.room.id,
-        playerId,
-        data: settings,
-      }));
-    }
-
-    // Update local game state
-    setGameState((prev) => ({
-      ...prev,
-      settings,
-    }));
-  };
   useEffect(() => {
     const hostPlayer = gameState.players?.find((p) => p.isHost);
     const currentPlayerCount = gameState.players?.length || 0;
@@ -305,18 +282,6 @@ export default function RoomHeader(
             <span class="hidden xs:inline">📤 Share</span>
           </button>
 
-          {/* Settings button - only show for host */}
-          {playerId === room.host?.id && (
-            <button
-              type="button"
-              onClick={() => setShowSettingsModal(true)}
-              class="flex-shrink-0 px-3 py-2 sm:px-4 sm:py-2 bg-white/15 text-white rounded-lg hover:bg-white/25 active:bg-white/30 transition-colors text-sm sm:text-base text-center touch-manipulation no-tap-highlight backdrop-blur-sm border border-white/20"
-              title="Game Settings"
-            >
-              <span class="xs:hidden">⚙️</span>
-              <span class="hidden xs:inline">⚙️ Settings</span>
-            </button>
-          )}
 
           <LeaveRoomButton
             roomId={room.room.id}
@@ -337,13 +302,6 @@ export default function RoomHeader(
         </div>
       </div>
 
-      {/* Game Settings Modal */}
-      <GameSettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        onSave={handleSettingsSave}
-        currentSettings={gameState.settings || { maxRounds: 5, roundTimeSeconds: 75 }}
-      />
     </div>
   );
 }
