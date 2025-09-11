@@ -4,14 +4,15 @@ import { getAsyncDatabaseService } from "../database-factory.ts";
 // Thin test wrapper that provides sensible defaults for tests
 export class TestRoomManager extends RoomManager {
   override createRoom(
-    params: { hostName: string; maxPlayers?: number },
+    params: { name?: string; hostName: string; gameType?: string; maxPlayers?: number; isPrivate?: boolean },
   ): Promise<CreateRoomResult> {
-    const { hostName, maxPlayers = 8 } = params;
+    const { name = "Test Room", hostName, gameType = "drawing", maxPlayers = 8, isPrivate = false } = params;
     return super.createRoom({
-      name: "Test Room",
+      name,
       hostName,
-      gameType: "drawing",
+      gameType,
       maxPlayers,
+      isPrivate,
     });
   }
 

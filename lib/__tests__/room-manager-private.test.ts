@@ -1,5 +1,4 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
-import { RoomManager } from "../core/room-manager.ts";
 import { TestRoomManager } from "./test-room-manager.ts";
 
 let roomManager: TestRoomManager;
@@ -217,7 +216,7 @@ Deno.test("RoomManager - leaveRoom works for private rooms", async () => {
   assertEquals(createResult.success, true);
 
   const roomId = createResult.data!.roomId;
-  const hostPlayerId = createResult.data!.playerId;
+  const _hostPlayerId = createResult.data!.playerId;
 
   // Join with another player
   const joinResult = await roomManager.joinRoom({
