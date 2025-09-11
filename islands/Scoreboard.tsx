@@ -4,13 +4,13 @@ import type { BaseGameState } from "../types/core/game.ts";
 import type { PlayerState } from "../types/core/room.ts";
 import type { DrawingGameState } from "../types/games/drawing.ts";
 // import type { JSX } from "preact";
-import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
 interface ScoreboardProps {
   roomId: string;
   playerId: string;
   gameState: BaseGameState;
   onGameStateUpdate?: (gameState: BaseGameState) => void;
+  onShowSettingsModal?: () => void;
   className?: string;
 }
 
@@ -23,6 +23,7 @@ export default function Scoreboard({
   playerId,
   gameState,
   onGameStateUpdate,
+  onShowSettingsModal,
   className = "",
 }: ScoreboardProps) {
   const [localGameState, setLocalGameState] = useState<BaseGameState>(gameState);
@@ -38,11 +39,6 @@ export default function Scoreboard({
     setLocalGameState(gameState);
   }, [gameState]);
 
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
-  const [gameSettings, setGameSettings] = useState<GameSettings>({
-    maxRounds: 5,
-    roundTimeSeconds: 75,
-  });
   const [phaseTransition, setPhaseTransition] = useState<string | null>(null);
   const [previousRound, setPreviousRound] = useState<number>(gameState.roundNumber);
 
@@ -470,8 +466,9 @@ export default function Scoreboard({
 
   // Calculate round progress percentage
   const getRoundProgress = (): number => {
-    if (!gameSettings.maxRounds) return 0;
-    return Math.min((localGameState.roundNumber / gameSettings.maxRounds) * 100, 100);
+    const settings = localGameState.settings || { maxRounds: 5, roundTimeSeconds: 75 };
+    if (!settings.maxRounds) return 0;
+    return Math.min((localGameState.roundNumber / settings.maxRounds) * 100, 100);
   };
 
   // Play notification sound (optional)
@@ -666,169 +663,166 @@ export default function Scoreboard({
     sendGameControlMessage("end-game");
   };
 
-  // Handle settings save
-  const handleSettingsSave = (newSettings: GameSettings) => {
-    setGameSettings(newSettings);
-    // In a real implementation, you might want to send these settings to the server
-    // For now, they're just stored locally for display purposes
-  };
 
   return (
-    <div className={`${className}`}>
-      {/* Phase Transition Notification */}
-      {phaseTransition && (
-        <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition backdrop-blur-sm">
-          {phaseTransition}
-        </div>
-      )}
-
-      {/* Connection Status */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-white">Scoreboard</h2>
-        <div className="flex items-center space-x-2">
-          <div
-            className={`w-2 h-2 rounded-full ${
-              connectionStatus.value === "connected"
-                ? "bg-green-400"
-                : connectionStatus.value === "connecting"
-                ? "bg-yellow-400"
-                : "bg-red-400"
-            }`}
-          >
+    <div className={`${className} flex flex-col h-full`}>
+      {/* Main content area that grows to fill available space */}
+      <div className="flex-1 min-h-0">
+        {/* Phase Transition Notification */}
+        {phaseTransition && (
+          <div className="mb-4 p-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg text-center font-medium phase-transition backdrop-blur-sm">
+            {phaseTransition}
           </div>
-          <span className="text-xs text-white/70 capitalize">
-            {connectionStatus.value}
-          </span>
-        </div>
-      </div>
+        )}
 
-      {/* Game Status */}
-      <div className="mb-4">
-        <div
-          className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPhaseColor()}`}
-        >
-          {getPhaseText()}
-        </div>
-
-        {/* Enhanced Timer Display */}
-        {localGameState.phase === "playing" && (
-          <div className="mt-3">
+        {/* Connection Status */}
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-white">Scoreboard</h2>
+          <div className="flex items-center space-x-2">
             <div
-              className={`inline-flex items-center px-4 py-2 rounded-lg border-2 border-white/30 font-mono text-lg font-bold text-white bg-white/10 backdrop-blur-sm ${
-                getTimerWarningState(clientTimeRemaining) === "critical" ? "timer-pulse" : ""
+              className={`w-2 h-2 rounded-full ${
+                connectionStatus.value === "connected"
+                  ? "bg-green-400"
+                  : connectionStatus.value === "connecting"
+                  ? "bg-yellow-400"
+                  : "bg-red-400"
               }`}
             >
-              <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                />
-              </svg>
-              {formatTime(clientTimeRemaining)}
             </div>
-            {getTimerWarningState(clientTimeRemaining) === "critical" && (
-              <div className="text-xs text-red-300 mt-1 font-medium animate-pulse">
-                Time's almost up!
-              </div>
-            )}
-            {getTimerWarningState(clientTimeRemaining) === "warning" && (
-              <div className="text-xs text-orange-300 mt-1 font-medium">
-                Hurry up!
-              </div>
-            )}
+            <span className="text-xs text-white/70 capitalize">
+              {connectionStatus.value}
+            </span>
+          </div>
+        </div>
 
-            {/* Timer Progress Bar */}
-            <div className="mt-2 w-full bg-white/20 rounded-full h-1">
+        {/* Game Status */}
+        <div className="mb-4">
+          <div
+            className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${getPhaseColor()}`}
+          >
+            {getPhaseText()}
+          </div>
+
+          {/* Enhanced Timer Display */}
+          {localGameState.phase === "playing" && (
+            <div className="mt-3">
               <div
-                className={`h-1 rounded-full transition-all duration-100 ${
-                  getTimerWarningState(clientTimeRemaining) === "critical"
-                    ? "bg-red-400"
-                    : getTimerWarningState(clientTimeRemaining) === "warning"
-                    ? "bg-orange-400"
-                    : "bg-blue-400"
+                className={`inline-flex items-center px-4 py-2 rounded-lg border-2 border-white/30 font-mono text-lg font-bold text-white bg-white/10 backdrop-blur-sm ${
+                  getTimerWarningState(clientTimeRemaining) === "critical" ? "timer-pulse" : ""
                 }`}
-                style={{
-                  width: `${
-                    Math.max(
-                      0,
-                      (clientTimeRemaining /
-                        (gameSettings.roundTimeSeconds * 1000)) * 100,
-                    )
-                  }%`,
-                }}
+              >
+                <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
+                </svg>
+                {formatTime(clientTimeRemaining)}
+              </div>
+              {getTimerWarningState(clientTimeRemaining) === "critical" && (
+                <div className="text-xs text-red-300 mt-1 font-medium animate-pulse">
+                  Time's almost up!
+                </div>
+              )}
+              {getTimerWarningState(clientTimeRemaining) === "warning" && (
+                <div className="text-xs text-orange-300 mt-1 font-medium">
+                  Hurry up!
+                </div>
+              )}
+
+              {/* Timer Progress Bar */}
+              <div className="mt-2 w-full bg-white/20 rounded-full h-1">
+                <div
+                  className={`h-1 rounded-full transition-all duration-100 ${
+                    getTimerWarningState(clientTimeRemaining) === "critical"
+                      ? "bg-red-400"
+                      : getTimerWarningState(clientTimeRemaining) === "warning"
+                      ? "bg-orange-400"
+                      : "bg-blue-400"
+                  }`}
+                  style={{
+                    width: `${
+                      Math.max(
+                        0,
+                        (clientTimeRemaining /
+                          ((localGameState.settings?.roundTimeSeconds || 75) * 1000)) * 100,
+                      )
+                    }%`,
+                  }}
+                >
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Round Progress */}
+          <div className="mt-3">
+            <div className="flex items-center justify-between text-sm text-white/70 mb-1">
+              <span>Round Progress</span>
+              <span>{localGameState.roundNumber} / {(localGameState.settings?.maxRounds || 5)}</span>
+            </div>
+            <div className="w-full bg-white/20 rounded-full h-2">
+              <div
+                className="bg-blue-400 h-2 rounded-full round-progress-fill"
+                style={{ width: `${getRoundProgress()}%` }}
               >
               </div>
+            </div>
+            {localGameState.roundNumber === (localGameState.settings?.maxRounds || 5) && (
+              <div className="text-xs text-orange-300 mt-1 font-medium">
+                Final round!
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Current Drawer */}
+        {currentDrawer && localGameState.phase === "playing" && (
+          <div className="mb-4 p-2 bg-blue-400/20 rounded-lg border border-blue-400/30 backdrop-blur-sm">
+            <div className="text-sm font-medium text-blue-200">
+              {currentDrawer.name} is drawing
             </div>
           </div>
         )}
 
-        {/* Round Progress */}
-        <div className="mt-3">
-          <div className="flex items-center justify-between text-sm text-white/70 mb-1">
-            <span>Round Progress</span>
-            <span>{localGameState.roundNumber} / {gameSettings.maxRounds}</span>
-          </div>
-          <div className="w-full bg-white/20 rounded-full h-2">
+        {/* Player Scores */}
+        <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
+          <h3 className="text-sm font-medium text-white/90">Players ({sortedPlayers.length})</h3>
+
+          {sortedPlayers.map((player, index) => (
             <div
-              className="bg-blue-400 h-2 rounded-full round-progress-fill"
-              style={{ width: `${getRoundProgress()}%` }}
+              key={`player-${player.id}-${player.name}`}
+              className="flex items-center justify-between p-2 bg-white/10 backdrop-blur-sm rounded border border-white/20"
             >
-            </div>
-          </div>
-          {localGameState.roundNumber === gameSettings.maxRounds && (
-            <div className="text-xs text-orange-300 mt-1 font-medium">
-              Final round!
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Current Drawer */}
-      {currentDrawer && localGameState.phase === "playing" && (
-        <div className="mb-4 p-2 bg-blue-400/20 rounded-lg border border-blue-400/30 backdrop-blur-sm">
-          <div className="text-sm font-medium text-blue-200">
-            {currentDrawer.name} is drawing
-          </div>
-        </div>
-      )}
-
-      {/* Player Scores */}
-      <div key={`players-container-${sortedPlayers.length}`} className="space-y-2 mb-4">
-        <h3 className="text-sm font-medium text-white/90">Players ({sortedPlayers.length})</h3>
-
-        {sortedPlayers.map((player, index) => (
-          <div
-            key={`player-${player.id}-${player.name}`}
-            className="flex items-center justify-between p-2 bg-white/10 backdrop-blur-sm rounded border border-white/20"
-          >
-            <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-white/70">#{index + 1}</span>
-              <span className="text-sm font-medium text-white">{player.name}</span>
-              {player.isHost && (
-                <span className="text-xs bg-yellow-400/20 text-yellow-200 px-2 py-1 rounded border border-yellow-400/30">
-                  Host
-                </span>
-              )}
-              {player.id === (localGameState as DrawingGameState).gameData?.currentDrawer && (
-                <span className="text-xs bg-blue-400/20 text-blue-200 px-2 py-1 rounded border border-blue-400/30">
-                  Drawing
-                </span>
-              )}
-              <div
-                className={`w-2 h-2 rounded-full bg-green-400`}
-              >
+              <div className="flex items-center space-x-2">
+                <span className="text-sm font-medium text-white/70">#{index + 1}</span>
+                <span className="text-sm font-medium text-white">{player.name}</span>
+                {player.isHost && (
+                  <span className="text-xs bg-yellow-400/20 text-yellow-200 px-2 py-1 rounded border border-yellow-400/30">
+                    Host
+                  </span>
+                )}
+                {player.id === (localGameState as DrawingGameState).gameData?.currentDrawer && (
+                  <span className="text-xs bg-blue-400/20 text-blue-200 px-2 py-1 rounded border border-blue-400/30">
+                    Drawing
+                  </span>
+                )}
+                <div
+                  className={`w-2 h-2 rounded-full bg-green-400`}
+                >
+                </div>
               </div>
+              <span className="text-sm font-semibold text-white">{player.score} pts</span>
             </div>
-            <span className="text-sm font-semibold text-white">{player.score} pts</span>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
-      {/* Host Controls */}
+      {/* Host Controls - positioned at bottom */}
       {isHost && (
-        <div className="border-t border-white/20 pt-4">
+        <div className="border-t border-white/20 pt-4 mt-4">
           <h3 className="text-sm font-medium text-white/90 mb-3">Host Controls</h3>
 
           {/* Start Game Button */}
@@ -910,7 +904,7 @@ export default function Scoreboard({
           {localGameState.phase === "waiting" && (
             <button
               type="button"
-              onClick={() => setShowSettingsModal(true)}
+              onClick={() => onShowSettingsModal?.()}
               className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
             >
               Game Settings
@@ -919,10 +913,10 @@ export default function Scoreboard({
 
           {/* Game Settings Info */}
           <div className="mt-3 text-xs text-white/60">
-            <div>Max Rounds: {gameSettings.maxRounds}</div>
+            <div>Max Rounds: {(localGameState.settings?.maxRounds || 5)}</div>
             <div>
               Round Time:{" "}
-              {Math.floor(gameSettings.roundTimeSeconds / 60)}:{(gameSettings.roundTimeSeconds % 60)
+              {Math.floor((localGameState.settings?.roundTimeSeconds || 75) / 60)}:{((localGameState.settings?.roundTimeSeconds || 75) % 60)
                 .toString().padStart(
                   2,
                   "0",
@@ -932,13 +926,6 @@ export default function Scoreboard({
         </div>
       )}
 
-      {/* Game Settings Modal */}
-      <GameSettingsModal
-        isOpen={showSettingsModal}
-        onClose={() => setShowSettingsModal(false)}
-        onSave={handleSettingsSave}
-        currentSettings={gameSettings}
-      />
     </div>
   );
 }

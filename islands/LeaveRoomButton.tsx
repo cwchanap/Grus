@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../components/ui/dialog.tsx";
 
 interface LeaveRoomButtonProps {
   roomId: string;
@@ -15,6 +16,7 @@ export default function LeaveRoomButton({
 }: LeaveRoomButtonProps) {
   const [isLeaving, setIsLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
 
   const handleLeaveRoom = async () => {
     if (isLeaving) return;
@@ -71,14 +73,16 @@ export default function LeaveRoomButton({
     e.preventDefault();
 
     // Show confirmation dialog for better UX
-    const confirmMessage = !playerId || playerId.trim() === ""
-      ? "Return to lobby? (Note: Unable to properly leave room due to missing player information)"
-      : "Are you sure you want to leave this room?";
+    setShowConfirmDialog(true);
+  };
 
-    const confirmed = confirm(confirmMessage);
-    if (confirmed) {
-      handleLeaveRoom();
-    }
+  const handleConfirmLeave = () => {
+    setShowConfirmDialog(false);
+    handleLeaveRoom();
+  };
+
+  const handleCancelLeave = () => {
+    setShowConfirmDialog(false);
   };
 
   return (
@@ -112,6 +116,36 @@ export default function LeaveRoomButton({
             )
           )}
       </button>
+
+      {/* Confirmation Dialog */}
+      <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Leave Room</DialogTitle>
+            <DialogDescription>
+              {!playerId || playerId.trim() === ""
+                ? "Return to lobby? (Note: Unable to properly leave room due to missing player information)"
+                : "Are you sure you want to leave this room?"}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={handleCancelLeave}
+              class="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmLeave}
+              class="px-4 py-2 text-sm font-medium text-white bg-red-600 border border-transparent rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+            >
+              Leave Room
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Error message */}
       {error && (

@@ -1,4 +1,5 @@
 import { Handlers, PageProps } from "$fresh/server.ts";
+import { signal } from "@preact/signals";
 import { RoomManager } from "../../lib/core/room-manager.ts";
 import { GameRegistry } from "../../lib/core/game-registry.ts";
 import type { RoomSummary } from "../../lib/core/room-manager.ts";
@@ -9,6 +10,7 @@ import DrawingBoard from "../../islands/games/drawing/DrawingBoard.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
+import GameSettingsWrapper from "../../islands/GameSettingsWrapper.tsx";
 import type { DrawingCommand } from "../../types/games/drawing.ts";
 
 interface GameRoomData {
@@ -188,6 +190,9 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   const gameState = createInitialGameState(room, playerId);
   const currentPlayerName = room.players.find((p) => p.id === playerId)?.name || "Unknown";
 
+  // Game settings modal state using signals
+  const showSettingsModal = signal(false);
+
   // Create a stable drawing command handler
   const drawingCommandHandler = createDrawingCommandHandler(room.room.id, playerId || "");
 
@@ -252,6 +257,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                   roomId={room.room.id}
                   playerId={playerId || ""}
                   gameState={gameState}
+                  onShowSettingsModal={() => showSettingsModal.value = true}
                   className="h-full"
                 />
               </div>
@@ -271,6 +277,14 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           </div>
         </div>
       </div>
+
+      {/* Game Settings Modal - centered on screen */}
+      <GameSettingsWrapper
+        roomId={room.room.id}
+        playerId={playerId || ""}
+        onShowModal={showSettingsModal.value}
+        onModalClose={() => showSettingsModal.value = false}
+      />
     </div>
   );
 }

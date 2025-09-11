@@ -32,6 +32,7 @@ import * as $websocket_test from "./routes/websocket-test.tsx";
 import * as $AvatarModal from "./islands/AvatarModal.tsx";
 import * as $Counter from "./islands/Counter.tsx";
 import * as $CreateRoomModal from "./islands/CreateRoomModal.tsx";
+import * as $GameSettingsWrapper from "./islands/GameSettingsWrapper.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
 import * as $LeaveRoomButton from "./islands/LeaveRoomButton.tsx";
 import * as $LoginForm from "./islands/LoginForm.tsx";
@@ -82,6 +83,7 @@ const manifest = {
     "./islands/AvatarModal.tsx": $AvatarModal,
     "./islands/Counter.tsx": $Counter,
     "./islands/CreateRoomModal.tsx": $CreateRoomModal,
+    "./islands/GameSettingsWrapper.tsx": $GameSettingsWrapper,
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
     "./islands/LeaveRoomButton.tsx": $LeaveRoomButton,
     "./islands/LoginForm.tsx": $LoginForm,
