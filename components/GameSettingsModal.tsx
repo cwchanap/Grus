@@ -29,6 +29,7 @@ export default function GameSettingsModal({
   onSave,
   currentSettings,
 }: GameSettingsModalProps) {
+  console.log("GameSettingsModal render", { isOpen, currentSettings });
   const [settings, setSettings] = useState<GameSettings>(currentSettings);
 
   const handleSave = () => {

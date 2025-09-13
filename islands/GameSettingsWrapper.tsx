@@ -1,26 +1,59 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import GameSettingsModal, { type GameSettings } from "../components/GameSettingsModal.tsx";
 
 interface GameSettingsWrapperProps {
   roomId: string;
   playerId: string;
-  onShowModal: boolean;
+  isOpen: boolean;
   onModalClose: () => void;
+  currentSettings?: GameSettings;
 }
 
 export default function GameSettingsWrapper({
   roomId,
   playerId,
-  onShowModal,
+  isOpen,
   onModalClose,
+  currentSettings,
 }: GameSettingsWrapperProps) {
-  const [gameSettings, setGameSettings] = useState<GameSettings>({
-    maxRounds: 5,
-    roundTimeSeconds: 75,
-  });
+  console.log("GameSettingsWrapper render", { isOpen, currentSettings, roomId, playerId });
+
+  const [gameSettings, setGameSettings] = useState<GameSettings>(
+    currentSettings || {
+      maxRounds: 5,
+      roundTimeSeconds: 75,
+    },
+  );
+
+  // Sync with currentSettings prop changes
+  useEffect(() => {
+    if (currentSettings) {
+      console.log("GameSettingsWrapper: Updating settings from prop:", currentSettings);
+      setGameSettings(currentSettings);
+    }
+  }, [currentSettings]);
+
+  // Listen for settings updates from server
+  useEffect(() => {
+    const handleSettingsUpdate = (event: CustomEvent) => {
+      const { settings } = event.detail;
+      console.log("GameSettingsWrapper: Received settings update:", settings);
+      setGameSettings((prevSettings) => ({
+        ...prevSettings,
+        ...settings,
+      }));
+    };
+
+    globalThis.addEventListener("settings-updated", handleSettingsUpdate as EventListener);
+
+    return () => {
+      globalThis.removeEventListener("settings-updated", handleSettingsUpdate as EventListener);
+    };
+  }, []);
 
   // Handle settings save
   const handleSettingsSave = (settings: GameSettings) => {
+    console.log("GameSettingsWrapper: Saving settings:", settings);
     setGameSettings(settings);
     // Send settings update via WebSocket
     const ws = (globalThis as any).__gameWebSocket as WebSocket;
@@ -31,12 +64,14 @@ export default function GameSettingsWrapper({
         playerId,
         data: settings,
       }));
+    } else {
+      console.warn("GameSettingsWrapper: WebSocket not available for settings update");
     }
   };
 
   return (
     <GameSettingsModal
-      isOpen={onShowModal}
+      isOpen={isOpen}
       onClose={onModalClose}
       onSave={handleSettingsSave}
       currentSettings={gameSettings}

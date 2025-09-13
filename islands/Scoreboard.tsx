@@ -401,6 +401,23 @@ export default function Scoreboard({
                   detail: { data: message },
                 }),
               );
+            } else if (message.type === "settings-updated") {
+              // Handle settings updates
+              const updatedSettings = message.data;
+              console.log("Settings updated:", updatedSettings);
+
+              // Update local game state with new settings
+              setLocalGameState((prevState) => ({
+                ...prevState,
+                settings: { ...prevState.settings, ...updatedSettings },
+              }));
+
+              // Emit custom event for settings modal to update
+              globalThis.dispatchEvent(
+                new CustomEvent("settings-updated", {
+                  detail: { settings: updatedSettings },
+                }),
+              );
             }
           } catch (error) {
             console.error("Scoreboard: Error parsing message:", error);
@@ -663,7 +680,6 @@ export default function Scoreboard({
     sendGameControlMessage("end-game");
   };
 
-
   return (
     <div className={`${className} flex flex-col h-full`}>
       {/* Main content area that grows to fill available space */}
@@ -761,7 +777,7 @@ export default function Scoreboard({
           <div className="mt-3">
             <div className="flex items-center justify-between text-sm text-white/70 mb-1">
               <span>Round Progress</span>
-              <span>{localGameState.roundNumber} / {(localGameState.settings?.maxRounds || 5)}</span>
+              <span>{localGameState.roundNumber} / {localGameState.settings?.maxRounds || 5}</span>
             </div>
             <div className="w-full bg-white/20 rounded-full h-2">
               <div
@@ -821,7 +837,10 @@ export default function Scoreboard({
       </div>
 
       {/* Host Controls - positioned at bottom */}
-      {isHost && (
+      {(() => {
+        console.log("Host controls render check", { isHost, phase: localGameState.phase });
+        return isHost;
+      })() && (
         <div className="border-t border-white/20 pt-4 mt-4">
           <h3 className="text-sm font-medium text-white/90 mb-3">Host Controls</h3>
 
@@ -904,7 +923,10 @@ export default function Scoreboard({
           {localGameState.phase === "waiting" && (
             <button
               type="button"
-              onClick={() => onShowSettingsModal?.()}
+              onClick={() => {
+                console.log("Game Settings button clicked", { isHost, phase: localGameState.phase });
+                onShowSettingsModal?.();
+              }}
               className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
             >
               Game Settings
@@ -913,10 +935,11 @@ export default function Scoreboard({
 
           {/* Game Settings Info */}
           <div className="mt-3 text-xs text-white/60">
-            <div>Max Rounds: {(localGameState.settings?.maxRounds || 5)}</div>
+            <div>Max Rounds: {localGameState.settings?.maxRounds || 5}</div>
             <div>
-              Round Time:{" "}
-              {Math.floor((localGameState.settings?.roundTimeSeconds || 75) / 60)}:{((localGameState.settings?.roundTimeSeconds || 75) % 60)
+              Round Time: {Math.floor(
+                (localGameState.settings?.roundTimeSeconds || 75) / 60,
+              )}:{((localGameState.settings?.roundTimeSeconds || 75) % 60)
                 .toString().padStart(
                   2,
                   "0",
@@ -925,7 +948,6 @@ export default function Scoreboard({
           </div>
         </div>
       )}
-
     </div>
   );
 }

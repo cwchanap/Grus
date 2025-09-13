@@ -198,7 +198,6 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
 
   return (
     <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 safe-area-inset">
-
       {/* Main Content */}
       <div class="pt-4 px-4 max-w-7xl mx-auto h-[calc(100vh-5rem)] flex flex-col overflow-hidden">
         {/* Player ID missing warning */}
@@ -257,7 +256,12 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                   roomId={room.room.id}
                   playerId={playerId || ""}
                   gameState={gameState}
-                  onShowSettingsModal={() => showSettingsModal.value = true}
+                  onShowSettingsModal={() => {
+                    console.log("Setting showSettingsModal to true");
+                    console.log("Before setting:", showSettingsModal.value);
+                    showSettingsModal.value = true;
+                    console.log("After setting:", showSettingsModal.value);
+                  }}
                   className="h-full"
                 />
               </div>
@@ -282,8 +286,9 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
       <GameSettingsWrapper
         roomId={room.room.id}
         playerId={playerId || ""}
-        onShowModal={showSettingsModal.value}
+        isOpen={showSettingsModal.value}
         onModalClose={() => showSettingsModal.value = false}
+        currentSettings={gameState.settings}
       />
     </div>
   );

@@ -8,6 +8,7 @@ interface DialogProps {
 }
 
 export function Dialog({ open, onOpenChange, children }: DialogProps) {
+  console.log("Dialog render", { open });
   if (!open) return null;
 
   const handleBackdropClick = (e: JSX.TargetedMouseEvent<HTMLDivElement>) => {
@@ -18,8 +19,9 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50"
+      className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50"
       onClick={handleBackdropClick}
+      style={{ zIndex: 9999 }}
     >
       {children}
     </div>
