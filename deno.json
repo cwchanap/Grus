@@ -10,7 +10,7 @@
     "update": "deno run -A -r https://fresh.deno.dev/update .",
     "test": "deno test --allow-all --unstable-kv lib/**/__tests__/*.ts islands/**/__tests__/*.tsx routes/**/__tests__/*.ts components/**/__tests__/*.tsx",
     "test:watch": "deno test --allow-all --unstable-kv --watch",
-    "test:coverage": "deno test --allow-all --unstable-kv --coverage=coverage && deno coverage coverage --lcov --output=coverage.lcov",
+    "test:coverage": "deno test --allow-all --unstable-kv --coverage=coverage lib/**/__tests__/*.ts islands/**/__tests__/*.tsx routes/**/__tests__/*.ts components/**/__tests__/*.tsx && deno coverage coverage --lcov --output=coverage.lcov",
     "deploy": "bash scripts/deploy-deno.sh",
     "health-check": "curl http://localhost:3000/api/health",
     "lint": "deno lint",

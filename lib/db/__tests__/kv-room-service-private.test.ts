@@ -1,24 +1,30 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { KVRoomService } from "../kv-room-service.ts";
+import { Room } from "../../../types/core/room.ts";
 
-let kvRoomService: KVRoomService;
-
-function setupTest() {
-  kvRoomService = new KVRoomService();
-}
-
-function teardownTest() {
-  // Clean up any test data and close the KV connection
-  kvRoomService.close();
+async function withTestRoomService(
+  name: string,
+  testFn: (kvRoomService: KVRoomService) => Promise<void>,
+) {
+  Deno.test(name, async () => {
+    const kvRoomService = new KVRoomService();
+    // Ensure a clean slate before the test
+    await kvRoomService.deleteAllRooms();
+    try {
+      await testFn(kvRoomService);
+    } finally {
+      // Clean up after the test
+      await kvRoomService.deleteAllRooms();
+      kvRoomService.close();
+    }
+  });
 }
 
 /**
  * Unit tests for KVRoomService private room functionality
  */
 
-Deno.test("KVRoomService - createRoom with private flag", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - createRoom with private flag", async (kvRoomService) => {
   const roomName = "Test Private Room";
   const hostId = "host-123";
   const maxPlayers = 6;
@@ -49,13 +55,9 @@ Deno.test("KVRoomService - createRoom with private flag", async () => {
   assertEquals(getResult.data!.gameType, gameType);
   assertEquals(getResult.data!.isPrivate, isPrivate);
   assertEquals(getResult.data!.isActive, true);
-
-  await teardownTest();
 });
 
-Deno.test("KVRoomService - createRoom with public flag (default)", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - createRoom with public flag (default)", async (kvRoomService) => {
   const roomName = "Test Public Room";
   const hostId = "host-456";
 
@@ -72,13 +74,9 @@ Deno.test("KVRoomService - createRoom with public flag (default)", async () => {
   assertEquals(getResult.success, true);
   assertExists(getResult.data);
   assertEquals(getResult.data!.isPrivate, false);
-
-  await teardownTest();
 });
 
-Deno.test("KVRoomService - getActiveRooms filters out private rooms", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - getActiveRooms filters out private rooms", async (kvRoomService) => {
   // Create a public room
   const publicRoomResult = await kvRoomService.createRoom(
     "Public Room",
@@ -104,17 +102,13 @@ Deno.test("KVRoomService - getActiveRooms filters out private rooms", async () =
   assertEquals(activeRoomsResult.success, true);
   assertExists(activeRoomsResult.data);
 
-  const activeRooms = activeRoomsResult.data!;
+  const activeRooms = activeRoomsResult.data as Room[];
   assertEquals(activeRooms.length, 1);
-  assertEquals(activeRooms[0].room.name, "Public Room");
-  assertEquals(activeRooms[0].room.isPrivate, false);
-
-  await teardownTest();
+  assertEquals(activeRooms[0].name, "Public Room");
+  assertEquals(activeRooms[0].isPrivate, false);
 });
 
-Deno.test("KVRoomService - getAllRooms includes both public and private", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - getAllRooms includes both public and private", async (kvRoomService) => {
   // Create a public room
   const publicRoomResult = await kvRoomService.createRoom(
     "Public Room 2",
@@ -140,7 +134,7 @@ Deno.test("KVRoomService - getAllRooms includes both public and private", async 
   assertEquals(allRoomsResult.success, true);
   assertExists(allRoomsResult.data);
 
-  const allRooms = allRoomsResult.data!;
+  const allRooms = allRoomsResult.data as Room[];
   assertEquals(allRooms.length, 2);
 
   const publicRoom = allRooms.find(r => r.name === "Public Room 2");
@@ -150,13 +144,9 @@ Deno.test("KVRoomService - getAllRooms includes both public and private", async 
   assertExists(privateRoom);
   assertEquals(publicRoom!.isPrivate, false);
   assertEquals(privateRoom!.isPrivate, true);
-
-  await teardownTest();
 });
 
-Deno.test("KVRoomService - updateRoom preserves isPrivate flag", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - updateRoom preserves isPrivate flag", async (kvRoomService) => {
   // Create a private room
   const createResult = await kvRoomService.createRoom(
     "Update Test Room",
@@ -179,13 +169,9 @@ Deno.test("KVRoomService - updateRoom preserves isPrivate flag", async () => {
   assertExists(getResult.data);
   assertEquals(getResult.data!.maxPlayers, 12);
   assertEquals(getResult.data!.isPrivate, true);
-
-  await teardownTest();
 });
 
-Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () => {
-  setupTest();
-
+withTestRoomService("KVRoomService - mixed private/public rooms in getAllRooms", async (kvRoomService) => {
   // Create multiple rooms with different privacy settings
   const rooms = [
     { name: "Public 1", isPrivate: false },
@@ -211,7 +197,7 @@ Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () 
   assertEquals(allRoomsResult.success, true);
   assertExists(allRoomsResult.data);
 
-  const allRooms = allRoomsResult.data!;
+  const allRooms = allRoomsResult.data as Room[];
   assertEquals(allRooms.length, 5);
 
   // Check that we have the right mix of private/public
@@ -226,13 +212,11 @@ Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () 
   assertEquals(activeRoomsResult.success, true);
   assertExists(activeRoomsResult.data);
 
-  const activeRooms = activeRoomsResult.data!;
+  const activeRooms = activeRoomsResult.data as Room[];
   assertEquals(activeRooms.length, 3); // Only public rooms
 
   // All active rooms should be public
   for (const room of activeRooms) {
-    assertEquals(room.room.isPrivate, false);
+    assertEquals(room.isPrivate, false);
   }
-
-  await teardownTest();
 });

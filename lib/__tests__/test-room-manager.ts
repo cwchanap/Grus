@@ -21,4 +21,9 @@ export class TestRoomManager extends RoomManager {
     const db = getAsyncDatabaseService();
     db.close();
   }
+
+  async cleanup(): Promise<void> {
+    const db = getAsyncDatabaseService();
+    await db.deleteAllRooms();
+  }
 }

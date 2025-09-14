@@ -1,24 +1,27 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { TestRoomManager } from "./test-room-manager.ts";
 
-let roomManager: TestRoomManager;
-
-function setupTest() {
-  roomManager = new TestRoomManager();
+async function withTestRoomManager(
+  name: string,
+  testFn: (roomManager: TestRoomManager) => Promise<void>,
+) {
+  Deno.test(name, async () => {
+    const roomManager = new TestRoomManager();
+    try {
+      await testFn(roomManager);
+    } finally {
+      await roomManager.cleanup();
+      roomManager.close();
+    }
+  });
 }
 
-function teardownTest() {
-  // Clean up any test data
-  roomManager.close();
-}
 
 /**
  * Unit tests for RoomManager private room functionality
  */
 
-Deno.test("RoomManager - createRoom with private flag", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - createRoom with private flag", async (roomManager) => {
   const roomName = "Test Private Room";
   const hostName = "Test Host";
 
@@ -48,13 +51,9 @@ Deno.test("RoomManager - createRoom with private flag", async () => {
   assertEquals(room.players.length, 1);
   assertEquals(room.players[0].name, hostName);
   assertEquals(room.players[0].isHost, true);
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - createRoom with public flag (default)", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - createRoom with public flag (default)", async (roomManager) => {
   const roomName = "Test Public Room";
   const hostName = "Public Host";
 
@@ -74,13 +73,9 @@ Deno.test("RoomManager - createRoom with public flag (default)", async () => {
 
   // Verify room is public
   assertEquals(room.room.isPrivate, false);
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - createRoom defaults to public when isPrivate not specified", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - createRoom defaults to public when isPrivate not specified", async (roomManager) => {
   const roomName = "Default Public Room";
   const hostName = "Default Host";
 
@@ -99,13 +94,9 @@ Deno.test("RoomManager - createRoom defaults to public when isPrivate not specif
 
   // Verify room defaults to public
   assertEquals(room.room.isPrivate, false);
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - getActiveRoomsWithCleanup filters out private rooms", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - getActiveRoomsWithCleanup filters out private rooms", async (roomManager) => {
   // Create a public room
   const publicRoomResult = await roomManager.createRoom({
     name: "Public Room",
@@ -135,13 +126,9 @@ Deno.test("RoomManager - getActiveRoomsWithCleanup filters out private rooms", a
   assertEquals(activeRooms.length, 1);
   assertEquals(activeRooms[0].room.name, "Public Room");
   assertEquals(activeRooms[0].room.isPrivate, false);
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - joinRoom works for private rooms via direct access", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - joinRoom works for private rooms via direct access", async (roomManager) => {
   // Create a private room
   const createResult = await roomManager.createRoom({
     name: "Private Join Test",
@@ -168,13 +155,9 @@ Deno.test("RoomManager - joinRoom works for private rooms via direct access", as
   assertExists(playerId);
   assertEquals(room.room.name, "Private Join Test");
   assertEquals(room.players.length, 2); // Host + new player
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - getRoomSummary works for private rooms", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - getRoomSummary works for private rooms", async (roomManager) => {
   // Create a private room
   const createResult = await roomManager.createRoom({
     name: "Private Summary Test",
@@ -199,13 +182,9 @@ Deno.test("RoomManager - getRoomSummary works for private rooms", async () => {
   assertEquals(summary.players.length, 1);
   assertEquals(summary.canJoin, true); // Room has space
   assertExists(summary.host);
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - leaveRoom works for private rooms", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - leaveRoom works for private rooms", async (roomManager) => {
   // Create a private room
   const createResult = await roomManager.createRoom({
     name: "Private Leave Test",
@@ -235,13 +214,9 @@ Deno.test("RoomManager - leaveRoom works for private rooms", async () => {
   assertEquals(leaveData.wasHost, false);
   assertExists(leaveData.remainingPlayers);
   assertEquals(leaveData.remainingPlayers!.length, 1); // Only host left
-
-  await teardownTest();
 });
 
-Deno.test("RoomManager - private room deletion when last player leaves", async () => {
-  setupTest();
-
+withTestRoomManager("RoomManager - private room deletion when last player leaves", async (roomManager) => {
   // Create a private room
   const createResult = await roomManager.createRoom({
     name: "Private Delete Test",
@@ -255,7 +230,7 @@ Deno.test("RoomManager - private room deletion when last player leaves", async (
   const hostPlayerId = createResult.data!.playerId;
 
   // Leave with the host (last player)
-  const leaveResult = await roomManager.leaveRoom(roomId, hostPlayerId);
+  const leaveResult = await roomManager.leaveRoom( roomId, hostPlayerId);
   assertEquals(leaveResult.success, true);
   assertExists(leaveResult.data);
 
@@ -266,6 +241,4 @@ Deno.test("RoomManager - private room deletion when last player leaves", async (
   // Verify room is gone
   const roomSummary = await roomManager.getRoomSummary(roomId);
   assertEquals(roomSummary.success, false); // Room should not exist
-
-  await teardownTest();
 });

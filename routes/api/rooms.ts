@@ -54,7 +54,7 @@ export const handler: Handlers = {
         hostName: hostName.trim(),
         gameType: gameType || "drawing",
         maxPlayers: maxPlayers || 8,
-        isPrivate: isPrivate || false,
+        isPrivate: isPrivate === true || isPrivate === "true",
       });
 
       if (!result.success || !result.data) {

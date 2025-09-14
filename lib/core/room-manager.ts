@@ -45,8 +45,8 @@ export interface CreateRoomResult {
 export class RoomManager {
   private db: IAsyncDatabaseService;
 
-  constructor() {
-    this.db = getAsyncDatabaseService();
+  constructor(db?: IAsyncDatabaseService) {
+    this.db = db || getAsyncDatabaseService();
   }
 
   async createRoom(params: CreateRoomParams): Promise<CreateRoomResult> {
