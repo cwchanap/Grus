@@ -2,7 +2,7 @@ import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { KVRoomService } from "../kv-room-service.ts";
 import { Room } from "../../../types/core/room.ts";
 
-async function withTestRoomService(
+function withTestRoomService(
   name: string,
   testFn: (kvRoomService: KVRoomService) => Promise<void>,
 ) {
@@ -37,7 +37,7 @@ withTestRoomService("KVRoomService - createRoom with private flag", async (kvRoo
     hostId,
     maxPlayers,
     gameType,
-    isPrivate
+    isPrivate,
   );
 
   assertEquals(createResult.success, true);
@@ -57,166 +57,181 @@ withTestRoomService("KVRoomService - createRoom with private flag", async (kvRoo
   assertEquals(getResult.data!.isActive, true);
 });
 
-withTestRoomService("KVRoomService - createRoom with public flag (default)", async (kvRoomService) => {
-  const roomName = "Test Public Room";
-  const hostId = "host-456";
+withTestRoomService(
+  "KVRoomService - createRoom with public flag (default)",
+  async (kvRoomService) => {
+    const roomName = "Test Public Room";
+    const hostId = "host-456";
 
-  // Create a public room (default)
-  const createResult = await kvRoomService.createRoom(roomName, hostId);
+    // Create a public room (default)
+    const createResult = await kvRoomService.createRoom(roomName, hostId);
 
-  assertEquals(createResult.success, true);
-  assertExists(createResult.data);
+    assertEquals(createResult.success, true);
+    assertExists(createResult.data);
 
-  const roomId = createResult.data!;
+    const roomId = createResult.data!;
 
-  // Verify the room was created as public
-  const getResult = await kvRoomService.getRoomById(roomId);
-  assertEquals(getResult.success, true);
-  assertExists(getResult.data);
-  assertEquals(getResult.data!.isPrivate, false);
-});
+    // Verify the room was created as public
+    const getResult = await kvRoomService.getRoomById(roomId);
+    assertEquals(getResult.success, true);
+    assertExists(getResult.data);
+    assertEquals(getResult.data!.isPrivate, false);
+  },
+);
 
-withTestRoomService("KVRoomService - getActiveRooms filters out private rooms", async (kvRoomService) => {
-  // Create a public room
-  const publicRoomResult = await kvRoomService.createRoom(
-    "Public Room",
-    "host-public",
-    8,
-    "drawing",
-    false
-  );
-  assertEquals(publicRoomResult.success, true);
-
-  // Create a private room
-  const privateRoomResult = await kvRoomService.createRoom(
-    "Private Room",
-    "host-private",
-    8,
-    "drawing",
-    true
-  );
-  assertEquals(privateRoomResult.success, true);
-
-  // Get active rooms - should only return public room
-  const activeRoomsResult = await kvRoomService.getActiveRooms(10);
-  assertEquals(activeRoomsResult.success, true);
-  assertExists(activeRoomsResult.data);
-
-  const activeRooms = activeRoomsResult.data as Room[];
-  assertEquals(activeRooms.length, 1);
-  assertEquals(activeRooms[0].name, "Public Room");
-  assertEquals(activeRooms[0].isPrivate, false);
-});
-
-withTestRoomService("KVRoomService - getAllRooms includes both public and private", async (kvRoomService) => {
-  // Create a public room
-  const publicRoomResult = await kvRoomService.createRoom(
-    "Public Room 2",
-    "host-public-2",
-    8,
-    "drawing",
-    false
-  );
-  assertEquals(publicRoomResult.success, true);
-
-  // Create a private room
-  const privateRoomResult = await kvRoomService.createRoom(
-    "Private Room 2",
-    "host-private-2",
-    8,
-    "drawing",
-    true
-  );
-  assertEquals(privateRoomResult.success, true);
-
-  // Get all rooms - should include both
-  const allRoomsResult = await kvRoomService.getAllRooms(10);
-  assertEquals(allRoomsResult.success, true);
-  assertExists(allRoomsResult.data);
-
-  const allRooms = allRoomsResult.data as Room[];
-  assertEquals(allRooms.length, 2);
-
-  const publicRoom = allRooms.find(r => r.name === "Public Room 2");
-  const privateRoom = allRooms.find(r => r.name === "Private Room 2");
-
-  assertExists(publicRoom);
-  assertExists(privateRoom);
-  assertEquals(publicRoom!.isPrivate, false);
-  assertEquals(privateRoom!.isPrivate, true);
-});
-
-withTestRoomService("KVRoomService - updateRoom preserves isPrivate flag", async (kvRoomService) => {
-  // Create a private room
-  const createResult = await kvRoomService.createRoom(
-    "Update Test Room",
-    "host-update",
-    8,
-    "drawing",
-    true
-  );
-  assertEquals(createResult.success, true);
-
-  const roomId = createResult.data!;
-
-  // Update the room (change max players)
-  const updateResult = await kvRoomService.updateRoom(roomId, { maxPlayers: 12 });
-  assertEquals(updateResult.success, true);
-
-  // Verify the room still has isPrivate = true
-  const getResult = await kvRoomService.getRoomById(roomId);
-  assertEquals(getResult.success, true);
-  assertExists(getResult.data);
-  assertEquals(getResult.data!.maxPlayers, 12);
-  assertEquals(getResult.data!.isPrivate, true);
-});
-
-withTestRoomService("KVRoomService - mixed private/public rooms in getAllRooms", async (kvRoomService) => {
-  // Create multiple rooms with different privacy settings
-  const rooms = [
-    { name: "Public 1", isPrivate: false },
-    { name: "Private 1", isPrivate: true },
-    { name: "Public 2", isPrivate: false },
-    { name: "Private 2", isPrivate: true },
-    { name: "Public 3", isPrivate: false },
-  ];
-
-  for (const room of rooms) {
-    const result = await kvRoomService.createRoom(
-      room.name,
-      `host-${room.name.replace(" ", "-")}`,
+withTestRoomService(
+  "KVRoomService - getActiveRooms filters out private rooms",
+  async (kvRoomService) => {
+    // Create a public room
+    const publicRoomResult = await kvRoomService.createRoom(
+      "Public Room",
+      "host-public",
       8,
       "drawing",
-      room.isPrivate
+      false,
     );
-    assertEquals(result.success, true);
-  }
+    assertEquals(publicRoomResult.success, true);
 
-  // Get all rooms
-  const allRoomsResult = await kvRoomService.getAllRooms();
-  assertEquals(allRoomsResult.success, true);
-  assertExists(allRoomsResult.data);
+    // Create a private room
+    const privateRoomResult = await kvRoomService.createRoom(
+      "Private Room",
+      "host-private",
+      8,
+      "drawing",
+      true,
+    );
+    assertEquals(privateRoomResult.success, true);
 
-  const allRooms = allRoomsResult.data as Room[];
-  assertEquals(allRooms.length, 5);
+    // Get active rooms - should only return public room
+    const activeRoomsResult = await kvRoomService.getActiveRooms(10);
+    assertEquals(activeRoomsResult.success, true);
+    assertExists(activeRoomsResult.data);
 
-  // Check that we have the right mix of private/public
-  const publicRooms = allRooms.filter(r => !r.isPrivate);
-  const privateRooms = allRooms.filter(r => r.isPrivate);
+    const activeRooms = activeRoomsResult.data as Room[];
+    assertEquals(activeRooms.length, 1);
+    assertEquals(activeRooms[0].name, "Public Room");
+    assertEquals(activeRooms[0].isPrivate, false);
+  },
+);
 
-  assertEquals(publicRooms.length, 3);
-  assertEquals(privateRooms.length, 2);
+withTestRoomService(
+  "KVRoomService - getAllRooms includes both public and private",
+  async (kvRoomService) => {
+    // Create a public room
+    const publicRoomResult = await kvRoomService.createRoom(
+      "Public Room 2",
+      "host-public-2",
+      8,
+      "drawing",
+      false,
+    );
+    assertEquals(publicRoomResult.success, true);
 
-  // Verify active rooms only shows public ones
-  const activeRoomsResult = await kvRoomService.getActiveRooms();
-  assertEquals(activeRoomsResult.success, true);
-  assertExists(activeRoomsResult.data);
+    // Create a private room
+    const privateRoomResult = await kvRoomService.createRoom(
+      "Private Room 2",
+      "host-private-2",
+      8,
+      "drawing",
+      true,
+    );
+    assertEquals(privateRoomResult.success, true);
 
-  const activeRooms = activeRoomsResult.data as Room[];
-  assertEquals(activeRooms.length, 3); // Only public rooms
+    // Get all rooms - should include both
+    const allRoomsResult = await kvRoomService.getAllRooms(10);
+    assertEquals(allRoomsResult.success, true);
+    assertExists(allRoomsResult.data);
 
-  // All active rooms should be public
-  for (const room of activeRooms) {
-    assertEquals(room.isPrivate, false);
-  }
-});
+    const allRooms = allRoomsResult.data as Room[];
+    assertEquals(allRooms.length, 2);
+
+    const publicRoom = allRooms.find((r) => r.name === "Public Room 2");
+    const privateRoom = allRooms.find((r) => r.name === "Private Room 2");
+
+    assertExists(publicRoom);
+    assertExists(privateRoom);
+    assertEquals(publicRoom!.isPrivate, false);
+    assertEquals(privateRoom!.isPrivate, true);
+  },
+);
+
+withTestRoomService(
+  "KVRoomService - updateRoom preserves isPrivate flag",
+  async (kvRoomService) => {
+    // Create a private room
+    const createResult = await kvRoomService.createRoom(
+      "Update Test Room",
+      "host-update",
+      8,
+      "drawing",
+      true,
+    );
+    assertEquals(createResult.success, true);
+
+    const roomId = createResult.data!;
+
+    // Update the room (change max players)
+    const updateResult = await kvRoomService.updateRoom(roomId, { maxPlayers: 12 });
+    assertEquals(updateResult.success, true);
+
+    // Verify the room still has isPrivate = true
+    const getResult = await kvRoomService.getRoomById(roomId);
+    assertEquals(getResult.success, true);
+    assertExists(getResult.data);
+    assertEquals(getResult.data!.maxPlayers, 12);
+    assertEquals(getResult.data!.isPrivate, true);
+  },
+);
+
+withTestRoomService(
+  "KVRoomService - mixed private/public rooms in getAllRooms",
+  async (kvRoomService) => {
+    // Create multiple rooms with different privacy settings
+    const rooms = [
+      { name: "Public 1", isPrivate: false },
+      { name: "Private 1", isPrivate: true },
+      { name: "Public 2", isPrivate: false },
+      { name: "Private 2", isPrivate: true },
+      { name: "Public 3", isPrivate: false },
+    ];
+
+    for (const room of rooms) {
+      const result = await kvRoomService.createRoom(
+        room.name,
+        `host-${room.name.replace(" ", "-")}`,
+        8,
+        "drawing",
+        room.isPrivate,
+      );
+      assertEquals(result.success, true);
+    }
+
+    // Get all rooms
+    const allRoomsResult = await kvRoomService.getAllRooms();
+    assertEquals(allRoomsResult.success, true);
+    assertExists(allRoomsResult.data);
+
+    const allRooms = allRoomsResult.data as Room[];
+    assertEquals(allRooms.length, 5);
+
+    // Check that we have the right mix of private/public
+    const publicRooms = allRooms.filter((r) => !r.isPrivate);
+    const privateRooms = allRooms.filter((r) => r.isPrivate);
+
+    assertEquals(publicRooms.length, 3);
+    assertEquals(privateRooms.length, 2);
+
+    // Verify active rooms only shows public ones
+    const activeRoomsResult = await kvRoomService.getActiveRooms();
+    assertEquals(activeRoomsResult.success, true);
+    assertExists(activeRoomsResult.data);
+
+    const activeRooms = activeRoomsResult.data as Room[];
+    assertEquals(activeRooms.length, 3); // Only public rooms
+
+    // All active rooms should be public
+    for (const room of activeRooms) {
+      assertEquals(room.isPrivate, false);
+    }
+  },
+);

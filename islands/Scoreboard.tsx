@@ -924,7 +924,10 @@ export default function Scoreboard({
             <button
               type="button"
               onClick={() => {
-                console.log("Game Settings button clicked", { isHost, phase: localGameState.phase });
+                console.log("Game Settings button clicked", {
+                  isHost,
+                  phase: localGameState.phase,
+                });
                 onShowSettingsModal?.();
               }}
               className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"

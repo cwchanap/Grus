@@ -68,7 +68,13 @@ export default function CreateRoomModal(
 
   const handleClose = () => {
     if (!loading) {
-      setFormData({ roomName: "", hostName: "", gameType: "drawing", maxPlayers: 8, isPrivate: false });
+      setFormData({
+        roomName: "",
+        hostName: "",
+        gameType: "drawing",
+        maxPlayers: 8,
+        isPrivate: false,
+      });
       setError("");
       onClose();
     }
@@ -208,7 +214,8 @@ export default function CreateRoomModal(
               <div>
                 <span class="text-sm font-medium text-gray-700">Private Room</span>
                 <p class="text-xs text-gray-500 mt-1">
-                  Private rooms won't appear on the public dashboard and can only be joined via direct link
+                  Private rooms won't appear on the public dashboard and can only be joined via
+                  direct link
                 </p>
               </div>
             </label>

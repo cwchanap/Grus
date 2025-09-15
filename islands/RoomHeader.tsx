@@ -35,14 +35,14 @@ export default function RoomHeader(
     try {
       await navigator.clipboard.writeText(text);
       // Show a temporary success message
-      const event = new CustomEvent('showToast', {
-        detail: { message: 'Room link copied to clipboard!', type: 'success' }
+      const event = new CustomEvent("showToast", {
+        detail: { message: "Room link copied to clipboard!", type: "success" },
       });
       globalThis.dispatchEvent(event);
     } catch (error) {
-      console.error('Failed to copy to clipboard:', error);
+      console.error("Failed to copy to clipboard:", error);
       // Fallback: show the URL in a prompt
-      globalThis.prompt('Copy this room link:', text);
+      globalThis.prompt("Copy this room link:", text);
     }
   };
 
@@ -282,7 +282,6 @@ export default function RoomHeader(
             <span class="hidden xs:inline">📤 Share</span>
           </button>
 
-
           <LeaveRoomButton
             roomId={room.room.id}
             playerId={playerId}
@@ -301,7 +300,6 @@ export default function RoomHeader(
           )}
         </div>
       </div>
-
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { TestRoomManager } from "./test-room-manager.ts";
 
-async function withTestRoomManager(
+function withTestRoomManager(
   name: string,
   testFn: (roomManager: TestRoomManager) => Promise<void>,
 ) {
@@ -15,7 +15,6 @@ async function withTestRoomManager(
     }
   });
 }
-
 
 /**
  * Unit tests for RoomManager private room functionality
@@ -75,87 +74,96 @@ withTestRoomManager("RoomManager - createRoom with public flag (default)", async
   assertEquals(room.room.isPrivate, false);
 });
 
-withTestRoomManager("RoomManager - createRoom defaults to public when isPrivate not specified", async (roomManager) => {
-  const roomName = "Default Public Room";
-  const hostName = "Default Host";
+withTestRoomManager(
+  "RoomManager - createRoom defaults to public when isPrivate not specified",
+  async (roomManager) => {
+    const roomName = "Default Public Room";
+    const hostName = "Default Host";
 
-  // Create a room without specifying isPrivate
-  const createResult = await roomManager.createRoom({
-    name: roomName,
-    hostName,
-    gameType: "drawing",
-    maxPlayers: 8,
-  });
+    // Create a room without specifying isPrivate
+    const createResult = await roomManager.createRoom({
+      name: roomName,
+      hostName,
+      gameType: "drawing",
+      maxPlayers: 8,
+    });
 
-  assertEquals(createResult.success, true);
-  assertExists(createResult.data);
+    assertEquals(createResult.success, true);
+    assertExists(createResult.data);
 
-  const { room } = createResult.data!;
+    const { room } = createResult.data!;
 
-  // Verify room defaults to public
-  assertEquals(room.room.isPrivate, false);
-});
+    // Verify room defaults to public
+    assertEquals(room.room.isPrivate, false);
+  },
+);
 
-withTestRoomManager("RoomManager - getActiveRoomsWithCleanup filters out private rooms", async (roomManager) => {
-  // Create a public room
-  const publicRoomResult = await roomManager.createRoom({
-    name: "Public Room",
-    hostName: "Public Host",
-    gameType: "drawing",
-    isPrivate: false,
-  });
-  assertEquals(publicRoomResult.success, true);
+withTestRoomManager(
+  "RoomManager - getActiveRoomsWithCleanup filters out private rooms",
+  async (roomManager) => {
+    // Create a public room
+    const publicRoomResult = await roomManager.createRoom({
+      name: "Public Room",
+      hostName: "Public Host",
+      gameType: "drawing",
+      isPrivate: false,
+    });
+    assertEquals(publicRoomResult.success, true);
 
-  // Create a private room
-  const privateRoomResult = await roomManager.createRoom({
-    name: "Private Room",
-    hostName: "Private Host",
-    gameType: "drawing",
-    isPrivate: true,
-  });
-  assertEquals(privateRoomResult.success, true);
+    // Create a private room
+    const privateRoomResult = await roomManager.createRoom({
+      name: "Private Room",
+      hostName: "Private Host",
+      gameType: "drawing",
+      isPrivate: true,
+    });
+    assertEquals(privateRoomResult.success, true);
 
-  // Get active rooms with cleanup
-  const activeRoomsResult = await roomManager.getActiveRoomsWithCleanup(10);
-  assertEquals(activeRoomsResult.success, true);
-  assertExists(activeRoomsResult.data);
+    // Get active rooms with cleanup
+    const activeRoomsResult = await roomManager.getActiveRoomsWithCleanup(10);
+    assertEquals(activeRoomsResult.success, true);
+    assertExists(activeRoomsResult.data);
 
-  const activeRooms = activeRoomsResult.data!;
+    const activeRooms = activeRoomsResult.data!;
 
-  // Should only contain the public room
-  assertEquals(activeRooms.length, 1);
-  assertEquals(activeRooms[0].room.name, "Public Room");
-  assertEquals(activeRooms[0].room.isPrivate, false);
-});
+    // Should only contain the public room
+    assertEquals(activeRooms.length, 1);
+    assertEquals(activeRooms[0].room.name, "Public Room");
+    assertEquals(activeRooms[0].room.isPrivate, false);
+  },
+);
 
-withTestRoomManager("RoomManager - joinRoom works for private rooms via direct access", async (roomManager) => {
-  // Create a private room
-  const createResult = await roomManager.createRoom({
-    name: "Private Join Test",
-    hostName: "Host",
-    gameType: "drawing",
-    isPrivate: true,
-  });
-  assertEquals(createResult.success, true);
+withTestRoomManager(
+  "RoomManager - joinRoom works for private rooms via direct access",
+  async (roomManager) => {
+    // Create a private room
+    const createResult = await roomManager.createRoom({
+      name: "Private Join Test",
+      hostName: "Host",
+      gameType: "drawing",
+      isPrivate: true,
+    });
+    assertEquals(createResult.success, true);
 
-  const roomId = createResult.data!.roomId;
+    const roomId = createResult.data!.roomId;
 
-  // Join the private room
-  const joinResult = await roomManager.joinRoom({
-    roomId,
-    playerName: "Joiner",
-  });
+    // Join the private room
+    const joinResult = await roomManager.joinRoom({
+      roomId,
+      playerName: "Joiner",
+    });
 
-  assertEquals(joinResult.success, true);
-  assertExists(joinResult.data);
+    assertEquals(joinResult.success, true);
+    assertExists(joinResult.data);
 
-  const { playerId, room } = joinResult.data!;
+    const { playerId, room } = joinResult.data!;
 
-  // Verify join was successful
-  assertExists(playerId);
-  assertEquals(room.room.name, "Private Join Test");
-  assertEquals(room.players.length, 2); // Host + new player
-});
+    // Verify join was successful
+    assertExists(playerId);
+    assertEquals(room.room.name, "Private Join Test");
+    assertEquals(room.players.length, 2); // Host + new player
+  },
+);
 
 withTestRoomManager("RoomManager - getRoomSummary works for private rooms", async (roomManager) => {
   // Create a private room
@@ -216,29 +224,32 @@ withTestRoomManager("RoomManager - leaveRoom works for private rooms", async (ro
   assertEquals(leaveData.remainingPlayers!.length, 1); // Only host left
 });
 
-withTestRoomManager("RoomManager - private room deletion when last player leaves", async (roomManager) => {
-  // Create a private room
-  const createResult = await roomManager.createRoom({
-    name: "Private Delete Test",
-    hostName: "Host",
-    gameType: "drawing",
-    isPrivate: true,
-  });
-  assertEquals(createResult.success, true);
+withTestRoomManager(
+  "RoomManager - private room deletion when last player leaves",
+  async (roomManager) => {
+    // Create a private room
+    const createResult = await roomManager.createRoom({
+      name: "Private Delete Test",
+      hostName: "Host",
+      gameType: "drawing",
+      isPrivate: true,
+    });
+    assertEquals(createResult.success, true);
 
-  const roomId = createResult.data!.roomId;
-  const hostPlayerId = createResult.data!.playerId;
+    const roomId = createResult.data!.roomId;
+    const hostPlayerId = createResult.data!.playerId;
 
-  // Leave with the host (last player)
-  const leaveResult = await roomManager.leaveRoom( roomId, hostPlayerId);
-  assertEquals(leaveResult.success, true);
-  assertExists(leaveResult.data);
+    // Leave with the host (last player)
+    const leaveResult = await roomManager.leaveRoom(roomId, hostPlayerId);
+    assertEquals(leaveResult.success, true);
+    assertExists(leaveResult.data);
 
-  const leaveData = leaveResult.data!;
-  assertEquals(leaveData.wasHost, true);
-  assertEquals(leaveData.roomDeleted, true);
+    const leaveData = leaveResult.data!;
+    assertEquals(leaveData.wasHost, true);
+    assertEquals(leaveData.roomDeleted, true);
 
-  // Verify room is gone
-  const roomSummary = await roomManager.getRoomSummary(roomId);
-  assertEquals(roomSummary.success, false); // Room should not exist
-});
+    // Verify room is gone
+    const roomSummary = await roomManager.getRoomSummary(roomId);
+    assertEquals(roomSummary.success, false); // Room should not exist
+  },
+);

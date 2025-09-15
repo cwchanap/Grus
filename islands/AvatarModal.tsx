@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog.tsx";
 import { Button } from "../components/ui/button.tsx";
 
 interface AvatarModalProps {
@@ -76,7 +82,14 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
         // We scale/translate proportionally from the view canvas space to 64px
         const scaleRatio = PREVIEW_SIZE / VIEW_SIZE; // 64/256 = 0.25
         pctx.save();
-        pctx.setTransform(scale * scaleRatio, 0, 0, scale * scaleRatio, offset.x * scaleRatio, offset.y * scaleRatio);
+        pctx.setTransform(
+          scale * scaleRatio,
+          0,
+          0,
+          scale * scaleRatio,
+          offset.x * scaleRatio,
+          offset.y * scaleRatio,
+        );
         pctx.imageSmoothingQuality = "high";
         pctx.drawImage(image, 0, 0);
         pctx.restore();
@@ -98,7 +111,10 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
       // Center the image in the viewport
       const initialScale = Math.min(VIEW_SIZE / img.width, VIEW_SIZE / img.height);
       setScale(initialScale);
-      setOffset({ x: (VIEW_SIZE - img.width * initialScale) / 2, y: (VIEW_SIZE - img.height * initialScale) / 2 });
+      setOffset({
+        x: (VIEW_SIZE - img.width * initialScale) / 2,
+        y: (VIEW_SIZE - img.height * initialScale) / 2,
+      });
       setError("");
     };
     img.onerror = () => setError("Failed to load image.");
@@ -122,8 +138,8 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
     const view = viewCanvasRef.current;
     if (!view) return;
     const rect = view.getBoundingClientRect();
-    const cx = (e.clientX - rect.left);
-    const cy = (e.clientY - rect.top);
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
 
     const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9;
     const newScale = clampScale(scale * zoomFactor);
@@ -183,7 +199,14 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
     ctx.fillRect(0, 0, PREVIEW_SIZE, PREVIEW_SIZE);
 
     const scaleRatio = PREVIEW_SIZE / VIEW_SIZE; // 0.25
-    ctx.setTransform(scale * scaleRatio, 0, 0, scale * scaleRatio, offset.x * scaleRatio, offset.y * scaleRatio);
+    ctx.setTransform(
+      scale * scaleRatio,
+      0,
+      0,
+      scale * scaleRatio,
+      offset.x * scaleRatio,
+      offset.y * scaleRatio,
+    );
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(image, 0, 0);
 
@@ -244,7 +267,10 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
       setImage(img);
       const initialScale = Math.min(VIEW_SIZE / img.width, VIEW_SIZE / img.height);
       setScale(initialScale);
-      setOffset({ x: (VIEW_SIZE - img.width * initialScale) / 2, y: (VIEW_SIZE - img.height * initialScale) / 2 });
+      setOffset({
+        x: (VIEW_SIZE - img.width * initialScale) / 2,
+        y: (VIEW_SIZE - img.height * initialScale) / 2,
+      });
       setError("");
     };
     img.onerror = () => setError("Failed to load image.");
@@ -274,7 +300,9 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
         <div className="p-6 pt-0">
           <div>
             <div
-              className={`w-[256px] h-[256px] border rounded-md bg-gray-100 relative ${image ? "cursor-move" : "cursor-pointer"} select-none`}
+              className={`w-[256px] h-[256px] border rounded-md bg-gray-100 relative ${
+                image ? "cursor-move" : "cursor-pointer"
+              } select-none`}
               onWheel={(e) => handleWheel(e as unknown as WheelEvent)}
               onMouseDown={(e) => startDrag(e as unknown as MouseEvent)}
               onMouseMove={(e) => onDrag(e as unknown as MouseEvent)}
@@ -285,9 +313,17 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
               onTouchEnd={endDrag}
               onDrop={(e) => handleDrop(e as unknown as DragEvent)}
               onDragOver={(e) => handleDragOver(e as unknown as DragEvent)}
-              onClick={() => { if (!image) fileInputRef.current?.click(); }}
+              onClick={() => {
+                if (!image) fileInputRef.current?.click();
+              }}
             >
-              <canvas ref={viewCanvasRef} className="absolute inset-0" width={VIEW_SIZE} height={VIEW_SIZE} data-testid="avatar-view-canvas" />
+              <canvas
+                ref={viewCanvasRef}
+                className="absolute inset-0"
+                width={VIEW_SIZE}
+                height={VIEW_SIZE}
+                data-testid="avatar-view-canvas"
+              />
             </div>
             <input
               ref={fileInputRef}
@@ -297,15 +333,15 @@ export default function AvatarModal({ open, onClose, onSaved }: AvatarModalProps
               className="hidden"
               data-testid="avatar-file-input"
             />
-            {error && (
-              <div className="mt-3 text-sm text-red-600">{error}</div>
-            )}
+            {error && <div className="mt-3 text-sm text-red-600">{error}</div>}
           </div>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} data-testid="avatar-cancel">Cancel</Button>
-          <Button variant="outline" onClick={handleRemove} data-testid="avatar-remove">Remove Avatar</Button>
+          <Button variant="outline" onClick={handleRemove} data-testid="avatar-remove">
+            Remove Avatar
+          </Button>
           <Button onClick={handleSave} data-testid="avatar-save">Save Avatar</Button>
         </DialogFooter>
       </DialogContent>

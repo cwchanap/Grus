@@ -2,7 +2,7 @@ import { useEffect, useState } from "preact/hooks";
 
 interface ToastMessage {
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: "success" | "error" | "info";
   id: string;
 }
 
@@ -12,7 +12,7 @@ export default function Toast() {
   useEffect(() => {
     const handleShowToast = (event: Event) => {
       const customEvent = event as CustomEvent;
-      const { message, type = 'info' } = customEvent.detail;
+      const { message, type = "info" } = customEvent.detail;
 
       const newToast: ToastMessage = {
         message,
@@ -28,22 +28,22 @@ export default function Toast() {
       }, 3000);
     };
 
-    globalThis.addEventListener('showToast', handleShowToast);
+    globalThis.addEventListener("showToast", handleShowToast);
 
     return () => {
-      globalThis.removeEventListener('showToast', handleShowToast);
+      globalThis.removeEventListener("showToast", handleShowToast);
     };
   }, []);
 
   const getToastStyles = (type: string) => {
     switch (type) {
-      case 'success':
-        return 'bg-green-500 text-white';
-      case 'error':
-        return 'bg-red-500 text-white';
-      case 'info':
+      case "success":
+        return "bg-green-500 text-white";
+      case "error":
+        return "bg-red-500 text-white";
+      case "info":
       default:
-        return 'bg-blue-500 text-white';
+        return "bg-blue-500 text-white";
     }
   };
 

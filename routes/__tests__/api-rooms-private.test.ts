@@ -2,7 +2,7 @@ import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { handler as roomsHandler } from "../api/rooms.ts";
 import { getKVRoomService } from "../../lib/db/index.ts";
 
-async function withApiTest(
+function withApiTest(
   name: string,
   testFn: () => Promise<void>,
 ) {
@@ -24,7 +24,6 @@ async function withApiTest(
     }
   });
 }
-
 
 /**
  * API endpoint tests for private room functionality
