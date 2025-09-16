@@ -107,7 +107,5 @@
     "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
     "strict": true
   },
-  // The Deno version in the CI workflow does not support "auto" for nodeModulesDir.
-  // It must be set to `true` to pass the CI checks.
-  "nodeModulesDir": true
+  "nodeModulesDir": "auto"
 }

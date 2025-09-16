@@ -11,7 +11,6 @@ function withTestRoomManager(
       await testFn(roomManager);
     } finally {
       await roomManager.cleanup();
-      roomManager.close();
     }
   });
 }
