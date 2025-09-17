@@ -9,10 +9,9 @@ export default function App({ Component }: PageProps) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>Drawing Game</title>
         <link rel="stylesheet" href="/styles.css" />
-        {/* deno-lint-ignore react-no-danger */}
         {/* @ts-ignore */}
+        {/* deno-lint-ignore ban-unknown-rule-code */}
         <script
-          // deno-lint-ignore react-no-danger
           dangerouslySetInnerHTML={{
             __html: `
             // Polyfill to prevent node:process imports
