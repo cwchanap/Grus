@@ -41,7 +41,7 @@
     "rules": {
       "tags": ["fresh", "recommended"],
       "include": ["no-unused-vars", "no-implicit-any", "prefer-const", "no-inferrable-types"],
-      "exclude": ["no-explicit-any", "react-no-danger"]
+      "exclude": ["no-explicit-any"]
     },
     "include": ["components/", "islands/", "lib/", "routes/", "types/", "*.ts", "*.tsx"],
     "exclude": ["**/_fresh/*", "**/node_modules/*", "**/.git/*", "**/coverage/*", "fresh.gen.ts"]
