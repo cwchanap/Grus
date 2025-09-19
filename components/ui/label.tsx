@@ -9,10 +9,11 @@ const labelVariants = cva(
 const Label = forwardRef<
   HTMLLabelElement,
   & preact.JSX.HTMLAttributes<HTMLLabelElement>
-  & VariantProps<typeof labelVariants>
->(({ className, ...props }, ref) => (
+  & VariantProps<typeof labelVariants> & { htmlFor?: string }
+>(({ className, htmlFor, ...props }, ref) => (
   <label
     ref={ref}
+    htmlFor={htmlFor}
     className={cn(labelVariants(), className)}
     {...props}
   />
