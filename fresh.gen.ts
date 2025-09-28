@@ -47,6 +47,9 @@ import * as $core_MainLobby from "./islands/core/MainLobby.tsx";
 import * as $core_MainLobbyWithAuth from "./islands/core/MainLobbyWithAuth.tsx";
 import * as $games_drawing_DrawingBoard from "./islands/games/drawing/DrawingBoard.tsx";
 import * as $games_drawing_DrawingEngine from "./islands/games/drawing/DrawingEngine.tsx";
+import * as $games_poker_PokerControls from "./islands/games/poker/PokerControls.tsx";
+import * as $games_poker_PokerPlayer from "./islands/games/poker/PokerPlayer.tsx";
+import * as $games_poker_PokerTable from "./islands/games/poker/PokerTable.tsx";
 import type { Manifest } from "$fresh/server.ts";
 
 const manifest = {
@@ -98,6 +101,9 @@ const manifest = {
     "./islands/core/MainLobbyWithAuth.tsx": $core_MainLobbyWithAuth,
     "./islands/games/drawing/DrawingBoard.tsx": $games_drawing_DrawingBoard,
     "./islands/games/drawing/DrawingEngine.tsx": $games_drawing_DrawingEngine,
+    "./islands/games/poker/PokerControls.tsx": $games_poker_PokerControls,
+    "./islands/games/poker/PokerPlayer.tsx": $games_poker_PokerPlayer,
+    "./islands/games/poker/PokerTable.tsx": $games_poker_PokerTable,
   },
   baseUrl: import.meta.url,
 } satisfies Manifest;

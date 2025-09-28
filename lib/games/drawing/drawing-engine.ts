@@ -29,7 +29,12 @@ class ServerDrawingCommandBuffer {
 
   add(command: DrawingCommand): void {
     this.buffer.push(command);
-    console.log("ServerDrawingCommandBuffer: Added command", command.type, "buffer size:", this.buffer.length);
+    console.log(
+      "ServerDrawingCommandBuffer: Added command",
+      command.type,
+      "buffer size:",
+      this.buffer.length,
+    );
 
     // Flush immediately for critical commands or when buffer is full
     if (
@@ -42,7 +47,11 @@ class ServerDrawingCommandBuffer {
       this.flush();
     } else if (this.timeoutId === null) {
       // Start debounce timer for non-critical commands
-      console.log("ServerDrawingCommandBuffer: Starting timeout for", this.config.drawing.serverDebounceMs, "ms");
+      console.log(
+        "ServerDrawingCommandBuffer: Starting timeout for",
+        this.config.drawing.serverDebounceMs,
+        "ms",
+      );
       this.timeoutId = setTimeout(() => {
         console.log("ServerDrawingCommandBuffer: Timeout triggered, flushing");
         this.flush();
@@ -273,7 +282,13 @@ export class DrawingGameEngine extends BaseGameEngine<
     // Collect any pending batched messages from the server buffer
     const batchedMessages = [...this.pendingServerMessages];
     this.pendingServerMessages = [];
-    console.log("handleClientMessage: Returning", serverMessages.length, "immediate messages and", batchedMessages.length, "batched messages");
+    console.log(
+      "handleClientMessage: Returning",
+      serverMessages.length,
+      "immediate messages and",
+      batchedMessages.length,
+      "batched messages",
+    );
 
     return { updatedState, serverMessages: [...serverMessages, ...batchedMessages] };
   }
@@ -297,7 +312,7 @@ export class DrawingGameEngine extends BaseGameEngine<
     console.log("VALIDATION DEBUG: playerId =", playerId);
     console.log("VALIDATION DEBUG: currentDrawer =", gameState.gameData.currentDrawer);
     console.log("VALIDATION DEBUG: phase =", gameState.phase);
-    
+
     // Only the current drawer can draw
     if (playerId !== gameState.gameData.currentDrawer) {
       console.log("VALIDATION DEBUG: Player is not the current drawer");

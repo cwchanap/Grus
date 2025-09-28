@@ -188,21 +188,23 @@ export default function UserProfile({ user }: UserProfileProps) {
                 aria-label="Update avatar"
                 data-testid="profile-avatar"
               >
-                {user.avatar ? (
-                  <img
-                    src={user.avatar}
-                    alt="User avatar"
-                    className="w-20 h-20 rounded-full object-cover border shadow"
-                  />
-                ) : (
-                  <div
-                    className={`w-20 h-20 rounded-full ${
-                      generateAvatarUrl(user.username)
-                    } flex items-center justify-center text-white text-2xl font-bold flex-shrink-0 border shadow`}
-                  >
-                    {(user.name || user.username).charAt(0).toUpperCase()}
-                  </div>
-                )}
+                {user.avatar
+                  ? (
+                    <img
+                      src={user.avatar}
+                      alt="User avatar"
+                      className="w-20 h-20 rounded-full object-cover border shadow"
+                    />
+                  )
+                  : (
+                    <div
+                      className={`w-20 h-20 rounded-full ${
+                        generateAvatarUrl(user.username)
+                      } flex items-center justify-center text-white text-2xl font-bold flex-shrink-0 border shadow`}
+                    >
+                      {(user.name || user.username).charAt(0).toUpperCase()}
+                    </div>
+                  )}
                 <span className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                   <span className="bg-white text-gray-700 rounded-full p-1.5 shadow border">
                     <Camera className="w-4 h-4" />

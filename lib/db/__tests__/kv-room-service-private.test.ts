@@ -31,7 +31,7 @@ Deno.test("KVRoomService - createRoom with private flag", async () => {
     hostId,
     maxPlayers,
     gameType,
-    isPrivate
+    isPrivate,
   );
 
   assertEquals(createResult.success, true);
@@ -85,7 +85,7 @@ Deno.test("KVRoomService - getActiveRooms filters out private rooms", async () =
     "host-public",
     8,
     "drawing",
-    false
+    false,
   );
   assertEquals(publicRoomResult.success, true);
 
@@ -95,7 +95,7 @@ Deno.test("KVRoomService - getActiveRooms filters out private rooms", async () =
     "host-private",
     8,
     "drawing",
-    true
+    true,
   );
   assertEquals(privateRoomResult.success, true);
 
@@ -121,7 +121,7 @@ Deno.test("KVRoomService - getAllRooms includes both public and private", async 
     "host-public-2",
     8,
     "drawing",
-    false
+    false,
   );
   assertEquals(publicRoomResult.success, true);
 
@@ -131,7 +131,7 @@ Deno.test("KVRoomService - getAllRooms includes both public and private", async 
     "host-private-2",
     8,
     "drawing",
-    true
+    true,
   );
   assertEquals(privateRoomResult.success, true);
 
@@ -143,8 +143,8 @@ Deno.test("KVRoomService - getAllRooms includes both public and private", async 
   const allRooms = allRoomsResult.data!;
   assertEquals(allRooms.length, 2);
 
-  const publicRoom = allRooms.find(r => r.name === "Public Room 2");
-  const privateRoom = allRooms.find(r => r.name === "Private Room 2");
+  const publicRoom = allRooms.find((r) => r.name === "Public Room 2");
+  const privateRoom = allRooms.find((r) => r.name === "Private Room 2");
 
   assertExists(publicRoom);
   assertExists(privateRoom);
@@ -163,7 +163,7 @@ Deno.test("KVRoomService - updateRoom preserves isPrivate flag", async () => {
     "host-update",
     8,
     "drawing",
-    true
+    true,
   );
   assertEquals(createResult.success, true);
 
@@ -201,7 +201,7 @@ Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () 
       `host-${room.name.replace(" ", "-")}`,
       8,
       "drawing",
-      room.isPrivate
+      room.isPrivate,
     );
     assertEquals(result.success, true);
   }
@@ -215,8 +215,8 @@ Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () 
   assertEquals(allRooms.length, 5);
 
   // Check that we have the right mix of private/public
-  const publicRooms = allRooms.filter(r => !r.isPrivate);
-  const privateRooms = allRooms.filter(r => r.isPrivate);
+  const publicRooms = allRooms.filter((r) => !r.isPrivate);
+  const privateRooms = allRooms.filter((r) => r.isPrivate);
 
   assertEquals(publicRooms.length, 3);
   assertEquals(privateRooms.length, 2);
