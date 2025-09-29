@@ -1,9 +1,8 @@
 import { forwardRef } from "preact/compat";
 import { cn } from "../../lib/utils.ts";
 
-export type InputProps = preact.JSX.HTMLAttributes<HTMLInputElement> & {
-  type?: string;
-};
+// deno-lint-ignore no-empty-interface
+export interface InputProps extends preact.JSX.HTMLAttributes<HTMLInputElement> {}
 
 const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, ...props }, ref) => {

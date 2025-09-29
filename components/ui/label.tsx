@@ -6,15 +6,17 @@ const labelVariants = cva(
   "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70",
 );
 
+// deno-lint-ignore no-empty-interface
+export interface LabelProps
+  extends preact.JSX.HTMLAttributes<HTMLLabelElement>,
+    VariantProps<typeof labelVariants> {}
+
 const Label = forwardRef<
   HTMLLabelElement,
-  & preact.JSX.HTMLAttributes<HTMLLabelElement>
-  & VariantProps<typeof labelVariants>
-  & { htmlFor?: string }
->(({ className, htmlFor, ...props }, ref) => (
+  LabelProps
+>(({ className, ...props }, ref) => (
   <label
     ref={ref}
-    htmlFor={htmlFor}
     className={cn(labelVariants(), className)}
     {...props}
   />
