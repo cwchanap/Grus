@@ -1,10 +1,4 @@
-import {
-  HandRank,
-  PokerCard,
-  PokerHand,
-  Rank,
-  Suit,
-} from "../../../types/games/poker.ts";
+import { HandRank, PokerCard, PokerHand, Rank, Suit } from "../../../types/games/poker.ts";
 
 /**
  * Converts a card rank to its numeric value.
@@ -126,9 +120,7 @@ export function findPairs(cards: PokerCard[]): number[] {
     acc[value] = (acc[value] || 0) + 1;
     return acc;
   }, {} as Record<number, number>);
-  return Object.values(counts).filter((count) => count >= 2).sort((a, b) =>
-    b - a
-  );
+  return Object.values(counts).filter((count) => count >= 2).sort((a, b) => b - a);
 }
 
 /**
@@ -140,29 +132,23 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
   // This is a simplified implementation. A full implementation would be more complex.
   // It should check for all hand ranks and handle tie-breaking correctly.
 
-  const cardValues = allCards.map((c) => rankToValue(c.rank)).sort((a, b) =>
-    b - a
-  );
+  const cardValues = allCards.map((c) => rankToValue(c.rank)).sort((a, b) => b - a);
 
-  const flushSuit = (Object.entries(allCards.reduce((acc, card) => {
+  const flushSuit = Object.entries(allCards.reduce((acc, card) => {
     acc[card.suit] = (acc[card.suit] || 0) + 1;
     return acc;
   }, {} as Record<Suit, number>)).find(([, count]) => count >= 5)?.[0] as
     | Suit
-    | undefined);
+    | undefined;
 
-  const flushCards = flushSuit
-    ? allCards.filter((c) => c.suit === flushSuit)
-    : [];
+  const flushCards = flushSuit ? allCards.filter((c) => c.suit === flushSuit) : [];
 
   const hasFlush = !!flushSuit;
   const hasStraight = isStraight(allCards);
   const pairs = findPairs(allCards);
 
   if (hasFlush && isStraight(flushCards)) {
-    const flushValues = flushCards.map((c) => rankToValue(c.rank)).sort((a, b) =>
-      b - a
-    );
+    const flushValues = flushCards.map((c) => rankToValue(c.rank)).sort((a, b) => b - a);
     // Simplified Royal Flush check
     if (flushValues.includes(14) && flushValues.includes(13)) {
       return { rank: HandRank.ROYAL_FLUSH, values: [] };
@@ -203,9 +189,7 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
   }
 
   if (hasFlush) {
-    const flushValues = flushCards.map((c) => rankToValue(c.rank)).sort((a, b) =>
-      b - a
-    );
+    const flushValues = flushCards.map((c) => rankToValue(c.rank)).sort((a, b) => b - a);
     return { rank: HandRank.FLUSH, values: flushValues.slice(0, 5) };
   }
 

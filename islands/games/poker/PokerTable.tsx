@@ -10,35 +10,38 @@ interface PokerTableProps {
 }
 
 export default function PokerTable({ gameState, playerId, onAction }: PokerTableProps) {
-  const localPlayer = gameState.players.find((p) => p.id === playerId);
+  const players = gameState.players || [];
+  const localPlayer = players.find((p) => p.id === playerId);
 
   return (
-    <div class="flex flex-col items-center justify-center bg-green-800 min-h-screen text-white">
-      <div class="relative w-[90vw] h-[90vw] md:w-[600px] md:h-[600px] bg-green-700 rounded-full border-8 border-yellow-800 shadow-lg">
+    <div class="flex flex-col items-center justify-center w-full h-full text-white">
+      <div class="relative w-full max-w-4xl aspect-[4/3] bg-green-700 rounded-full border-8 border-yellow-800 shadow-lg">
         <div class="absolute inset-0 flex items-center justify-center">
-          <div class="text-center">
-            <h2 class="text-2xl font-bold">Pot: ${gameState.pot}</h2>
-            <div class="flex space-x-2 my-2">
-              {gameState.communityCards.map((card, i) => (
+          <div class="text-center bg-green-600/80 rounded-lg p-4 max-w-xs">
+            <h2 class="text-xl font-bold mb-2">Pot: ${gameState.pot || 0}</h2>
+            <div class="flex space-x-1 my-2 justify-center">
+              {(gameState.communityCards || []).map((card, i) => (
                 <div
                   key={i}
-                  class="w-16 h-24 bg-white rounded-lg text-black flex items-center justify-center text-2xl font-bold"
+                  class="w-12 h-16 bg-white rounded text-black flex items-center justify-center text-sm font-bold"
                 >
-                  {card.rank}
-                  {card.suit}
+                  <div class="text-center">
+                    <div>{card.rank}</div>
+                    <div>{card.suit}</div>
+                  </div>
                 </div>
               ))}
             </div>
-            <p class="text-lg">Current Bet: ${gameState.currentBet}</p>
-            <p class="text-md font-semibold">{gameState.bettingRound}</p>
+            <p class="text-sm mb-1">Bet: ${gameState.currentBet || 0}</p>
+            <p class="text-xs font-semibold">{gameState.bettingRound || "Pre-flop"}</p>
           </div>
         </div>
 
-        {gameState.players.map((player, index) => (
+        {players.map((player, index) => (
           <PokerPlayer
             key={player.id}
             player={player}
-            isCurrentPlayer={gameState.currentPlayerId === player.id}
+            isCurrentPlayer={gameState.currentPlayerId === player.id || (gameState.currentPlayerIndex === index && !gameState.currentPlayerId)}
             isLocalPlayer={player.id === playerId}
             position={index}
           />

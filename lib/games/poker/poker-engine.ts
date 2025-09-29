@@ -9,13 +9,7 @@ import {
   PokerServerMessage,
 } from "../../../types/games/poker.ts";
 import { PlayerState } from "../../../types/core/room.ts";
-import {
-  compareHands,
-  createDeck,
-  dealCards,
-  evaluateHand,
-  shuffleDeck,
-} from "./poker-utils.ts";
+import { compareHands, createDeck, dealCards, evaluateHand, shuffleDeck } from "./poker-utils.ts";
 
 export class PokerGameEngine extends BaseGameEngine<
   PokerGameState,

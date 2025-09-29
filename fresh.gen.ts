@@ -36,6 +36,7 @@ import * as $GameSettingsWrapper from "./islands/GameSettingsWrapper.tsx";
 import * as $JoinRoomModal from "./islands/JoinRoomModal.tsx";
 import * as $LeaveRoomButton from "./islands/LeaveRoomButton.tsx";
 import * as $LoginForm from "./islands/LoginForm.tsx";
+import * as $PokerRoom from "./islands/PokerRoom.tsx";
 import * as $RoomHeader from "./islands/RoomHeader.tsx";
 import * as $Scoreboard from "./islands/Scoreboard.tsx";
 import * as $SignupForm from "./islands/SignupForm.tsx";
@@ -90,6 +91,7 @@ const manifest = {
     "./islands/JoinRoomModal.tsx": $JoinRoomModal,
     "./islands/LeaveRoomButton.tsx": $LeaveRoomButton,
     "./islands/LoginForm.tsx": $LoginForm,
+    "./islands/PokerRoom.tsx": $PokerRoom,
     "./islands/RoomHeader.tsx": $RoomHeader,
     "./islands/Scoreboard.tsx": $Scoreboard,
     "./islands/SignupForm.tsx": $SignupForm,

@@ -1,4 +1,4 @@
-import { BaseGameMessage, BaseGameState, BaseGameSettings } from "../core/game.ts";
+import { BaseGameMessage, BaseGameSettings, BaseGameState } from "../core/game.ts";
 import { PlayerState } from "../core/room.ts";
 
 export enum Suit {

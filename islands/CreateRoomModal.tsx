@@ -1,9 +1,17 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 
 interface CreateRoomModalProps {
   show: boolean;
   onClose: () => void;
   onSuccess: () => void;
+}
+
+interface GameType {
+  id: string;
+  name: string;
+  description: string;
+  minPlayers: number;
+  maxPlayers: number;
 }
 
 export default function CreateRoomModal(
@@ -18,6 +26,51 @@ export default function CreateRoomModal(
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [gameTypes, setGameTypes] = useState<GameType[]>([]);
+  const [loadingGameTypes, setLoadingGameTypes] = useState(true);
+
+  // Fetch available game types
+  useEffect(() => {
+    const fetchGameTypes = async () => {
+      try {
+        const response = await fetch("/api/games");
+        if (response.ok) {
+          const data = await response.json();
+          setGameTypes(data.gameTypes || []);
+          // Set default game type to first available game if drawing doesn't exist
+          if (
+            data.gameTypes?.length > 0 && !data.gameTypes.find((g: GameType) => g.id === "drawing")
+          ) {
+            setFormData((prev) => ({ ...prev, gameType: data.gameTypes[0].id }));
+          }
+        }
+      } catch (error) {
+        console.error("Failed to fetch game types:", error);
+        // Fall back to default drawing game
+        setGameTypes([
+          {
+            id: "drawing",
+            name: "Drawing & Guessing",
+            description: "Draw pictures and guess what others are drawing",
+            minPlayers: 2,
+            maxPlayers: 8,
+          },
+        ]);
+      } finally {
+        setLoadingGameTypes(false);
+      }
+    };
+
+    fetchGameTypes();
+  }, []);
+
+  // Update max players when game type changes
+  useEffect(() => {
+    const selectedGame = gameTypes.find((g) => g.id === formData.gameType);
+    if (selectedGame && formData.maxPlayers > selectedGame.maxPlayers) {
+      setFormData((prev) => ({ ...prev, maxPlayers: selectedGame.maxPlayers }));
+    }
+  }, [formData.gameType, gameTypes]);
 
   const handleSubmit = async (e: Event) => {
     e.preventDefault();
@@ -27,8 +80,19 @@ export default function CreateRoomModal(
       return;
     }
 
-    if (formData.maxPlayers < 2 || formData.maxPlayers > 8) {
-      setError("Max players must be between 2 and 8");
+    const selectedGame = gameTypes.find((g) => g.id === formData.gameType);
+    if (selectedGame) {
+      if (
+        formData.maxPlayers < selectedGame.minPlayers ||
+        formData.maxPlayers > selectedGame.maxPlayers
+      ) {
+        setError(
+          `Max players must be between ${selectedGame.minPlayers} and ${selectedGame.maxPlayers} for ${selectedGame.name}`,
+        );
+        return;
+      }
+    } else {
+      setError("Please select a valid game type");
       return;
     }
 
@@ -68,11 +132,15 @@ export default function CreateRoomModal(
 
   const handleClose = () => {
     if (!loading) {
+      // Reset to first available game type or drawing as fallback
+      const defaultGameType = gameTypes.length > 0 ? gameTypes[0].id : "drawing";
+      const defaultMaxPlayers = gameTypes.length > 0 ? gameTypes[0].maxPlayers : 8;
+
       setFormData({
         roomName: "",
         hostName: "",
-        gameType: "drawing",
-        maxPlayers: 8,
+        gameType: defaultGameType,
+        maxPlayers: defaultMaxPlayers,
         isPrivate: false,
       });
       setError("");
@@ -168,11 +236,16 @@ export default function CreateRoomModal(
                   ...prev,
                   gameType: (e.target as HTMLSelectElement).value,
                 }))}
-              disabled={loading}
+              disabled={loading || loadingGameTypes}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
             >
-              <option value="drawing">🎨 Drawing & Guessing</option>
-              {/* Future game types can be added here */}
+              {loadingGameTypes ? <option>Loading game types...</option> : (
+                gameTypes.map((game) => (
+                  <option key={game.id} value={game.id}>
+                    {game.id === "drawing" ? "🎨" : game.id === "poker" ? "🃏" : "🎮"} {game.name}
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
@@ -187,14 +260,24 @@ export default function CreateRoomModal(
                   ...prev,
                   maxPlayers: parseInt((e.target as HTMLSelectElement).value),
                 }))}
-              disabled={loading}
+              disabled={loading || loadingGameTypes}
               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-100"
             >
-              {Array.from({ length: 7 }, (_, i) => i + 2).map((num) => (
-                <option key={num} value={num}>
-                  {num} players
-                </option>
-              ))}
+              {(() => {
+                const selectedGame = gameTypes.find((g) => g.id === formData.gameType);
+                if (!selectedGame) return null;
+
+                const minPlayers = selectedGame.minPlayers;
+                const maxPlayers = selectedGame.maxPlayers;
+                const playerCounts = Array.from({ length: maxPlayers - minPlayers + 1 }, (_, i) =>
+                  i + minPlayers);
+
+                return playerCounts.map((num) => (
+                  <option key={num} value={num}>
+                    {num} players
+                  </option>
+                ));
+              })()}
             </select>
           </div>
 

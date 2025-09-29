@@ -7,11 +7,14 @@ import type { BaseGameState } from "../../types/core/game.ts";
 import "../../lib/games/index.ts"; // Ensure games are registered
 import ChatRoom from "../../islands/core/ChatRoom.tsx";
 import DrawingBoard from "../../islands/games/drawing/DrawingBoard.tsx";
+import PokerTable from "../../islands/games/poker/PokerTable.tsx";
+import PokerRoom from "../../islands/PokerRoom.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
 import GameSettingsWrapper from "../../islands/GameSettingsWrapper.tsx";
 import type { DrawingCommand } from "../../types/games/drawing.ts";
+import type { PokerAction } from "../../types/games/poker.ts";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -53,15 +56,36 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
     // Make the current player the initial drawer and start with empty drawing history
     gameData.currentDrawer = playerId || null;
     gameData.drawingData = [] as any[];
+  } else if (gameType === "poker") {
+    // Initialize poker-specific data
+    gameData.deck = [];
+    gameData.communityCards = [];
+    gameData.pot = 0;
+    gameData.currentBet = 0;
+    gameData.bettingRound = "Pre-flop";
+    gameData.currentPlayerIndex = 0;
+    gameData.smallBlindIndex = 0;
+    gameData.bigBlindIndex = 1;
+    // Initialize poker players with empty hands and chips
+    gameData.players = players.map((player: any, index: number) => ({
+      ...player,
+      hand: [],
+      chips: (defaultSettings as any).buyIn || 1000,
+      currentBet: 0,
+      hasActed: false,
+      isAllIn: false,
+      isFolded: false,
+      position: index,
+    }));
   }
 
-  return {
+  const baseState = {
     roomId: room.room.id,
     gameType,
     roundNumber: 0, // Game hasn't started
     timeRemaining: defaultSettings.roundTimeSeconds * 1000, // Convert to milliseconds
     phase: "waiting", // Waiting for game to start
-    players,
+    players: gameType === "poker" ? gameData.players : players,
     scores: players.reduce((acc: any, player: any) => {
       acc[player.id] = 0; // Initialize all scores to 0
       return acc;
@@ -69,6 +93,64 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
     gameData,
     chatMessages: [], // No chat messages initially
     settings: defaultSettings,
+  };
+
+  // For poker, add poker-specific fields to the top level
+  if (gameType === "poker") {
+    return {
+      ...baseState,
+      deck: gameData.deck,
+      communityCards: gameData.communityCards,
+      pot: gameData.pot,
+      currentBet: gameData.currentBet,
+      bettingRound: gameData.bettingRound,
+      currentPlayerIndex: gameData.currentPlayerIndex,
+      smallBlindIndex: gameData.smallBlindIndex,
+      bigBlindIndex: gameData.bigBlindIndex,
+    };
+  }
+
+  return baseState;
+}
+
+// Create a stable poker action handler function
+function createPokerActionHandler(roomId: string, playerId: string) {
+  return (action: PokerAction, amount?: number) => {
+    const sendPokerAction = () => {
+      try {
+        const ws = (globalThis as any).__gameWebSocket as WebSocket | undefined;
+        console.log("Attempting to send poker action", {
+          action,
+          amount,
+          wsExists: !!ws,
+          readyState: ws?.readyState,
+        });
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const message = {
+            type: "poker-action",
+            roomId: roomId,
+            playerId: playerId,
+            data: { action, amount },
+          };
+          console.log("Sending poker action message:", message);
+          ws.send(JSON.stringify(message));
+          return true;
+        } else {
+          console.warn("WS not ready for poker action", { action, readyState: ws?.readyState });
+          return false;
+        }
+      } catch (err) {
+        console.error("Failed to send poker action", err);
+        return false;
+      }
+    };
+
+    // Attempt to send immediately, with retry if needed
+    if (!sendPokerAction()) {
+      setTimeout(() => {
+        sendPokerAction();
+      }, 100);
+    }
   };
 }
 
@@ -196,6 +278,22 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
   // Create a stable drawing command handler
   const drawingCommandHandler = createDrawingCommandHandler(room.room.id, playerId || "");
 
+  // Create a stable poker action handler
+  const pokerActionHandler = createPokerActionHandler(room.room.id, playerId || "");
+
+  // Use dedicated layout based on game type
+  if (room.room.gameType === "poker") {
+    return (
+      <PokerRoom
+        room={room}
+        playerId={playerId || ""}
+        gameState={gameState}
+        pokerActionHandler={pokerActionHandler}
+      />
+    );
+  }
+
+  // Default drawing game layout
   return (
     <div class="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 safe-area-inset">
       {/* Main Content */}
@@ -228,7 +326,7 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
           <div class="flex-1 flex flex-col lg:flex-row gap-4 lg:gap-6 min-h-0">
             {/* Drawing board area - takes 70% on desktop */}
             <div class="flex-1 lg:flex-[0_0_70%] bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg p-4 lg:p-6 min-h-0">
-              <div class="drawing-area overflow-hidden">
+              <div class="game-area overflow-hidden">
                 {room.room.gameType === "drawing"
                   ? (
                     <DrawingBoard
