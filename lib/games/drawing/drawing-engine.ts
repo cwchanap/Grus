@@ -29,12 +29,6 @@ class ServerDrawingCommandBuffer {
 
   add(command: DrawingCommand): void {
     this.buffer.push(command);
-    console.log(
-      "ServerDrawingCommandBuffer: Added command",
-      command.type,
-      "buffer size:",
-      this.buffer.length,
-    );
 
     // Flush immediately for critical commands or when buffer is full
     if (
@@ -43,17 +37,10 @@ class ServerDrawingCommandBuffer {
       command.type === "clear" ||
       this.buffer.length >= this.config.drawing.maxBatchSize
     ) {
-      console.log("ServerDrawingCommandBuffer: Immediate flush triggered");
       this.flush();
     } else if (this.timeoutId === null) {
       // Start debounce timer for non-critical commands
-      console.log(
-        "ServerDrawingCommandBuffer: Starting timeout for",
-        this.config.drawing.serverDebounceMs,
-        "ms",
-      );
       this.timeoutId = setTimeout(() => {
-        console.log("ServerDrawingCommandBuffer: Timeout triggered, flushing");
         this.flush();
       }, this.config.drawing.serverDebounceMs);
     }
@@ -159,7 +146,6 @@ export class DrawingGameEngine extends BaseGameEngine<
             roomId: gameState.roomId,
             data: { commands },
           };
-          console.log("ServerDrawingCommandBuffer: Flushing", commands.length, "commands");
           this.pendingServerMessages.push(batchedMessage);
         },
       );
@@ -167,11 +153,7 @@ export class DrawingGameEngine extends BaseGameEngine<
 
     switch (message.type) {
       case "draw":
-        (Deno.env.get("DENO_ENV") !== "production") &&
-          console.log("Received draw message:", message.data);
-        console.log("DRAW DEBUG: serverBuffer exists?", !!this.serverBuffer);
         if (this.validateDrawingAction(gameState, message.playerId, message.data)) {
-          console.log("DRAW DEBUG: Validation passed, about to add to buffer");
           const drawCommand = message.data as DrawingCommand;
           updatedState.gameData = {
             ...updatedState.gameData,
@@ -179,11 +161,7 @@ export class DrawingGameEngine extends BaseGameEngine<
           };
 
           // Add to server buffer for batched broadcasting
-          console.log("DRAW DEBUG: Calling serverBuffer.add with command:", drawCommand);
           this.serverBuffer.add(drawCommand);
-          console.log("DRAW DEBUG: serverBuffer.add completed");
-        } else {
-          console.log("DRAW DEBUG: Validation failed for drawing action");
         }
         break;
 
@@ -282,13 +260,6 @@ export class DrawingGameEngine extends BaseGameEngine<
     // Collect any pending batched messages from the server buffer
     const batchedMessages = [...this.pendingServerMessages];
     this.pendingServerMessages = [];
-    console.log(
-      "handleClientMessage: Returning",
-      serverMessages.length,
-      "immediate messages and",
-      batchedMessages.length,
-      "batched messages",
-    );
 
     return { updatedState, serverMessages: [...serverMessages, ...batchedMessages] };
   }
@@ -309,25 +280,18 @@ export class DrawingGameEngine extends BaseGameEngine<
     playerId: string,
     drawCommand: any,
   ): boolean {
-    console.log("VALIDATION DEBUG: playerId =", playerId);
-    console.log("VALIDATION DEBUG: currentDrawer =", gameState.gameData.currentDrawer);
-    console.log("VALIDATION DEBUG: phase =", gameState.phase);
-
     // Only the current drawer can draw
     if (playerId !== gameState.gameData.currentDrawer) {
-      console.log("VALIDATION DEBUG: Player is not the current drawer");
       return false;
     }
 
     // Game must be in playing phase
     if (gameState.phase !== "playing") {
-      console.log("VALIDATION DEBUG: Game is not in playing phase");
       return false;
     }
 
     // Validate the drawing command structure
     const isValid = validateDrawingCommand(drawCommand);
-    console.log("VALIDATION DEBUG: Command structure valid =", isValid);
     return isValid;
   }
 

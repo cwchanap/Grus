@@ -404,7 +404,6 @@ export default function Scoreboard({
             } else if (message.type === "settings-updated") {
               // Handle settings updates
               const updatedSettings = message.data;
-              console.log("Settings updated:", updatedSettings);
 
               // Update local game state with new settings
               setLocalGameState((prevState) => ({
@@ -837,10 +836,7 @@ export default function Scoreboard({
       </div>
 
       {/* Host Controls - positioned at bottom */}
-      {(() => {
-        console.log("Host controls render check", { isHost, phase: localGameState.phase });
-        return isHost;
-      })() && (
+      {isHost && (
         <div className="border-t border-white/20 pt-4 mt-4">
           <h3 className="text-sm font-medium text-white/90 mb-3">Host Controls</h3>
 
@@ -924,10 +920,6 @@ export default function Scoreboard({
             <button
               type="button"
               onClick={() => {
-                console.log("Game Settings button clicked", {
-                  isHost,
-                  phase: localGameState.phase,
-                });
                 onShowSettingsModal?.();
               }}
               className="w-full bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 mb-2"
