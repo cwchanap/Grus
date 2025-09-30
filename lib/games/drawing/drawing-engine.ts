@@ -257,6 +257,11 @@ export class DrawingGameEngine extends BaseGameEngine<
       }
     }
 
+    // Flush any remaining buffered commands before collecting messages
+    if (this.serverBuffer) {
+      this.serverBuffer.flush();
+    }
+
     // Collect any pending batched messages from the server buffer
     const batchedMessages = [...this.pendingServerMessages];
     this.pendingServerMessages = [];
