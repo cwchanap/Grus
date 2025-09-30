@@ -13,8 +13,7 @@ export default function PokerPlayer(
 ) {
   const totalPlayers = 8;
   const angle = (360 / totalPlayers) * position;
-  const transform =
-    `rotate(${angle}deg) translate(200px) rotate(-${angle}deg)`;
+  const transform = `rotate(${angle}deg) translate(200px) rotate(-${angle}deg)`;
 
   return (
     <div

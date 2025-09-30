@@ -1,5 +1,6 @@
 import { ComponentChildren } from "preact";
 import { JSX } from "preact/jsx-runtime";
+import { createPortal } from "preact/compat";
 
 interface DialogProps {
   open: boolean;
@@ -17,14 +18,25 @@ export function Dialog({ open, onOpenChange, children }: DialogProps) {
     }
   };
 
-  return (
+  // Use createPortal to render dialog at document.body level, escaping any parent containers
+  if (typeof document === "undefined") return null;
+
+  return createPortal(
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center bg-black bg-opacity-50"
       onClick={handleBackdropClick}
-      style={{ zIndex: 9999 }}
+      style={{
+        zIndex: 9999,
+        position: "fixed",
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+      }}
     >
       {children}
-    </div>
+    </div>,
+    document.body,
   );
 }
 

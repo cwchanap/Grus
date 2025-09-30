@@ -34,7 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Database Management
 
-- `deno task db:inspect` - Inspect SQLite database contents
+- `deno task db:inspect` - Inspect Deno KV database contents
 - `deno task db:cleanup` - Clean up old/empty rooms
 - `deno task db:cleanup:dry-run` - Preview cleanup without changes
 
@@ -72,6 +72,8 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 #### Game-Specific Implementations (`lib/games/`)
 
 - **`drawing/`** - Drawing game implementation with Pixi.js canvas
+- **`poker/`** - Poker game implementation
+- **`index.ts`** - Auto-registers all games via imports (self-registration pattern)
 - Each game type implements the `GameEngine` interface for pluggability
 
 #### Frontend Architecture
@@ -81,6 +83,8 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 - **`routes/`** - File-based routing with API endpoints under `routes/api/`
 
 ### WebSocket Message Flow
+
+**Critical**: WebSocket handler survives HMR via `globalThis.__WS_HANDLER__` singleton pattern in `routes/api/websocket.ts`.
 
 1. **Connection** - Client connects via `/api/websocket` route
 2. **Room Operations** - Join/leave rooms through `CoreWebSocketHandler`
@@ -105,9 +109,12 @@ This is a **multiplayer drawing game platform** built with a **modular, game-agn
 ### Adding New Game Types
 
 1. Create game engine in `lib/games/[gametype]/`
-2. Implement `GameEngine` interface from `lib/core/game-engine.ts`
-3. Register in `lib/core/game-registry.ts`
-4. Add type definitions to `types/games/[gametype].ts`
+   - `engine.ts` - Implements `GameEngine<TState, TSettings, TClientMessage, TServerMessage>`
+   - `utils.ts` - Game-specific utilities
+   - `index.ts` - Self-registration with `GameRegistry.getInstance().registerGame()`
+2. Add type definitions to `types/games/[gametype].ts`
+3. Import in `lib/games/index.ts` to trigger auto-registration
+4. Create client-side island in `islands/games/[gametype]/`
 
 ## Testing Strategy
 
@@ -168,15 +175,15 @@ The application supports **optional authentication** for enhanced features:
 - **Custom lint-staged** - Process only staged files for performance
 - **Deno built-in tools** - Fast formatting, linting, and type checking
 
-### Recent Features
+### Critical Development Notes
 
-#### Username Profile Navigation
+#### WebSocket Handler Persistence
 
-- **File**: `islands/core/MainLobby.tsx`
-- **Feature**: Username in top navigation is now clickable
-- **Navigation**: Links to `/profile` page for authenticated users
-- **UX**: Hover effects and smooth transitions
-- **Security**: Automatic redirect to login if not authenticated
+The WebSocket handler is pinned to `globalThis.__WS_HANDLER__` to survive Deno's HMR (hot module reloading) in development. This prevents connection loss during file changes.
+
+#### Test Requirements
+
+All tests **must** include `--unstable-kv` flag for Deno KV access. The `deno task test` command already includes this.
 
 ## Environment Configuration
 
@@ -192,16 +199,6 @@ The application supports **optional authentication** for enhanced features:
 - Service access via `lib/database-factory.ts`
 
 ## Common Patterns
-
-### Profile Navigation Feature
-
-**Recent Implementation**: Username in main lobby navigation bar is now clickable:
-
-- **Location**: `islands/core/MainLobby.tsx` - top navigation bar
-- **Functionality**: Clicking username navigates to `/profile`
-- **Styling**: Hover effects and transition animations
-- **Requirements**: User must be authenticated to access profile
-- **Fallback**: Redirects to `/login` if not authenticated
 
 ### Error Handling
 

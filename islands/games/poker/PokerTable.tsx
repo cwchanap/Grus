@@ -41,7 +41,8 @@ export default function PokerTable({ gameState, playerId, onAction }: PokerTable
           <PokerPlayer
             key={player.id}
             player={player}
-            isCurrentPlayer={gameState.currentPlayerId === player.id || (gameState.currentPlayerIndex === index && !gameState.currentPlayerId)}
+            isCurrentPlayer={gameState.currentPlayerId === player.id ||
+              (gameState.currentPlayerIndex === index && !gameState.currentPlayerId)}
             isLocalPlayer={player.id === playerId}
             position={index}
           />

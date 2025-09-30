@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gemini:*)"
+      "Bash(gemini:*)",
+      "Bash(deno task:*)"
     ],
     "deny": [],
     "ask": []

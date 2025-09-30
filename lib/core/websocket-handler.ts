@@ -171,6 +171,17 @@ export class CoreWebSocketHandler {
           roomId,
           data: roomSummary.data,
         });
+
+        // If there's an active game, send the current game state
+        const gameState = this.gameStates.get(roomId);
+        if (gameState) {
+          this.sendMessage(connection, {
+            type: "game-state",
+            roomId,
+            data: gameState,
+          });
+        }
+
         // Also broadcast to ensure all clients have a consistent, up-to-date player list
         await this.broadcastToRoom(roomId, {
           type: "room-update",
@@ -211,6 +222,31 @@ export class CoreWebSocketHandler {
         roomId,
         data: result.data.room,
       });
+
+      // If there's an active game, add the player to the game state
+      const gameState = this.gameStates.get(roomId);
+      if (gameState && gameState.phase !== "finished") {
+        const gameEngine = this.gameRegistry.getGameEngine(gameState.gameType);
+        if (gameEngine) {
+          const playerState = {
+            id: result.data.playerId,
+            name: playerName || "Unknown",
+            isHost: false,
+            isConnected: true,
+            lastActivity: Date.now(),
+          };
+
+          const updatedGameState = gameEngine.addPlayer(gameState, playerState);
+          this.gameStates.set(roomId, updatedGameState);
+
+          // Broadcast updated game state to all players
+          await this.broadcastToRoom(roomId, {
+            type: "game-state",
+            roomId,
+            data: updatedGameState,
+          });
+        }
+      }
     } catch (error) {
       console.error("Error joining room:", error);
       this.sendError(connection, "Failed to join room");

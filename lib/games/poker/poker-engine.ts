@@ -168,6 +168,45 @@ export class PokerGameEngine extends BaseGameEngine<
     return 0; // Not used in poker
   }
 
+  override addPlayer(gameState: PokerGameState, player: PlayerState): PokerGameState {
+    // Check if player already exists
+    if (gameState.players.some((p) => p.id === player.id)) {
+      return gameState;
+    }
+
+    // Create poker player with initialized state
+    const pokerPlayer: PokerPlayer = {
+      ...player,
+      chips: gameState.settings.buyIn,
+      cards: [],
+      bet: 0,
+      hasActed: false,
+      isAllIn: false,
+      isFolded: false,
+      position: gameState.players.length,
+    };
+
+    return {
+      ...gameState,
+      players: [...gameState.players, pokerPlayer],
+    };
+  }
+
+  override removePlayer(gameState: PokerGameState, playerId: string): PokerGameState {
+    const updatedPlayers = gameState.players.filter((p) => p.id !== playerId);
+
+    // Reindex positions
+    const reindexedPlayers = updatedPlayers.map((p, i) => ({
+      ...p,
+      position: i,
+    }));
+
+    return {
+      ...gameState,
+      players: reindexedPlayers,
+    };
+  }
+
   private dealNewHand(gameState: PokerGameState): PokerGameState {
     let deck = shuffleDeck(createDeck());
     const players = gameState.players.map((p) => {

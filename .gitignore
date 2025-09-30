@@ -17,5 +17,6 @@ db/*.db
 
 test-results/
 playwright-report/
+.playwright-mcp/
 
 *.db
