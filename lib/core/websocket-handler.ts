@@ -192,6 +192,13 @@ export class CoreWebSocketHandler {
       }
 
       // No existing player matched — create a new player entry via RoomManager
+
+      // First check if game is in progress
+      if (!this.canJoinDuringGameState(roomId)) {
+        this.sendError(connection, "Cannot join room - game is in progress");
+        return;
+      }
+
       const result = await this.roomManager.joinRoom({ roomId, playerName });
 
       if (!result.success || !result.data) {
@@ -651,5 +658,26 @@ export class CoreWebSocketHandler {
     this.connections.clear();
     this.roomConnections.clear();
     this.gameStates.clear();
+  }
+
+  /**
+   * Check if a room has an active game in progress
+   * @param roomId The room ID to check
+   * @returns The game phase if game exists, null otherwise
+   */
+  getGamePhase(roomId: string): "waiting" | "playing" | "results" | "finished" | null {
+    const gameState = this.gameStates.get(roomId);
+    return gameState ? gameState.phase : null;
+  }
+
+  /**
+   * Check if a room allows new players to join based on game state
+   * @param roomId The room ID to check
+   * @returns True if players can join (no game or game is waiting/finished), false otherwise
+   */
+  canJoinDuringGameState(roomId: string): boolean {
+    const phase = this.getGamePhase(roomId);
+    // Allow joining if no game exists, or game is waiting or finished
+    return phase === null || phase === "waiting" || phase === "finished";
   }
 }

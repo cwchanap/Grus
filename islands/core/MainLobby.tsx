@@ -344,7 +344,31 @@ interface RoomCardProps {
 }
 
 function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
-  const { room, playerCount, canJoin, host } = roomSummary;
+  const { room, playerCount, canJoin, canJoinReason, host } = roomSummary;
+
+  // Determine display text based on reason
+  let statusText = "Open";
+  let buttonText = "Join Room";
+
+  if (!canJoin) {
+    switch (canJoinReason) {
+      case "full":
+        statusText = "Full";
+        buttonText = "Room Full";
+        break;
+      case "game-in-progress":
+        statusText = "Playing";
+        buttonText = "Game in Progress";
+        break;
+      case "inactive":
+        statusText = "Closed";
+        buttonText = "Room Closed";
+        break;
+      default:
+        statusText = "Unavailable";
+        buttonText = "Cannot Join";
+    }
+  }
 
   return (
     <div class="bg-white/10 backdrop-blur-sm rounded-lg shadow-lg border border-white/20 p-4 sm:p-6 hover:bg-white/15 active:bg-white/20 transition-all duration-200 touch-manipulation">
@@ -366,7 +390,7 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
               canJoin ? "bg-green-400/20 text-green-200" : "bg-red-400/20 text-red-200"
             }`}
           >
-            {canJoin ? "Open" : "Full"}
+            {statusText}
           </div>
         </div>
       </div>
@@ -406,7 +430,7 @@ function RoomCard({ roomSummary, onJoin }: RoomCardProps) {
             : "bg-white/20 text-white/50 cursor-not-allowed"
         }`}
       >
-        {canJoin ? "Join Room" : "Room Full"}
+        {buttonText}
       </button>
     </div>
   );

@@ -2,11 +2,23 @@
 import { getAsyncDatabaseService, type IAsyncDatabaseService } from "../database-factory.ts";
 import { Player, Room } from "../../types/core/room.ts";
 
+// Helper to get the WebSocket handler singleton for game state checking
+function getWebSocketHandler() {
+  const g = globalThis as unknown as {
+    __WS_HANDLER__?: {
+      canJoinDuringGameState: (roomId: string) => boolean;
+      getGamePhase: (roomId: string) => "waiting" | "playing" | "results" | "finished" | null;
+    };
+  };
+  return g.__WS_HANDLER__;
+}
+
 export interface RoomSummary {
   room: Room;
   players: Player[];
   playerCount: number;
   canJoin: boolean;
+  canJoinReason?: "full" | "game-in-progress" | "inactive";
   host: Player | null;
 }
 
@@ -320,11 +332,31 @@ export class RoomManager {
       const players = playersResult.data || [];
       const host = players.find((p: any) => p.isHost) || null;
 
+      // Check various conditions for joining
+      let canJoin = true;
+      let canJoinReason: "full" | "game-in-progress" | "inactive" | undefined;
+
+      if (!room.isActive) {
+        canJoin = false;
+        canJoinReason = "inactive";
+      } else if (players.length >= room.maxPlayers) {
+        canJoin = false;
+        canJoinReason = "full";
+      } else {
+        // Check if game is in progress via WebSocket handler
+        const wsHandler = getWebSocketHandler();
+        if (wsHandler && !wsHandler.canJoinDuringGameState(roomId)) {
+          canJoin = false;
+          canJoinReason = "game-in-progress";
+        }
+      }
+
       const roomSummary: RoomSummary = {
         room,
         players,
         playerCount: players.length,
-        canJoin: players.length < room.maxPlayers && room.isActive,
+        canJoin,
+        canJoinReason,
         host,
       };
 
