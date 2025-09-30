@@ -1,4 +1,3 @@
-import { h } from "preact";
 import { PokerAction, PokerGameState } from "../../../types/games/poker.ts";
 import PokerPlayer from "./PokerPlayer.tsx";
 import PokerControls from "./PokerControls.tsx";

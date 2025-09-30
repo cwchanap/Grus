@@ -7,7 +7,6 @@ import type { BaseGameState } from "../../types/core/game.ts";
 import "../../lib/games/index.ts"; // Ensure games are registered
 import ChatRoom from "../../islands/core/ChatRoom.tsx";
 import DrawingBoard from "../../islands/games/drawing/DrawingBoard.tsx";
-import PokerTable from "../../islands/games/poker/PokerTable.tsx";
 import PokerRoom from "../../islands/PokerRoom.tsx";
 import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";

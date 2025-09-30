@@ -50,7 +50,7 @@ export default function PokerRoom(
               roomId={room.room.id}
               playerId={playerId}
               playerName={room.players.find((p) => p.id === playerId)?.name || "Unknown"}
-              isCompact={true}
+              isCompact
             />
           </div>
 

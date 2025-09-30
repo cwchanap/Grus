@@ -1,4 +1,3 @@
-import { h } from "preact";
 import { PokerPlayer as PokerPlayerType } from "../../../types/games/poker.ts";
 
 interface PokerPlayerProps {

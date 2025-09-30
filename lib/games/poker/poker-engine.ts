@@ -87,13 +87,14 @@ export class PokerGameEngine extends BaseGameEngine<
       case PokerAction.CHECK:
         // Valid only if player.bet === updatedState.currentBet
         break;
-      case PokerAction.CALL:
+      case PokerAction.CALL: {
         const callAmount = updatedState.currentBet - player.bet;
         player.chips -= callAmount;
         player.bet += callAmount;
         updatedState.pot += callAmount;
         break;
-      case PokerAction.RAISE:
+      }
+      case PokerAction.RAISE: {
         const raiseAmount = message.data.amount ?? 0;
         const totalBet = player.bet + raiseAmount;
         player.chips -= raiseAmount;
@@ -105,7 +106,8 @@ export class PokerGameEngine extends BaseGameEngine<
           if (!p.isFolded && !p.isAllIn) p.hasActed = false;
         });
         break;
-      case PokerAction.ALL_IN:
+      }
+      case PokerAction.ALL_IN: {
         const allInAmount = player.chips;
         player.bet += allInAmount;
         player.chips = 0;
@@ -119,6 +121,7 @@ export class PokerGameEngine extends BaseGameEngine<
           });
         }
         break;
+      }
     }
 
     player.hasActed = true;
@@ -150,13 +153,14 @@ export class PokerGameEngine extends BaseGameEngine<
     switch (action.action) {
       case PokerAction.CHECK:
         return player.bet === gameState.currentBet;
-      case PokerAction.RAISE:
+      case PokerAction.RAISE: {
         const raiseAmount = action.amount ?? 0;
         return (
           raiseAmount > 0 &&
           player.chips >= raiseAmount &&
           (player.bet + raiseAmount) >= (gameState.currentBet * 2)
         );
+      }
       case PokerAction.CALL:
         return player.chips >= (gameState.currentBet - player.bet);
       default:
@@ -364,7 +368,7 @@ export class PokerGameEngine extends BaseGameEngine<
     };
 
     // Announce winner(s)
-    const serverMessages: PokerServerMessage[] = [{
+    const _serverMessages: PokerServerMessage[] = [{
       type: "hand-result",
       roomId: gameState.roomId,
       data: {
