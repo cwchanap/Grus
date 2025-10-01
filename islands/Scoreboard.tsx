@@ -394,7 +394,7 @@ export default function Scoreboard({
                   detail: { data: message },
                 }),
               );
-            } else if (message.type === "draw-update") {
+            } else if (message.type === "draw-update" || message.type === "draw-update-batch") {
               // Forward drawing updates for DrawingBoard to consume
               globalThis.dispatchEvent(
                 new CustomEvent("websocket-message", {
