@@ -329,12 +329,20 @@ Deno.test("PokerGameEngine - handleClientMessage RAISE updates chips, pot, and c
     data: { action: PokerAction.RAISE, amount: 100 },
   };
 
+  // Mark some players as having acted before the raise
+  gameState.players[1].hasActed = true;
+  gameState.players[2].hasActed = true;
+
   const result = engine.handleClientMessage(gameState, message);
 
   assertEquals(result.updatedState.players[0].chips, 900); // 1000 - 100
   assertEquals(result.updatedState.players[0].bet, 100);
   assertEquals(result.updatedState.pot, 120); // 20 + 100
   assertEquals(result.updatedState.currentBet, 100);
+
+  // Verify that other players' hasActed flags were reset after the raise
+  assertEquals(result.updatedState.players[1].hasActed, false);
+  assertEquals(result.updatedState.players[2].hasActed, false);
 });
 
 Deno.test("PokerGameEngine - handleClientMessage ALL_IN sets player all-in", () => {

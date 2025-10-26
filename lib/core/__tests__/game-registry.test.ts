@@ -18,13 +18,15 @@ class MockGameEngine extends BaseGameEngine {
   ): BaseGameState {
     return {
       roomId,
+      gameType: this.getGameType(),
       players,
       settings,
       phase: "waiting",
       roundNumber: 0,
       timeRemaining: 0,
-      createdAt: Date.now(),
-      lastUpdated: Date.now(),
+      scores: {},
+      gameData: {},
+      chatMessages: [],
     };
   }
 
@@ -60,13 +62,15 @@ class AnotherMockGameEngine extends BaseGameEngine {
   ): BaseGameState {
     return {
       roomId,
+      gameType: this.getGameType(),
       players,
       settings,
       phase: "waiting",
       roundNumber: 0,
       timeRemaining: 0,
-      createdAt: Date.now(),
-      lastUpdated: Date.now(),
+      scores: {},
+      gameData: {},
+      chatMessages: [],
     };
   }
 
@@ -92,7 +96,7 @@ class AnotherMockGameEngine extends BaseGameEngine {
 // Helper to create a fresh registry for each test
 function createTestRegistry(): GameRegistry {
   // Reset the singleton instance for testing
-  (GameRegistry as any).instance = undefined;
+  GameRegistry.__resetForTesting();
   return GameRegistry.getInstance();
 }
 
