@@ -60,4 +60,16 @@ export class GameRegistry {
     const gameInfo = this.gameTypes.get(gameType);
     return gameInfo ? gameInfo.defaultSettings : null;
   }
+
+  /**
+   * Test-only method to reset the singleton instance.
+   * This should ONLY be used in tests to ensure test isolation.
+   */
+  static __resetForTesting(): void {
+    if (GameRegistry.instance) {
+      GameRegistry.instance.engines.clear();
+      GameRegistry.instance.gameTypes.clear();
+    }
+    GameRegistry.instance = undefined as any;
+  }
 }

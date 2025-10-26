@@ -680,4 +680,43 @@ export class CoreWebSocketHandler {
     // Allow joining if no game exists, or game is waiting or finished
     return phase === null || phase === "waiting" || phase === "finished";
   }
+
+  /**
+   * Test-only methods for accessing private state in tests.
+   * These should ONLY be used in unit tests.
+   */
+  __testSetGameState(roomId: string, gameState: BaseGameState): void {
+    this.gameStates.set(roomId, gameState);
+  }
+
+  __testSetConnection(playerId: string, connection: WebSocketConnection): void {
+    this.connections.set(playerId, connection);
+  }
+
+  __testSetRoomConnection(roomId: string, playerIds: Set<string>): void {
+    this.roomConnections.set(roomId, playerIds);
+  }
+
+  __testSendMessage(connection: WebSocketConnection, message: BaseServerMessage): void {
+    this.sendMessage(connection, message);
+  }
+
+  __testSendError(connection: WebSocketConnection, error: string): void {
+    this.sendError(connection, error);
+  }
+
+  __testHandlePing(connection: WebSocketConnection, message: BaseClientMessage): void {
+    this.handlePing(connection, message);
+  }
+
+  __testBroadcastToRoom(roomId: string, message: BaseServerMessage): Promise<void> {
+    return this.broadcastToRoom(roomId, message);
+  }
+
+  __testHandleGameSpecificMessage(
+    connection: WebSocketConnection,
+    message: BaseClientMessage,
+  ): Promise<void> {
+    return this.handleGameSpecificMessage(connection, message);
+  }
 }

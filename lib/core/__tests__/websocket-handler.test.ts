@@ -67,14 +67,15 @@ class TestGameEngine extends BaseGameEngine {
   ): BaseGameState {
     return {
       roomId,
+      gameType: "test-game",
       players,
       settings,
       phase: "waiting",
       roundNumber: 0,
       timeRemaining: 0,
-      createdAt: Date.now(),
-      lastUpdated: Date.now(),
-      gameType: "test-game",
+      scores: {},
+      gameData: {},
+      chatMessages: [],
     };
   }
 
@@ -87,7 +88,7 @@ class TestGameEngine extends BaseGameEngine {
   } {
     // Simple test behavior - echo message back
     return {
-      updatedState: { ...gameState, lastUpdated: Date.now() },
+      updatedState: { ...gameState },
       serverMessages: [{
         type: "test-response",
         roomId: gameState.roomId,
@@ -189,13 +190,14 @@ Deno.test("CoreWebSocketHandler - canJoinDuringGameState returns true for waitin
     phase: "waiting",
     roundNumber: 0,
     timeRemaining: 0,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
   // Access private gameStates map (testing internals)
-  (handler as any).gameStates.set("test-room", gameState);
+  handler.__testSetGameState("test-room", gameState);
 
   const canJoin = handler.canJoinDuringGameState("test-room");
   assertEquals(canJoin, true);
@@ -211,12 +213,13 @@ Deno.test("CoreWebSocketHandler - canJoinDuringGameState returns false for playi
     phase: "playing",
     roundNumber: 1,
     timeRemaining: 60000,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
-  (handler as any).gameStates.set("test-room", gameState);
+  handler.__testSetGameState("test-room", gameState);
 
   const canJoin = handler.canJoinDuringGameState("test-room");
   assertEquals(canJoin, false);
@@ -232,12 +235,13 @@ Deno.test("CoreWebSocketHandler - canJoinDuringGameState returns true for finish
     phase: "finished",
     roundNumber: 3,
     timeRemaining: 0,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
-  (handler as any).gameStates.set("test-room", gameState);
+  handler.__testSetGameState("test-room", gameState);
 
   const canJoin = handler.canJoinDuringGameState("test-room");
   assertEquals(canJoin, true);
@@ -248,7 +252,7 @@ Deno.test("CoreWebSocketHandler - sendMessage sends JSON to open websocket", () 
   const mockWs = new MockWebSocket();
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
@@ -260,7 +264,7 @@ Deno.test("CoreWebSocketHandler - sendMessage sends JSON to open websocket", () 
     data: { foo: "bar" },
   };
 
-  (handler as any).sendMessage(connection, message);
+  handler.__testSendMessage(connection, message);
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -275,7 +279,7 @@ Deno.test("CoreWebSocketHandler - sendMessage doesn't send to closed websocket",
   mockWs.readyState = 3; // CLOSED
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
@@ -287,7 +291,7 @@ Deno.test("CoreWebSocketHandler - sendMessage doesn't send to closed websocket",
     data: {},
   };
 
-  (handler as any).sendMessage(connection, message);
+  handler.__testSendMessage(connection, message);
 
   assertEquals(mockWs.sent.length, 0);
 });
@@ -297,13 +301,13 @@ Deno.test("CoreWebSocketHandler - sendError sends error message", () => {
   const mockWs = new MockWebSocket();
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
   };
 
-  (handler as any).sendError(connection, "Test error message");
+  handler.__testSendError(connection, "Test error message");
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -316,7 +320,7 @@ Deno.test("CoreWebSocketHandler - handlePing sends pong response", () => {
   const mockWs = new MockWebSocket();
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
@@ -329,7 +333,7 @@ Deno.test("CoreWebSocketHandler - handlePing sends pong response", () => {
     data: {},
   };
 
-  (handler as any).handlePing(connection, pingMessage);
+  handler.__testHandlePing(connection, pingMessage);
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -343,23 +347,23 @@ Deno.test("CoreWebSocketHandler - broadcastToRoom sends to all room connections"
   const mockWs2 = new MockWebSocket();
 
   const connection1 = {
-    ws: mockWs1 as any,
+    ws: mockWs1 as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
   };
 
   const connection2 = {
-    ws: mockWs2 as any,
+    ws: mockWs2 as unknown as WebSocket,
     playerId: "player2",
     roomId: "room1",
     lastActivity: Date.now(),
   };
 
   // Manually add connections
-  (handler as any).connections.set("player1", connection1);
-  (handler as any).connections.set("player2", connection2);
-  (handler as any).roomConnections.set("room1", new Set(["player1", "player2"]));
+  handler.__testSetConnection("player1", connection1);
+  handler.__testSetConnection("player2", connection2);
+  handler.__testSetRoomConnection("room1", new Set(["player1", "player2"]));
 
   const message: BaseServerMessage = {
     type: "test-broadcast",
@@ -367,7 +371,7 @@ Deno.test("CoreWebSocketHandler - broadcastToRoom sends to all room connections"
     data: { message: "Hello everyone" },
   };
 
-  await (handler as any).broadcastToRoom("room1", message);
+  await handler.__testBroadcastToRoom("room1", message);
 
   // Both connections should have received the message
   assertEquals(mockWs1.sent.length, 1);
@@ -386,7 +390,7 @@ Deno.test("CoreWebSocketHandler - broadcastToRoom handles missing connections gr
   const handler = new CoreWebSocketHandler();
 
   // Set up room connections but no actual WebSocket connections
-  (handler as any).roomConnections.set("room1", new Set(["player1", "player2"]));
+  handler.__testSetRoomConnection("room1", new Set(["player1", "player2"]));
 
   const message: BaseServerMessage = {
     type: "test-broadcast",
@@ -395,7 +399,7 @@ Deno.test("CoreWebSocketHandler - broadcastToRoom handles missing connections gr
   };
 
   // Should not throw error
-  await (handler as any).broadcastToRoom("room1", message);
+  await handler.__testBroadcastToRoom("room1", message);
 
   // Test passes if no error is thrown
   assertEquals(true, true);
@@ -411,7 +415,7 @@ Deno.test("CoreWebSocketHandler - broadcastToRoom handles non-existent room", as
   };
 
   // Should not throw error
-  await (handler as any).broadcastToRoom("non-existent-room", message);
+  await handler.__testBroadcastToRoom("non-existent-room", message);
 
   // Test passes if no error is thrown
   assertEquals(true, true);
@@ -422,7 +426,7 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage sends error when no 
   const mockWs = new MockWebSocket();
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
@@ -435,7 +439,7 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage sends error when no 
     data: {},
   };
 
-  await (handler as any).handleGameSpecificMessage(connection, message);
+  await handler.__testHandleGameSpecificMessage(connection, message);
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -462,7 +466,7 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage delegates to game en
   const mockWs = new MockWebSocket();
 
   const connection = {
-    ws: mockWs as any,
+    ws: mockWs as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
@@ -476,14 +480,15 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage delegates to game en
     phase: "playing",
     roundNumber: 1,
     timeRemaining: 30000,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
-  (handler as any).gameStates.set("room1", gameState);
-  (handler as any).connections.set("player1", connection);
-  (handler as any).roomConnections.set("room1", new Set(["player1"]));
+  handler.__testSetGameState("room1", gameState);
+  handler.__testSetConnection("player1", connection);
+  handler.__testSetRoomConnection("room1", new Set(["player1"]));
 
   const message: BaseClientMessage = {
     type: "custom-game-action",
@@ -492,7 +497,7 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage delegates to game en
     data: { action: "test" },
   };
 
-  await (handler as any).handleGameSpecificMessage(connection, message);
+  await handler.__testHandleGameSpecificMessage(connection, message);
 
   // Should have received a response from the game engine
   assertEquals(mockWs.sent.length, 1);
@@ -517,21 +522,21 @@ Deno.test("CoreWebSocketHandler - cleanup closes all WebSocket connections", () 
   const mockWs2 = new MockWebSocket();
 
   const connection1 = {
-    ws: mockWs1 as any,
+    ws: mockWs1 as unknown as WebSocket,
     playerId: "player1",
     roomId: "room1",
     lastActivity: Date.now(),
   };
 
   const connection2 = {
-    ws: mockWs2 as any,
+    ws: mockWs2 as unknown as WebSocket,
     playerId: "player2",
     roomId: "room1",
     lastActivity: Date.now(),
   };
 
-  (handler as any).connections.set("player1", connection1);
-  (handler as any).connections.set("player2", connection2);
+  handler.__testSetConnection("player1", connection1);
+  handler.__testSetConnection("player2", connection2);
 
   assertEquals(mockWs1.readyState, 1); // OPEN
   assertEquals(mockWs2.readyState, 1); // OPEN
@@ -553,12 +558,13 @@ Deno.test("CoreWebSocketHandler - getGamePhase returns correct phase for active 
     phase: "playing",
     roundNumber: 2,
     timeRemaining: 45000,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
-  (handler as any).gameStates.set("room1", gameState);
+  handler.__testSetGameState("room1", gameState);
 
   const phase = handler.getGamePhase("room1");
   assertEquals(phase, "playing");
@@ -574,12 +580,13 @@ Deno.test("CoreWebSocketHandler - canJoinDuringGameState returns false for resul
     phase: "results",
     roundNumber: 3,
     timeRemaining: 0,
-    createdAt: Date.now(),
-    lastUpdated: Date.now(),
     gameType: "test-game",
+    scores: {},
+    gameData: {},
+    chatMessages: [],
   };
 
-  (handler as any).gameStates.set("room1", gameState);
+  handler.__testSetGameState("room1", gameState);
 
   const canJoin = handler.canJoinDuringGameState("room1");
   assertEquals(canJoin, false);

@@ -283,7 +283,7 @@ Deno.test("DrawingGameEngine - handleClientMessage processes draw command from d
     x: 100,
     y: 150,
     color: "#000000",
-    brushSize: 5,
+    size: 5,
     timestamp: Date.now(),
   };
 
@@ -318,7 +318,7 @@ Deno.test("DrawingGameEngine - handleClientMessage rejects draw command from non
     x: 100,
     y: 150,
     color: "#000000",
-    brushSize: 5,
+    size: 5,
     timestamp: Date.now(),
   };
 
