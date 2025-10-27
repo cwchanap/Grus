@@ -33,13 +33,10 @@ jobs:
       run: deno fmt --check
       
     - name: Type check
-      run: deno check **/*.ts **/*.tsx
-      
+      run: deno task type-check
+
     - name: Run tests
-      run: deno test --allow-all --coverage=coverage
-      
-    - name: Generate coverage report
-      run: deno coverage coverage --lcov --output=coverage.lcov
+      run: deno task test:coverage
       
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
