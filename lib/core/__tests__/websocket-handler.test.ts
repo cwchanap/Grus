@@ -448,6 +448,9 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage sends error when no 
 });
 
 Deno.test("CoreWebSocketHandler - handleGameSpecificMessage delegates to game engine", async () => {
+  // Reset registry for test isolation
+  GameRegistry.__resetForTesting();
+
   // Register test game engine
   const registry = GameRegistry.getInstance();
   registry.registerGame(
