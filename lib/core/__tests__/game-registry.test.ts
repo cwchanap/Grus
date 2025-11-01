@@ -101,6 +101,9 @@ function createTestRegistry(): GameRegistry {
 }
 
 Deno.test("GameRegistry - singleton instance", () => {
+  // Reset to ensure clean state for this test
+  GameRegistry.__resetForTesting();
+
   const registry1 = GameRegistry.getInstance();
   const registry2 = GameRegistry.getInstance();
 
