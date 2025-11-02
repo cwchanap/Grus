@@ -7,8 +7,9 @@ function setupTest() {
   kvRoomService = new KVRoomService();
 }
 
-function teardownTest() {
+async function teardownTest() {
   // Clean up any test data and close the KV connection
+  await kvRoomService.deleteAllRooms();
   kvRoomService.close();
 }
 
@@ -106,8 +107,8 @@ Deno.test("KVRoomService - getActiveRooms filters out private rooms", async () =
 
   const activeRooms = activeRoomsResult.data!;
   assertEquals(activeRooms.length, 1);
-  assertEquals(activeRooms[0].room.name, "Public Room");
-  assertEquals(activeRooms[0].room.isPrivate, false);
+  assertEquals(activeRooms[0].name, "Public Room");
+  assertEquals(activeRooms[0].isPrivate, false);
 
   await teardownTest();
 });
@@ -231,7 +232,7 @@ Deno.test("KVRoomService - mixed private/public rooms in getAllRooms", async () 
 
   // All active rooms should be public
   for (const room of activeRooms) {
-    assertEquals(room.room.isPrivate, false);
+    assertEquals(room.isPrivate, false);
   }
 
   await teardownTest();

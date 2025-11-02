@@ -1,4 +1,5 @@
-import { BaseGameMessage, BaseGameSettings, BaseGameState } from "../core/game.ts";
+import { BaseGameSettings, BaseGameState } from "../core/game.ts";
+import { BaseClientMessage, BaseServerMessage } from "../core/websocket.ts";
 import { PlayerState } from "../core/room.ts";
 
 export enum Suit {
@@ -93,14 +94,36 @@ export interface PokerGameState extends BaseGameState {
 }
 
 // Messages
-export type PokerClientMessage = BaseGameMessage<"game-action", {
-  action: PokerAction;
-  amount?: number;
-}>;
+export interface PokerClientMessage extends BaseClientMessage {
+  type:
+    | "poker-action"
+    | "game-action"
+    | "join-room"
+    | "leave-room"
+    | "chat"
+    | "start-game"
+    | "end-game"
+    | "update-settings"
+    | "ping";
+  data: {
+    action: PokerAction;
+    amount?: number;
+  };
+}
 
-export type PokerServerMessage =
-  | BaseGameMessage<"game-state", PokerGameState>
-  | BaseGameMessage<"hand-result", {
-    winners: string[];
-    pot: number;
-  }>;
+export interface PokerServerMessage extends BaseServerMessage {
+  type:
+    | "game-state"
+    | "hand-result"
+    | "room-update"
+    | "chat-message"
+    | "score-update"
+    | "host-changed"
+    | "settings-updated"
+    | "error"
+    | "pong";
+  data: PokerGameState | {
+    winners?: string[];
+    pot?: number;
+  };
+}

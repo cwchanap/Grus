@@ -8,6 +8,7 @@ Deno.test("PokerGameEngine - addPlayer adds new player correctly", () => {
 
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 1000,
     smallBlind: 10,
     bigBlind: 20,
@@ -67,6 +68,7 @@ Deno.test("PokerGameEngine - addPlayer does not add duplicate player", () => {
 
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 1000,
     smallBlind: 10,
     bigBlind: 20,
@@ -105,6 +107,7 @@ Deno.test("PokerGameEngine - removePlayer removes player and reindexes positions
 
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 1000,
     smallBlind: 10,
     bigBlind: 20,

@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertNotEquals } from "$std/testing/asserts.ts";
+import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { GameRegistry, GameTypeInfo } from "../game-registry.ts";
 import { BaseGameEngine } from "../game-engine.ts";
 import { BaseGameSettings, BaseGameState } from "../../../types/core/game.ts";
@@ -269,8 +269,8 @@ Deno.test("GameRegistry - engine factory creates new instances each time", () =>
 
   assertExists(engine1);
   assertExists(engine2);
-  // Should be different instances
-  assertNotEquals(engine1, engine2);
+  // Should be different instances (using strict inequality)
+  assertEquals(engine1 === engine2, false);
 });
 
 Deno.test("GameRegistry - re-registering same game type overwrites previous registration", () => {
