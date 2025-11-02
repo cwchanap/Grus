@@ -162,7 +162,7 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
         const value = rankToValue(card.rank);
         acc[value] = (acc[value] || 0) + 1;
         return acc;
-      }, {} as Record<number, number>)).find(([, count]) => count === 4)!,
+      }, {} as Record<number, number>)).find(([, count]) => count === 4)![0],
     );
     const kicker = Math.max(...cardValues.filter((v) => v !== quadValue));
     return { rank: HandRank.FOUR_OF_A_KIND, values: [quadValue, kicker] };
@@ -174,7 +174,7 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
         const value = rankToValue(card.rank);
         acc[value] = (acc[value] || 0) + 1;
         return acc;
-      }, {} as Record<number, number>)).find(([, count]) => count === 3)!,
+      }, {} as Record<number, number>)).find(([, count]) => count === 3)![0],
     );
     const pairValue = parseInt(
       Object.entries(allCards.reduce((acc, card) => {
@@ -219,7 +219,7 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
         const value = rankToValue(card.rank);
         acc[value] = (acc[value] || 0) + 1;
         return acc;
-      }, {} as Record<number, number>)).find(([, count]) => count === 3)!,
+      }, {} as Record<number, number>)).find(([, count]) => count === 3)![0],
     );
     const kickers = cardValues.filter((v) => v !== tripleValue).slice(0, 2);
     return { rank: HandRank.THREE_OF_A_KIND, values: [tripleValue, ...kickers] };
@@ -248,7 +248,7 @@ export function evaluateHand(allCards: PokerCard[]): PokerHand {
         const value = rankToValue(card.rank);
         acc[value] = (acc[value] || 0) + 1;
         return acc;
-      }, {} as Record<number, number>)).find(([, count]) => count === 2)!,
+      }, {} as Record<number, number>)).find(([, count]) => count === 2)![0],
     );
     const kickers = cardValues.filter((v) => v !== pairValue).slice(0, 3);
     return { rank: HandRank.ONE_PAIR, values: [pairValue, ...kickers] };

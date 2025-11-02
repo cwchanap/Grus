@@ -16,9 +16,11 @@ function teardownMockEnv() {
 }
 
 // Ensure Deno.Kv connections are closed to avoid resource leaks between tests
-function teardownResources() {
+async function teardownResources() {
   try {
-    getKVRoomService().close();
+    const kvService = getKVRoomService();
+    await kvService.deleteAllRooms();
+    kvService.close();
   } catch (_) {
     // ignore
   }
@@ -62,7 +64,7 @@ Deno.test("API Rooms - POST creates private room", async () => {
   assertEquals(data.room.room.maxPlayers, requestBody.maxPlayers);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST creates public room by default", async () => {
@@ -93,7 +95,7 @@ Deno.test("API Rooms - POST creates public room by default", async () => {
   assertEquals(data.room.room.isPrivate, false);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST creates public room when isPrivate is false", async () => {
@@ -125,7 +127,7 @@ Deno.test("API Rooms - POST creates public room when isPrivate is false", async 
   assertEquals(data.room.room.isPrivate, false);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - GET filters out private rooms", async () => {
@@ -186,7 +188,7 @@ Deno.test("API Rooms - GET filters out private rooms", async () => {
   assertEquals(rooms[0].room.isPrivate, false);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST validation with missing required fields", async () => {
@@ -216,7 +218,7 @@ Deno.test("API Rooms - POST validation with missing required fields", async () =
   assertEquals(data.error, "Room name and host name are required");
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST validation with missing host name", async () => {
@@ -246,7 +248,7 @@ Deno.test("API Rooms - POST validation with missing host name", async () => {
   assertEquals(data.error, "Room name and host name are required");
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST defaults to public when isPrivate not provided", async () => {
@@ -277,7 +279,7 @@ Deno.test("API Rooms - POST defaults to public when isPrivate not provided", asy
   assertEquals(data.room.room.isPrivate, false);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });
 
 Deno.test("API Rooms - POST handles isPrivate as string 'false'", async () => {
@@ -310,5 +312,5 @@ Deno.test("API Rooms - POST handles isPrivate as string 'false'", async () => {
   assertEquals(data.room.room.isPrivate, false);
 
   teardownMockEnv();
-  teardownResources();
+  await teardownResources();
 });

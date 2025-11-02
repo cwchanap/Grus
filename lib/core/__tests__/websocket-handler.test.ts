@@ -1,23 +1,16 @@
-import {
-  assertEquals,
-  assertExists,
-  assertNotEquals,
-} from "$std/testing/asserts.ts";
+import { assertEquals, assertExists } from "$std/testing/asserts.ts";
 import { CoreWebSocketHandler } from "../websocket-handler.ts";
 import { GameRegistry } from "../game-registry.ts";
 import { BaseGameEngine } from "../game-engine.ts";
 import { BaseGameSettings, BaseGameState } from "../../../types/core/game.ts";
-import {
-  BaseClientMessage,
-  BaseServerMessage,
-} from "../../../types/core/websocket.ts";
+import { BaseClientMessage, BaseServerMessage } from "../../../types/core/websocket.ts";
 import { PlayerState } from "../../../types/core/room.ts";
 
 // Mock WebSocket implementation for testing
 class MockWebSocket {
-  readyState: number = 1; // OPEN
+  readyState = 1; // OPEN
   sent: string[] = [];
-  eventListeners: Map<string, Function[]> = new Map();
+  eventListeners: Map<string, ((event?: unknown) => void)[]> = new Map();
 
   send(data: string): void {
     this.sent.push(data);
@@ -27,7 +20,7 @@ class MockWebSocket {
     this.readyState = 3; // CLOSED
   }
 
-  addEventListener(event: string, handler: Function): void {
+  addEventListener(event: string, handler: (event?: unknown) => void): void {
     if (!this.eventListeners.has(event)) {
       this.eventListeners.set(event, []);
     }
@@ -512,8 +505,8 @@ Deno.test("CoreWebSocketHandler - multiple handlers maintain separate state", ()
   const handler1 = new CoreWebSocketHandler();
   const handler2 = new CoreWebSocketHandler();
 
-  // These should be different instances with separate state
-  assertNotEquals(handler1, handler2);
+  // These should be different instances with separate state (using strict inequality)
+  assertEquals(handler1 === handler2, false);
 
   assertEquals(handler1.getConnectionCount(), 0);
   assertEquals(handler2.getConnectionCount(), 0);

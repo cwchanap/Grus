@@ -4,7 +4,6 @@ import {
   DrawingClientMessage,
   DrawingCommand,
   DrawingGameSettings,
-  DrawingGameState,
 } from "../../../../types/games/drawing.ts";
 import { PlayerState } from "../../../../types/core/room.ts";
 

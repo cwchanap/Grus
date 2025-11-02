@@ -49,12 +49,15 @@ export const handler: Handlers = {
       const roomManager = new RoomManager();
 
       // Create room using room manager
+      // Convert string "false" to boolean false
+      const isPrivateBool = isPrivate === "false" ? false : Boolean(isPrivate);
+
       const result = await roomManager.createRoom({
         name: name.trim(),
         hostName: hostName.trim(),
         gameType: gameType || "drawing",
         maxPlayers: maxPlayers || 8,
-        isPrivate: isPrivate || false,
+        isPrivate: isPrivateBool,
       });
 
       if (!result.success || !result.data) {

@@ -1,4 +1,4 @@
-import { assertEquals, assertExists } from "$std/testing/asserts.ts";
+import { assertEquals } from "$std/testing/asserts.ts";
 import { PokerGameEngine } from "../poker-engine.ts";
 import {
   BettingRound,
@@ -14,11 +14,12 @@ import { PlayerState } from "../../../../types/core/room.ts";
  */
 
 function createTestGameState(
-  roundNumber: number = 0,
+  roundNumber = 0,
   phase: "waiting" | "playing" | "results" | "finished" = "waiting",
 ): PokerGameState {
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 1000,
     smallBlind: 10,
     bigBlind: 20,
@@ -63,6 +64,7 @@ Deno.test("PokerGameEngine - initializeGame creates correct initial state", () =
 
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 1500,
     smallBlind: 15,
     bigBlind: 30,
@@ -396,8 +398,7 @@ Deno.test("PokerGameEngine - getGameType returns poker", () => {
 
 Deno.test("PokerGameEngine - calculateScore returns 0", () => {
   const engine = new PokerGameEngine();
-  const gameState = createTestGameState();
-  const score = engine.calculateScore(gameState, "p1", {});
+  const score = engine.calculateScore();
   assertEquals(score, 0);
 });
 
@@ -416,6 +417,7 @@ Deno.test("PokerGameEngine - players start with correct chip counts", () => {
 
   const settings: PokerGameSettings = {
     roundTimeSeconds: 60,
+    maxRounds: 3,
     buyIn: 2000,
     smallBlind: 25,
     bigBlind: 50,
@@ -437,7 +439,6 @@ Deno.test("PokerGameEngine - players start with correct chip counts", () => {
 });
 
 Deno.test("PokerGameEngine - all players start with no bets", () => {
-  const engine = new PokerGameEngine();
   const gameState = createTestGameState();
 
   gameState.players.forEach((player) => {
@@ -449,14 +450,12 @@ Deno.test("PokerGameEngine - all players start with no bets", () => {
 });
 
 Deno.test("PokerGameEngine - community cards start empty", () => {
-  const engine = new PokerGameEngine();
   const gameState = createTestGameState();
 
   assertEquals(gameState.communityCards.length, 0);
 });
 
 Deno.test("PokerGameEngine - initial betting round is PRE_FLOP", () => {
-  const engine = new PokerGameEngine();
   const gameState = createTestGameState();
 
   assertEquals(gameState.bettingRound, BettingRound.PRE_FLOP);

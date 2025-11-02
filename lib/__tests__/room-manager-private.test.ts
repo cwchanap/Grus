@@ -7,8 +7,9 @@ function setupTest() {
   roomManager = new TestRoomManager();
 }
 
-function teardownTest() {
+async function teardownTest() {
   // Clean up any test data
+  await roomManager.deleteAllRooms();
   roomManager.close();
 }
 

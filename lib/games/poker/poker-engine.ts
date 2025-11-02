@@ -55,6 +55,7 @@ export class PokerGameEngine extends BaseGameEngine<
       timeRemaining: 0,
       chatMessages: [],
       scores: {},
+      gameData: {},
     };
   }
 
