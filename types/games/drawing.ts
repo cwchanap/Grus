@@ -4,9 +4,7 @@ import { BaseGameSettings, BaseGameState } from "../core/game.ts";
 import { BaseClientMessage, BaseServerMessage } from "../core/websocket.ts";
 import { ChatMessage } from "../core/room.ts";
 
-export interface DrawingGameSettings extends BaseGameSettings {
-  // Drawing game specific settings can be added here
-}
+export type DrawingGameSettings = BaseGameSettings;
 
 export interface DrawingCommand {
   type: "start" | "move" | "end" | "clear";
