@@ -59,10 +59,8 @@ export default function WebSocketTest() {
         </div>
       </div>
 
-      {/* deno-lint-ignore react-no-danger */}
       {/* @ts-ignore */}
       <script
-        // deno-lint-ignore react-no-danger
         dangerouslySetInnerHTML={{
           __html: `
           let ws = null;
