@@ -30,6 +30,7 @@ export class PokerGameEngine extends BaseGameEngine<
       ...p,
       chips: settings.buyIn,
       cards: [],
+      hand: [], // Alias for cards used in UI
       bet: 0,
       hasActed: false,
       isAllIn: false,
@@ -46,6 +47,7 @@ export class PokerGameEngine extends BaseGameEngine<
       communityCards: [],
       pot: 0,
       currentBet: 0,
+      minRaise: settings.bigBlind, // Minimum raise is big blind initially
       bettingRound: BettingRound.PRE_FLOP,
       currentPlayerIndex: 0,
       smallBlindIndex: 0,
@@ -184,6 +186,7 @@ export class PokerGameEngine extends BaseGameEngine<
       ...player,
       chips: gameState.settings.buyIn,
       cards: [],
+      hand: [], // Alias for cards used in UI
       bet: 0,
       hasActed: false,
       isAllIn: false,
