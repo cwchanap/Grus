@@ -48,18 +48,19 @@ if (!summary.data.canJoin) {
 console.log("✅ Room is joinable before game starts\n");
 
 // Simulate starting a game by setting a game state
-const mockGameState: { phase: "waiting" | "playing" | "results" | "finished"; [key: string]: any } = {
-  roomId,
-  gameType: "drawing",
-  phase: "playing",
-  roundNumber: 1,
-  timeRemaining: 60,
-  players: [],
-  scores: {},
-  gameData: {},
-  chatMessages: [],
-  settings: { maxRounds: 3, roundTimeSeconds: 60 },
-};
+const mockGameState: { phase: "waiting" | "playing" | "results" | "finished"; [key: string]: any } =
+  {
+    roomId,
+    gameType: "drawing",
+    phase: "playing",
+    roundNumber: 1,
+    timeRemaining: 60,
+    players: [],
+    scores: {},
+    gameData: {},
+    chatMessages: [],
+    settings: { maxRounds: 3, roundTimeSeconds: 60 },
+  };
 
 // Access the private gameStates map (for testing only)
 (wsHandler as any).gameStates.set(roomId, mockGameState);
