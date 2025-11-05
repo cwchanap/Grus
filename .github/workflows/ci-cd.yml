@@ -37,12 +37,6 @@ jobs:
 
     - name: Run tests
       run: deno task test:coverage
-      
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
-      with:
-        file: ./coverage.lcov
-        fail_ci_if_error: true
 
   build:
     name: Build
