@@ -11,9 +11,10 @@ export async function getPrismaClient(): Promise<any> {
 
     try {
       // Dynamic import to avoid module resolution issues
-      const prismaModule = await import("@prisma/client");
-      const PrismaClient = prismaModule.PrismaClient || prismaModule.default?.PrismaClient ||
-        prismaModule.default;
+      const prismaModule = await import("@prisma/client") as any;
+      const PrismaClient = (prismaModule as any).PrismaClient ||
+        (prismaModule as any).default?.PrismaClient ||
+        (prismaModule as any).default;
 
       if (!PrismaClient) {
         throw new Error("PrismaClient not found in the imported module");

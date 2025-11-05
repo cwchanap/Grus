@@ -27,18 +27,18 @@ export default function PokerControls({ gameState, playerId, onAction }: PokerCo
   };
 
   const handleAllIn = () => {
-    onAction("raise", player.chips);
+    onAction(PokerAction.RAISE, player.chips);
   };
 
   return (
     <div class="fixed bottom-0 left-0 right-0 bg-gray-900 p-4 shadow-lg md:relative md:bg-transparent md:shadow-none">
       <div class="flex flex-col md:flex-row items-center justify-center space-y-4 md:space-y-0 md:space-x-4">
         <div class="flex space-x-2">
-          <Button onClick={() => onAction("fold")} variant="destructive">Fold</Button>
+          <Button onClick={() => onAction(PokerAction.FOLD)} variant="destructive">Fold</Button>
           {canCheck
-            ? <Button onClick={() => onAction("check")} variant="secondary">Check</Button>
+            ? <Button onClick={() => onAction(PokerAction.CHECK)} variant="secondary">Check</Button>
             : (
-              <Button onClick={() => onAction("call", callAmount)} variant="secondary">
+              <Button onClick={() => onAction(PokerAction.CALL, callAmount)} variant="secondary">
                 Call ${callAmount}
               </Button>
             )}
@@ -46,7 +46,7 @@ export default function PokerControls({ gameState, playerId, onAction }: PokerCo
 
         <div class="flex items-center space-x-2">
           <Button
-            onClick={() => onAction("raise", raiseAmount)}
+            onClick={() => onAction(PokerAction.RAISE, raiseAmount)}
             disabled={raiseAmount > player.chips}
           >
             Raise to ${raiseAmount}
@@ -67,7 +67,7 @@ export default function PokerControls({ gameState, playerId, onAction }: PokerCo
           />
         </div>
 
-        <Button onClick={handleAllIn} variant="special">All-in (${player.chips})</Button>
+        <Button onClick={handleAllIn} variant="destructive">All-in (${player.chips})</Button>
       </div>
       <p class="text-center text-sm mt-2 md:hidden">Your Chips: ${player.chips}</p>
     </div>
