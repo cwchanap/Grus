@@ -48,10 +48,10 @@ if (!summary.data.canJoin) {
 console.log("✅ Room is joinable before game starts\n");
 
 // Simulate starting a game by setting a game state
-const mockGameState = {
+const mockGameState: { phase: "waiting" | "playing" | "results" | "finished"; [key: string]: any } = {
   roomId,
   gameType: "drawing",
-  phase: "playing" as const,
+  phase: "playing",
   roundNumber: 1,
   timeRemaining: 60,
   players: [],

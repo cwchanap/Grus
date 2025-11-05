@@ -1,11 +1,22 @@
 import { jwtVerify, SignJWT } from "jose";
 import { getPrismaClient } from "./prisma-client.ts";
 import { getConfig } from "../config.ts";
-import type { User } from "@prisma/client";
 
 const JWT_SECRET = new TextEncoder().encode(
   Deno.env.get("JWT_SECRET") || "default-secret-change-in-production",
 );
+
+// Local User type definition (matches Prisma User schema)
+export interface User {
+  id: string;
+  email: string;
+  username: string;
+  password: string;
+  name: string | null;
+  avatar?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
 
 export interface UserPayload {
   id: string;

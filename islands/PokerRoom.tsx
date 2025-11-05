@@ -48,9 +48,8 @@ export default function PokerRoom(
           <div class="bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg shadow-lg">
             <ChatRoom
               roomId={room.room.id}
-              playerId={playerId}
-              playerName={room.players.find((p) => p.id === playerId)?.name || "Unknown"}
-              isCompact
+              currentPlayerId={playerId}
+              currentPlayerName={room.players.find((p) => p.id === playerId)?.name || "Unknown"}
             />
           </div>
 
@@ -74,7 +73,7 @@ export default function PokerRoom(
       {/* Game Settings Modal */}
       <GameSettingsWrapper
         isOpen={showSettingsModal.value}
-        onClose={() => {
+        onModalClose={() => {
           showSettingsModal.value = false;
         }}
         roomId={room.room.id}

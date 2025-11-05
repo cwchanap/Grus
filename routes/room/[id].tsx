@@ -106,10 +106,10 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
       currentPlayerIndex: gameData.currentPlayerIndex,
       smallBlindIndex: gameData.smallBlindIndex,
       bigBlindIndex: gameData.bigBlindIndex,
-    };
+    } as BaseGameState;
   }
 
-  return baseState;
+  return baseState as BaseGameState;
 }
 
 // Create a stable poker action handler function

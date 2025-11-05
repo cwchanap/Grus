@@ -67,11 +67,14 @@ export interface PokerHand {
 export interface PokerPlayer extends PlayerState {
   chips: number;
   cards: PokerCard[];
+  hand: PokerCard[]; // Alias for cards, used in UI components
   bet: number;
   hasActed: boolean;
   isAllIn: boolean;
   isFolded: boolean;
   position: number;
+  status?: "active" | "folded" | "all-in";
+  isDealer?: boolean;
 }
 
 export interface PokerGameSettings extends BaseGameSettings {
@@ -86,8 +89,10 @@ export interface PokerGameState extends BaseGameState {
   communityCards: PokerCard[];
   pot: number;
   currentBet: number;
+  minRaise: number;
   bettingRound: BettingRound;
   currentPlayerIndex: number;
+  currentPlayerId?: string;
   smallBlindIndex: number;
   bigBlindIndex: number;
   settings: PokerGameSettings;
