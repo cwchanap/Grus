@@ -30,7 +30,6 @@ export class PokerGameEngine extends BaseGameEngine<
       ...p,
       chips: settings.buyIn,
       cards: [],
-      hand: [], // Alias for cards used in UI
       bet: 0,
       hasActed: false,
       isAllIn: false,
@@ -194,7 +193,6 @@ export class PokerGameEngine extends BaseGameEngine<
       ...player,
       chips: gameState.settings.buyIn,
       cards: [],
-      hand: [], // Alias for cards used in UI
       bet: 0,
       hasActed: false,
       isAllIn: false,

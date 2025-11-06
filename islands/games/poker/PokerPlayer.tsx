@@ -36,7 +36,7 @@ export default function PokerPlayer(
       </div>
 
       <div class="flex space-x-1 mt-1">
-        {player.hand.map((card, i) => (
+        {player.cards.map((card, i) => (
           <div
             key={i}
             class={`w-6 h-8 rounded text-xs ${
