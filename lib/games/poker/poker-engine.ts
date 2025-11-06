@@ -98,12 +98,17 @@ export class PokerGameEngine extends BaseGameEngine<
         break;
       }
       case PokerAction.RAISE: {
-        const raiseAmount = message.data.amount ?? 0;
-        const totalBet = player.bet + raiseAmount;
-        player.chips -= raiseAmount;
-        player.bet = totalBet;
-        updatedState.pot += raiseAmount;
-        updatedState.currentBet = totalBet;
+        const newTotalBet = message.data.amount ?? 0;
+        const amountToAdd = newTotalBet - player.bet;
+        // Compute the actual raise amount (increase over current bet)
+        const actualRaiseAmount = newTotalBet - updatedState.currentBet;
+
+        player.chips -= amountToAdd;
+        player.bet = newTotalBet;
+        updatedState.pot += amountToAdd;
+        updatedState.currentBet = newTotalBet;
+        // Set minRaise to the actual raise amount for future raises
+        updatedState.minRaise = actualRaiseAmount;
         // Reset hasActed for other players
         updatedState.players.forEach((p) => {
           if (!p.isFolded && !p.isAllIn) p.hasActed = false;
@@ -157,11 +162,14 @@ export class PokerGameEngine extends BaseGameEngine<
       case PokerAction.CHECK:
         return player.bet === gameState.currentBet;
       case PokerAction.RAISE: {
-        const raiseAmount = action.amount ?? 0;
+        const newTotalBet = action.amount ?? 0;
+        // Compute the actual raise amount (difference between new bet and current bet)
+        const actualRaiseAmount = newTotalBet - gameState.currentBet;
+        // Require the raise amount to be at least minRaise
         return (
-          raiseAmount > 0 &&
-          player.chips >= raiseAmount &&
-          (player.bet + raiseAmount) >= (gameState.currentBet * 2)
+          actualRaiseAmount >= gameState.minRaise &&
+          player.chips >= (newTotalBet - player.bet) &&
+          newTotalBet > gameState.currentBet
         );
       }
       case PokerAction.CALL:
