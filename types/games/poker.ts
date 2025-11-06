@@ -115,19 +115,75 @@ export interface PokerClientMessage extends BaseClientMessage {
   };
 }
 
-export interface PokerServerMessage extends BaseServerMessage {
-  type:
-    | "game-state"
-    | "hand-result"
-    | "room-update"
-    | "chat-message"
-    | "score-update"
-    | "host-changed"
-    | "settings-updated"
-    | "error"
-    | "pong";
-  data: PokerGameState | {
-    winners?: string[];
-    pot?: number;
+// Discriminated union for poker server messages
+export type PokerServerMessage =
+  | {
+    type: "game-state";
+    roomId: string;
+    data: PokerGameState;
+  }
+  | {
+    type: "hand-result";
+    roomId: string;
+    data: {
+      winners: string[];
+      pot: number;
+    };
+  }
+  | {
+    type: "room-update";
+    roomId: string;
+    data: {
+      players: PlayerState[];
+      hostId?: string;
+    };
+  }
+  | {
+    type: "chat-message";
+    roomId: string;
+    data: {
+      id: string;
+      playerId: string;
+      playerName: string;
+      message: string;
+      timestamp: number;
+      isSystemMessage?: boolean;
+    };
+  }
+  | {
+    type: "score-update";
+    roomId: string;
+    data: {
+      scores: Record<string, number>;
+      sessionId?: string;
+    };
+  }
+  | {
+    type: "host-changed";
+    roomId: string;
+    data: {
+      newHostId: string;
+      newHostName?: string;
+    };
+  }
+  | {
+    type: "settings-updated";
+    roomId: string;
+    data: PokerGameSettings;
+  }
+  | {
+    type: "error";
+    roomId: string;
+    data: {
+      error: string;
+      message?: string;
+      code?: string;
+    };
+  }
+  | {
+    type: "pong";
+    roomId: string;
+    data: {
+      timestamp: number;
+    };
   };
-}
