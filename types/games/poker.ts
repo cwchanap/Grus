@@ -67,7 +67,6 @@ export interface PokerHand {
 export interface PokerPlayer extends PlayerState {
   chips: number;
   cards: PokerCard[];
-  hand: PokerCard[]; // Alias for cards, used in UI components
   bet: number;
   hasActed: boolean;
   isAllIn: boolean;
