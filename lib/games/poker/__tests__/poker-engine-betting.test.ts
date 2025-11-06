@@ -288,6 +288,8 @@ Deno.test("PokerGameEngine - handleClientMessage FOLD marks player as folded", (
 
   assertEquals(result.updatedState.players[0].isFolded, true);
   assertEquals(result.updatedState.players[0].hasActed, true);
+  // Verify turn advances to next player after fold
+  assertEquals(result.updatedState.currentPlayerIndex, 1);
   assertEquals(result.serverMessages.length, 1);
   assertEquals(result.serverMessages[0].type, "game-state");
 });

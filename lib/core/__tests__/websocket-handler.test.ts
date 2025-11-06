@@ -508,7 +508,23 @@ Deno.test("CoreWebSocketHandler - multiple handlers maintain separate state", ()
   // These should be different instances with separate state (using strict inequality)
   assertEquals(handler1 === handler2, false);
 
+  // Verify initial state
   assertEquals(handler1.getConnectionCount(), 0);
+  assertEquals(handler2.getConnectionCount(), 0);
+
+  // Add connection to handler1 and verify handler2 remains unaffected
+  const mockWs = new MockWebSocket();
+  const connection = {
+    ws: mockWs as unknown as WebSocket,
+    playerId: "player1",
+    roomId: "room1",
+    lastActivity: Date.now(),
+  };
+
+  handler1.__testSetConnection("player1", connection);
+
+  // Verify state independence: handler1 has connection, handler2 doesn't
+  assertEquals(handler1.getConnectionCount(), 1);
   assertEquals(handler2.getConnectionCount(), 0);
 });
 
