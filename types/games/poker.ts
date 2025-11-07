@@ -82,7 +82,7 @@ export interface PokerGameSettings extends BaseGameSettings {
   bigBlind: number;
 }
 
-export interface PokerGameState extends BaseGameState {
+export interface PokerGameState extends Omit<BaseGameState, "gameData"> {
   players: PokerPlayer[];
   deck: PokerCard[];
   communityCards: PokerCard[];
