@@ -71,6 +71,12 @@ export class PokerGameEngine extends BaseGameEngine<
     updatedState: PokerGameState;
     serverMessages: PokerServerMessage[];
   } {
+    // Type guard: only handle poker-action and game-action messages
+    if (message.type !== "poker-action" && message.type !== "game-action") {
+      console.warn(`PokerGameEngine received unexpected message type: ${message.type}`);
+      return { updatedState: gameState, serverMessages: [] };
+    }
+
     if (!this.validateGameAction(gameState, message.playerId, message.data)) {
       // Optionally, send an error message to the player
       return { updatedState: gameState, serverMessages: [] };
