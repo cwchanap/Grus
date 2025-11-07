@@ -97,23 +97,66 @@ export interface PokerGameState extends BaseGameState {
   settings: PokerGameSettings;
 }
 
-// Messages
-export interface PokerClientMessage extends BaseClientMessage {
-  type:
-    | "poker-action"
-    | "game-action"
-    | "join-room"
-    | "leave-room"
-    | "chat"
-    | "start-game"
-    | "end-game"
-    | "update-settings"
-    | "ping";
-  data: {
-    action: PokerAction;
-    amount?: number;
+// Messages - Discriminated union for poker client messages
+export type PokerClientMessage =
+  | {
+    type: "poker-action" | "game-action";
+    roomId: string;
+    playerId: string;
+    data: {
+      action: PokerAction;
+      amount?: number;
+    };
+  }
+  | {
+    type: "chat";
+    roomId: string;
+    playerId: string;
+    data: {
+      text: string;
+      playerName?: string;
+    };
+  }
+  | {
+    type: "join-room";
+    roomId: string;
+    playerId: string;
+    data: {
+      playerName: string;
+    };
+  }
+  | {
+    type: "leave-room";
+    roomId: string;
+    playerId: string;
+    data: Record<string, never>; // Empty object
+  }
+  | {
+    type: "start-game";
+    roomId: string;
+    playerId: string;
+    data: Record<string, never>; // Empty object
+  }
+  | {
+    type: "end-game";
+    roomId: string;
+    playerId: string;
+    data: Record<string, never>; // Empty object
+  }
+  | {
+    type: "update-settings";
+    roomId: string;
+    playerId: string;
+    data: {
+      settings: Partial<PokerGameSettings>;
+    };
+  }
+  | {
+    type: "ping";
+    roomId: string;
+    playerId: string;
+    data: Record<string, never>; // Empty object
   };
-}
 
 // Discriminated union for poker server messages
 export type PokerServerMessage =
