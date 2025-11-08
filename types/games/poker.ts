@@ -1,5 +1,4 @@
 import { BaseGameSettings, BaseGameState } from "../core/game.ts";
-import { BaseClientMessage, BaseServerMessage } from "../core/websocket.ts";
 import { PlayerState } from "../core/room.ts";
 
 export enum Suit {
