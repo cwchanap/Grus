@@ -308,7 +308,7 @@ Deno.test("CoreWebSocketHandler - sendError sends error message", () => {
   assertEquals(sentData.data.error, "Test error message");
 });
 
-Deno.test("CoreWebSocketHandler - handlePing sends pong response", () => {
+Deno.test("CoreWebSocketHandler - handlePing sends pong response", async () => {
   const handler = new CoreWebSocketHandler();
   const mockWs = new MockWebSocket();
 
@@ -326,7 +326,8 @@ Deno.test("CoreWebSocketHandler - handlePing sends pong response", () => {
     data: {},
   };
 
-  handler.__testHandlePing(connection, pingMessage);
+  // Test through production entry point with stringified message
+  await handler.__testHandleMessage(connection, JSON.stringify(pingMessage));
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -432,7 +433,8 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage sends error when no 
     data: {},
   };
 
-  await handler.__testHandleGameSpecificMessage(connection, message);
+  // Test through production entry point with stringified message
+  await handler.__testHandleMessage(connection, JSON.stringify(message));
 
   assertEquals(mockWs.sent.length, 1);
   const sentData = JSON.parse(mockWs.sent[0]);
@@ -493,7 +495,8 @@ Deno.test("CoreWebSocketHandler - handleGameSpecificMessage delegates to game en
     data: { action: "test" },
   };
 
-  await handler.__testHandleGameSpecificMessage(connection, message);
+  // Test through production entry point with stringified message
+  await handler.__testHandleMessage(connection, JSON.stringify(message));
 
   // Should have received a response from the game engine
   assertEquals(mockWs.sent.length, 1);

@@ -719,4 +719,8 @@ export class CoreWebSocketHandler {
   ): Promise<void> {
     return this.handleGameSpecificMessage(connection, message);
   }
+
+  __testHandleMessage(connection: WebSocketConnection, data: string): Promise<void> {
+    return this.handleMessage(connection, data);
+  }
 }
