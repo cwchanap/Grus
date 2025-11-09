@@ -71,8 +71,6 @@ export interface PokerPlayer extends PlayerState {
   isAllIn: boolean;
   isFolded: boolean;
   position: number;
-  status?: "active" | "folded" | "all-in";
-  isDealer?: boolean;
 }
 
 export interface PokerGameSettings extends BaseGameSettings {

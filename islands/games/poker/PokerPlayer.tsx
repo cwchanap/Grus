@@ -5,10 +5,11 @@ interface PokerPlayerProps {
   isCurrentPlayer: boolean;
   isLocalPlayer: boolean;
   position: number;
+  isDealer: boolean;
 }
 
 export default function PokerPlayer(
-  { player, isCurrentPlayer, isLocalPlayer, position }: PokerPlayerProps,
+  { player, isCurrentPlayer, isLocalPlayer, position, isDealer }: PokerPlayerProps,
 ) {
   const totalPlayers = 8;
   const angle = (360 / totalPlayers) * position;
@@ -23,12 +24,12 @@ export default function PokerPlayer(
     >
       <div
         class={`text-center p-1 rounded ${
-          player.status === "folded" ? "bg-gray-600" : "bg-gray-800"
+          player.isFolded ? "bg-gray-600" : "bg-gray-800"
         }`}
       >
         <p class="font-bold text-xs truncate">{player.name}</p>
         <p class="text-yellow-400 text-xs">${player.chips}</p>
-        {player.isDealer && (
+        {isDealer && (
           <div class="absolute -top-2 -right-2 w-6 h-6 bg-white text-black rounded-full flex items-center justify-center font-bold text-xs">
             D
           </div>
