@@ -150,7 +150,9 @@ export class CoreWebSocketHandler {
       const players = roomSummary.data.players || [];
       const byId = playerId ? players.find((p: Player) => p.id === playerId) : undefined;
       const byName = !byId && playerName
-        ? players.find((p: Player) => p.name?.trim().toLowerCase() === playerName.trim().toLowerCase())
+        ? players.find((p: Player) =>
+          p.name?.trim().toLowerCase() === playerName.trim().toLowerCase()
+        )
         : undefined;
 
       if (byId || byName) {
