@@ -56,6 +56,7 @@ export class PokerGameEngine extends BaseGameEngine<
       timeRemaining: 0,
       chatMessages: [],
       scores: {},
+      gameData: {}, // Unused for poker - all state is in dedicated fields
     };
   }
 
