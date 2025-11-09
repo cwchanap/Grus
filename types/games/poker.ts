@@ -91,7 +91,6 @@ export interface PokerGameState extends BaseGameState<PokerGameSettings, Record<
   minRaise: number;
   bettingRound: BettingRound;
   currentPlayerIndex: number;
-  currentPlayerId?: string;
   smallBlindIndex: number;
   bigBlindIndex: number;
   settings: PokerGameSettings;

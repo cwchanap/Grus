@@ -14,7 +14,9 @@ export default function PokerControls({ gameState, playerId, onAction }: PokerCo
   const player = gameState.players.find((p) => p.id === playerId);
   const [raiseAmount, setRaiseAmount] = useState(gameState.minRaise);
 
-  if (!player || gameState.currentPlayerId !== playerId) {
+  // Only show controls if it's this player's turn
+  const currentPlayer = gameState.players[gameState.currentPlayerIndex];
+  if (!player || currentPlayer?.id !== playerId) {
     return null;
   }
 
