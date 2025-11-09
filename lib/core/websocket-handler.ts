@@ -3,6 +3,7 @@ import { GameRegistry } from "./game-registry.ts";
 import { RoomManager } from "./room-manager.ts";
 import { BaseClientMessage, BaseServerMessage } from "../../types/core/websocket.ts";
 import { BaseGameState } from "../../types/core/game.ts";
+import { Player } from "../../types/core/room.ts";
 
 export interface WebSocketConnection {
   ws: WebSocket;
@@ -147,9 +148,9 @@ export class CoreWebSocketHandler {
       }
 
       const players = roomSummary.data.players || [];
-      const byId = playerId ? players.find((p: any) => p.id === playerId) : undefined;
+      const byId = playerId ? players.find((p: Player) => p.id === playerId) : undefined;
       const byName = !byId && playerName
-        ? players.find((p: any) => p.name?.trim().toLowerCase() === playerName.trim().toLowerCase())
+        ? players.find((p: Player) => p.name?.trim().toLowerCase() === playerName.trim().toLowerCase())
         : undefined;
 
       if (byId || byName) {
@@ -544,7 +545,7 @@ export class CoreWebSocketHandler {
 
     try {
       // Handle message with game engine
-      const result = gameEngine.handleClientMessage(gameState, message as any);
+      const result = gameEngine.handleClientMessage(gameState, message);
 
       // Update game state
       this.gameStates.set(roomId, result.updatedState);
