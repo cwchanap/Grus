@@ -12,6 +12,9 @@ export default function PokerTable({ gameState, playerId, onAction }: PokerTable
   const players = gameState.players || [];
   const localPlayer = players.find((p) => p.id === playerId);
 
+  // Dealer is one position before small blind
+  const dealerIndex = (gameState.smallBlindIndex - 1 + players.length) % players.length;
+
   return (
     <div class="flex flex-col items-center justify-center w-full h-full text-white">
       <div class="relative w-full max-w-4xl aspect-[4/3] bg-green-700 rounded-full border-8 border-yellow-800 shadow-lg">
@@ -43,6 +46,7 @@ export default function PokerTable({ gameState, playerId, onAction }: PokerTable
             isCurrentPlayer={gameState.currentPlayerIndex === index}
             isLocalPlayer={player.id === playerId}
             position={index}
+            isDealer={index === dealerIndex}
           />
         ))}
       </div>
