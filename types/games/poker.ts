@@ -97,7 +97,7 @@ export interface PokerGameState extends BaseGameState<PokerGameSettings, Record<
 // Messages - Discriminated union for poker client messages
 export type PokerClientMessage =
   | {
-    type: "poker-action" | "game-action";
+    type: "poker-action";
     roomId: string;
     playerId: string;
     data: {
