@@ -23,9 +23,7 @@ export default function PokerPlayer(
       style={{ transform }}
     >
       <div
-        class={`text-center p-1 rounded ${
-          player.isFolded ? "bg-gray-600" : "bg-gray-800"
-        }`}
+        class={`text-center p-1 rounded ${player.isFolded ? "bg-gray-600" : "bg-gray-800"}`}
       >
         <p class="font-bold text-xs truncate">{player.name}</p>
         <p class="text-yellow-400 text-xs">${player.chips}</p>
