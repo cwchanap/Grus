@@ -12,9 +12,19 @@ import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
 import GameSettingsWrapper from "../../islands/GameSettingsWrapper.tsx";
-import type { DrawingCommand, DrawingGameData, DrawingGameSettings } from "../../types/games/drawing.ts";
-import type { PokerAction, PokerPlayer, BettingRound, PokerGameState, PokerGameSettings } from "../../types/games/poker.ts";
-import type { RoomPlayer, GameData, GameScores } from "../../types/room/route.ts";
+import type {
+  DrawingCommand,
+  DrawingGameData,
+  DrawingGameSettings,
+} from "../../types/games/drawing.ts";
+import type {
+  BettingRound,
+  PokerAction,
+  PokerGameSettings,
+  PokerGameState,
+  PokerPlayer,
+} from "../../types/games/poker.ts";
+import type { GameData, GameScores, RoomPlayer } from "../../types/room/route.ts";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -23,7 +33,10 @@ interface GameRoomData {
 }
 
 // Helper function to create initial game state from room data
-function createInitialGameState(room: RoomSummary, playerId?: string | null): BaseGameState | PokerGameState {
+function createInitialGameState(
+  room: RoomSummary,
+  playerId?: string | null,
+): BaseGameState | PokerGameState {
   const gameRegistry = GameRegistry.getInstance();
   const gameType = room.room.gameType || "drawing";
 
@@ -370,8 +383,12 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                       width={960}
                       height={600}
                       onDrawCommand={drawingCommandHandler}
-                      drawingData={gameState.gameData.type === "drawing" ? gameState.gameData.drawingData : []}
-                      isDrawer={gameState.gameData.type === "drawing" ? gameState.gameData.currentDrawer === (playerId || "") : false}
+                      drawingData={gameState.gameData.type === "drawing"
+                        ? gameState.gameData.drawingData
+                        : []}
+                      isDrawer={gameState.gameData.type === "drawing"
+                        ? gameState.gameData.currentDrawer === (playerId || "")
+                        : false}
                       playerId={playerId || ""}
                       roomId={room.room.id}
                     />

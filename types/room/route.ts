@@ -1,7 +1,7 @@
 // Room-specific types for route handlers and components
 import { PlayerState } from "../core/room.ts";
 import { DrawingCommand } from "../games/drawing.ts";
-import { PokerCard, PokerPlayer, BettingRound } from "../games/poker.ts";
+import { BettingRound, PokerCard, PokerPlayer } from "../games/poker.ts";
 
 /**
  * Player representation used in room routes - extends base PlayerState
@@ -17,24 +17,24 @@ export interface RoomPlayer extends PlayerState {
  */
 export type GameData =
   | {
-      type: "drawing";
-      currentDrawer: string | null;
-      currentWord: string;
-      drawingData: DrawingCommand[];
-      correctGuesses: Array<{ playerId: string; timestamp: number }>;
-    }
+    type: "drawing";
+    currentDrawer: string | null;
+    currentWord: string;
+    drawingData: DrawingCommand[];
+    correctGuesses: Array<{ playerId: string; timestamp: number }>;
+  }
   | {
-      type: "poker";
-      deck: PokerCard[];
-      communityCards: PokerCard[];
-      pot: number;
-      currentBet: number;
-      bettingRound: BettingRound;
-      currentPlayerIndex: number;
-      smallBlindIndex: number;
-      bigBlindIndex: number;
-      players: PokerPlayer[];
-    };
+    type: "poker";
+    deck: PokerCard[];
+    communityCards: PokerCard[];
+    pot: number;
+    currentBet: number;
+    bettingRound: BettingRound;
+    currentPlayerIndex: number;
+    smallBlindIndex: number;
+    bigBlindIndex: number;
+    players: PokerPlayer[];
+  };
 
 /**
  * Type alias for game scores - maps player IDs to their scores
