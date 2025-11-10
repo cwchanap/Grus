@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { GameTestHelpers } from "./utils/test-helpers.ts";
 
+const TEXAS_HOLDEM_LABEL = "Texas Hold'em Poker";
+
 /**
  * Tests for poker room creation functionality
  */
@@ -49,8 +51,12 @@ test.describe("Poker Room Creation", () => {
     await roomNameInput.fill("Test Poker Room");
     await hostNameInput.fill("Poker Tester");
 
+    // Verify Texas Hold'em Poker option exists
+    const pokerOption = gameTypeSelect.locator(`option:has-text("${TEXAS_HOLDEM_LABEL}")`);
+    await expect(pokerOption).toBeAttached({ timeout: 5000 });
+
     // Select poker game type
-    await gameTypeSelect.selectOption({ label: "Texas Hold'em Poker" });
+    await gameTypeSelect.selectOption({ label: TEXAS_HOLDEM_LABEL });
 
     // Submit the form
     await submitButton.click();
@@ -75,7 +81,12 @@ test.describe("Poker Room Creation", () => {
 
     // Select poker game type first
     const gameTypeSelect = modal.locator('select').nth(0);
-    await gameTypeSelect.selectOption({ label: "Texas Hold'em Poker" });
+
+    // Verify Texas Hold'em Poker option exists
+    const pokerOption = gameTypeSelect.locator(`option:has-text("${TEXAS_HOLDEM_LABEL}")`);
+    await expect(pokerOption).toBeAttached({ timeout: 5000 });
+
+    await gameTypeSelect.selectOption({ label: TEXAS_HOLDEM_LABEL });
 
     // Check max players dropdown
     const maxPlayersSelect = modal.locator('select').nth(1); // Second select should be max players
@@ -119,7 +130,12 @@ test.describe("Poker Room Creation", () => {
 
       await roomNameInput.fill(`Poker Room ${playerCount} Players`);
       await hostNameInput.fill("Poker Host");
-      await gameTypeSelect.selectOption({ label: "Texas Hold'em Poker" });
+
+      // Verify Texas Hold'em Poker option exists
+      const pokerOption = gameTypeSelect.locator(`option:has-text("${TEXAS_HOLDEM_LABEL}")`);
+      await expect(pokerOption).toBeAttached({ timeout: 5000 });
+
+      await gameTypeSelect.selectOption({ label: TEXAS_HOLDEM_LABEL });
       await maxPlayersSelect.selectOption({ label: `${playerCount} players` });
 
       // Submit and verify navigation

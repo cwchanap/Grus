@@ -1,22 +1,18 @@
 import { jwtVerify, SignJWT } from "jose";
+import { Prisma } from "prisma";
 import { getPrismaClient } from "./prisma-client.ts";
 import { getConfig } from "../config.ts";
 
-const JWT_SECRET = new TextEncoder().encode(
-  Deno.env.get("JWT_SECRET") || "default-secret-change-in-production",
-);
+const JWT_SECRET = (() => {
+  const secret = Deno.env.get("JWT_SECRET");
+  if (!secret || secret.trim() === "") {
+    console.error("❌ JWT_SECRET environment variable is required but not set");
+    console.error("Please set JWT_SECRET to a secure random string (>32 characters)");
+    Deno.exit(1);
+  }
+  return new TextEncoder().encode(secret);
+})();
 
-// Local User type definition (matches Prisma User schema)
-export interface User {
-  id: string;
-  email: string;
-  username: string;
-  password: string;
-  name: string | null;
-  avatar?: string | null;
-  createdAt?: Date;
-  updatedAt?: Date;
-}
 
 export interface UserPayload {
   id: string;
@@ -97,7 +93,7 @@ export async function createUser(
   username: string,
   password: string,
   name?: string,
-): Promise<User> {
+): Promise<Prisma.User> {
   const prisma = await getPrismaClient();
 
   const hashedPassword = await hashPassword(password);
@@ -113,7 +109,7 @@ export async function createUser(
 }
 
 // Create user session
-export async function createSession(user: User): Promise<SessionData> {
+export async function createSession(user: Prisma.User): Promise<SessionData> {
   const prisma = await getPrismaClient();
   const config = getConfig();
 
@@ -122,7 +118,7 @@ export async function createSession(user: User): Promise<SessionData> {
     email: user.email,
     username: user.username,
     name: user.name,
-    avatar: (user as any).avatar ?? null,
+    avatar: user.avatar ?? null,
   };
 
   const token = await generateToken(userPayload);
@@ -163,7 +159,7 @@ export async function getSession(token: string): Promise<SessionData | null> {
     email: session.user.email,
     username: session.user.username,
     name: session.user.name,
-    avatar: (session.user as any).avatar ?? null,
+    avatar: session.user.avatar ?? null,
   };
 
   return {
