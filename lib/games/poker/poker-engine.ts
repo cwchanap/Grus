@@ -265,6 +265,7 @@ export class PokerGameEngine extends BaseGameEngine<
       communityCards: [],
       pot: smallBlindPlayer.bet + bigBlindPlayer.bet,
       currentBet: gameState.settings.bigBlind,
+      minRaise: gameState.settings.bigBlind,
       bettingRound: BettingRound.PRE_FLOP,
       currentPlayerIndex: (gameState.bigBlindIndex + 1) % players.length,
       roundNumber: gameState.roundNumber + 1,
@@ -295,8 +296,12 @@ export class PokerGameEngine extends BaseGameEngine<
   private advanceBettingRound(gameState: PokerGameState): PokerGameState {
     let { bettingRound, communityCards, deck } = gameState;
 
-    // Reset player action status for the new round
-    const players = gameState.players.map((p) => ({ ...p, hasActed: false }));
+    // Reset player action status and bets for the new round
+    const players = gameState.players.map((p) => ({
+      ...p,
+      hasActed: false,
+      bet: 0, // Reset bets (they're already in the pot)
+    }));
 
     switch (bettingRound) {
       case BettingRound.PRE_FLOP:
@@ -327,6 +332,7 @@ export class PokerGameEngine extends BaseGameEngine<
       currentPlayerIndex: (gameState.smallBlindIndex) %
         gameState.players.length,
       currentBet: 0,
+      minRaise: gameState.settings.bigBlind,
     };
   }
 
