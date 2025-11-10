@@ -29,7 +29,7 @@ export default function PokerControls({ gameState, playerId, onAction }: PokerCo
   };
 
   const handleAllIn = () => {
-    onAction(PokerAction.RAISE, player.chips);
+    onAction(PokerAction.ALL_IN);
   };
 
   return (
