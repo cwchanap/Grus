@@ -12,8 +12,9 @@ import Scoreboard from "../../islands/Scoreboard.tsx";
 import _LeaveRoomButton from "../../islands/LeaveRoomButton.tsx";
 import RoomHeader from "../../islands/RoomHeader.tsx";
 import GameSettingsWrapper from "../../islands/GameSettingsWrapper.tsx";
-import type { DrawingCommand } from "../../types/games/drawing.ts";
-import type { PokerAction } from "../../types/games/poker.ts";
+import type { DrawingCommand, DrawingGameData, DrawingGameSettings } from "../../types/games/drawing.ts";
+import type { PokerAction, PokerPlayer, BettingRound, PokerGameState, PokerGameSettings } from "../../types/games/poker.ts";
+import type { RoomPlayer, GameData, GameScores } from "../../types/room/route.ts";
 
 interface GameRoomData {
   room: RoomSummary | null;
@@ -22,7 +23,7 @@ interface GameRoomData {
 }
 
 // Helper function to create initial game state from room data
-function createInitialGameState(room: RoomSummary, playerId?: string | null): BaseGameState {
+function createInitialGameState(room: RoomSummary, playerId?: string | null): BaseGameState | PokerGameState {
   const gameRegistry = GameRegistry.getInstance();
   const gameType = room.room.gameType || "drawing";
 
@@ -33,7 +34,7 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
   };
 
   // Ensure the current player is included in the players list
-  const players = room.players.map((player: any) => ({
+  const players: RoomPlayer[] = room.players.map((player: any) => ({
     id: player.id,
     name: player.name,
     isHost: player.isHost,
@@ -50,66 +51,103 @@ function createInitialGameState(room: RoomSummary, playerId?: string | null): Ba
   }
 
   // Initialize game-specific data so clients can render correctly before real-time updates
-  const gameData: any = {};
+  let gameData: GameData;
   if (gameType === "drawing") {
     // Make the current player the initial drawer and start with empty drawing history
-    gameData.currentDrawer = playerId || null;
-    gameData.drawingData = [] as any[];
+    gameData = {
+      type: "drawing",
+      currentDrawer: playerId || null,
+      currentWord: "",
+      drawingData: [],
+      correctGuesses: [],
+    };
   } else if (gameType === "poker") {
     // Initialize poker-specific data
-    gameData.deck = [];
-    gameData.communityCards = [];
-    gameData.pot = 0;
-    gameData.currentBet = 0;
-    gameData.bettingRound = "Pre-flop";
-    gameData.currentPlayerIndex = 0;
-    gameData.smallBlindIndex = 0;
-    gameData.bigBlindIndex = 1;
-    // Initialize poker players with empty hands and chips
-    gameData.players = players.map((player: any, index: number) => ({
-      ...player,
-      hand: [],
-      chips: (defaultSettings as any).buyIn || 1000,
+    const pokerGameData: GameData & { type: "poker" } = {
+      type: "poker",
+      deck: [],
+      communityCards: [],
+      pot: 0,
       currentBet: 0,
-      hasActed: false,
-      isAllIn: false,
-      isFolded: false,
-      position: index,
-    }));
+      bettingRound: "Pre-flop" as BettingRound,
+      currentPlayerIndex: 0,
+      smallBlindIndex: 0,
+      bigBlindIndex: 1,
+      players: players.map((player, index): PokerPlayer => ({
+        ...player,
+        chips: (defaultSettings as { buyIn?: number }).buyIn || 1000,
+        cards: [],
+        bet: 0,
+        hasActed: false,
+        isAllIn: false,
+        isFolded: false,
+        position: index,
+      })),
+    };
+    gameData = pokerGameData;
+  } else {
+    // Fallback for unknown game types
+    gameData = {
+      type: "drawing",
+      currentDrawer: null,
+      currentWord: "",
+      drawingData: [],
+      correctGuesses: [],
+    };
   }
 
-  const baseState = {
+  // Build base state with proper typing
+  if (gameType === "poker") {
+    const pokerData = gameData as GameData & { type: "poker" };
+    // For poker, we know defaultSettings has poker-specific properties
+    // Type assertion is safe here because poker games are registered with PokerGameSettings
+    const pokerSettings = defaultSettings as PokerGameSettings;
+    const pokerState: PokerGameState = {
+      roomId: room.room.id,
+      gameType: "poker",
+      roundNumber: 0,
+      timeRemaining: pokerSettings.roundTimeSeconds * 1000,
+      phase: "waiting" as const,
+      players: pokerData.players,
+      scores: players.reduce((acc: GameScores, player: RoomPlayer): GameScores => {
+        acc[player.id] = 0;
+        return acc;
+      }, {} as GameScores),
+      gameData: {} as Record<string, never>,
+      chatMessages: [],
+      settings: pokerSettings,
+      deck: pokerData.deck,
+      communityCards: pokerData.communityCards,
+      pot: pokerData.pot,
+      currentBet: pokerData.currentBet,
+      minRaise: pokerData.currentBet,
+      bettingRound: pokerData.bettingRound,
+      currentPlayerIndex: pokerData.currentPlayerIndex,
+      smallBlindIndex: pokerData.smallBlindIndex,
+      bigBlindIndex: pokerData.bigBlindIndex,
+    };
+    return pokerState;
+  }
+
+  // For drawing (and fallback), return properly typed BaseGameState
+  const drawingGameData = gameData as DrawingGameData; // Type guard for drawing data
+  const drawingState: BaseGameState<DrawingGameSettings, DrawingGameData> = {
     roomId: room.room.id,
     gameType,
-    roundNumber: 0, // Game hasn't started
-    timeRemaining: defaultSettings.roundTimeSeconds * 1000, // Convert to milliseconds
-    phase: "waiting", // Waiting for game to start
-    players: gameType === "poker" ? gameData.players : players,
-    scores: players.reduce((acc: any, player: any) => {
-      acc[player.id] = 0; // Initialize all scores to 0
+    roundNumber: 0,
+    timeRemaining: defaultSettings.roundTimeSeconds * 1000,
+    phase: "waiting" as const,
+    players: players,
+    scores: players.reduce((acc: GameScores, player: RoomPlayer): GameScores => {
+      acc[player.id] = 0;
       return acc;
-    }, {} as Record<string, number>),
-    gameData,
-    chatMessages: [], // No chat messages initially
+    }, {} as GameScores),
+    gameData: drawingGameData,
+    chatMessages: [],
     settings: defaultSettings,
   };
 
-  // For poker, add poker-specific fields to the top level
-  if (gameType === "poker") {
-    return {
-      ...baseState,
-      deck: gameData.deck,
-      communityCards: gameData.communityCards,
-      pot: gameData.pot,
-      currentBet: gameData.currentBet,
-      bettingRound: gameData.bettingRound,
-      currentPlayerIndex: gameData.currentPlayerIndex,
-      smallBlindIndex: gameData.smallBlindIndex,
-      bigBlindIndex: gameData.bigBlindIndex,
-    } as BaseGameState;
-  }
-
-  return baseState as BaseGameState;
+  return drawingState;
 }
 
 // Create a stable poker action handler function
@@ -332,8 +370,8 @@ export default function GameRoom({ data }: PageProps<GameRoomData>) {
                       width={960}
                       height={600}
                       onDrawCommand={drawingCommandHandler}
-                      drawingData={(gameState as any)?.gameData?.drawingData || []}
-                      isDrawer={(gameState as any)?.gameData?.currentDrawer === (playerId || "")}
+                      drawingData={gameState.gameData.type === "drawing" ? gameState.gameData.drawingData : []}
+                      isDrawer={gameState.gameData.type === "drawing" ? gameState.gameData.currentDrawer === (playerId || "") : false}
                       playerId={playerId || ""}
                       roomId={room.room.id}
                     />

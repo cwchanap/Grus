@@ -167,7 +167,8 @@ export class PokerGameEngine extends BaseGameEngine<
       case PokerAction.CHECK:
         return player.bet === gameState.currentBet;
       case PokerAction.RAISE: {
-        const newTotalBet = action.amount ?? 0;
+        if (action.amount === undefined) return false;
+        const newTotalBet = action.amount;
         // Compute the actual raise amount (difference between new bet and current bet)
         const actualRaiseAmount = newTotalBet - gameState.currentBet;
         // Require the raise amount to be at least minRaise

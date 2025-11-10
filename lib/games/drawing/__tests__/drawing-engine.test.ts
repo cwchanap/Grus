@@ -72,18 +72,6 @@ Deno.test("DrawingGameEngine - initializeGame creates correct initial state", ()
   assertEquals(gameState.scores["p3"], 0);
 });
 
-Deno.test("DrawingGameEngine - initializeGame initializes scores for all players", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-
-  assertEquals(Object.keys(gameState.scores).length, 3);
-  assertEquals(gameState.scores["p1"], 0);
-  assertEquals(gameState.scores["p2"], 0);
-  assertEquals(gameState.scores["p3"], 0);
-});
 
 Deno.test("DrawingGameEngine - startGame sets first drawer and selects word", () => {
   const engine = new DrawingGameEngine();

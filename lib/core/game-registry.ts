@@ -13,7 +13,7 @@ export interface GameTypeInfo {
 }
 
 export class GameRegistry {
-  private static instance: GameRegistry;
+  private static instance: GameRegistry | undefined;
   private engines: Map<string, () => GameEngine> = new Map();
   private gameTypes: Map<string, GameTypeInfo> = new Map();
 
@@ -70,6 +70,6 @@ export class GameRegistry {
       GameRegistry.instance.engines.clear();
       GameRegistry.instance.gameTypes.clear();
     }
-    GameRegistry.instance = undefined as any;
+    GameRegistry.instance = undefined;
   }
 }

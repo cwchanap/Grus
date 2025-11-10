@@ -48,9 +48,8 @@ export const handler: Handlers = {
 
       const roomManager = new RoomManager();
 
-      // Create room using room manager
-      // Convert string "false" to boolean false
-      const isPrivateBool = isPrivate === "false" ? false : Boolean(isPrivate);
+      // Convert to boolean: only explicit true or "true" (case-insensitive) are private
+      const isPrivateBool = isPrivate === true || String(isPrivate).trim().toLowerCase() === "true";
 
       const result = await roomManager.createRoom({
         name: name.trim(),
