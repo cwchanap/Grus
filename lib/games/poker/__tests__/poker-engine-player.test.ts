@@ -1,4 +1,4 @@
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "$std/assert/mod.ts";
 import { PokerGameEngine } from "../poker-engine.ts";
 import { PokerGameSettings } from "../../../../types/games/poker.ts";
 import { PlayerState } from "../../../../types/core/room.ts";
