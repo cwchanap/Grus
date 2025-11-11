@@ -1,4 +1,12 @@
 // Use dynamic import to avoid module resolution issues
+// Define expected structure of the Prisma module
+interface PrismaModule {
+  PrismaClient?: unknown;
+  default?: {
+    PrismaClient?: unknown;
+  } | unknown;
+}
+
 // deno-lint-ignore no-explicit-any
 let prisma: any = null;
 
@@ -13,21 +21,23 @@ export async function getPrismaClient(): Promise<any> {
 
     try {
       // Dynamic import to avoid module resolution issues
-      // deno-lint-ignore no-explicit-any
-      const prismaModule = await import("@prisma/client") as any;
-      // deno-lint-ignore no-explicit-any
-      const PrismaClient = (prismaModule as any).PrismaClient ||
-        // deno-lint-ignore no-explicit-any
-        (prismaModule as any).default?.PrismaClient ||
-        // deno-lint-ignore no-explicit-any
-        (prismaModule as any).default;
+      const prismaModule = await import("@prisma/client") as PrismaModule;
+
+      // Try multiple access patterns to find PrismaClient
+      const PrismaClient = prismaModule.PrismaClient ||
+        (prismaModule.default &&
+            typeof prismaModule.default === "object" &&
+            "PrismaClient" in prismaModule.default
+          ? (prismaModule.default as { PrismaClient: unknown }).PrismaClient
+          : prismaModule.default);
 
       if (!PrismaClient) {
         throw new Error("PrismaClient not found in the imported module");
       }
 
       // Initialize Prisma client
-      prisma = new PrismaClient({
+      // deno-lint-ignore no-explicit-any
+      prisma = new (PrismaClient as any)({
         log: ["error", "warn"],
       });
     } catch (error) {
