@@ -135,8 +135,7 @@ export async function createSession(user: User): Promise<SessionData> {
     email: user.email,
     username: user.username,
     name: user.name,
-    // deno-lint-ignore no-explicit-any
-    avatar: (user as any).avatar ?? null,
+    avatar: user.avatar ?? null,
   };
 
   const token = await generateToken(userPayload);
@@ -177,8 +176,7 @@ export async function getSession(token: string): Promise<SessionData | null> {
     email: session.user.email,
     username: session.user.username,
     name: session.user.name,
-    // deno-lint-ignore no-explicit-any
-    avatar: (session.user as any).avatar ?? null,
+    avatar: session.user.avatar ?? null,
   };
 
   return {
