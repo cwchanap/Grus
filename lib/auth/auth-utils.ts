@@ -2,9 +2,20 @@ import { jwtVerify, SignJWT } from "jose";
 import { getPrismaClient } from "./prisma-client.ts";
 import { getConfig } from "../config.ts";
 
-const JWT_SECRET = new TextEncoder().encode(
-  Deno.env.get("JWT_SECRET") || "default-secret-change-in-production",
-);
+// JWT secret is optional - only required if authentication features are used
+const JWT_SECRET_STRING = Deno.env.get("JWT_SECRET");
+const JWT_SECRET = JWT_SECRET_STRING ? new TextEncoder().encode(JWT_SECRET_STRING) : null;
+
+function ensureJWTSecret(): Uint8Array {
+  if (!JWT_SECRET) {
+    throw new Error(
+      "JWT_SECRET environment variable is required for authentication. " +
+        "Please set JWT_SECRET to a secure random string (>32 characters). " +
+        "Authentication features are optional - the game can run without them.",
+    );
+  }
+  return JWT_SECRET;
+}
 
 // Local User type definition (matches Prisma User schema)
 export interface User {
@@ -72,11 +83,12 @@ export async function verifyPassword(password: string, hashedPassword: string): 
 // Generate JWT token
 export async function generateToken(user: UserPayload): Promise<string> {
   const config = getConfig();
+  const secret = ensureJWTSecret();
   const token = await new SignJWT({ ...user })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setExpirationTime(config.auth.jwtExpiresIn)
-    .sign(JWT_SECRET);
+    .sign(secret);
 
   return token;
 }
@@ -84,7 +96,8 @@ export async function generateToken(user: UserPayload): Promise<string> {
 // Verify JWT token
 export async function verifyToken(token: string): Promise<UserPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, JWT_SECRET);
+    const secret = ensureJWTSecret();
+    const { payload } = await jwtVerify(token, secret);
     return payload as unknown as UserPayload;
   } catch {
     return null;
