@@ -7,10 +7,7 @@ import { BettingRound, PokerCard, PokerPlayer } from "../games/poker.ts";
  * Player representation used in room routes - extends base PlayerState
  * with additional fields needed for room initialization
  */
-export interface RoomPlayer extends PlayerState {
-  // RoomPlayer extends PlayerState which already has: id, name, isHost, isConnected, lastActivity
-  // Additional fields can be added here if needed in the future
-}
+export type RoomPlayer = PlayerState;
 
 /**
  * Discriminated union for game-specific data in room initialization
