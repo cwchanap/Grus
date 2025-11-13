@@ -4,8 +4,9 @@ import { DrawingCommand } from "../games/drawing.ts";
 import { BettingRound, PokerCard, PokerPlayer } from "../games/poker.ts";
 
 /**
- * Player representation used in room routes - extends base PlayerState
- * with additional fields needed for room initialization
+ * Type alias for player representation in room routes.
+ * Currently equivalent to PlayerState - can be extended to an intersection type
+ * if additional room-specific fields are needed in the future.
  */
 export type RoomPlayer = PlayerState;
 
