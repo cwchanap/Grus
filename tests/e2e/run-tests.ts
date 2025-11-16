@@ -68,7 +68,7 @@ if (args.reporter) {
 
 // Run Playwright tests
 const command = new Deno.Command(Deno.execPath(), {
-  args: ["run", "-A", "npm:playwright@1.40.0", ...playwrightArgs],
+  args: ["run", "-A", "npm:@playwright/test@1.40.0", ...playwrightArgs],
   cwd: Deno.cwd(),
   stdout: "inherit",
   stderr: "inherit",

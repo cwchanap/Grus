@@ -188,7 +188,7 @@ const DrawingEngine = forwardRef<DrawingEngineRef, DrawingEngineProps>(({
 
       try {
         await app.init({
-          canvas: canvasRef.current!,
+          canvas: canvasRef.current as unknown as PIXI.ICanvas,
           width,
           height,
           backgroundColor: 0xffffff,
