@@ -413,19 +413,9 @@ Deno.test("Drawing Utils - Decompression error handling", () => {
   const invalid3 = decompressDrawingData("{broken");
   assertEquals(invalid3.length, 0);
 
-  // Valid JSON but wrong structure
+  // Valid JSON but wrong structure (non-array)
   const invalid4 = decompressDrawingData(JSON.stringify({ not: "array" }));
-  // This will throw an error when trying to map, so it should return empty array
-  // Actually, looking at the code, it will try to map on non-array and fail
-  // The current implementation doesn't handle this gracefully, but we can test what happens
-  try {
-    const result = decompressDrawingData(JSON.stringify({ not: "array" }));
-    // If it doesn't throw, verify it returns empty or handles it
-    assert(Array.isArray(result) || result.length === 0);
-  } catch {
-    // Expected to fail for non-array input
-    assert(true);
-  }
+  assertEquals(invalid4.length, 0);
 });
 
 Deno.test("Drawing Utils - Batch ID uniqueness", () => {
@@ -459,7 +449,7 @@ Deno.test("Drawing Utils - Batch with custom ID", () => {
   assertEquals(batch.batchId, customId);
 });
 
-Deno.test("Drawing Utils - Throttler with end command", async () => {
+Deno.test("Drawing Utils - Throttler with end command", () => {
   const results: DrawingCommand[] = [];
   const throttler = new DrawingCommandThrottler(50);
 
@@ -481,7 +471,7 @@ Deno.test("Drawing Utils - Throttler with end command", async () => {
   throttler.destroy();
 });
 
-Deno.test("Drawing Utils - Throttler with clear command", async () => {
+Deno.test("Drawing Utils - Throttler with clear command", () => {
   const results: DrawingCommand[] = [];
   const throttler = new DrawingCommandThrottler(50);
 
