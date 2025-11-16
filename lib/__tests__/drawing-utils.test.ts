@@ -634,7 +634,7 @@ Deno.test("Drawing Utils - Buffer triggers immediate flush for end command", () 
   buffer.add({ type: "move", x: 10, y: 20, timestamp: 1000 });
   buffer.add({ type: "end", timestamp: 1001 });
 
-  // Should have 2 flushes: one for move+end batch
+  // Should have 1 flush containing move+end batch
   assertEquals(flushedBatches.length, 1);
   assertEquals(flushedBatches[0].length, 2);
 
