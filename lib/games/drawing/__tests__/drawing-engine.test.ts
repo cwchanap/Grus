@@ -493,3 +493,516 @@ Deno.test("DrawingGameEngine - chat messages include timestamp", () => {
   assertExists(result.updatedState.chatMessages[0].timestamp);
   assertExists(result.updatedState.chatMessages[0].id);
 });
+
+// ============================================================================
+// Additional Tests for Round Progression and Batching
+// ============================================================================
+
+Deno.test("DrawingGameEngine - next-round message from drawer advances round", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  const currentDrawer = startedState.gameData.currentDrawer;
+
+  const nextRoundMessage: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: currentDrawer,
+    data: {},
+  };
+
+  const result = engine.handleClientMessage(startedState, nextRoundMessage);
+
+  // Round should advance
+  assertEquals(result.updatedState.roundNumber, 2);
+  // Drawer should rotate to next player
+  assertNotEquals(result.updatedState.gameData.currentDrawer, currentDrawer);
+  assertEquals(result.updatedState.gameData.currentDrawer, "p2");
+  // Drawing data should be cleared
+  assertEquals(result.updatedState.gameData.drawingData.length, 0);
+  // Correct guesses should be cleared
+  assertEquals(result.updatedState.gameData.correctGuesses.length, 0);
+  // New word should be selected
+  assertNotEquals(result.updatedState.gameData.currentWord, "");
+
+  // Should send game-state message
+  const gameStateMessage = result.serverMessages.find((m) => m.type === "game-state");
+  assertExists(gameStateMessage);
+});
+
+Deno.test("DrawingGameEngine - next-round message from host advances round", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  const nextRoundMessage: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: "p1", // Host (also the drawer in first round)
+    data: {},
+  };
+
+  const result = engine.handleClientMessage(startedState, nextRoundMessage);
+
+  // Round should advance
+  assertEquals(result.updatedState.roundNumber, 2);
+});
+
+Deno.test("DrawingGameEngine - next-round from non-host non-drawer is ignored", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  const nextRoundMessage: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: "p2", // Not drawer (p1 is drawer) and not host
+    data: {},
+  };
+
+  const result = engine.handleClientMessage(startedState, nextRoundMessage);
+
+  // Round should NOT advance
+  assertEquals(result.updatedState.roundNumber, startedState.roundNumber);
+  // Should not send game-state message
+  const gameStateMessage = result.serverMessages.find((m) => m.type === "game-state");
+  assertEquals(gameStateMessage, undefined);
+});
+
+Deno.test("DrawingGameEngine - game ends when max rounds reached", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+  settings.maxRounds = 2; // Only 2 rounds
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  let currentState = engine.startGame(gameState);
+
+  // Round 1 -> Round 2
+  const nextRoundMessage1: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: currentState.gameData.currentDrawer,
+    data: {},
+  };
+
+  currentState = engine.handleClientMessage(currentState, nextRoundMessage1).updatedState;
+  assertEquals(currentState.roundNumber, 2);
+  assertEquals(currentState.phase, "playing");
+
+  // Round 2 -> Game should end
+  const nextRoundMessage2: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: currentState.gameData.currentDrawer,
+    data: {},
+  };
+
+  const finalResult = engine.handleClientMessage(currentState, nextRoundMessage2);
+  assertEquals(finalResult.updatedState.phase, "finished");
+  assertEquals(finalResult.updatedState.timeRemaining, 0);
+});
+
+Deno.test("DrawingGameEngine - drawer rotation cycles through players", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+  settings.maxRounds = 5;
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  let currentState = engine.startGame(gameState);
+
+  // Track drawer order
+  const drawerOrder = [currentState.gameData.currentDrawer];
+
+  // Advance 3 rounds to cycle through all players
+  for (let i = 0; i < 3; i++) {
+    const nextRoundMessage: DrawingClientMessage = {
+      type: "next-round",
+      roomId: "room1",
+      playerId: currentState.gameData.currentDrawer,
+      data: {},
+    };
+
+    currentState = engine.handleClientMessage(currentState, nextRoundMessage).updatedState;
+    drawerOrder.push(currentState.gameData.currentDrawer);
+  }
+
+  // Should cycle: p1 -> p2 -> p3 -> p1
+  assertEquals(drawerOrder[0], "p1");
+  assertEquals(drawerOrder[1], "p2");
+  assertEquals(drawerOrder[2], "p3");
+  assertEquals(drawerOrder[3], "p1"); // Back to first player
+});
+
+Deno.test("DrawingGameEngine - multiple draw commands are batched", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Send multiple draw commands
+  const drawCommands: DrawingCommand[] = [
+    { type: "start", x: 10, y: 20, color: "#000000", size: 5, timestamp: 1000 },
+    { type: "move", x: 15, y: 25, color: "#000000", size: 5, timestamp: 1001 },
+    { type: "move", x: 20, y: 30, color: "#000000", size: 5, timestamp: 1002 },
+    { type: "end", timestamp: 1003 },
+  ];
+
+  let currentState = startedState;
+  let allServerMessages: DrawingServerMessage[] = [];
+
+  // Process each draw command
+  for (const command of drawCommands) {
+    const drawMessage: DrawingClientMessage = {
+      type: "draw",
+      roomId: "room1",
+      playerId: "p1",
+      data: command,
+    };
+
+    const result = engine.handleClientMessage(currentState, drawMessage);
+    currentState = result.updatedState;
+    allServerMessages = allServerMessages.concat(result.serverMessages);
+  }
+
+  // All commands should be stored
+  assertEquals(currentState.gameData.drawingData.length, 4);
+
+  // Should have batched draw-update messages
+  const batchMessages = allServerMessages.filter((m) => m.type === "draw-update-batch");
+  assert(batchMessages.length > 0);
+
+  // Check that commands are properly batched
+  const totalBatchedCommands = batchMessages.reduce(
+    (sum, msg) => sum + (msg.data.commands?.length || 0),
+    0,
+  );
+  assertEquals(totalBatchedCommands, 4);
+});
+
+Deno.test("DrawingGameEngine - invalid draw command is rejected", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Invalid draw command (coordinates out of bounds)
+  const invalidCommand = {
+    type: "start",
+    x: -100, // Invalid
+    y: 5000, // Invalid
+    color: "#000000",
+    size: 5,
+    timestamp: Date.now(),
+  };
+
+  const drawMessage: DrawingClientMessage = {
+    type: "draw",
+    roomId: "room1",
+    playerId: "p1",
+    data: invalidCommand,
+  };
+
+  const result = engine.handleClientMessage(startedState, drawMessage);
+
+  // Invalid command should NOT be added to drawing data
+  assertEquals(result.updatedState.gameData.drawingData.length, 0);
+});
+
+Deno.test("DrawingGameEngine - draw command during waiting phase is rejected", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  // Keep in waiting phase (don't start game)
+
+  const drawCommand: DrawingCommand = {
+    type: "start",
+    x: 100,
+    y: 150,
+    color: "#000000",
+    size: 5,
+    timestamp: Date.now(),
+  };
+
+  const drawMessage: DrawingClientMessage = {
+    type: "draw",
+    roomId: "room1",
+    playerId: "p1",
+    data: drawCommand,
+  };
+
+  const result = engine.handleClientMessage(gameState, drawMessage);
+
+  // Draw command should be rejected
+  assertEquals(result.updatedState.gameData.drawingData.length, 0);
+});
+
+Deno.test("DrawingGameEngine - validateGameAction rejects draw from non-drawer", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  const drawCommand: DrawingCommand = {
+    type: "start",
+    x: 100,
+    y: 150,
+    color: "#000000",
+    size: 5,
+    timestamp: Date.now(),
+  };
+
+  // p2 is not the drawer (p1 is)
+  const isValid = engine.validateGameAction(startedState, "p2", {
+    type: "draw",
+    data: drawCommand,
+  });
+
+  assertEquals(isValid, false);
+});
+
+Deno.test("DrawingGameEngine - validateGameAction accepts draw from drawer", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  const drawCommand: DrawingCommand = {
+    type: "start",
+    x: 100,
+    y: 150,
+    color: "#000000",
+    size: 5,
+    timestamp: Date.now(),
+  };
+
+  // p1 is the current drawer
+  const isValid = engine.validateGameAction(startedState, "p1", {
+    type: "draw",
+    data: drawCommand,
+  });
+
+  assertEquals(isValid, true);
+});
+
+Deno.test("DrawingGameEngine - time remaining is reset on new round", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+  settings.roundTimeSeconds = 120; // 2 minutes
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Simulate time passing
+  startedState.timeRemaining = 30000; // 30 seconds remaining
+
+  const nextRoundMessage: DrawingClientMessage = {
+    type: "next-round",
+    roomId: "room1",
+    playerId: startedState.gameData.currentDrawer,
+    data: {},
+  };
+
+  const result = engine.handleClientMessage(startedState, nextRoundMessage);
+
+  // Time should be reset to full round time
+  assertEquals(result.updatedState.timeRemaining, 120000); // 120 seconds in milliseconds
+});
+
+Deno.test("DrawingGameEngine - score is calculated based on time remaining", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+  settings.roundTimeSeconds = 60;
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Quick guess (55 seconds remaining)
+  startedState.timeRemaining = 55000;
+  const quickScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
+
+  // Medium guess (30 seconds remaining)
+  startedState.timeRemaining = 30000;
+  const mediumScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
+
+  // Late guess (5 seconds remaining)
+  startedState.timeRemaining = 5000;
+  const lateScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
+
+  // Verify scoring order
+  assert(quickScore > mediumScore);
+  assert(mediumScore > lateScore);
+  assert(lateScore >= 0);
+});
+
+Deno.test("DrawingGameEngine - endGame cleans up server buffer", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  let currentState = engine.startGame(gameState);
+
+  // Add some draw commands to initialize the buffer
+  const drawCommand: DrawingCommand = {
+    type: "start",
+    x: 100,
+    y: 150,
+    color: "#000000",
+    size: 5,
+    timestamp: Date.now(),
+  };
+
+  const drawMessage: DrawingClientMessage = {
+    type: "draw",
+    roomId: "room1",
+    playerId: "p1",
+    data: drawCommand,
+  };
+
+  currentState = engine.handleClientMessage(currentState, drawMessage).updatedState;
+
+  // End the game
+  const endedState = engine.endGame(currentState);
+
+  assertEquals(endedState.phase, "finished");
+  // Buffer should be cleaned up (no way to directly test, but ensuring no errors)
+});
+
+Deno.test("DrawingGameEngine - word is selected from word list", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Word should be non-empty and reasonable length
+  assert(startedState.gameData.currentWord.length > 0);
+  assert(startedState.gameData.currentWord.length < 20);
+  // Word should be a string
+  assertEquals(typeof startedState.gameData.currentWord, "string");
+});
+
+Deno.test("DrawingGameEngine - drawer gets word but other players don't see it", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+
+  // Current word should be set
+  assertNotEquals(startedState.gameData.currentWord, "");
+  // Current drawer should be set
+  assertEquals(startedState.gameData.currentDrawer, "p1");
+
+  // Note: In a real implementation, the server would send different
+  // game state to drawer vs. guessers. This test just verifies the
+  // word exists in the game state.
+});
+
+Deno.test("DrawingGameEngine - multiple players can guess correctly", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  const startedState = engine.startGame(gameState);
+  startedState.gameData.currentWord = "cat";
+
+  // Player 2 guesses correctly
+  const guess1: DrawingClientMessage = {
+    type: "guess",
+    roomId: "room1",
+    playerId: "p2",
+    data: { message: "cat" },
+  };
+
+  let currentState = engine.handleClientMessage(startedState, guess1).updatedState;
+  assertEquals(currentState.gameData.correctGuesses.length, 1);
+
+  // Player 3 also guesses correctly
+  const guess2: DrawingClientMessage = {
+    type: "guess",
+    roomId: "room1",
+    playerId: "p3",
+    data: { message: "cat" },
+  };
+
+  currentState = engine.handleClientMessage(currentState, guess2).updatedState;
+  assertEquals(currentState.gameData.correctGuesses.length, 2);
+
+  // Both players should have scores
+  assert(currentState.scores["p2"] > 0);
+  assert(currentState.scores["p3"] > 0);
+});
+
+Deno.test("DrawingGameEngine - clear command clears drawing data", () => {
+  const engine = new DrawingGameEngine();
+  const players = createTestPlayers();
+  const settings = createTestSettings();
+
+  const gameState = engine.initializeGame("room1", players, settings);
+  let currentState = engine.startGame(gameState);
+
+  // Add some drawing commands
+  const commands: DrawingCommand[] = [
+    { type: "start", x: 10, y: 20, color: "#000000", size: 5, timestamp: 1000 },
+    { type: "move", x: 15, y: 25, color: "#000000", size: 5, timestamp: 1001 },
+  ];
+
+  for (const command of commands) {
+    const drawMessage: DrawingClientMessage = {
+      type: "draw",
+      roomId: "room1",
+      playerId: "p1",
+      data: command,
+    };
+    currentState = engine.handleClientMessage(currentState, drawMessage).updatedState;
+  }
+
+  assertEquals(currentState.gameData.drawingData.length, 2);
+
+  // Send clear command
+  const clearCommand: DrawingCommand = {
+    type: "clear",
+    timestamp: Date.now(),
+  };
+
+  const clearMessage: DrawingClientMessage = {
+    type: "draw",
+    roomId: "room1",
+    playerId: "p1",
+    data: clearCommand,
+  };
+
+  currentState = engine.handleClientMessage(currentState, clearMessage).updatedState;
+
+  // Clear command should be added to drawing data
+  assertEquals(currentState.gameData.drawingData.length, 3);
+  assertEquals(currentState.gameData.drawingData[2].type, "clear");
+});
