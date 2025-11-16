@@ -92,9 +92,9 @@ Deno.test("DrawingGameEngine - validateGameAction allows guess during playing ph
   const settings = createTestSettings();
 
   const gameState = engine.initializeGame("room1", players, settings);
-  gameState.phase = "playing";
+  const modifiedState = { ...gameState, phase: "playing" as const };
 
-  const isValid = engine.validateGameAction(gameState, "p2", { type: "guess" });
+  const isValid = engine.validateGameAction(modifiedState, "p2", { type: "guess" });
   assertEquals(isValid, true);
 });
 
@@ -104,9 +104,9 @@ Deno.test("DrawingGameEngine - validateGameAction rejects guess during waiting p
   const settings = createTestSettings();
 
   const gameState = engine.initializeGame("room1", players, settings);
-  gameState.phase = "waiting";
+  const modifiedState = { ...gameState, phase: "waiting" as const };
 
-  const isValid = engine.validateGameAction(gameState, "p2", { type: "guess" });
+  const isValid = engine.validateGameAction(modifiedState, "p2", { type: "guess" });
   assertEquals(isValid, false);
 });
 
@@ -116,9 +116,9 @@ Deno.test("DrawingGameEngine - validateGameAction rejects unknown action types",
   const settings = createTestSettings();
 
   const gameState = engine.initializeGame("room1", players, settings);
-  gameState.phase = "playing";
+  const modifiedState = { ...gameState, phase: "playing" as const };
 
-  const isValid = engine.validateGameAction(gameState, "p2", { type: "unknown" });
+  const isValid = engine.validateGameAction(modifiedState, "p2", { type: "unknown" });
   assertEquals(isValid, false);
 });
 
@@ -130,8 +130,11 @@ Deno.test("DrawingGameEngine - handleClientMessage processes correct guess", () 
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  // Manually set a known word for testing
-  startedState.gameData.currentWord = "cat";
+  // Manually set a known word for testing (using immutable pattern)
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -140,7 +143,7 @@ Deno.test("DrawingGameEngine - handleClientMessage processes correct guess", () 
     data: { message: "cat" },
   };
 
-  const result = engine.handleClientMessage(startedState, guessMessage);
+  const result = engine.handleClientMessage(modifiedState, guessMessage);
 
   // Check that correct guess was recorded
   assertEquals(result.updatedState.gameData.correctGuesses.length, 1);
@@ -168,7 +171,10 @@ Deno.test("DrawingGameEngine - handleClientMessage processes incorrect guess", (
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  startedState.gameData.currentWord = "cat";
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -177,7 +183,7 @@ Deno.test("DrawingGameEngine - handleClientMessage processes incorrect guess", (
     data: { message: "dog" },
   };
 
-  const result = engine.handleClientMessage(startedState, guessMessage);
+  const result = engine.handleClientMessage(modifiedState, guessMessage);
 
   // Check that no correct guess was recorded
   assertEquals(result.updatedState.gameData.correctGuesses.length, 0);
@@ -200,7 +206,10 @@ Deno.test("DrawingGameEngine - handleClientMessage ignores duplicate correct gue
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  startedState.gameData.currentWord = "cat";
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -210,7 +219,7 @@ Deno.test("DrawingGameEngine - handleClientMessage ignores duplicate correct gue
   };
 
   // First guess
-  const result1 = engine.handleClientMessage(startedState, guessMessage);
+  const result1 = engine.handleClientMessage(modifiedState, guessMessage);
   const firstScore = result1.updatedState.scores["p2"];
 
   // Second guess (duplicate)
@@ -326,12 +335,12 @@ Deno.test("DrawingGameEngine - calculateScore returns higher score for faster gu
   const startedState = engine.startGame(gameState);
 
   // Fast guess (50 seconds remaining out of 60)
-  startedState.timeRemaining = 50000; // 50 seconds in milliseconds
-  const fastScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
+  const fastGuessState = { ...startedState, timeRemaining: 50000 }; // 50 seconds in milliseconds
+  const fastScore = engine.calculateScore(fastGuessState, "p2", { type: "correct_guess" });
 
   // Slow guess (10 seconds remaining out of 60)
-  startedState.timeRemaining = 10000; // 10 seconds in milliseconds
-  const slowScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
+  const slowGuessState = { ...startedState, timeRemaining: 10000 }; // 10 seconds in milliseconds
+  const slowScore = engine.calculateScore(slowGuessState, "p2", { type: "correct_guess" });
 
   // Fast guess should have higher score
   assertNotEquals(fastScore, slowScore);
@@ -395,7 +404,10 @@ Deno.test("DrawingGameEngine - guess is case-insensitive", () => {
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  startedState.gameData.currentWord = "cat";
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -404,7 +416,7 @@ Deno.test("DrawingGameEngine - guess is case-insensitive", () => {
     data: { message: "CAT" }, // Uppercase
   };
 
-  const result = engine.handleClientMessage(startedState, guessMessage);
+  const result = engine.handleClientMessage(modifiedState, guessMessage);
 
   // Should match despite different case
   assertEquals(result.updatedState.gameData.correctGuesses.length, 1);
@@ -419,7 +431,10 @@ Deno.test("DrawingGameEngine - guess trims whitespace", () => {
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  startedState.gameData.currentWord = "cat";
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -428,7 +443,7 @@ Deno.test("DrawingGameEngine - guess trims whitespace", () => {
     data: { message: "  cat  " }, // With whitespace
   };
 
-  const result = engine.handleClientMessage(startedState, guessMessage);
+  const result = engine.handleClientMessage(modifiedState, guessMessage);
 
   // Should match after trimming
   assertEquals(result.updatedState.gameData.correctGuesses.length, 1);
@@ -443,7 +458,10 @@ Deno.test("DrawingGameEngine - correct guess shows masked message", () => {
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  startedState.gameData.currentWord = "cat";
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   const guessMessage: DrawingClientMessage = {
     type: "guess",
@@ -452,7 +470,7 @@ Deno.test("DrawingGameEngine - correct guess shows masked message", () => {
     data: { message: "cat" },
   };
 
-  const result = engine.handleClientMessage(startedState, guessMessage);
+  const result = engine.handleClientMessage(modifiedState, guessMessage);
 
   const chatMessage = result.serverMessages.find((m) => m.type === "chat-message");
   assertExists(chatMessage);
@@ -754,17 +772,17 @@ Deno.test("DrawingGameEngine - time remaining is reset on new round", () => {
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
 
-  // Simulate time passing
-  startedState.timeRemaining = 30000; // 30 seconds remaining
+  // Simulate time passing (create new state object to preserve immutability)
+  const modifiedState = { ...startedState, timeRemaining: 30000 }; // 30 seconds remaining
 
   const nextRoundMessage: DrawingClientMessage = {
     type: "next-round",
     roomId: "room1",
-    playerId: startedState.gameData.currentDrawer,
+    playerId: modifiedState.gameData.currentDrawer,
     data: {},
   };
 
-  const result = engine.handleClientMessage(startedState, nextRoundMessage);
+  const result = engine.handleClientMessage(modifiedState, nextRoundMessage);
 
   // Time should be reset to full round time
   assertEquals(result.updatedState.timeRemaining, 120000); // 120 seconds in milliseconds
@@ -777,7 +795,12 @@ Deno.test("DrawingGameEngine - multiple players can guess correctly", () => {
 
   const gameState = engine.initializeGame("room1", players, settings);
   const startedState = engine.startGame(gameState);
-  startedState.gameData.currentWord = "cat";
+
+  // Set word using immutable pattern
+  const modifiedState = {
+    ...startedState,
+    gameData: { ...startedState.gameData, currentWord: "cat" },
+  };
 
   // Player 2 guesses correctly
   const guess1: DrawingClientMessage = {
@@ -787,7 +810,7 @@ Deno.test("DrawingGameEngine - multiple players can guess correctly", () => {
     data: { message: "cat" },
   };
 
-  let currentState = engine.handleClientMessage(startedState, guess1).updatedState;
+  let currentState = engine.handleClientMessage(modifiedState, guess1).updatedState;
   assertEquals(currentState.gameData.correctGuesses.length, 1);
 
   // Player 3 also guesses correctly
