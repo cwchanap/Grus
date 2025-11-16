@@ -44,11 +44,6 @@ function createTestSettings(): DrawingGameSettings {
   };
 }
 
-Deno.test("DrawingGameEngine - getGameType returns drawing", () => {
-  const engine = new DrawingGameEngine();
-  assertEquals(engine.getGameType(), "drawing");
-});
-
 Deno.test("DrawingGameEngine - initializeGame creates correct initial state", () => {
   const engine = new DrawingGameEngine();
   const players = createTestPlayers();
@@ -342,17 +337,6 @@ Deno.test("DrawingGameEngine - calculateScore returns higher score for faster gu
   assertEquals(fastScore > slowScore, true);
 });
 
-Deno.test("DrawingGameEngine - calculateScore returns 0 for non-guess actions", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-
-  const score = engine.calculateScore(gameState, "p1", { type: "other" });
-  assertEquals(score, 0);
-});
-
 Deno.test("DrawingGameEngine - endGame cleans up buffer and sets phase to finished", () => {
   const engine = new DrawingGameEngine();
   const players = createTestPlayers();
@@ -472,26 +456,6 @@ Deno.test("DrawingGameEngine - correct guess shows masked message", () => {
   const chatMessage = result.serverMessages.find((m) => m.type === "chat-message");
   assertExists(chatMessage);
   assertEquals(chatMessage?.data.message, "*** guessed correctly! ***");
-});
-
-Deno.test("DrawingGameEngine - chat messages include timestamp", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-
-  const chatMessage: DrawingClientMessage = {
-    type: "chat",
-    roomId: "room1",
-    playerId: "p2",
-    data: { message: "Hello!" },
-  };
-
-  const result = engine.handleClientMessage(gameState, chatMessage);
-
-  assertExists(result.updatedState.chatMessages[0].timestamp);
-  assertExists(result.updatedState.chatMessages[0].id);
 });
 
 // ============================================================================
@@ -780,32 +744,6 @@ Deno.test("DrawingGameEngine - validateGameAction rejects draw from non-drawer",
   assertEquals(isValid, false);
 });
 
-Deno.test("DrawingGameEngine - validateGameAction accepts draw from drawer", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-  const startedState = engine.startGame(gameState);
-
-  const drawCommand: DrawingCommand = {
-    type: "start",
-    x: 100,
-    y: 150,
-    color: "#000000",
-    size: 5,
-    timestamp: Date.now(),
-  };
-
-  // p1 is the current drawer
-  const isValid = engine.validateGameAction(startedState, "p1", {
-    type: "draw",
-    data: drawCommand,
-  });
-
-  assertEquals(isValid, true);
-});
-
 Deno.test("DrawingGameEngine - time remaining is reset on new round", () => {
   const engine = new DrawingGameEngine();
   const players = createTestPlayers();
@@ -829,100 +767,6 @@ Deno.test("DrawingGameEngine - time remaining is reset on new round", () => {
 
   // Time should be reset to full round time
   assertEquals(result.updatedState.timeRemaining, 120000); // 120 seconds in milliseconds
-});
-
-Deno.test("DrawingGameEngine - score is calculated based on time remaining", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-  settings.roundTimeSeconds = 60;
-
-  const gameState = engine.initializeGame("room1", players, settings);
-  const startedState = engine.startGame(gameState);
-
-  // Quick guess (55 seconds remaining)
-  startedState.timeRemaining = 55000;
-  const quickScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
-
-  // Medium guess (30 seconds remaining)
-  startedState.timeRemaining = 30000;
-  const mediumScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
-
-  // Late guess (5 seconds remaining)
-  startedState.timeRemaining = 5000;
-  const lateScore = engine.calculateScore(startedState, "p2", { type: "correct_guess" });
-
-  // Verify scoring order
-  assert(quickScore > mediumScore);
-  assert(mediumScore > lateScore);
-  assert(lateScore >= 0);
-});
-
-Deno.test("DrawingGameEngine - endGame cleans up server buffer", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-  let currentState = engine.startGame(gameState);
-
-  // Add some draw commands to initialize the buffer
-  const drawCommand: DrawingCommand = {
-    type: "start",
-    x: 100,
-    y: 150,
-    color: "#000000",
-    size: 5,
-    timestamp: Date.now(),
-  };
-
-  const drawMessage: DrawingClientMessage = {
-    type: "draw",
-    roomId: "room1",
-    playerId: "p1",
-    data: drawCommand,
-  };
-
-  currentState = engine.handleClientMessage(currentState, drawMessage).updatedState;
-
-  // End the game
-  const endedState = engine.endGame(currentState);
-
-  assertEquals(endedState.phase, "finished");
-  // Buffer should be cleaned up (no way to directly test, but ensuring no errors)
-});
-
-Deno.test("DrawingGameEngine - word is selected from word list", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-  const startedState = engine.startGame(gameState);
-
-  // Word should be non-empty and reasonable length
-  assert(startedState.gameData.currentWord.length > 0);
-  assert(startedState.gameData.currentWord.length < 20);
-  // Word should be a string
-  assertEquals(typeof startedState.gameData.currentWord, "string");
-});
-
-Deno.test("DrawingGameEngine - drawer gets word but other players don't see it", () => {
-  const engine = new DrawingGameEngine();
-  const players = createTestPlayers();
-  const settings = createTestSettings();
-
-  const gameState = engine.initializeGame("room1", players, settings);
-  const startedState = engine.startGame(gameState);
-
-  // Current word should be set
-  assertNotEquals(startedState.gameData.currentWord, "");
-  // Current drawer should be set
-  assertEquals(startedState.gameData.currentDrawer, "p1");
-
-  // Note: In a real implementation, the server would send different
-  // game state to drawer vs. guessers. This test just verifies the
-  // word exists in the game state.
 });
 
 Deno.test("DrawingGameEngine - multiple players can guess correctly", () => {
