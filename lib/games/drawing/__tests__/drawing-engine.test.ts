@@ -1,4 +1,4 @@
-import { assertEquals, assertExists, assertNotEquals } from "$std/testing/asserts.ts";
+import { assert, assertEquals, assertExists, assertNotEquals } from "$std/testing/asserts.ts";
 import { DrawingGameEngine } from "../drawing-engine.ts";
 import {
   DrawingClientMessage,
