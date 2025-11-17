@@ -66,9 +66,9 @@ if (args.reporter) {
   playwrightArgs.push("--reporter", "line");
 }
 
-// Run Playwright tests
+// Run Playwright tests via Deno's npm compatibility layer
 const command = new Deno.Command(Deno.execPath(), {
-  args: ["run", "-A", "npm:@playwright/test@1.40.0", ...playwrightArgs],
+  args: ["run", "-A", "npm:playwright", ...playwrightArgs],
   cwd: Deno.cwd(),
   stdout: "inherit",
   stderr: "inherit",
