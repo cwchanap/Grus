@@ -175,13 +175,18 @@ export function validateDrawingCommand(command: any): command is DrawingCommand 
     return false;
   }
 
-  if (typeof command.timestamp !== "number") {
+  if (typeof command.timestamp !== "number" || Number.isNaN(command.timestamp)) {
     return false;
   }
 
   // Validate coordinates for start and move commands
   if (command.type === "start" || command.type === "move") {
     if (typeof command.x !== "number" || typeof command.y !== "number") {
+      return false;
+    }
+
+    // Check for NaN values
+    if (Number.isNaN(command.x) || Number.isNaN(command.y)) {
       return false;
     }
 
@@ -200,7 +205,7 @@ export function validateDrawingCommand(command: any): command is DrawingCommand 
 
   // Validate brush size
   if (command.size !== undefined) {
-    if (typeof command.size !== "number" || command.size < 1 || command.size > 50) {
+    if (typeof command.size !== "number" || Number.isNaN(command.size) || command.size < 1 || command.size > 50) {
       return false;
     }
   }
