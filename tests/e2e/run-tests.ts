@@ -66,10 +66,10 @@ if (args.reporter) {
   playwrightArgs.push("--reporter", "line");
 }
 
-// Run Playwright tests via Deno's npm compatibility layer
-// Version must match the one used in deno.json and playwright:install task
-const command = new Deno.Command(Deno.execPath(), {
-  args: ["run", "-A", "npm:playwright@1.40.0", ...playwrightArgs],
+// Run Playwright tests via npx (native Node.js, not Deno's npm layer)
+// This avoids Deno's Node.js polyfill incompatibilities with Playwright workers
+const command = new Deno.Command("npx", {
+  args: ["--yes", "playwright@1.40.0", "test", ...playwrightArgs],
   cwd: Deno.cwd(),
   stdout: "inherit",
   stderr: "inherit",
