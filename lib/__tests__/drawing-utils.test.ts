@@ -114,11 +114,13 @@ Deno.test("Drawing Utils - Validation", () => {
   assert(!validateDrawingCommand({ type: "invalid", timestamp: 1000 }));
   assert(!validateDrawingCommand({ type: "start", timestamp: 1000 })); // Missing x, y
   assert(!validateDrawingCommand({ type: "start", x: 100, y: 200, timestamp: "invalid" }));
-  assert(!validateDrawingCommand({ type: "start", x: -10, y: 200, timestamp: 1000 })); // Out of bounds
+  // Out of bounds
+  assert(!validateDrawingCommand({ type: "start", x: -10, y: 200, timestamp: 1000 }));
   assert(
     !validateDrawingCommand({ type: "start", x: 100, y: 200, color: "invalid", timestamp: 1000 }),
   );
-  assert(!validateDrawingCommand({ type: "start", x: 100, y: 200, size: 100, timestamp: 1000 })); // Size too large
+  // Size too large
+  assert(!validateDrawingCommand({ type: "start", x: 100, y: 200, size: 100, timestamp: 1000 }));
 });
 
 Deno.test("Drawing Utils - Throttler", async () => {

@@ -156,8 +156,8 @@ export function decompressDrawingData(compressedData: string): DrawingCommand[] 
       size: cmd.s,
       timestamp: cmd.ts,
     }));
-  } catch (error) {
-    console.error("Failed to decompress drawing data:", error);
+  } catch (_error) {
+    // Silently return empty array on decompression failure
     return [];
   }
 }
@@ -205,7 +205,10 @@ export function validateDrawingCommand(command: any): command is DrawingCommand 
 
   // Validate brush size
   if (command.size !== undefined) {
-    if (typeof command.size !== "number" || Number.isNaN(command.size) || command.size < 1 || command.size > 50) {
+    if (
+      typeof command.size !== "number" || Number.isNaN(command.size) ||
+      command.size < 1 || command.size > 50
+    ) {
       return false;
     }
   }
