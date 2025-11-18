@@ -30,6 +30,9 @@ jobs:
     - name: Install dependencies
       run: deno cache --reload main.ts dev.ts
     
+    - name: Cache Playwright dependencies
+      run: deno cache --reload playwright.config.ts tests/e2e/**/*.ts
+    
     - name: Install Playwright Browsers
       run: deno task playwright:install
     
