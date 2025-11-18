@@ -31,7 +31,10 @@ jobs:
       run: deno cache --reload main.ts dev.ts
     
     - name: Cache Playwright dependencies
-      run: deno cache --reload playwright.config.ts tests/e2e/**/*.ts
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/deno
+        key: ${{ runner.os }}-playwright-${{ hashFiles('playwright.config.ts', 'tests/e2e/**/*.ts') }}
     
     - name: Install Playwright Browsers
       run: deno task playwright:install
