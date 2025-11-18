@@ -67,8 +67,9 @@ if (args.reporter) {
 }
 
 // Run Playwright tests via Deno's npm compatibility layer
+// Version must match the one used in deno.json and playwright:install task
 const command = new Deno.Command(Deno.execPath(), {
-  args: ["run", "-A", "npm:playwright", ...playwrightArgs],
+  args: ["run", "-A", "npm:playwright@1.40.0", ...playwrightArgs],
   cwd: Deno.cwd(),
   stdout: "inherit",
   stderr: "inherit",
