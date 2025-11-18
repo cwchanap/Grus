@@ -30,14 +30,11 @@ jobs:
     - name: Install dependencies
       run: deno cache --reload main.ts dev.ts
     
-    - name: Cache Playwright dependencies
-      uses: actions/cache@v3
-      with:
-        path: ~/.cache/deno
-        key: ${{ runner.os }}-playwright-${{ hashFiles('playwright.config.ts', 'tests/e2e/**/*.ts') }}
+    - name: Install Playwright packages
+      run: npm install --no-save playwright@1.40.0 @playwright/test@1.40.0
     
     - name: Install Playwright Browsers
-      run: deno task playwright:install
+      run: npx playwright@1.40.0 install
     
     - name: Run Playwright tests
       run: deno task test:e2e
