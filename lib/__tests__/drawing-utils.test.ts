@@ -213,19 +213,23 @@ Deno.test("Drawing Utils - Validation with boundary values", () => {
   }));
 
   // Test just outside boundaries
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: -1, // Just below min
-    y: 100,
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: -1, // Just below min
+      y: 100,
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 2001, // Just above max
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 2001, // Just above max
+      timestamp: 1000,
+    }),
+  );
 
   // Test brush size boundaries
   assert(validateDrawingCommand({
@@ -244,21 +248,25 @@ Deno.test("Drawing Utils - Validation with boundary values", () => {
     timestamp: 1000,
   }));
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    size: 0, // Below min
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      size: 0, // Below min
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    size: 51, // Above max
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      size: 51, // Above max
+      timestamp: 1000,
+    }),
+  );
 });
 
 Deno.test("Drawing Utils - Validation with various color formats", () => {
@@ -288,37 +296,45 @@ Deno.test("Drawing Utils - Validation with various color formats", () => {
   }));
 
   // Invalid color formats
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    color: "#fff", // Too short
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      color: "#fff", // Too short
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    color: "000000", // Missing #
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      color: "000000", // Missing #
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    color: "#GGGGGG", // Invalid hex chars
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      color: "#GGGGGG", // Invalid hex chars
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: 100,
-    color: "rgb(255,0,0)", // Wrong format
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: 100,
+      color: "rgb(255,0,0)", // Wrong format
+      timestamp: 1000,
+    }),
+  );
 });
 
 Deno.test("Drawing Utils - Validation with invalid types and structures", () => {
@@ -329,44 +345,56 @@ Deno.test("Drawing Utils - Validation with invalid types and structures", () => 
   assert(!validateDrawingCommand(undefined));
 
   // Missing required fields
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    // Missing y
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      // Missing y
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "move",
-    // Missing x and y
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "move",
+      // Missing x and y
+      timestamp: 1000,
+    }),
+  );
 
   // Invalid timestamp types
-  assert(!validateDrawingCommand({
-    type: "clear",
-    timestamp: "1000", // String instead of number
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "clear",
+      timestamp: "1000", // String instead of number
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "clear",
-    timestamp: null,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "clear",
+      timestamp: null,
+    }),
+  );
 
   // Invalid coordinate types
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: "100", // String instead of number
-    y: 100,
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: "100", // String instead of number
+      y: 100,
+      timestamp: 1000,
+    }),
+  );
 
-  assert(!validateDrawingCommand({
-    type: "start",
-    x: 100,
-    y: NaN,
-    timestamp: 1000,
-  }));
+  assert(
+    !validateDrawingCommand({
+      type: "start",
+      x: 100,
+      y: NaN,
+      timestamp: 1000,
+    }),
+  );
 });
 
 Deno.test("Drawing Utils - Optimization with edge cases", () => {
