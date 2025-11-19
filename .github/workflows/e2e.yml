@@ -31,7 +31,7 @@ jobs:
       run: deno cache --reload main.ts dev.ts
     
     - name: Install Playwright packages
-      run: npm install --no-save playwright@1.40.0 @playwright/test@1.40.0
+      run: npm install --no-save --legacy-peer-deps playwright@1.40.0 @playwright/test@1.40.0
     
     - name: Install Playwright Browsers
       run: npx playwright@1.40.0 install
