@@ -1,0 +1,10 @@
+{
+  "name": "grus-e2e-tests",
+  "private": true,
+  "devDependencies": {
+    "@playwright/test": "1.40.0"
+  },
+  "scripts": {
+    "test": "playwright test"
+  }
+}
