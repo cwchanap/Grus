@@ -38,8 +38,9 @@ Examples:
   Deno.exit(0);
 }
 
-// Build the Playwright command
-const playwrightArgs = ["test", "--config", "../../../playwright.config.ts"];
+// Build the Playwright command  
+// Use tests/e2e as working directory with its own playwright.config.ts
+const playwrightArgs = ["test"];
 
 if (args.headed) {
   playwrightArgs.push("--headed");
@@ -66,11 +67,11 @@ if (args.reporter) {
   playwrightArgs.push("--reporter", "line");
 }
 
-// Run Playwright tests via npx (native Node.js, not Deno's npm layer)
-// This avoids Deno's Node.js polyfill incompatibilities with Playwright workers
+// Run Playwright via npx from tests/e2e directory where it has its own config
+// This uses the npm-only Playwright from tests/e2e/package.json, avoiding conflicts with Deno
 const command = new Deno.Command("npx", {
   args: ["--yes", "playwright", "test", ...playwrightArgs],
-  cwd: `${Deno.cwd()}/tests/e2e/node-runner`,
+  cwd: `${Deno.cwd()}/tests/e2e`,
   stdout: "inherit",
   stderr: "inherit",
 });
