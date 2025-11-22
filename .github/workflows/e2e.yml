@@ -31,11 +31,11 @@ jobs:
       run: deno cache --reload main.ts dev.ts
     
     - name: Install Playwright packages
-      working-directory: tests/e2e/node-runner
+      working-directory: tests/e2e
       run: npm install
     
     - name: Install Playwright Browsers
-      working-directory: tests/e2e/node-runner
+      working-directory: tests/e2e
       run: npx playwright install
     
     - name: Run Playwright tests
