@@ -5,7 +5,7 @@
  * This script handles running Playwright tests with proper Deno integration
  */
 
-import { parseArgs } from "$std/cli/parse_args.ts";
+import { parseArgs } from "https://deno.land/std@0.216.0/cli/parse_args.ts";
 
 const args = parseArgs(Deno.args, {
   boolean: ["headed", "debug", "help"],
