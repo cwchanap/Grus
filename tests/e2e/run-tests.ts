@@ -39,7 +39,7 @@ Examples:
 }
 
 // Build the Playwright command
-const playwrightArgs = ["test"];
+const playwrightArgs = ["test", "--config", "../../../playwright.config.ts"];
 
 if (args.headed) {
   playwrightArgs.push("--headed");
@@ -69,8 +69,8 @@ if (args.reporter) {
 // Run Playwright tests via npx (native Node.js, not Deno's npm layer)
 // This avoids Deno's Node.js polyfill incompatibilities with Playwright workers
 const command = new Deno.Command("npx", {
-  args: ["--yes", "playwright@1.40.0", "test", ...playwrightArgs],
-  cwd: Deno.cwd(),
+  args: ["--yes", "playwright", "test", ...playwrightArgs],
+  cwd: `${Deno.cwd()}/tests/e2e/node-runner`,
   stdout: "inherit",
   stderr: "inherit",
 });
