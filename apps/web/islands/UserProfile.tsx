@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import type { JSX } from "preact";
 import { Button } from "../components/ui/button.tsx";
 import {
   Card,
@@ -255,7 +256,8 @@ export default function UserProfile({ user }: UserProfileProps) {
                     <div className="space-y-2">
                       <Input
                         value={displayName}
-                        onInput={(e) => setDisplayName((e.target as HTMLInputElement).value)}
+                        onInput={(e: JSX.TargetedEvent<HTMLInputElement, Event>) =>
+                          setDisplayName((e.target as HTMLInputElement).value)}
                         placeholder="Enter display name"
                         maxLength={100}
                         disabled={nameLoading}

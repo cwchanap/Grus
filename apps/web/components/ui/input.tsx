@@ -1,9 +1,12 @@
 import { forwardRef } from "preact/compat";
+import { type JSX } from "preact";
 import { cn } from "../../lib/utils.ts";
 
-export type InputProps = preact.JSX.HTMLAttributes<HTMLInputElement>;
+export type InputProps = JSX.HTMLAttributes<HTMLInputElement> & {
+  [key: string]: unknown;
+};
 
-const Input = forwardRef<HTMLInputElement, preact.JSX.HTMLAttributes<HTMLInputElement>>(
+const Input = forwardRef<HTMLInputElement, InputProps>(
   ({ className, type, ...props }, ref) => {
     return (
       <input

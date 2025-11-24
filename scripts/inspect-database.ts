@@ -14,7 +14,7 @@
  *   --detailed   Show detailed information for all tables
  */
 
-import { getKVRoomService, KVRoomService } from "../lib/db/index.ts";
+import { getKVRoomService, KVRoomService } from "../apps/web/lib/db/index.ts";
 
 interface DatabaseStats {
   totalRooms: number;

@@ -11,8 +11,8 @@
  * See docs/authentication-setup.md for setup instructions.
  */
 
-import { createUser, createSession } from "../lib/auth/auth-utils.ts";
-import { getPrismaClient } from "../lib/auth/prisma-client.ts";
+import { createUser, createSession } from "../apps/web/lib/auth/auth-utils.ts";
+import { getPrismaClient } from "../apps/web/lib/auth/prisma-client.ts";
 
 const TEST_ACCOUNT = {
   email: "test@grus.dev",
