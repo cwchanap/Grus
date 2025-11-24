@@ -1,5 +1,33 @@
 {
   "name": "@grus/web",
   "version": "0.1.0",
-  "exports": "./main.ts"
+  "exports": "./main.ts",
+  "imports": {
+    "$fresh/": "https://deno.land/x/fresh@1.7.3/",
+    "preact": "https://esm.sh/preact@10.22.0",
+    "preact/": "https://esm.sh/preact@10.22.0/",
+    "@preact/signals": "https://esm.sh/*@preact/signals@1.2.2",
+    "@preact/signals-core": "https://esm.sh/*@preact/signals-core@1.5.1",
+    "tailwindcss": "npm:tailwindcss@3.4.1",
+    "tailwindcss/": "npm:/tailwindcss@3.4.1/",
+    "tailwindcss/plugin": "npm:/tailwindcss@3.4.1/plugin.js",
+    "tailwindcss-animate": "npm:tailwindcss-animate@1.0.7",
+    "class-variance-authority": "https://esm.sh/class-variance-authority@0.7.0",
+    "clsx": "https://esm.sh/clsx@2.1.0",
+    "tailwind-merge": "https://esm.sh/tailwind-merge@2.2.1",
+    "$std/": "https://deno.land/std@0.216.0/",
+    "pixi.js": "npm:pixi.js@8.0.0",
+    "node:process": "data:application/javascript,export default {env:{}};",
+    "node:crypto": "data:application/javascript,export default {randomUUID:()=>Date.now().toString(36)+Math.random().toString(36).substr(2,9)};",
+    "@prisma/client": "npm:@prisma/client@5.18.0",
+    "prisma": "npm:prisma@5.18.0",
+    "@neondatabase/serverless": "npm:@neondatabase/serverless@0.9.3",
+    "@prisma/adapter-neon": "npm:@prisma/adapter-neon@5.18.0",
+    "bcryptjs": "npm:bcryptjs@2.4.3",
+    "jsonwebtoken": "npm:jsonwebtoken@9.0.2",
+    "@types/bcryptjs": "npm:@types/bcryptjs@2.4.6",
+    "@types/jsonwebtoken": "npm:@types/jsonwebtoken@9.0.6",
+    "jose": "https://deno.land/x/jose@v4.14.4/index.ts",
+    "lucide-react": "https://esm.sh/lucide-react@0.263.1?alias=react:preact/compat&external=preact"
+  }
 }
