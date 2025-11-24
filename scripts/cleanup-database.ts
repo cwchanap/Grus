@@ -15,7 +15,7 @@
  *   --limit=N    Limit number of records to process (default: 100)
  */
 
-import { getKVRoomService, KVRoomService } from "../lib/db/index.ts";
+import { getKVRoomService, KVRoomService } from "../apps/web/lib/db/index.ts";
 
 interface CleanupOptions {
   dryRun: boolean;

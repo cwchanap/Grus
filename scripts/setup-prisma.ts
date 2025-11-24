@@ -6,7 +6,7 @@
  */
 
 import "$std/dotenv/load.ts";
-import { getPrismaClient, closePrismaClient } from "../lib/auth/prisma-client.ts";
+import { getPrismaClient, closePrismaClient } from "../apps/web/lib/auth/prisma-client.ts";
 
 async function setupPrisma() {
   console.log("🔧 Setting up Prisma and database...\n");

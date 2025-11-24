@@ -1,0 +1,12 @@
+{
+  "name": "@grus/e2e",
+  "version": "0.1.0",
+  "fmt": {
+    "include": [],
+    "exclude": ["**/*"]
+  },
+  "lint": {
+    "include": [],
+    "exclude": ["**/*"]
+  }
+}

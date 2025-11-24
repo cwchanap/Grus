@@ -1,5 +1,6 @@
 import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef } from "preact/compat";
+import { type JSX } from "preact";
 import { cn } from "../../lib/utils.ts";
 
 const labelVariants = cva(
@@ -8,8 +9,9 @@ const labelVariants = cva(
 
 const Label = forwardRef<
   HTMLLabelElement,
-  & preact.JSX.HTMLAttributes<HTMLLabelElement>
+  & JSX.HTMLAttributes<HTMLLabelElement>
   & VariantProps<typeof labelVariants>
+  & { [key: string]: unknown }
 >(({ className, ...props }, ref) => (
   <label
     ref={ref}
