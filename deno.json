@@ -113,5 +113,5 @@
     "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
     "strict": true
   },
-  "nodeModulesDir": "auto"
+  "nodeModulesDir": true
 }
