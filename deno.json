@@ -6,7 +6,7 @@
     "cli": "echo \"import '\\$fresh/src/dev/cli.ts'\" | deno run --unstable -A -",
     "manifest": "deno task cli manifest $(pwd)",
     "start": "deno run -A --unstable-kv --watch=apps/web/static/,apps/web/routes/ apps/web/dev.ts",
-    "build": "deno run -A --unstable-kv apps/web/dev.ts build",
+    "build": "deno run -A --unstable-kv apps/web/dev.ts build && deno run -A scripts/sync-fresh-build.ts",
     "preview": "deno run -A --unstable-kv apps/web/main.ts",
     "update": "deno run -A -r https://fresh.deno.dev/update .",
     "test": "deno test --allow-all --unstable-kv apps/web/lib/**/__tests__/*.ts apps/web/islands/**/__tests__/*.tsx apps/web/routes/**/__tests__/*.ts apps/web/components/**/__tests__/*.tsx",
@@ -113,5 +113,5 @@
     "lib": ["dom", "dom.iterable", "dom.asynciterable", "deno.ns", "deno.unstable", "webworker"],
     "strict": true
   },
-  "nodeModulesDir": true
+  "nodeModulesDir": "auto"
 }
