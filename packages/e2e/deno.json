@@ -1,6 +1,7 @@
 {
   "name": "@grus/e2e",
   "version": "0.1.0",
+  "exports": "./mod.ts",
   "fmt": {
     "include": [],
     "exclude": ["**/*"]
