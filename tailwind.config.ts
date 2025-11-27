@@ -3,7 +3,9 @@ import tailwindAnimate from "tailwindcss-animate";
 
 export default {
   content: [
-    "{routes,islands,components}/**/*.{ts,tsx,js,jsx}",
+    "./apps/web/{routes,islands,components}/**/*.{ts,tsx,js,jsx}",
+    "./apps/web/lib/**/*.{ts,tsx,js,jsx}",
+    "./apps/web/static/**/*.{css,html}",
   ],
   darkMode: ["class"],
   theme: {
