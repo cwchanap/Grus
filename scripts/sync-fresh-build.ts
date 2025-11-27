@@ -9,7 +9,7 @@ const rootFreshDir = join(repoRoot, "_fresh");
 if (!await exists(webFreshDir)) {
   throw new Error(
     `Expected Fresh build output at ${webFreshDir}, but it does not exist. ` +
-      "Make sure 'deno run apps/web/dev.ts build' completed successfully.",
+      "Make sure 'deno task build' completed successfully.",
   );
 }
 
