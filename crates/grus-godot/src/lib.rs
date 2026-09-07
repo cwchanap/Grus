@@ -5,8 +5,8 @@ use godot::prelude::{ExtensionLibrary, ToGodot, Variant, gdextension};
 use godot_bevy::plugins::event_bridge::AddGodotEventAppExt;
 use godot_bevy::prelude::*;
 use grus_sim::{
-    GridMap, MapFixture, SIM_STEP_SECONDS, SimPosition, TeamId, Unit, UnitCommand,
-    UnitCommandKind, UnitId, apply_command, spawn_unit, step_movement,
+    GridMap, MapFixture, SIM_STEP_SECONDS, SimPosition, TeamId, Unit, UnitCommand, UnitCommandKind,
+    UnitId, apply_command, spawn_unit, step_movement,
 };
 
 #[derive(Clone, Debug, Event)]
