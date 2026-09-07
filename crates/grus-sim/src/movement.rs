@@ -1,10 +1,13 @@
 use bevy::math::Vec2;
-use bevy::prelude::{Component, World};
+use bevy::prelude::{Component, Entity, World};
 
 use crate::ids::{TeamId, UnitId};
 use crate::map::GridMap;
 
 pub const SIM_STEP_SECONDS: f32 = 0.05;
+const WAYPOINT_EPSILON: f32 = 0.0001;
+const SEPARATION_DISTANCE: f32 = 0.6;
+const MAX_SEPARATION_STEP: f32 = 0.08;
 
 #[derive(Clone, Copy, Component, Debug)]
 pub struct Unit {
@@ -34,8 +37,126 @@ pub struct MoveOrder {
     pub next: usize,
 }
 
-pub fn step_movement(_world: &mut World, _map: &GridMap, _delta_seconds: f32) {
-    // RED phase: movement behavior is implemented after these tests fail.
+#[derive(Clone, Debug)]
+struct MovementSnapshot {
+    entity: Entity,
+    unit: Unit,
+    position: SimPosition,
+    order: Option<MoveOrder>,
+}
+
+pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
+    let snapshots = {
+        let mut query = world.query::<(Entity, &Unit, &SimPosition, Option<&MoveOrder>)>();
+        query
+            .iter(world)
+            .map(|(entity, unit, position, order)| MovementSnapshot {
+                entity,
+                unit: *unit,
+                position: *position,
+                order: order.cloned(),
+            })
+            .collect::<Vec<_>>()
+    };
+
+    for snapshot in &snapshots {
+        let mut position = snapshot.position;
+        position.previous = snapshot.position.current;
+        let mut order = snapshot.order.clone();
+
+        if let Some(active_order) = order.as_mut() {
+            let route_candidate = advance_along_route(
+                snapshot.position.current,
+                active_order,
+                snapshot.unit.speed * delta_seconds.max(0.0),
+            );
+
+            let mut candidate = route_candidate;
+            if map.is_walkable(map.world_to_cell(candidate)) {
+                let separation = separation_for(snapshot, &snapshots);
+                let separated = candidate + separation;
+                if map.is_walkable(map.world_to_cell(separated)) {
+                    candidate = separated;
+                }
+                position.current = candidate;
+            }
+
+            if active_order.next >= active_order.waypoints.len() {
+                order = None;
+            }
+        }
+
+        let mut entity = world.entity_mut(snapshot.entity);
+        entity.insert(position);
+        if let Some(order) = order {
+            entity.insert(order);
+        } else {
+            entity.remove::<MoveOrder>();
+        }
+    }
+}
+
+fn advance_along_route(mut current: Vec2, order: &mut MoveOrder, mut remaining: f32) -> Vec2 {
+    while order.next < order.waypoints.len() {
+        let target = order.waypoints[order.next];
+        let offset = target - current;
+        let distance = offset.length();
+
+        if distance <= WAYPOINT_EPSILON {
+            current = target;
+            order.next += 1;
+            continue;
+        }
+
+        if remaining + WAYPOINT_EPSILON >= distance {
+            current = target;
+            remaining = (remaining - distance).max(0.0);
+            order.next += 1;
+            if remaining <= WAYPOINT_EPSILON {
+                break;
+            }
+        } else {
+            current += offset / distance * remaining;
+            break;
+        }
+    }
+
+    current
+}
+
+fn separation_for(snapshot: &MovementSnapshot, all: &[MovementSnapshot]) -> Vec2 {
+    let mut separation = Vec2::ZERO;
+
+    for other in all {
+        if other.entity == snapshot.entity {
+            continue;
+        }
+
+        let offset = snapshot.position.current - other.position.current;
+        let distance = offset.length();
+        if distance >= SEPARATION_DISTANCE {
+            continue;
+        }
+
+        let direction = if distance <= WAYPOINT_EPSILON {
+            if snapshot.unit.id < other.unit.id {
+                Vec2::NEG_X
+            } else {
+                Vec2::X
+            }
+        } else {
+            offset / distance
+        };
+        let strength = 1.0 - (distance / SEPARATION_DISTANCE);
+        separation += direction * strength;
+    }
+
+    let length = separation.length();
+    if length > MAX_SEPARATION_STEP {
+        separation / length * MAX_SEPARATION_STEP
+    } else {
+        separation
+    }
 }
 
 #[cfg(test)]
