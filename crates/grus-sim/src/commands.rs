@@ -155,11 +155,7 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
     outcome
 }
 
-fn owned_entity(
-    world: &World,
-    id: UnitId,
-    issuer: TeamId,
-) -> Result<Entity, CommandRejectReason> {
+fn owned_entity(world: &World, id: UnitId, issuer: TeamId) -> Result<Entity, CommandRejectReason> {
     let entity = world
         .get_resource::<UnitIndex>()
         .and_then(|index| index.entity(id))
