@@ -59,13 +59,7 @@ mod tests {
     fn fixed_step_moves_by_speed_times_delta() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let entity = spawn_unit(
-            &mut world,
-            UnitId(1),
-            TeamId(1),
-            Vec2::new(1.5, 1.5),
-            2.0,
-        );
+        let entity = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 2.0);
         world.entity_mut(entity).insert(MoveOrder {
             waypoints: vec![Vec2::new(8.5, 1.5)],
             next: 0,
@@ -82,13 +76,7 @@ mod tests {
     fn route_finishes_and_removes_move_order() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let entity = spawn_unit(
-            &mut world,
-            UnitId(2),
-            TeamId(1),
-            Vec2::new(1.5, 1.5),
-            20.0,
-        );
+        let entity = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 20.0);
         world.entity_mut(entity).insert(MoveOrder {
             waypoints: vec![Vec2::new(2.5, 1.5)],
             next: 0,
@@ -108,13 +96,7 @@ mod tests {
         let mut world = World::new();
         let mut map = GridMap::new(16, 16);
         map.set_blocked_rect(GridPos::new(2, 1), GridPos::new(2, 1));
-        let entity = spawn_unit(
-            &mut world,
-            UnitId(3),
-            TeamId(1),
-            Vec2::new(1.5, 1.5),
-            20.0,
-        );
+        let entity = spawn_unit(&mut world, UnitId(3), TeamId(1), Vec2::new(1.5, 1.5), 20.0);
         world.entity_mut(entity).insert((
             SimPosition {
                 previous: Vec2::ZERO,
@@ -138,20 +120,8 @@ mod tests {
     fn neighboring_units_separate_instead_of_collapsing() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let first = spawn_unit(
-            &mut world,
-            UnitId(4),
-            TeamId(1),
-            Vec2::new(5.5, 5.5),
-            2.0,
-        );
-        let second = spawn_unit(
-            &mut world,
-            UnitId(5),
-            TeamId(1),
-            Vec2::new(5.5, 5.5),
-            2.0,
-        );
+        let first = spawn_unit(&mut world, UnitId(4), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
+        let second = spawn_unit(&mut world, UnitId(5), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
         for entity in [first, second] {
             world.entity_mut(entity).insert(MoveOrder {
                 waypoints: vec![Vec2::new(10.5, 5.5)],
@@ -211,8 +181,10 @@ mod tests {
         assert_eq!(moving_query.iter(&world).count(), 0);
 
         let mut position_query = world.query::<&SimPosition>();
-        assert!(position_query
-            .iter(&world)
-            .all(|position| fixture.map.is_walkable(fixture.map.world_to_cell(position.current))));
+        assert!(position_query.iter(&world).all(|position| {
+            fixture
+                .map
+                .is_walkable(fixture.map.world_to_cell(position.current))
+        }));
     }
 }
