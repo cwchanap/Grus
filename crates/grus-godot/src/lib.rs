@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use godot::builtin::{GString, PackedInt32Array, Vector2};
-use godot::classes::{INode, Node, Node3D};
+use godot::classes::{Engine, INode, Node, Node3D, SceneTree};
 use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
@@ -128,8 +128,17 @@ fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
         .collect()
 }
 
+fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
+    Engine::singleton()
+        .get_main_loop()?
+        .try_cast::<SceneTree>()
+        .ok()?
+        .get_root()?
+        .try_get_node_as::<BevyApp>("BevyAppSingleton")
+}
+
 fn queue_command(command: UnitCommand) -> bool {
-    let Some(mut app_node) = BevyApp::try_singleton() else {
+    let Some(mut app_node) = bevy_app_singleton() else {
         return false;
     };
     let mut app_node = app_node.bind_mut();
@@ -144,7 +153,7 @@ fn queue_command(command: UnitCommand) -> bool {
 }
 
 fn with_app<T>(read: impl FnOnce(&App) -> T) -> Option<T> {
-    let app_node = BevyApp::try_singleton()?;
+    let app_node = bevy_app_singleton()?;
     let app_node = app_node.bind();
     app_node.get_app().map(read)
 }
