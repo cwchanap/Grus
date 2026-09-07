@@ -25,6 +25,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not mouse_event.pressed:
 		return
 
+	print("GRUS_INPUT button=", mouse_event.button_index, " pos=", mouse_event.position, " shift=", mouse_event.shift_pressed)
 	match mouse_event.button_index:
 		MOUSE_BUTTON_LEFT:
 			_select_at(mouse_event.position, mouse_event.shift_pressed)
@@ -43,6 +44,11 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			nearest = unit
 			nearest_distance = distance
 
+	var nearest_id := -1
+	if nearest != null:
+		nearest_id = int(nearest.get_meta("unit_id", -1))
+	print("GRUS_SELECT additive=", additive, " nearest=", nearest_id, " before=", selected_ids)
+
 	if not additive:
 		selected_ids.clear()
 	if nearest != null:
@@ -50,6 +56,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 		if id > 0 and not selected_ids.has(id):
 			selected_ids.append(id)
 	_apply_selection()
+	print("GRUS_SELECT after=", selected_ids)
 
 func _apply_selection() -> void:
 	var live_selected: Array[int] = []
