@@ -96,6 +96,7 @@ func _run() -> void:
 		_fail("stable UnitId metadata did not initialize for retained fixture")
 		return
 
+	var controller := get_node("Main")
 	var camera := get_node("Main/Camera3D") as Camera3D
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -115,10 +116,11 @@ func _run() -> void:
 		_fail("right-click input did not move unit 1 through ECS")
 		return
 
-	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT, true)
+	var unit_two_screen := camera.unproject_position(unit_two.global_position)
+	_mouse_click(unit_two_screen, MOUSE_BUTTON_LEFT, true)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
-		_fail("Shift-click did not add a second friendly unit")
+		_fail("Shift-click additive diagnostics ids=%s ring1=%s ring2=%s unit2_screen=%s" % [controller.selected_ids, _ring(unit_one).visible, _ring(unit_two).visible, unit_two_screen])
 		return
 
 	_key_tap(KEY_1, true)
