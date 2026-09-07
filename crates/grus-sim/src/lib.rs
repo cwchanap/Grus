@@ -11,4 +11,4 @@ pub use commands::{
 pub use fixture::MapFixture;
 pub use ids::{TeamId, UnitId};
 pub use map::{GridMap, GridPos};
-pub use movement::{MoveOrder, SimPosition, Unit};
+pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};

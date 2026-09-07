@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  rust-sim:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,5 +18,9 @@ jobs:
           components: rustfmt, clippy
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test simulation
         run: cargo test -p grus-sim
+      - name: Build Godot extension
+        run: cargo build -p grus-godot
