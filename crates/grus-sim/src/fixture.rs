@@ -1,6 +1,14 @@
 use bevy::math::Vec2;
 
+use crate::ids::{TeamId, UnitId};
 use crate::map::{GridMap, GridPos};
+
+#[derive(Clone, Copy, Debug)]
+pub struct UnitSpawn {
+    pub id: UnitId,
+    pub team: TeamId,
+    pub position: Vec2,
+}
 
 #[derive(Clone, Debug)]
 pub struct MapFixture {
@@ -33,10 +41,40 @@ impl MapFixture {
             expansion_resources: vec![Vec2::new(45.5, 16.5), Vec2::new(82.5, 79.5)],
         }
     }
+
+    pub fn units_200(&self) -> Vec<UnitSpawn> {
+        let mut units = Vec::with_capacity(200);
+
+        for row in 0..10 {
+            for column in 0..10 {
+                let offset = (row * 10 + column) as u32;
+                units.push(UnitSpawn {
+                    id: UnitId(offset + 1),
+                    team: TeamId(1),
+                    position: Vec2::new(
+                        self.left_spawn.x - 4.0 + column as f32,
+                        self.left_spawn.y - 4.0 + row as f32,
+                    ),
+                });
+                units.push(UnitSpawn {
+                    id: UnitId(offset + 101),
+                    team: TeamId(2),
+                    position: Vec2::new(
+                        self.right_spawn.x + 4.0 - column as f32,
+                        self.right_spawn.y - 4.0 + row as f32,
+                    ),
+                });
+            }
+        }
+
+        units
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -49,5 +87,20 @@ mod tests {
         let route = map.find_path(start, goal).expect("base zones must connect");
 
         assert!(route.len() as u32 > direct_manhattan + 1);
+    }
+
+    #[test]
+    fn two_hundred_unit_fixture_has_stable_unique_walkable_spawns() {
+        let fixture = MapFixture::battlefield();
+        let units = fixture.units_200();
+        let ids = units.iter().map(|unit| unit.id).collect::<HashSet<_>>();
+
+        assert_eq!(units.len(), 200);
+        assert_eq!(ids.len(), 200);
+        assert_eq!(units.iter().filter(|unit| unit.team == TeamId(1)).count(), 100);
+        assert_eq!(units.iter().filter(|unit| unit.team == TeamId(2)).count(), 100);
+        assert!(units.iter().all(|unit| fixture
+            .map
+            .is_walkable(fixture.map.world_to_cell(unit.position))));
     }
 }
