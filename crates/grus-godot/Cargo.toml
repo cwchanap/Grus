@@ -1,0 +1,15 @@
+[package]
+name = "grus-godot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bevy.workspace = true
+godot.workspace = true
+godot-bevy.workspace = true
+grus-sim = { path = "../grus-sim" }

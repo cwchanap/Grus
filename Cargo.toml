@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/grus-sim"]
+members = ["crates/grus-sim", "crates/grus-godot"]
 resolver = "3"
 
 [workspace.package]
@@ -10,4 +10,6 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 bevy = { version = "=0.18.1", default-features = false }
+godot = "=0.4.5"
+godot-bevy = "=0.11.0"
 pathfinding = "=4.16.0"
