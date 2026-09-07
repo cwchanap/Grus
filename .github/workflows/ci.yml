@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, hpa-470-battlefield-commands]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install native dependencies
-        run: sudo apt-get update && sudo apt-get install --yes libudev-dev
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           components: rustfmt, clippy
