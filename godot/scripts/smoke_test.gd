@@ -14,9 +14,6 @@ func _modifier_event(keycode: int, pressed: bool) -> void:
 	Input.parse_input_event(event)
 
 func _mouse_click(position: Vector2, button: int, shift_pressed := false) -> void:
-	if shift_pressed:
-		_modifier_event(KEY_SHIFT, true)
-
 	var press := InputEventMouseButton.new()
 	press.button_index = button
 	press.position = position
@@ -30,9 +27,6 @@ func _mouse_click(position: Vector2, button: int, shift_pressed := false) -> voi
 	release.pressed = false
 	release.shift_pressed = shift_pressed
 	Input.parse_input_event(release)
-
-	if shift_pressed:
-		_modifier_event(KEY_SHIFT, false)
 
 func _mouse_drag(start: Vector2, finish: Vector2, button: int) -> void:
 	var press := InputEventMouseButton.new()
@@ -57,9 +51,6 @@ func _mouse_drag(start: Vector2, finish: Vector2, button: int) -> void:
 	Input.parse_input_event(release)
 
 func _key_tap(keycode: int, ctrl_pressed := false) -> void:
-	if ctrl_pressed:
-		_modifier_event(KEY_CTRL, true)
-
 	var press := InputEventKey.new()
 	press.keycode = keycode
 	press.pressed = true
@@ -71,9 +62,6 @@ func _key_tap(keycode: int, ctrl_pressed := false) -> void:
 	release.pressed = false
 	release.ctrl_pressed = ctrl_pressed
 	Input.parse_input_event(release)
-
-	if ctrl_pressed:
-		_modifier_event(KEY_CTRL, false)
 
 func _find_unit(units: Array[Node], id: int) -> Node3D:
 	for unit in units:
@@ -133,13 +121,21 @@ func _run() -> void:
 		_fail("right-click input did not move unit 1 through ECS")
 		return
 
+	_modifier_event(KEY_SHIFT, true)
+	await get_tree().process_frame
 	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT, true)
+	await get_tree().process_frame
+	_modifier_event(KEY_SHIFT, false)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
 		_fail("Shift-click did not add a second friendly unit")
 		return
 
+	_modifier_event(KEY_CTRL, true)
+	await get_tree().process_frame
 	_key_tap(KEY_1, true)
+	await get_tree().process_frame
+	_modifier_event(KEY_CTRL, false)
 	await get_tree().process_frame
 	_mouse_click(camera.unproject_position(enemy.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
