@@ -129,10 +129,7 @@ mod tests {
 
         assert_eq!(outcome.accepted, vec![UnitId(1)]);
         let order = world.get::<MoveOrder>(unit).expect("replacement order");
-        assert_eq!(
-            order.waypoints.last().copied(),
-            Some(Vec2::new(19.5, 19.5))
-        );
+        assert_eq!(order.waypoints.last().copied(), Some(Vec2::new(19.5, 19.5)));
         assert_ne!(order.waypoints, vec![Vec2::new(3.5, 1.5)]);
     }
 
