@@ -53,15 +53,14 @@ pub fn spawn_unit(
         .spawn((Unit { id, team, speed }, SimPosition::new(position)))
         .id();
     let mut index = world.get_resource_or_insert_with(UnitIndex::default);
-    assert!(index.0.insert(id, entity).is_none(), "duplicate UnitId {id:?}");
+    assert!(
+        index.0.insert(id, entity).is_none(),
+        "duplicate UnitId {id:?}"
+    );
     entity
 }
 
-pub fn apply_command(
-    _world: &mut World,
-    _map: &GridMap,
-    _command: UnitCommand,
-) -> CommandOutcome {
+pub fn apply_command(_world: &mut World, _map: &GridMap, _command: UnitCommand) -> CommandOutcome {
     // RED phase: command validation and routing are implemented after the behavior tests fail.
     CommandOutcome::default()
 }
@@ -90,13 +89,7 @@ mod tests {
     fn enemy_units_are_rejected_without_mutating_their_order() {
         let mut world = World::new();
         let map = open_map();
-        let enemy = spawn_unit(
-            &mut world,
-            UnitId(9),
-            TeamId(2),
-            Vec2::new(2.5, 2.5),
-            6.0,
-        );
+        let enemy = spawn_unit(&mut world, UnitId(9), TeamId(2), Vec2::new(2.5, 2.5), 6.0);
         world.entity_mut(enemy).insert(MoveOrder {
             waypoints: vec![Vec2::new(3.5, 2.5)],
             next: 0,
@@ -122,13 +115,7 @@ mod tests {
     fn replacement_move_discards_the_previous_route() {
         let mut world = World::new();
         let map = open_map();
-        let unit = spawn_unit(
-            &mut world,
-            UnitId(1),
-            TeamId(1),
-            Vec2::new(1.5, 1.5),
-            6.0,
-        );
+        let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
         world.entity_mut(unit).insert(MoveOrder {
             waypoints: vec![Vec2::new(3.5, 1.5)],
             next: 0,
@@ -142,7 +129,10 @@ mod tests {
 
         assert_eq!(outcome.accepted, vec![UnitId(1)]);
         let order = world.get::<MoveOrder>(unit).expect("replacement order");
-        assert_eq!(order.waypoints.last().copied(), Some(Vec2::new(19.5, 19.5)));
+        assert_eq!(
+            order.waypoints.last().copied(),
+            Some(Vec2::new(19.5, 19.5))
+        );
         assert_ne!(order.waypoints, vec![Vec2::new(3.5, 1.5)]);
     }
 
@@ -150,13 +140,7 @@ mod tests {
     fn stop_removes_an_active_move_order() {
         let mut world = World::new();
         let map = open_map();
-        let unit = spawn_unit(
-            &mut world,
-            UnitId(2),
-            TeamId(1),
-            Vec2::new(1.5, 1.5),
-            6.0,
-        );
+        let unit = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
         world.entity_mut(unit).insert(MoveOrder {
             waypoints: vec![Vec2::new(8.5, 1.5)],
             next: 0,
@@ -181,13 +165,7 @@ mod tests {
         let mut world = World::new();
         let mut map = open_map();
         map.set_blocked_rect(GridPos::new(10, 10), GridPos::new(12, 12));
-        let unit = spawn_unit(
-            &mut world,
-            UnitId(3),
-            TeamId(1),
-            Vec2::new(2.5, 2.5),
-            6.0,
-        );
+        let unit = spawn_unit(&mut world, UnitId(3), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
 
         let outcome = apply_command(
             &mut world,
@@ -226,7 +204,10 @@ mod tests {
             ),
         );
 
-        assert_eq!(outcome.accepted, vec![UnitId(1), UnitId(2), UnitId(3), UnitId(4)]);
+        assert_eq!(
+            outcome.accepted,
+            vec![UnitId(1), UnitId(2), UnitId(3), UnitId(4)]
+        );
         let index = world.resource::<UnitIndex>();
         let entities = (1..=4)
             .map(|id| index.entity(UnitId(id)).unwrap())
