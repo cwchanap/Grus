@@ -1,0 +1,59 @@
+[gd_scene load_steps=8 format=3]
+
+[sub_resource type="StandardMaterial3D" id="Material_ground"]
+albedo_color = Color(0.23, 0.34, 0.22, 1)
+roughness = 0.95
+
+[sub_resource type="BoxMesh" id="BoxMesh_ground"]
+size = Vector3(128, 0.2, 96)
+
+[sub_resource type="StandardMaterial3D" id="Material_obstacle"]
+albedo_color = Color(0.28, 0.29, 0.31, 1)
+roughness = 0.9
+
+[sub_resource type="BoxMesh" id="BoxMesh_obstacle_a"]
+size = Vector3(8, 2, 56)
+
+[sub_resource type="BoxMesh" id="BoxMesh_obstacle_b"]
+size = Vector3(4, 2, 20)
+
+[sub_resource type="StandardMaterial3D" id="Material_base"]
+albedo_color = Color(0.78, 0.69, 0.42, 1)
+roughness = 0.8
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_base"]
+top_radius = 2.4
+bottom_radius = 2.4
+height = 0.3
+
+[node name="Battlefield" type="Node3D"]
+
+[node name="Ground" type="MeshInstance3D" parent="."]
+position = Vector3(64, -0.1, 48)
+mesh = SubResource("BoxMesh_ground")
+material_override = SubResource("Material_ground")
+
+[node name="WestBarrier" type="MeshInstance3D" parent="."]
+position = Vector3(58, 1, 48)
+mesh = SubResource("BoxMesh_obstacle_a")
+material_override = SubResource("Material_obstacle")
+
+[node name="EastBarrier" type="MeshInstance3D" parent="."]
+position = Vector3(70, 1, 48)
+mesh = SubResource("BoxMesh_obstacle_a")
+material_override = SubResource("Material_obstacle")
+
+[node name="CenterBarrier" type="MeshInstance3D" parent="."]
+position = Vector3(64, 1, 48)
+mesh = SubResource("BoxMesh_obstacle_b")
+material_override = SubResource("Material_obstacle")
+
+[node name="LeftBaseMarker" type="MeshInstance3D" parent="."]
+position = Vector3(14.5, 0.15, 48.5)
+mesh = SubResource("CylinderMesh_base")
+material_override = SubResource("Material_base")
+
+[node name="RightBaseMarker" type="MeshInstance3D" parent="."]
+position = Vector3(113.5, 0.15, 48.5)
+mesh = SubResource("CylinderMesh_base")
+material_override = SubResource("Material_base")

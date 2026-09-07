@@ -1,5 +1,7 @@
 target/
 .godot/
 godot/.godot/
+godot/bin/*
+!godot/bin/.gitkeep
 .DS_Store
 .worktrees/
