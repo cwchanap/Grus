@@ -234,17 +234,18 @@ mod tests {
         let destinations = entities
             .into_iter()
             .map(|entity| {
-                world
+                let point = world
                     .get::<MoveOrder>(entity)
                     .unwrap()
                     .waypoints
                     .last()
                     .copied()
-                    .unwrap()
+                    .unwrap();
+                map.world_to_cell(point)
             })
             .collect::<std::collections::HashSet<_>>();
 
         assert_eq!(destinations.len(), 4);
-        assert!(destinations.iter().all(|point| map.is_walkable(map.world_to_cell(*point))));
+        assert!(destinations.iter().all(|cell| map.is_walkable(*cell)));
     }
 }
