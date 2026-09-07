@@ -97,10 +97,18 @@ mod tests {
 
         assert_eq!(units.len(), 200);
         assert_eq!(ids.len(), 200);
-        assert_eq!(units.iter().filter(|unit| unit.team == TeamId(1)).count(), 100);
-        assert_eq!(units.iter().filter(|unit| unit.team == TeamId(2)).count(), 100);
-        assert!(units.iter().all(|unit| fixture
-            .map
-            .is_walkable(fixture.map.world_to_cell(unit.position))));
+        assert_eq!(
+            units.iter().filter(|unit| unit.team == TeamId(1)).count(),
+            100
+        );
+        assert_eq!(
+            units.iter().filter(|unit| unit.team == TeamId(2)).count(),
+            100
+        );
+        assert!(units.iter().all(|unit| {
+            fixture
+                .map
+                .is_walkable(fixture.map.world_to_cell(unit.position))
+        }));
     }
 }
