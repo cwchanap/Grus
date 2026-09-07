@@ -1,0 +1,5 @@
+target/
+.godot/
+godot/.godot/
+.DS_Store
+.worktrees/

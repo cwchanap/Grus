@@ -1,0 +1,22 @@
+name: CI
+
+on:
+  push:
+    branches: [main, hpa-470-battlefield-commands]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test simulation
+        run: cargo test -p grus-sim

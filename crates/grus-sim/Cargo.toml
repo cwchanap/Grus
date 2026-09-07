@@ -1,0 +1,10 @@
+[package]
+name = "grus-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+bevy.workspace = true
+pathfinding.workspace = true
