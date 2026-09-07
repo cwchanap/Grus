@@ -64,25 +64,28 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         position.previous = snapshot.position.current;
         let mut order = snapshot.order.clone();
 
-        if let Some(active_order) = order.as_mut() {
+        if let Some(active_order) = snapshot.order.as_ref() {
+            let mut candidate_order = active_order.clone();
             let route_candidate = advance_along_route(
                 snapshot.position.current,
-                active_order,
+                &mut candidate_order,
                 snapshot.unit.speed * delta_seconds.max(0.0),
             );
 
-            let mut candidate = route_candidate;
-            if map.is_walkable(map.world_to_cell(candidate)) {
+            if map.is_walkable(map.world_to_cell(route_candidate)) {
                 let separation = separation_for(snapshot, &snapshots);
-                let separated = candidate + separation;
-                if map.is_walkable(map.world_to_cell(separated)) {
-                    candidate = separated;
-                }
-                position.current = candidate;
-            }
+                let separated = route_candidate + separation;
+                position.current = if map.is_walkable(map.world_to_cell(separated)) {
+                    separated
+                } else {
+                    route_candidate
+                };
 
-            if active_order.next >= active_order.waypoints.len() {
-                order = None;
+                order = if candidate_order.next >= candidate_order.waypoints.len() {
+                    None
+                } else {
+                    Some(candidate_order)
+                };
             }
         }
 
