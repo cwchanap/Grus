@@ -30,16 +30,15 @@ func _run() -> void:
 		return
 
 	var start := unit_one.global_position
-	BevyAppSingleton.send_event("move_units", {
-		"units": PackedInt32Array([1]),
-		"target": Vector2(30.5, 48.5),
-	})
+	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30.5, 48.5)):
+		_fail("Rust command bridge rejected a valid move request")
+		return
 
 	for _frame in range(80):
 		await get_tree().physics_frame
 
 	if unit_one.global_position.distance_to(start) <= 0.5:
-		_fail("input bridge command did not move unit 1 through ECS")
+		_fail("command bridge did not move unit 1 through ECS")
 		return
 
 	print("GRUS_GODOT_SMOKE_OK units=200 moved=", unit_one.global_position.distance_to(start))

@@ -10,6 +10,7 @@ run/main_scene="res://scenes/main.tscn"
 [autoload]
 
 BevyAppSingleton="*res://bevy_app_singleton.tscn"
+GrusBridge="*res://grus_bridge.tscn"
 
 [display]
 
