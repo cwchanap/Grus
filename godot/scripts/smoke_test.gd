@@ -20,9 +20,14 @@ func _run() -> void:
 		return
 
 	var unit_one: Node3D = null
-	for unit in units:
-		if int(unit.get_meta("unit_id", -1)) == 1:
-			unit_one = unit as Node3D
+	for _frame in range(30):
+		await get_tree().process_frame
+		units = get_tree().get_nodes_in_group("unit_views")
+		for unit in units:
+			if int(unit.get_meta("unit_id", -1)) == 1:
+				unit_one = unit as Node3D
+				break
+		if unit_one != null:
 			break
 
 	if unit_one == null:
