@@ -49,8 +49,20 @@ impl GridMap {
         self.in_bounds(pos) && !self.blocked.contains(&pos)
     }
 
-    pub fn set_blocked_rect(&mut self, _min: GridPos, _max_inclusive: GridPos) {
-        // RED phase: intentionally left empty so the behavior-first test proves it can fail.
+    pub fn set_blocked_rect(&mut self, min: GridPos, max_inclusive: GridPos) {
+        let min_x = min.x.min(max_inclusive.x);
+        let max_x = min.x.max(max_inclusive.x);
+        let min_y = min.y.min(max_inclusive.y);
+        let max_y = min.y.max(max_inclusive.y);
+
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                let pos = GridPos::new(x, y);
+                if self.in_bounds(pos) {
+                    self.blocked.insert(pos);
+                }
+            }
+        }
     }
 
     pub fn world_to_cell(&self, world: Vec2) -> GridPos {
