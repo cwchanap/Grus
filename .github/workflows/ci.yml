@@ -24,3 +24,19 @@ jobs:
         run: cargo test -p grus-sim
       - name: Build Godot extension
         run: cargo build -p grus-godot
+      - name: Stage Godot extension
+        run: |
+          mkdir -p godot/bin
+          cp target/debug/libgrus_godot.so godot/bin/libgrus_godot.so
+      - uses: chickensoft-games/setup-godot@v2
+        name: Setup Godot 4.6.2
+        with:
+          version: 4.6.2
+          use-dotnet: false
+          include-templates: true
+      - name: Verify Godot version
+        run: godot --version
+      - name: Import Godot project and load extension
+        run: godot --headless --path godot --editor --quit-after 1
+      - name: Run Godot bridge smoke contract
+        run: timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn

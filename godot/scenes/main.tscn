@@ -1,0 +1,35 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
+
+[node name="Main" type="Node3D"]
+
+[node name="Battlefield" parent="." instance=ExtResource("1_battlefield")]
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-55, -25, 0)
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+position = Vector3(64, 65, 95)
+rotation_degrees = Vector3(-54, 0, 0)
+projection = 1
+size = 72.0
+current = true
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Title" type="Label" parent="HUD"]
+offset_left = 18.0
+offset_top = 14.0
+offset_right = 410.0
+offset_bottom = 44.0
+theme_override_font_sizes/font_size = 22
+text = "GRUS — 2.5D Battlefield"
+
+[node name="CommandStatus" type="Label" parent="HUD"]
+offset_left = 18.0
+offset_top = 48.0
+offset_right = 600.0
+offset_bottom = 76.0
+text = "ECS bridge initializing…"
