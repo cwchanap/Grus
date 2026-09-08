@@ -114,6 +114,21 @@ func _run() -> void:
 		_fail("stable UnitId metadata did not initialize for retained fixture")
 		return
 
+	var cadence_start := unit_three.global_position
+	if not GrusBridge.move_units(PackedInt32Array([3]), Vector2(36.5, 44.5)):
+		_fail("20 Hz cadence probe move was rejected")
+		return
+	await get_tree().create_timer(1.0).timeout
+	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
+	if cadence_distance < 8.0 or cadence_distance > 16.0:
+		_fail("authoritative simulation is not running near 20 Hz: speed-12 unit moved %.2f units in one second" % cadence_distance)
+		return
+	if not GrusBridge.stop_units(PackedInt32Array([3])):
+		_fail("20 Hz cadence probe stop was rejected")
+		return
+	for _frame in range(2):
+		await get_tree().physics_frame
+
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
