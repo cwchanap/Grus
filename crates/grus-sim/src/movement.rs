@@ -194,6 +194,8 @@ fn separation_for(snapshot: &MovementSnapshot, all: &[MovementSnapshot]) -> Vec2
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use bevy::prelude::World;
 
     use super::*;
@@ -337,10 +339,23 @@ mod tests {
         assert_eq!(moving_query.iter(&world).count(), 0);
 
         let mut position_query = world.query::<&SimPosition>();
-        assert!(position_query.iter(&world).all(|position| {
+        let final_positions = position_query
+            .iter(&world)
+            .map(|position| position.current)
+            .collect::<Vec<_>>();
+        assert!(final_positions.iter().all(|position| {
             fixture
                 .map
-                .is_walkable(fixture.map.world_to_cell(position.current))
+                .is_walkable(fixture.map.world_to_cell(*position))
         }));
+        let final_cells = final_positions
+            .into_iter()
+            .map(|position| fixture.map.world_to_cell(position))
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            final_cells.len(),
+            100,
+            "100-unit group collapsed onto shared destination cells"
+        );
     }
 }
