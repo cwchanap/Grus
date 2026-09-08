@@ -6,6 +6,7 @@ const CLICK_RADIUS := 20.0
 @onready var command_status: Label = $HUD/CommandStatus
 
 var selected_ids: Array[int] = []
+var _control_groups: Dictionary = {}
 var _feedback_revision := -1
 
 func _ready() -> void:
@@ -19,6 +20,9 @@ func _process(_delta: float) -> void:
 		command_status.text = str(GrusBridge.command_feedback())
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		_handle_key(event as InputEventKey)
+		return
 	if not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
@@ -30,6 +34,24 @@ func _unhandled_input(event: InputEvent) -> void:
 			_select_at(mouse_event.position, mouse_event.shift_pressed)
 		MOUSE_BUTTON_RIGHT:
 			_issue_move(mouse_event.position)
+
+func _handle_key(event: InputEventKey) -> void:
+	if not event.pressed or event.echo:
+		return
+	if event.keycode < KEY_1 or event.keycode > KEY_9:
+		return
+
+	var group := int(event.keycode - KEY_1 + 1)
+	if event.ctrl_pressed:
+		_control_groups[group] = selected_ids.duplicate()
+		return
+	if not _control_groups.has(group):
+		return
+
+	selected_ids.clear()
+	for id in _control_groups[group]:
+		selected_ids.append(int(id))
+	_apply_selection()
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
 	var nearest: Node3D = null
