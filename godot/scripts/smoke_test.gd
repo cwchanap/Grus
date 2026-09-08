@@ -103,7 +103,8 @@ func _run() -> void:
 		return
 
 	var camera := get_node("Main/Camera3D") as Camera3D
-	var clear_screen := camera.unproject_position(Vector3(64.0, 0.0, 90.0))
+	var viewport_size := get_viewport().get_visible_rect().size
+	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
