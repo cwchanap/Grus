@@ -124,6 +124,7 @@ fn build_app(app: &mut App) {
     app.add_plugins(GodotAssetsPlugin)
         .add_plugins(GodotTransformSyncPlugin::default())
         .add_plugins(GodotPackedScenePlugin)
+        .insert_resource(Time::<Fixed>::from_seconds(f64::from(SIM_STEP_SECONDS)))
         .init_resource::<PendingCommands>()
         .init_resource::<CommandFeedback>()
         .add_systems(Startup, setup_fixture)
