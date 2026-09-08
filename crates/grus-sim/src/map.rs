@@ -21,6 +21,7 @@ pub struct GridMap {
     width: i32,
     height: i32,
     blocked: HashSet<GridPos>,
+    revision: u64,
 }
 
 impl GridMap {
@@ -30,6 +31,7 @@ impl GridMap {
             width,
             height,
             blocked: HashSet::new(),
+            revision: 0,
         }
     }
 
@@ -41,12 +43,32 @@ impl GridMap {
         self.height
     }
 
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn in_bounds(&self, pos: GridPos) -> bool {
         pos.x >= 0 && pos.y >= 0 && pos.x < self.width && pos.y < self.height
     }
 
     pub fn is_walkable(&self, pos: GridPos) -> bool {
         self.in_bounds(pos) && !self.blocked.contains(&pos)
+    }
+
+    pub fn set_blocked(&mut self, pos: GridPos, blocked: bool) -> bool {
+        if !self.in_bounds(pos) {
+            return false;
+        }
+
+        let changed = if blocked {
+            self.blocked.insert(pos)
+        } else {
+            self.blocked.remove(&pos)
+        };
+        if changed {
+            self.revision = self.revision.wrapping_add(1);
+        }
+        changed
     }
 
     pub fn set_blocked_rect(&mut self, min: GridPos, max_inclusive: GridPos) {
@@ -57,10 +79,7 @@ impl GridMap {
 
         for y in min_y..=max_y {
             for x in min_x..=max_x {
-                let pos = GridPos::new(x, y);
-                if self.in_bounds(pos) {
-                    self.blocked.insert(pos);
-                }
+                self.set_blocked(GridPos::new(x, y), true);
             }
         }
     }
