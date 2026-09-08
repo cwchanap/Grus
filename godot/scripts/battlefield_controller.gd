@@ -29,6 +29,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
 		_handle_key(event as InputEventKey)
 		return
+	if event is InputEventMouseMotion:
+		var motion := event as InputEventMouseMotion
+		if motion.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
+			_pan_camera(motion.relative)
+		return
 	if not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
@@ -76,6 +81,12 @@ func _handle_key(event: InputEventKey) -> void:
 	for id in _control_groups[group]:
 		selected_ids.append(int(id))
 	_apply_selection()
+
+func _pan_camera(relative: Vector2) -> void:
+	var viewport_height := maxf(get_viewport().get_visible_rect().size.y, 1.0)
+	var world_per_pixel := camera.size / viewport_height
+	camera.position.x -= relative.x * world_per_pixel
+	camera.position.z -= relative.y * world_per_pixel
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
 	var nearest: Node3D = null
