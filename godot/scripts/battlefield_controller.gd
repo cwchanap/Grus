@@ -1,6 +1,7 @@
 extends Node3D
 
 const CLICK_RADIUS := 20.0
+const DRAG_THRESHOLD := 6.0
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
@@ -8,6 +9,8 @@ const CLICK_RADIUS := 20.0
 var selected_ids: Array[int] = []
 var _control_groups: Dictionary = {}
 var _feedback_revision := -1
+var _left_press_position := Vector2.ZERO
+var _left_pressed := false
 
 func _ready() -> void:
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
@@ -26,14 +29,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
-	if not mouse_event.pressed:
+
+	if mouse_event.button_index == MOUSE_BUTTON_LEFT:
+		if mouse_event.pressed:
+			_left_pressed = true
+			_left_press_position = mouse_event.position
+			_select_at(mouse_event.position, mouse_event.shift_pressed)
+		elif _left_pressed:
+			_left_pressed = false
+			if _left_press_position.distance_to(mouse_event.position) >= DRAG_THRESHOLD:
+				_select_box(_left_press_position, mouse_event.position, mouse_event.shift_pressed)
 		return
 
-	match mouse_event.button_index:
-		MOUSE_BUTTON_LEFT:
-			_select_at(mouse_event.position, mouse_event.shift_pressed)
-		MOUSE_BUTTON_RIGHT:
-			_issue_move(mouse_event.position)
+	if not mouse_event.pressed:
+		return
+	if mouse_event.button_index == MOUSE_BUTTON_RIGHT:
+		_issue_move(mouse_event.position)
 
 func _handle_key(event: InputEventKey) -> void:
 	if not event.pressed or event.echo:
@@ -69,6 +80,23 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 		selected_ids.clear()
 	if nearest != null:
 		var id := int(nearest.get_meta("unit_id", -1))
+		if id > 0 and not selected_ids.has(id):
+			selected_ids.append(id)
+	_apply_selection()
+
+func _select_box(start: Vector2, finish: Vector2, additive: bool) -> void:
+	var top_left := Vector2(minf(start.x, finish.x), minf(start.y, finish.y))
+	var size := Vector2(absf(finish.x - start.x), absf(finish.y - start.y))
+	var selection_rect := Rect2(top_left, size)
+
+	if not additive:
+		selected_ids.clear()
+	for unit in _friendly_units():
+		if camera.is_position_behind(unit.global_position):
+			continue
+		if not selection_rect.has_point(camera.unproject_position(unit.global_position)):
+			continue
+		var id := int(unit.get_meta("unit_id", -1))
 		if id > 0 and not selected_ids.has(id):
 			selected_ids.append(id)
 	_apply_selection()
