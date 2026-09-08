@@ -103,6 +103,7 @@ func _run() -> void:
 		return
 
 	var camera := get_node("Main/Camera3D") as Camera3D
+	var clear_screen := camera.unproject_position(Vector3(64.0, 0.0, 90.0))
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
@@ -137,7 +138,7 @@ func _run() -> void:
 	await get_tree().process_frame
 	_modifier_event(KEY_CTRL, false)
 	await get_tree().process_frame
-	_mouse_click(camera.unproject_position(enemy.global_position), MOUSE_BUTTON_LEFT)
+	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if _ring(unit_one).visible or _ring(unit_two).visible:
 		_fail("clicking outside friendly units did not clear selection")
@@ -148,7 +149,7 @@ func _run() -> void:
 		_fail("control-group recall did not restore selected stable IDs")
 		return
 
-	_mouse_click(camera.unproject_position(enemy.global_position), MOUSE_BUTTON_LEFT)
+	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	var screen_two := camera.unproject_position(unit_two.global_position)
 	var screen_three := camera.unproject_position(unit_three.global_position)
