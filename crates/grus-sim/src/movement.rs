@@ -2,7 +2,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, World};
 
 use crate::ids::{TeamId, UnitId};
-use crate::map::GridMap;
+use crate::map::{GridMap, GridPos};
 
 pub const SIM_STEP_SECONDS: f32 = 0.05;
 const WAYPOINT_EPSILON: f32 = 0.0001;
@@ -35,6 +35,8 @@ impl SimPosition {
 pub struct MoveOrder {
     pub waypoints: Vec<Vec2>,
     pub next: usize,
+    pub goal: GridPos,
+    pub map_revision: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -65,27 +67,31 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         let mut order = snapshot.order.clone();
 
         if let Some(active_order) = snapshot.order.as_ref() {
-            let mut candidate_order = active_order.clone();
-            let route_candidate = advance_along_route(
-                snapshot.position.current,
-                &mut candidate_order,
-                snapshot.unit.speed * delta_seconds.max(0.0),
-            );
+            if let Some(mut candidate_order) = refresh_route(active_order, snapshot.position.current, map)
+            {
+                let route_candidate = advance_along_route(
+                    snapshot.position.current,
+                    &mut candidate_order,
+                    snapshot.unit.speed * delta_seconds.max(0.0),
+                );
 
-            if map.is_walkable(map.world_to_cell(route_candidate)) {
-                let separation = separation_for(snapshot, &snapshots);
-                let separated = route_candidate + separation;
-                position.current = if map.is_walkable(map.world_to_cell(separated)) {
-                    separated
-                } else {
-                    route_candidate
-                };
+                if map.is_walkable(map.world_to_cell(route_candidate)) {
+                    let separation = separation_for(snapshot, &snapshots);
+                    let separated = route_candidate + separation;
+                    position.current = if map.is_walkable(map.world_to_cell(separated)) {
+                        separated
+                    } else {
+                        route_candidate
+                    };
 
-                order = if candidate_order.next >= candidate_order.waypoints.len() {
-                    None
-                } else {
-                    Some(candidate_order)
-                };
+                    order = if candidate_order.next >= candidate_order.waypoints.len() {
+                        None
+                    } else {
+                        Some(candidate_order)
+                    };
+                }
+            } else {
+                order = None;
             }
         }
 
@@ -97,6 +103,29 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
             entity.remove::<MoveOrder>();
         }
     }
+}
+
+fn refresh_route(order: &MoveOrder, current: Vec2, map: &GridMap) -> Option<MoveOrder> {
+    if order.map_revision == map.revision() {
+        return Some(order.clone());
+    }
+
+    let path = map.find_path(map.world_to_cell(current), order.goal)?;
+    let waypoints = path
+        .into_iter()
+        .skip(1)
+        .map(|cell| map.cell_center(cell))
+        .collect::<Vec<_>>();
+    if waypoints.is_empty() {
+        return None;
+    }
+
+    Some(MoveOrder {
+        waypoints,
+        next: 0,
+        goal: order.goal,
+        map_revision: map.revision(),
+    })
 }
 
 fn advance_along_route(mut current: Vec2, order: &mut MoveOrder, mut remaining: f32) -> Vec2 {
@@ -169,7 +198,6 @@ mod tests {
     use super::*;
     use crate::commands::{UnitCommand, UnitCommandKind, apply_command, spawn_unit};
     use crate::fixture::MapFixture;
-    use crate::map::GridPos;
 
     fn assert_vec2_near(actual: Vec2, expected: Vec2) {
         let error = actual.distance(expected);
@@ -179,15 +207,23 @@ mod tests {
         );
     }
 
+    fn test_order(map: &GridMap, waypoint: Vec2) -> MoveOrder {
+        MoveOrder {
+            waypoints: vec![waypoint],
+            next: 0,
+            goal: map.world_to_cell(waypoint),
+            map_revision: map.revision(),
+        }
+    }
+
     #[test]
     fn fixed_step_moves_by_speed_times_delta() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
         let entity = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 2.0);
-        world.entity_mut(entity).insert(MoveOrder {
-            waypoints: vec![Vec2::new(8.5, 1.5)],
-            next: 0,
-        });
+        world
+            .entity_mut(entity)
+            .insert(test_order(&map, Vec2::new(8.5, 1.5)));
 
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
 
@@ -201,10 +237,9 @@ mod tests {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
         let entity = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 20.0);
-        world.entity_mut(entity).insert(MoveOrder {
-            waypoints: vec![Vec2::new(2.5, 1.5)],
-            next: 0,
-        });
+        world
+            .entity_mut(entity)
+            .insert(test_order(&map, Vec2::new(2.5, 1.5)));
 
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
 
@@ -226,10 +261,7 @@ mod tests {
                 previous: Vec2::ZERO,
                 current: Vec2::new(1.5, 1.5),
             },
-            MoveOrder {
-                waypoints: vec![Vec2::new(2.5, 1.5)],
-                next: 0,
-            },
+            test_order(&map, Vec2::new(2.5, 1.5)),
         ));
 
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
@@ -247,10 +279,9 @@ mod tests {
         let first = spawn_unit(&mut world, UnitId(4), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
         let second = spawn_unit(&mut world, UnitId(5), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
         for entity in [first, second] {
-            world.entity_mut(entity).insert(MoveOrder {
-                waypoints: vec![Vec2::new(10.5, 5.5)],
-                next: 0,
-            });
+            world
+                .entity_mut(entity)
+                .insert(test_order(&map, Vec2::new(10.5, 5.5)));
         }
 
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
