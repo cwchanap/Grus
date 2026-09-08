@@ -67,7 +67,8 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         let mut order = snapshot.order.clone();
 
         if let Some(active_order) = snapshot.order.as_ref() {
-            if let Some(mut candidate_order) = refresh_route(active_order, snapshot.position.current, map)
+            if let Some(mut candidate_order) =
+                refresh_route(active_order, snapshot.position.current, map)
             {
                 let route_candidate = advance_along_route(
                     snapshot.position.current,
