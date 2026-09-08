@@ -43,6 +43,8 @@ jobs:
         run: timeout 30s godot --headless --path godot --editor --quit-after 120
       - name: Run Godot bridge smoke contract
         run: timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn
+      - name: Run fixture reset smoke
+        run: timeout 45s godot --headless --path godot res://scenes/reset_test.tscn
       - name: Export Linux x86_64 desktop build
         run: |
           mkdir -p build
