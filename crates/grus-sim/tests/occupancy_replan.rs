@@ -9,13 +9,7 @@ use grus_sim::{
 fn active_move_replans_when_new_obstacle_intersects_route() {
     let mut world = World::new();
     let mut map = GridMap::new(16, 8);
-    let unit = spawn_unit(
-        &mut world,
-        UnitId(1),
-        TeamId(1),
-        Vec2::new(1.5, 3.5),
-        4.0,
-    );
+    let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 3.5), 4.0);
 
     let outcome = apply_command(
         &mut world,
@@ -44,6 +38,9 @@ fn active_move_replans_when_new_obstacle_intersects_route() {
         world.get::<MoveOrder>(unit).is_none(),
         "route stalled instead of replanning at {position:?}"
     );
-    assert!(position.x > 10.0, "unit did not make it around the obstacle: {position:?}");
+    assert!(
+        position.x > 10.0,
+        "unit did not make it around the obstacle: {position:?}"
+    );
     assert!(map.is_walkable(map.world_to_cell(position)));
 }
