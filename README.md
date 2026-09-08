@@ -35,6 +35,8 @@ godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
 ```
 
+On a clean clone the GDExtension is not registered until the editor has scanned the project once, so the `--editor` step above must run before the headless scene smokes — otherwise `BevyApp`/`GrusBridgeNode` resolve to placeholders and the smokes fail with `expected 200 ECS-backed unit views, found 0`. The scan writes `godot/.godot/extension_list.cfg`, after which the scene runs load the Rust bridge correctly.
+
 The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the 200-unit ECS fixture. The reset smoke despawns/reseeds the retained fixture and requires it to settle back to exactly **200 scene nodes with 200 unique stable UnitIds**.
 
 Rust tests cover ownership/live-entity checks, successful and unreachable routes, replacement orders, stop, obstacle avoidance, 100-unit traversal, occupancy mutation semantics, and active-route replanning after a new obstacle intersects the path.
