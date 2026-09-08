@@ -128,15 +128,13 @@ fn build_app(app: &mut App) {
         .init_resource::<PendingCommands>()
         .init_resource::<CommandFeedback>()
         .add_systems(Startup, setup_fixture)
-        .add_systems(Update, initialize_unit_views)
+        .add_systems(
+            Update,
+            (initialize_unit_views, sync_interpolated_unit_transforms),
+        )
         .add_systems(
             FixedUpdate,
-            (
-                apply_pending_commands,
-                advance_simulation,
-                sync_unit_transforms,
-            )
-                .chain(),
+            (apply_pending_commands, advance_simulation).chain(),
         );
 }
 
@@ -274,13 +272,16 @@ fn advance_simulation(world: &mut World) {
     });
 }
 
-fn sync_unit_transforms(mut units: Query<(&SimPosition, &mut Transform), With<Unit>>) {
+fn sync_interpolated_unit_transforms(
+    fixed_time: Res<Time<Fixed>>,
+    mut units: Query<(&SimPosition, &mut Transform), With<Unit>>,
+) {
+    let alpha = fixed_time.overstep_fraction();
     for (position, mut transform) in &mut units {
-        if transform.translation.x != position.current.x
-            || transform.translation.z != position.current.y
-        {
-            transform.translation.x = position.current.x;
-            transform.translation.z = position.current.y;
+        let rendered = position.previous.lerp(position.current, alpha);
+        if transform.translation.x != rendered.x || transform.translation.z != rendered.y {
+            transform.translation.x = rendered.x;
+            transform.translation.z = rendered.y;
         }
     }
 }
