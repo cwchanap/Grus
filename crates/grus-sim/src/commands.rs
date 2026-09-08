@@ -143,9 +143,12 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                 if waypoints.is_empty() {
                     world.entity_mut(entity).remove::<MoveOrder>();
                 } else {
-                    world
-                        .entity_mut(entity)
-                        .insert(MoveOrder { waypoints, next: 0 });
+                    world.entity_mut(entity).insert(MoveOrder {
+                        waypoints,
+                        next: 0,
+                        goal: slot,
+                        map_revision: map.revision(),
+                    });
                 }
                 outcome.accepted.push(id);
             }
@@ -220,15 +223,23 @@ mod tests {
         }
     }
 
+    fn test_order(map: &GridMap, waypoint: Vec2) -> MoveOrder {
+        MoveOrder {
+            waypoints: vec![waypoint],
+            next: 0,
+            goal: map.world_to_cell(waypoint),
+            map_revision: map.revision(),
+        }
+    }
+
     #[test]
     fn enemy_units_are_rejected_without_mutating_their_order() {
         let mut world = World::new();
         let map = open_map();
         let enemy = spawn_unit(&mut world, UnitId(9), TeamId(2), Vec2::new(2.5, 2.5), 6.0);
-        world.entity_mut(enemy).insert(MoveOrder {
-            waypoints: vec![Vec2::new(3.5, 2.5)],
-            next: 0,
-        });
+        world
+            .entity_mut(enemy)
+            .insert(test_order(&map, Vec2::new(3.5, 2.5)));
 
         let outcome = apply_command(
             &mut world,
@@ -251,10 +262,9 @@ mod tests {
         let mut world = World::new();
         let map = open_map();
         let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
-        world.entity_mut(unit).insert(MoveOrder {
-            waypoints: vec![Vec2::new(3.5, 1.5)],
-            next: 0,
-        });
+        world
+            .entity_mut(unit)
+            .insert(test_order(&map, Vec2::new(3.5, 1.5)));
 
         let outcome = apply_command(
             &mut world,
@@ -273,10 +283,9 @@ mod tests {
         let mut world = World::new();
         let map = open_map();
         let unit = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
-        world.entity_mut(unit).insert(MoveOrder {
-            waypoints: vec![Vec2::new(8.5, 1.5)],
-            next: 0,
-        });
+        world
+            .entity_mut(unit)
+            .insert(test_order(&map, Vec2::new(8.5, 1.5)));
 
         let outcome = apply_command(
             &mut world,
