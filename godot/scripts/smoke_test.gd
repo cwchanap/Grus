@@ -115,12 +115,29 @@ func _run() -> void:
 		return
 
 	var camera := get_node("Main/Camera3D") as Camera3D
+	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
+
+	var size_before_zoom := camera.size
+	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
+	await get_tree().process_frame
+	if camera.size >= size_before_zoom:
+		_fail("mouse wheel did not zoom the orthographic camera")
+		return
+
+	var camera_before_pan := Vector2(camera.position.x, camera.position.z)
+	_mouse_drag(Vector2(640.0, 360.0), Vector2(680.0, 385.0), MOUSE_BUTTON_MIDDLE)
+	await get_tree().process_frame
+	var camera_after_pan := Vector2(camera.position.x, camera.position.z)
+	if camera_after_pan.distance_to(camera_before_pan) <= 0.1:
+		_fail("middle-drag did not pan the camera")
+		return
+
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
 	if not _ring(unit_one).visible:
-		_fail("left-click input did not select friendly unit 1")
+		_fail("left-click input did not select friendly unit 1 after camera pan/zoom")
 		return
 
 	var start := unit_one.global_position
@@ -141,7 +158,7 @@ func _run() -> void:
 	_modifier_event(KEY_SHIFT, false)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
-		_fail("Shift-click did not add a second friendly unit")
+		_fail("Shift-click did not add a second friendly unit after camera pan/zoom")
 		return
 
 	_modifier_event(KEY_CTRL, true)
@@ -158,7 +175,7 @@ func _run() -> void:
 	_key_tap(KEY_1)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
-		_fail("control-group recall did not restore selected stable IDs")
+		_fail("control-group recall did not restore selected stable IDs after camera pan/zoom")
 		return
 
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
@@ -170,7 +187,7 @@ func _run() -> void:
 	_mouse_drag(box_start, box_end, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if not _ring(unit_two).visible or not _ring(unit_three).visible:
-		_fail("box selection did not include projected friendly units")
+		_fail("box selection did not include projected friendly units after camera pan/zoom")
 		return
 
 	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
@@ -200,19 +217,13 @@ func _run() -> void:
 		_fail("HUD click leaked into world controls")
 		return
 
-	var size_before_zoom := camera.size
-	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
+	var blocked_target := Vector3(64.5, 0.0, 48.5)
+	_mouse_click(camera.unproject_position(blocked_target), MOUSE_BUTTON_RIGHT)
+	for _frame in range(3):
+		await get_tree().physics_frame
 	await get_tree().process_frame
-	if camera.size >= size_before_zoom:
-		_fail("mouse wheel did not zoom the orthographic camera")
-		return
-
-	var camera_before_pan := Vector2(camera.position.x, camera.position.z)
-	_mouse_drag(Vector2(640.0, 360.0), Vector2(680.0, 385.0), MOUSE_BUTTON_MIDDLE)
-	await get_tree().process_frame
-	var camera_after_pan := Vector2(camera.position.x, camera.position.z)
-	if camera_after_pan.distance_to(camera_before_pan) <= 0.1:
-		_fail("middle-drag did not pan the camera")
+	if not command_status.text.to_lower().contains("unreachable"):
+		_fail("blocked destination did not surface unreachable feedback: %s" % command_status.text)
 		return
 
 	var cadence_start := unit_three.global_position
@@ -240,5 +251,5 @@ func _run() -> void:
 		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
 	get_tree().quit(0)
