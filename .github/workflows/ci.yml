@@ -54,3 +54,14 @@ jobs:
           timeout 20s ./build/Grus.x86_64 --headless --quit-after 30 2>&1 | tee export-smoke.log
           grep -q "Initialize godot-rust" export-smoke.log
           ! grep -Eq "Failed to load.*GDExtension|Can't open dynamic library|Cannot open dynamic library" export-smoke.log
+      - name: Benchmark 200 moving units at 1080p
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: |
+          echo "GRUS_BENCHMARK_HOST"
+          uname -a
+          lscpu | grep -E 'Architecture|CPU\(s\)|Model name'
+          command -v xvfb-run
+          set -o pipefail
+          timeout 45s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log
+          grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log
