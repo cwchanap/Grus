@@ -49,6 +49,9 @@ func _unhandled_input(event: InputEvent) -> void:
 func _handle_key(event: InputEventKey) -> void:
 	if not event.pressed or event.echo:
 		return
+	if event.keycode == KEY_S:
+		_issue_stop()
+		return
 	if event.keycode < KEY_1 or event.keycode > KEY_9:
 		return
 
@@ -122,6 +125,14 @@ func _issue_move(screen_position: Vector2) -> void:
 		command_status.text = "Move command queued"
 	else:
 		command_status.text = "Move command rejected"
+
+func _issue_stop() -> void:
+	if selected_ids.is_empty():
+		return
+	if GrusBridge.stop_units(PackedInt32Array(selected_ids)):
+		command_status.text = "Stop command queued"
+	else:
+		command_status.text = "Stop command rejected"
 
 func _ground_target(screen_position: Vector2):
 	var origin := camera.project_ray_origin(screen_position)
