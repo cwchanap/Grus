@@ -129,13 +129,25 @@ func _run() -> void:
 	for _frame in range(2):
 		await get_tree().physics_frame
 
+	var controller := get_node("Main")
 	var camera := get_node("Main/Camera3D") as Camera3D
+	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
-	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
+	var first_click := camera.unproject_position(unit_one.global_position)
+	_mouse_click(first_click, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
 	if not _ring(unit_one).visible:
-		_fail("left-click input did not select friendly unit 1")
+		var nearest_id := -1
+		var nearest_distance := INF
+		for unit in get_tree().get_nodes_in_group("unit_views"):
+			if int(unit.get_meta("team_id", -1)) != 1:
+				continue
+			var distance := camera.unproject_position((unit as Node3D).global_position).distance_to(first_click)
+			if distance < nearest_distance:
+				nearest_distance = distance
+				nearest_id = int(unit.get_meta("unit_id", -1))
+		_fail("left-click diagnostics point=%s shield=%s shield_hit=%s selected=%s nearest=%d distance=%.2f unit1_pos=%s" % [first_click, input_shield.get_global_rect() if input_shield != null else Rect2(), input_shield.get_global_rect().has_point(first_click) if input_shield != null else false, controller.selected_ids, nearest_id, nearest_distance, unit_one.global_position])
 		return
 
 	var start := unit_one.global_position
@@ -204,7 +216,6 @@ func _run() -> void:
 		_fail("Stop input did not settle the active move order")
 		return
 
-	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
 	if input_shield == null:
 		_fail("HUD input shield is missing")
 		return
