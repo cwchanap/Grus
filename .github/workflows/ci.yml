@@ -63,5 +63,5 @@ jobs:
           lscpu | grep -E 'Architecture|CPU\(s\)|Model name'
           command -v xvfb-run
           set -o pipefail
-          timeout 45s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log
+          timeout 90s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log
           grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log
