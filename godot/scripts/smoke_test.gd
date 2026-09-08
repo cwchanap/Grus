@@ -102,6 +102,7 @@ func _run() -> void:
 		_fail("stable UnitId metadata did not initialize for retained fixture")
 		return
 
+	var controller := get_node("Main")
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var viewport_size := get_viewport().get_visible_rect().size
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
@@ -142,7 +143,8 @@ func _run() -> void:
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if _ring(unit_one).visible or _ring(unit_two).visible:
-		_fail("clicking outside friendly units did not clear selection")
+		var shield := get_node_or_null("Main/HUD/InputShield") as Control
+		_fail("clear-selection diagnostics point=%s viewport=%s shield=%s ids=%s" % [clear_screen, viewport_size, shield.get_global_rect() if shield != null else Rect2(), controller.selected_ids])
 		return
 	_key_tap(KEY_1)
 	await get_tree().process_frame
