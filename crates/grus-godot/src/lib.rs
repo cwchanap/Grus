@@ -6,7 +6,8 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::{
     CommandOutcome, CommandRejectReason, GridMap, MapFixture, SIM_STEP_SECONDS, SimPosition,
-    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, apply_command, spawn_unit, step_movement,
+    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, apply_command, spawn_unit,
+    step_movement,
 };
 
 #[derive(Default, Resource)]
@@ -94,6 +95,20 @@ impl GrusBridgeNode {
         });
 
         player_queued && enemy_queued
+    }
+
+    #[func]
+    fn reset_fixture(&self) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+
+        reset_fixture_world(app.world_mut());
+        true
     }
 
     #[func]
@@ -192,6 +207,27 @@ fn setup_fixture(world: &mut World) {
             GodotScene::from_path("res://scenes/unit_view.tscn"),
         ));
     }
+}
+
+fn reset_fixture_world(world: &mut World) {
+    let unit_entities = {
+        let mut query = world.query_filtered::<Entity, With<Unit>>();
+        query.iter(world).collect::<Vec<_>>()
+    };
+    for entity in unit_entities {
+        let _ = world.despawn(entity);
+    }
+
+    world.remove_resource::<UnitIndex>();
+    if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
+        pending.0.clear();
+    }
+    if let Some(mut feedback) = world.get_resource_mut::<CommandFeedback>() {
+        feedback.revision = feedback.revision.wrapping_add(1);
+        feedback.text = "Ready".to_string();
+    }
+
+    setup_fixture(world);
 }
 
 fn initialize_unit_views(
