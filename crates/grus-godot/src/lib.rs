@@ -76,6 +76,27 @@ impl GrusBridgeNode {
     }
 
     #[func]
+    fn benchmark_move_all(&self) -> bool {
+        let fixture = MapFixture::battlefield();
+        let player_queued = queue_command(UnitCommand {
+            issuer: TeamId(1),
+            units: (1_u32..=100).map(UnitId).collect(),
+            kind: UnitCommandKind::Move {
+                target: fixture.right_spawn,
+            },
+        });
+        let enemy_queued = queue_command(UnitCommand {
+            issuer: TeamId(2),
+            units: (101_u32..=200).map(UnitId).collect(),
+            kind: UnitCommandKind::Move {
+                target: fixture.left_spawn,
+            },
+        });
+
+        player_queued && enemy_queued
+    }
+
+    #[func]
     fn command_feedback_revision(&self) -> i64 {
         with_app(|app| {
             app.world()
