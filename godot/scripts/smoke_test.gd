@@ -1,5 +1,7 @@
 extends Node
 
+const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -73,6 +75,16 @@ func _ring(unit: Node3D) -> MeshInstance3D:
 	return unit.get_node("SelectionRing") as MeshInstance3D
 
 func _run() -> void:
+	var window := get_window()
+	window.content_scale_size = TEST_VIEWPORT_SIZE
+	window.size = TEST_VIEWPORT_SIZE
+	await get_tree().process_frame
+
+	var viewport_size := get_viewport().get_visible_rect().size
+	if viewport_size != Vector2(TEST_VIEWPORT_SIZE):
+		_fail("smoke viewport did not resize to project baseline: %s" % viewport_size)
+		return
+
 	var units: Array[Node] = []
 	for _frame in range(160):
 		await get_tree().physics_frame
@@ -102,9 +114,7 @@ func _run() -> void:
 		_fail("stable UnitId metadata did not initialize for retained fixture")
 		return
 
-	var controller := get_node("Main")
 	var camera := get_node("Main/Camera3D") as Camera3D
-	var viewport_size := get_viewport().get_visible_rect().size
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -143,8 +153,7 @@ func _run() -> void:
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if _ring(unit_one).visible or _ring(unit_two).visible:
-		var shield := get_node_or_null("Main/HUD/InputShield") as Control
-		_fail("clear-selection diagnostics point=%s viewport=%s shield=%s ids=%s" % [clear_screen, viewport_size, shield.get_global_rect() if shield != null else Rect2(), controller.selected_ids])
+		_fail("clicking outside friendly units did not clear selection")
 		return
 	_key_tap(KEY_1)
 	await get_tree().process_frame
