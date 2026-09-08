@@ -35,3 +35,11 @@ offset_top = 48.0
 offset_right = 600.0
 offset_bottom = 76.0
 text = "ECS bridge initializing…"
+
+[node name="InputShield" type="Control" parent="HUD"]
+layout_mode = 3
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 620.0
+offset_bottom = 88.0
+mouse_filter = 0
