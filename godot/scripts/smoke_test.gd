@@ -219,11 +219,26 @@ func _run() -> void:
 	if not GrusBridge.move_units(PackedInt32Array([3]), Vector2(36.5, 44.5)):
 		_fail("20 Hz cadence probe move was rejected")
 		return
-	await get_tree().create_timer(1.0).timeout
+	var cadence_started_ms := Time.get_ticks_msec()
+	var previous_visual := unit_three.global_position
+	var max_visual_step := 0.0
+	var visual_changes := 0
+	while Time.get_ticks_msec() - cadence_started_ms < 1000:
+		await get_tree().process_frame
+		var visual_position := unit_three.global_position
+		var visual_step := visual_position.distance_to(previous_visual)
+		if visual_step > 0.0001:
+			visual_changes += 1
+			max_visual_step = maxf(max_visual_step, visual_step)
+		previous_visual = visual_position
+
 	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
 	if cadence_distance < 8.0 or cadence_distance > 16.0:
 		_fail("authoritative simulation is not running near 20 Hz: speed-12 unit moved %.2f units in one second" % cadence_distance)
 		return
+	if max_visual_step >= 0.45:
+		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
+		return
 
-	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived cadence=20hz")
+	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
 	get_tree().quit(0)
