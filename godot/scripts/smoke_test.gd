@@ -114,40 +114,13 @@ func _run() -> void:
 		_fail("stable UnitId metadata did not initialize for retained fixture")
 		return
 
-	var cadence_start := unit_three.global_position
-	if not GrusBridge.move_units(PackedInt32Array([3]), Vector2(36.5, 44.5)):
-		_fail("20 Hz cadence probe move was rejected")
-		return
-	await get_tree().create_timer(1.0).timeout
-	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
-	if cadence_distance < 8.0 or cadence_distance > 16.0:
-		_fail("authoritative simulation is not running near 20 Hz: speed-12 unit moved %.2f units in one second" % cadence_distance)
-		return
-	if not GrusBridge.stop_units(PackedInt32Array([3])):
-		_fail("20 Hz cadence probe stop was rejected")
-		return
-	for _frame in range(2):
-		await get_tree().physics_frame
-
-	var controller := get_node("Main")
 	var camera := get_node("Main/Camera3D") as Camera3D
-	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
-	var first_click := camera.unproject_position(unit_one.global_position)
-	_mouse_click(first_click, MOUSE_BUTTON_LEFT)
+	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
 	if not _ring(unit_one).visible:
-		var nearest_id := -1
-		var nearest_distance := INF
-		for unit in get_tree().get_nodes_in_group("unit_views"):
-			if int(unit.get_meta("team_id", -1)) != 1:
-				continue
-			var distance := camera.unproject_position((unit as Node3D).global_position).distance_to(first_click)
-			if distance < nearest_distance:
-				nearest_distance = distance
-				nearest_id = int(unit.get_meta("unit_id", -1))
-		_fail("left-click diagnostics point=%s shield=%s shield_hit=%s selected=%s nearest=%d distance=%.2f unit1_pos=%s" % [first_click, input_shield.get_global_rect() if input_shield != null else Rect2(), input_shield.get_global_rect().has_point(first_click) if input_shield != null else false, controller.selected_ids, nearest_id, nearest_distance, unit_one.global_position])
+		_fail("left-click input did not select friendly unit 1")
 		return
 
 	var start := unit_one.global_position
@@ -216,6 +189,7 @@ func _run() -> void:
 		_fail("Stop input did not settle the active move order")
 		return
 
+	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
 	if input_shield == null:
 		_fail("HUD input shield is missing")
 		return
@@ -241,5 +215,15 @@ func _run() -> void:
 		_fail("middle-drag did not pan the camera")
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived")
+	var cadence_start := unit_three.global_position
+	if not GrusBridge.move_units(PackedInt32Array([3]), Vector2(36.5, 44.5)):
+		_fail("20 Hz cadence probe move was rejected")
+		return
+	await get_tree().create_timer(1.0).timeout
+	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
+	if cadence_distance < 8.0 or cadence_distance > 16.0:
+		_fail("authoritative simulation is not running near 20 Hz: speed-12 unit moved %.2f units in one second" % cadence_distance)
+		return
+
+	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived cadence=20hz")
 	get_tree().quit(0)
