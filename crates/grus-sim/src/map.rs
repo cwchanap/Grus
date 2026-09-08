@@ -134,6 +134,27 @@ mod tests {
     }
 
     #[test]
+    fn occupancy_revision_changes_only_when_walkability_changes() {
+        let mut map = GridMap::new(8, 8);
+        let cell = GridPos::new(3, 4);
+
+        assert_eq!(map.revision(), 0);
+        assert!(map.set_blocked(cell, true));
+        assert_eq!(map.revision(), 1);
+        assert!(!map.is_walkable(cell));
+
+        assert!(!map.set_blocked(cell, true));
+        assert_eq!(map.revision(), 1);
+
+        assert!(map.set_blocked(cell, false));
+        assert_eq!(map.revision(), 2);
+        assert!(map.is_walkable(cell));
+
+        assert!(!map.set_blocked(cell, false));
+        assert_eq!(map.revision(), 2);
+    }
+
+    #[test]
     fn world_cell_round_trip_uses_cell_centers() {
         let map = GridMap::new(8, 8);
         for cell in [GridPos::new(0, 0), GridPos::new(3, 5), GridPos::new(7, 7)] {
