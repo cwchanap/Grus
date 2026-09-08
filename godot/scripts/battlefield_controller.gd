@@ -2,6 +2,9 @@ extends Node3D
 
 const CLICK_RADIUS := 20.0
 const DRAG_THRESHOLD := 6.0
+const MIN_CAMERA_SIZE := 24.0
+const MAX_CAMERA_SIZE := 120.0
+const ZOOM_STEP := 6.0
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
@@ -29,6 +32,13 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
+
+	if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_WHEEL_UP:
+		camera.size = maxf(MIN_CAMERA_SIZE, camera.size - ZOOM_STEP)
+		return
+	if mouse_event.pressed and mouse_event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+		camera.size = minf(MAX_CAMERA_SIZE, camera.size + ZOOM_STEP)
+		return
 
 	if mouse_event.button_index == MOUSE_BUTTON_LEFT:
 		if mouse_event.pressed:
