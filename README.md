@@ -67,23 +67,23 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## 200-unit 1080p baseline
 
-CI run **87** records the post-20-Hz/interpolation 1920x1080 baseline while **all 200 units are moving** through the retained command/path/movement systems.
+CI run **95** records the post-20-Hz/interpolation 1920x1080 baseline while **all 200 units are moving** through the retained command/path/movement systems.
 
 | Item | Baseline |
 | --- | --- |
-| Host OS | Ubuntu 24.04.4, Linux x86_64 |
-| Reference CPU | 4 vCPU, AMD EPYC 9V74 80-Core Processor |
+| Host OS | Ubuntu 24.04, Linux x86_64 |
+| Reference CPU | 4 vCPU, AMD EPYC 7763 64-Core Processor |
 | Godot | 4.6.2 |
 | Build mode | Rust dev/debug GDExtension in the Godot editor runtime; debug export verified separately |
 | Display | X11 via Xvfb, 1920x1080 |
 | Renderer | `gl_compatibility`, OpenGL 4.5 |
 | Adapter | Mesa `llvmpipe` (LLVM 20.1.2, 256-bit) software renderer |
-| Sample | 60 warm-up frames + 240 measured frames |
-| Mean frame time | 160.166 ms |
-| p50 | 155.723 ms |
-| p95 | 170.445 ms |
-| p99 | 210.995 ms |
-| Max | 216.646 ms |
-| Mean FPS | 6.2 |
+| Sample | 8 warm-up frames + 40 measured frames |
+| Mean frame time | 192.607 ms |
+| p50 | 198.735 ms |
+| p95 | 208.873 ms |
+| p99 | 210.047 ms |
+| Max | 210.047 ms |
+| Mean FPS | 5.2 |
 
 This is intentionally a **software-rendered CI reference baseline**, not a representative discrete/integrated-GPU performance result. The project target remains 60 FPS; a hardware-rendered workstation measurement is still required before treating that target as achieved or missed.
