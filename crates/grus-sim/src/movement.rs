@@ -37,6 +37,11 @@ pub struct MoveOrder {
     pub next: usize,
     pub goal: GridPos,
     pub map_revision: u64,
+    /// Revision at which a forced replan from the unit's current cell last
+    /// failed to find a route to `goal`. While `map.revision()` matches this,
+    /// the movement step skips re-running A* and waits for a map change
+    /// instead of recomputing a path that is already known to be unreachable.
+    pub last_failed_replan: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -98,11 +103,16 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     // adopt it and recover in one tick. If the goal is still
                     // unreachable from here, preserve the existing order and
                     // wait for a map revision change rather than cancelling a
-                    // still-valid order.
-                    if let Some(forced_order) =
-                        compute_route(active_order.goal, snapshot.position.current, map)
-                    {
-                        order = Some(forced_order);
+                    // still-valid order. Record the failed revision so we do
+                    // not re-run A* on every step while the map is unchanged.
+                    if active_order.last_failed_replan != Some(map.revision()) {
+                        if let Some(forced_order) =
+                            compute_route(active_order.goal, snapshot.position.current, map)
+                        {
+                            order = Some(forced_order);
+                        } else if let Some(preserved) = order.as_mut() {
+                            preserved.last_failed_replan = Some(map.revision());
+                        }
                     }
                 }
             } else {
@@ -144,6 +154,7 @@ fn compute_route(goal: GridPos, current: Vec2, map: &GridMap) -> Option<MoveOrde
         next: 0,
         goal,
         map_revision: map.revision(),
+        last_failed_replan: None,
     })
 }
 
@@ -234,6 +245,7 @@ mod tests {
             next: 0,
             goal: map.world_to_cell(waypoint),
             map_revision: map.revision(),
+            last_failed_replan: None,
         }
     }
 
@@ -308,6 +320,7 @@ mod tests {
             next: 0,
             goal: GridPos::new(3, 1),
             map_revision: map.revision(),
+            last_failed_replan: None,
         });
 
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
@@ -328,6 +341,84 @@ mod tests {
         let position = world.get::<SimPosition>(entity).unwrap();
         assert_vec2_near(position.current, map.cell_center(GridPos::new(3, 1)));
         assert!(world.get::<MoveOrder>(entity).is_none());
+    }
+
+    #[test]
+    fn failed_forced_replan_waits_for_map_change_instead_of_recomputing() {
+        let mut world = World::new();
+        let mut map = GridMap::new(16, 16);
+        // Enclose the unit's cell (1, 1) so the walkable goal (5, 5) is
+        // unreachable from its current position.
+        for cell in [
+            GridPos::new(2, 1),
+            GridPos::new(0, 1),
+            GridPos::new(1, 2),
+            GridPos::new(1, 0),
+        ] {
+            map.set_blocked(cell, true);
+        }
+        let entity = spawn_unit(&mut world, UnitId(7), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        // Stale cached route whose first step lands on the blocked cell (2, 1),
+        // forcing the movement step into the forced-replan branch.
+        world.entity_mut(entity).insert(MoveOrder {
+            waypoints: vec![
+                map.cell_center(GridPos::new(2, 1)),
+                map.cell_center(GridPos::new(5, 5)),
+            ],
+            next: 0,
+            goal: GridPos::new(5, 5),
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+        let failed_revision = map.revision();
+
+        // First step: the forced replan fails (no path from the enclosed cell),
+        // so the order is preserved and the failed revision is recorded.
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        let order = world
+            .get::<MoveOrder>(entity)
+            .expect("order preserved while stranded");
+        assert_eq!(order.last_failed_replan, Some(failed_revision));
+        assert_vec2_near(
+            world.get::<SimPosition>(entity).unwrap().current,
+            Vec2::new(1.5, 1.5),
+        );
+        let calls_after_first_step = map.path_call_count();
+
+        // Many subsequent steps must not re-run A* for the same revision: the
+        // unit stays put, the recorded failed revision is unchanged, and the
+        // pathfind call count does not increase.
+        for _ in 0..50 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        let order = world
+            .get::<MoveOrder>(entity)
+            .expect("order still preserved");
+        assert_eq!(order.last_failed_replan, Some(failed_revision));
+        assert_vec2_near(
+            world.get::<SimPosition>(entity).unwrap().current,
+            Vec2::new(1.5, 1.5),
+        );
+        assert_eq!(
+            map.path_call_count(),
+            calls_after_first_step,
+            "A* was re-run on a stranded unit while the map revision was unchanged"
+        );
+
+        // When the map changes so the goal becomes reachable, the unit resumes.
+        map.set_blocked(GridPos::new(2, 1), false);
+        assert!(map.revision() > failed_revision);
+        for _ in 0..200 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        assert!(
+            world.get::<MoveOrder>(entity).is_none(),
+            "unit should reach the goal"
+        );
+        assert_vec2_near(
+            world.get::<SimPosition>(entity).unwrap().current,
+            map.cell_center(GridPos::new(5, 5)),
+        );
     }
 
     #[test]
