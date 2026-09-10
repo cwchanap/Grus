@@ -90,6 +90,20 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     } else {
                         Some(candidate_order)
                     };
+                } else if map.is_walkable(active_order.goal) {
+                    // The cached route's next step is blocked, typically because
+                    // separation nudged the unit off-route and the straight line
+                    // to the next waypoint clips a blocked corner. Force a
+                    // replan from the current cell; if a fresh route exists,
+                    // adopt it and recover in one tick. If the goal is still
+                    // unreachable from here, preserve the existing order and
+                    // wait for a map revision change rather than cancelling a
+                    // still-valid order.
+                    if let Some(forced_order) =
+                        compute_route(active_order.goal, snapshot.position.current, map)
+                    {
+                        order = Some(forced_order);
+                    }
                 }
             } else {
                 order = None;
@@ -111,7 +125,11 @@ fn refresh_route(order: &MoveOrder, current: Vec2, map: &GridMap) -> Option<Move
         return Some(order.clone());
     }
 
-    let path = map.find_path(map.world_to_cell(current), order.goal)?;
+    compute_route(order.goal, current, map)
+}
+
+fn compute_route(goal: GridPos, current: Vec2, map: &GridMap) -> Option<MoveOrder> {
+    let path = map.find_path(map.world_to_cell(current), goal)?;
     let waypoints = path
         .into_iter()
         .skip(1)
@@ -124,7 +142,7 @@ fn refresh_route(order: &MoveOrder, current: Vec2, map: &GridMap) -> Option<Move
     Some(MoveOrder {
         waypoints,
         next: 0,
-        goal: order.goal,
+        goal,
         map_revision: map.revision(),
     })
 }
@@ -273,6 +291,43 @@ mod tests {
         assert_vec2_near(position.previous, Vec2::new(1.5, 1.5));
         assert_vec2_near(position.current, Vec2::new(1.5, 1.5));
         assert!(world.get::<MoveOrder>(entity).is_some());
+    }
+
+    #[test]
+    fn blocked_cached_step_replans_around_obstacle() {
+        let mut world = World::new();
+        let mut map = GridMap::new(16, 16);
+        map.set_blocked_rect(GridPos::new(2, 1), GridPos::new(2, 1));
+        let entity = spawn_unit(&mut world, UnitId(6), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        // Stale cached route that would step straight through the blocked cell.
+        world.entity_mut(entity).insert(MoveOrder {
+            waypoints: vec![
+                map.cell_center(GridPos::new(2, 1)),
+                map.cell_center(GridPos::new(3, 1)),
+            ],
+            next: 0,
+            goal: GridPos::new(3, 1),
+            map_revision: map.revision(),
+        });
+
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+
+        // The blocked step must trigger a replan around (2, 1) rather than
+        // preserving the stale route that walks into it.
+        let order = world.get::<MoveOrder>(entity).expect("order preserved");
+        assert_ne!(
+            order.waypoints.first().copied(),
+            Some(map.cell_center(GridPos::new(2, 1))),
+            "stale route through blocked cell was not replaced"
+        );
+
+        for _ in 0..200 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+
+        let position = world.get::<SimPosition>(entity).unwrap();
+        assert_vec2_near(position.current, map.cell_center(GridPos::new(3, 1)));
+        assert!(world.get::<MoveOrder>(entity).is_none());
     }
 
     #[test]
