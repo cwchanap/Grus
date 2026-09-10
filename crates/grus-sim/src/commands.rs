@@ -90,11 +90,6 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
         UnitCommandKind::Move { target } => {
             let target_cell = map.world_to_cell(target);
             let target_is_walkable = map.is_walkable(target_cell);
-            let slots = if target_is_walkable {
-                destination_slots(map, target_cell, units.len())
-            } else {
-                Vec::new()
-            };
             let command_units: HashSet<UnitId> = units.iter().copied().collect();
             let mut used_slots: HashSet<GridPos> = HashSet::new();
             // Reserve destination cells already occupied or targeted by units that
@@ -118,6 +113,16 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                     used_slots.insert(order.goal);
                 }
             }
+            // Generate destination slots after seeding reservations so the cap
+            // counts only unreserved candidates. A fixed 4*units.len() list built
+            // before reservations would exhaust a one-unit command whose first
+            // few candidates are already occupied/targeted, rejecting the move
+            // even when a neighboring cell is open and pathable.
+            let slots = if target_is_walkable {
+                destination_slots(map, target_cell, units.len(), &used_slots)
+            } else {
+                Vec::new()
+            };
 
             for id in units {
                 let entity = match owned_entity(world, id, issuer) {
@@ -198,10 +203,17 @@ fn owned_entity(world: &World, id: UnitId, issuer: TeamId) -> Result<Entity, Com
     Ok(entity)
 }
 
-fn destination_slots(map: &GridMap, target: GridPos, unit_count: usize) -> Vec<GridPos> {
+fn destination_slots(
+    map: &GridMap,
+    target: GridPos,
+    unit_count: usize,
+    used_slots: &HashSet<GridPos>,
+) -> Vec<GridPos> {
     let desired = unit_count.max(1).saturating_mul(4);
     let mut slots = Vec::with_capacity(desired);
-    slots.push(target);
+    if !used_slots.contains(&target) {
+        slots.push(target);
+    }
 
     let max_radius = map.width().max(map.height());
     for radius in 1..=max_radius {
@@ -216,7 +228,7 @@ fn destination_slots(map: &GridMap, target: GridPos, unit_count: usize) -> Vec<G
                     continue;
                 }
                 let cell = GridPos::new(x, y);
-                if map.is_walkable(cell) {
+                if map.is_walkable(cell) && !used_slots.contains(&cell) {
                     slots.push(cell);
                     if slots.len() >= desired {
                         return slots;
@@ -439,6 +451,48 @@ mod tests {
             first_pos.distance(second_pos) >= 0.9,
             "units collapsed at first={first_pos:?} second={second_pos:?}"
         );
+    }
+
+    #[test]
+    fn destination_slots_keep_scanning_past_reserved_candidates() {
+        let mut world = World::new();
+        let map = open_map();
+        // Reserve the four closest destination candidates (the target cell and
+        // the first three ring-1 cells in slot order) with units that are not part
+        // of the command, so a fixed 4*units.len() slot list would be exhausted
+        // and the one-unit command would be rejected as unreachable.
+        let target_cell = map.world_to_cell(Vec2::new(18.5, 18.5));
+        let reserved = [
+            target_cell,
+            GridPos::new(17, 17),
+            GridPos::new(18, 17),
+            GridPos::new(19, 17),
+        ];
+        for (i, cell) in reserved.iter().enumerate() {
+            spawn_unit(
+                &mut world,
+                UnitId(100 + i as u32),
+                TeamId(2),
+                map.cell_center(*cell),
+                6.0,
+            );
+        }
+        let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
+
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(1)], Vec2::new(18.5, 18.5)),
+        );
+
+        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        let order = world.get::<MoveOrder>(unit).expect("order accepted");
+        assert!(
+            !reserved.contains(&order.goal),
+            "unit settled on a reserved candidate {:?}",
+            order.goal
+        );
+        assert!(map.is_walkable(order.goal));
     }
 
     #[test]

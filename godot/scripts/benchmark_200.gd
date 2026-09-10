@@ -4,7 +4,7 @@ const BENCHMARK_SIZE := Vector2i(1920, 1080)
 const WARMUP_FRAMES := 8
 const SAMPLE_FRAMES := 40
 const MOVEMENT_CHECK_INTERVAL := 20
-const MOVEMENT_THRESHOLD := 190
+const MOVEMENT_THRESHOLD := 200
 const MOVEMENT_EPSILON := 0.05
 
 func _ready() -> void:
