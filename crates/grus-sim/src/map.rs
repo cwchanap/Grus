@@ -16,12 +16,32 @@ impl GridPos {
     }
 }
 
-#[derive(Clone, Debug, Resource)]
+#[derive(Debug, Resource)]
 pub struct GridMap {
     width: i32,
     height: i32,
     blocked: HashSet<GridPos>,
     revision: u64,
+    /// Test-only count of `find_path` invocations, used by performance
+    /// regressions to prove A* is not re-run every simulation step. Absent in
+    /// non-test builds.
+    #[cfg(test)]
+    path_calls: std::sync::atomic::AtomicU64,
+}
+
+impl Clone for GridMap {
+    fn clone(&self) -> Self {
+        Self {
+            width: self.width,
+            height: self.height,
+            blocked: self.blocked.clone(),
+            revision: self.revision,
+            #[cfg(test)]
+            path_calls: std::sync::atomic::AtomicU64::new(
+                self.path_calls.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+        }
+    }
 }
 
 impl GridMap {
@@ -32,6 +52,8 @@ impl GridMap {
             height,
             blocked: HashSet::new(),
             revision: 0,
+            #[cfg(test)]
+            path_calls: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -45,6 +67,12 @@ impl GridMap {
 
     pub const fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Number of times `find_path` has been invoked on this map. Test-only.
+    #[cfg(test)]
+    pub fn path_call_count(&self) -> u64 {
+        self.path_calls.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn in_bounds(&self, pos: GridPos) -> bool {
@@ -93,6 +121,10 @@ impl GridMap {
     }
 
     pub fn find_path(&self, start: GridPos, goal: GridPos) -> Option<Vec<GridPos>> {
+        #[cfg(test)]
+        self.path_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         if !self.is_walkable(start) || !self.is_walkable(goal) {
             return None;
         }

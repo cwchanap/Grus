@@ -91,26 +91,41 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
             let target_cell = map.world_to_cell(target);
             let target_is_walkable = map.is_walkable(target_cell);
             let command_units: HashSet<UnitId> = units.iter().copied().collect();
-            let mut used_slots: HashSet<GridPos> = HashSet::new();
-            // Reserve destination cells already occupied or targeted by units that
-            // are NOT part of this command, so a separate later command cannot
-            // collapse a unit onto a cell a live unit is standing on or moving to.
-            let reservations: Vec<Entity> = world
+
+            // Reference-counted reservations seeded from EVERY live unit's
+            // current cell and existing MoveOrder goal, including units in this
+            // command. A commanded unit that is later rejected keeps its
+            // reservation so an accepted sibling cannot be assigned the cell it
+            // is standing on or already moving to; a commanded unit's old
+            // reservation is released only when an accepted replacement is
+            // assigned (and restored if assignment fails).
+            let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
+            // Candidate slot generation excludes only non-commanded
+            // reservations, so a commanded unit's own current cell (e.g. a unit
+            // already at the target) remains a selectable candidate that the
+            // live `slot_taken` check protects until the unit is reassigned.
+            let mut non_commanded_used: HashSet<GridPos> = HashSet::new();
+            let all_entities: Vec<Entity> = world
                 .get_resource::<UnitIndex>()
-                .map(|index| {
-                    index
-                        .iter()
-                        .filter(|(id, _)| !command_units.contains(*id))
-                        .map(|(_, entity)| *entity)
-                        .collect()
-                })
+                .map(|index| index.iter().map(|(_, entity)| *entity).collect())
                 .unwrap_or_default();
-            for entity in reservations {
-                if let Some(position) = world.get::<SimPosition>(entity) {
-                    used_slots.insert(map.world_to_cell(position.current));
+            for entity in &all_entities {
+                let is_commanded = world
+                    .get::<Unit>(*entity)
+                    .map(|unit| command_units.contains(&unit.id))
+                    .unwrap_or(false);
+                if let Some(position) = world.get::<SimPosition>(*entity) {
+                    let cell = map.world_to_cell(position.current);
+                    reserve_slot(&mut used_slots, cell);
+                    if !is_commanded {
+                        non_commanded_used.insert(cell);
+                    }
                 }
-                if let Some(order) = world.get::<MoveOrder>(entity) {
-                    used_slots.insert(order.goal);
+                if let Some(order) = world.get::<MoveOrder>(*entity) {
+                    reserve_slot(&mut used_slots, order.goal);
+                    if !is_commanded {
+                        non_commanded_used.insert(order.goal);
+                    }
                 }
             }
             // Generate destination slots after seeding reservations so the cap
@@ -119,7 +134,7 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
             // few candidates are already occupied/targeted, rejecting the move
             // even when a neighboring cell is open and pathable.
             let slots = if target_is_walkable {
-                destination_slots(map, target_cell, units.len(), &used_slots)
+                destination_slots(map, target_cell, units.len(), &non_commanded_used)
             } else {
                 Vec::new()
             };
@@ -128,6 +143,8 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                 let entity = match owned_entity(world, id, issuer) {
                     Ok(entity) => entity,
                     Err(reason) => {
+                        // Rejected before any reservation is touched: the unit
+                        // keeps its current cell and existing goal reserved.
                         outcome.rejected.push((id, reason));
                         continue;
                     }
@@ -147,22 +164,36 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                     continue;
                 };
                 let start = map.world_to_cell(position.current);
+                let old_goal = world.get::<MoveOrder>(entity).map(|order| order.goal);
+
+                // Tentatively release this unit's old reservations so a later
+                // sibling may reuse the cell it is leaving. If no replacement
+                // slot is accepted below, restore them so a rejected unit keeps
+                // its place reserved against the rest of the command.
+                release_slot(&mut used_slots, start);
+                if let Some(goal) = old_goal {
+                    release_slot(&mut used_slots, goal);
+                }
 
                 let route = slots.iter().copied().find_map(|slot| {
-                    if used_slots.contains(&slot) {
+                    if slot_taken(&used_slots, &slot) {
                         return None;
                     }
                     map.find_path(start, slot).map(|path| (slot, path))
                 });
 
                 let Some((slot, path)) = route else {
+                    reserve_slot(&mut used_slots, start);
+                    if let Some(goal) = old_goal {
+                        reserve_slot(&mut used_slots, goal);
+                    }
                     outcome
                         .rejected
                         .push((id, CommandRejectReason::Unreachable));
                     continue;
                 };
 
-                used_slots.insert(slot);
+                reserve_slot(&mut used_slots, slot);
                 let waypoints = path
                     .into_iter()
                     .skip(1)
@@ -177,6 +208,7 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                         next: 0,
                         goal: slot,
                         map_revision: map.revision(),
+                        last_failed_replan: None,
                     });
                 }
                 outcome.accepted.push(id);
@@ -201,6 +233,28 @@ fn owned_entity(world: &World, id: UnitId, issuer: TeamId) -> Result<Entity, Com
     }
 
     Ok(entity)
+}
+
+/// Reference-counted reservation for a destination cell. A cell shared by
+/// several units (e.g. two units with the same existing goal) stays reserved
+/// until every one of them releases it.
+fn reserve_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
+    *used.entry(cell).or_default() += 1;
+}
+
+/// Release one reference to a reserved cell, removing it entirely once the
+/// last unit that claimed it has let go.
+fn release_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
+    if let Some(count) = used.get_mut(&cell) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            used.remove(&cell);
+        }
+    }
+}
+
+fn slot_taken(used: &HashMap<GridPos, usize>, cell: &GridPos) -> bool {
+    used.contains_key(cell)
 }
 
 fn destination_slots(
@@ -266,6 +320,7 @@ mod tests {
             next: 0,
             goal: map.world_to_cell(waypoint),
             map_revision: map.revision(),
+            last_failed_replan: None,
         }
     }
 
@@ -547,5 +602,59 @@ mod tests {
             world.get::<MoveOrder>(unit).unwrap().waypoints,
             vec![Vec2::new(1.5, 2.5)]
         );
+    }
+
+    #[test]
+    fn rejected_unit_keeps_its_destination_reserved_from_accepted_sibling() {
+        let mut world = World::new();
+        let mut map = open_map();
+        let target = Vec2::new(18.5, 18.5);
+        let target_cell = map.world_to_cell(target);
+
+        // Unit A is on the right side and can reach the target.
+        let a = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(18.5, 2.5), 12.0);
+        // Unit B is walled into a pocket on the left so it is Unreachable, but
+        // it already holds a MoveOrder to the target cell. B must keep that goal
+        // reserved so the accepted A is not sent to the same cell.
+        for cell in [
+            GridPos::new(3, 2),
+            GridPos::new(2, 3),
+            GridPos::new(1, 2),
+            GridPos::new(2, 1),
+        ] {
+            map.set_blocked(cell, true);
+        }
+        let b = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(2.5, 2.5), 12.0);
+        world.entity_mut(b).insert(MoveOrder {
+            waypoints: vec![map.cell_center(target_cell)],
+            next: 0,
+            goal: target_cell,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(1), UnitId(2)], target),
+        );
+
+        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        assert_eq!(
+            outcome.rejected,
+            vec![(UnitId(2), CommandRejectReason::Unreachable)]
+        );
+
+        // A must not have been assigned the target cell B is already moving to.
+        let a_goal = world.get::<MoveOrder>(a).expect("A accepted an order").goal;
+        assert_ne!(
+            a_goal, target_cell,
+            "accepted unit took the rejected unit's goal"
+        );
+
+        // B keeps its existing order to the target cell unchanged.
+        let b_order = world.get::<MoveOrder>(b).expect("B keeps its order");
+        assert_eq!(b_order.goal, target_cell);
+        assert_eq!(b_order.waypoints, vec![map.cell_center(target_cell)]);
     }
 }
