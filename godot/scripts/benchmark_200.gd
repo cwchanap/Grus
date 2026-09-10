@@ -1,8 +1,11 @@
 extends Node
 
 const BENCHMARK_SIZE := Vector2i(1920, 1080)
-const WARMUP_FRAMES := 60
-const SAMPLE_FRAMES := 240
+const WARMUP_FRAMES := 8
+const SAMPLE_FRAMES := 40
+const MOVEMENT_CHECK_INTERVAL := 20
+const MOVEMENT_THRESHOLD := 190
+const MOVEMENT_EPSILON := 0.05
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -81,13 +84,32 @@ func _run() -> void:
 
 	var samples: Array[float] = []
 	var previous_ticks := Time.get_ticks_usec()
+	# Snapshot unit positions at the start of the sample so each checkpoint can
+	# prove the 200-unit load is still actively moving, not just that it moved
+	# once before the warm-up. The destination routes cross the mandatory central
+	# blocker detour (~133+ world units at speed 12), so the shortened sample
+	# window stays inside the active-movement period.
+	var checkpoint_positions: Dictionary = {}
+	for unit in units:
+		checkpoint_positions[int(unit.get_meta("unit_id"))] = (unit as Node3D).global_position
 	for frame in range(SAMPLE_FRAMES):
 		await get_tree().process_frame
 		var current_ticks := Time.get_ticks_usec()
 		samples.append(float(current_ticks - previous_ticks) / 1000.0)
 		previous_ticks = current_ticks
-		if (frame + 1) % 60 == 0:
-			_progress("sample", frame + 1)
+		if (frame + 1) % MOVEMENT_CHECK_INTERVAL == 0:
+			var moved_since_checkpoint := 0
+			for unit in units:
+				var id := int(unit.get_meta("unit_id"))
+				var before: Vector3 = checkpoint_positions[id]
+				var now: Vector3 = (unit as Node3D).global_position
+				if now.distance_to(before) > MOVEMENT_EPSILON:
+					moved_since_checkpoint += 1
+				checkpoint_positions[id] = now
+			if moved_since_checkpoint < MOVEMENT_THRESHOLD:
+				_fail("benchmark movement stalled: only %d of %d units moved between sample frames %d and %d" % [moved_since_checkpoint, units.size(), frame + 1 - MOVEMENT_CHECK_INTERVAL, frame + 1])
+				return
+			_progress("active", moved_since_checkpoint)
 
 	var sorted_samples := samples.duplicate()
 	sorted_samples.sort()

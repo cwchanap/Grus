@@ -40,6 +40,10 @@ impl UnitIndex {
     pub fn entity(&self, id: UnitId) -> Option<Entity> {
         self.0.get(&id).copied()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&UnitId, &Entity)> {
+        self.0.iter()
+    }
 }
 
 pub fn spawn_unit(
@@ -91,7 +95,29 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
             } else {
                 Vec::new()
             };
-            let mut used_slots = HashSet::new();
+            let command_units: HashSet<UnitId> = units.iter().copied().collect();
+            let mut used_slots: HashSet<GridPos> = HashSet::new();
+            // Reserve destination cells already occupied or targeted by units that
+            // are NOT part of this command, so a separate later command cannot
+            // collapse a unit onto a cell a live unit is standing on or moving to.
+            let reservations: Vec<Entity> = world
+                .get_resource::<UnitIndex>()
+                .map(|index| {
+                    index
+                        .iter()
+                        .filter(|(id, _)| !command_units.contains(*id))
+                        .map(|(_, entity)| *entity)
+                        .collect()
+                })
+                .unwrap_or_default();
+            for entity in reservations {
+                if let Some(position) = world.get::<SimPosition>(entity) {
+                    used_slots.insert(map.world_to_cell(position.current));
+                }
+                if let Some(order) = world.get::<MoveOrder>(entity) {
+                    used_slots.insert(order.goal);
+                }
+            }
 
             for id in units {
                 let entity = match owned_entity(world, id, issuer) {
@@ -103,7 +129,6 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                 };
 
                 if !target_is_walkable {
-                    world.entity_mut(entity).remove::<MoveOrder>();
                     outcome
                         .rejected
                         .push((id, CommandRejectReason::Unreachable));
@@ -126,7 +151,6 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                 });
 
                 let Some((slot, path)) = route else {
-                    world.entity_mut(entity).remove::<MoveOrder>();
                     outcome
                         .rejected
                         .push((id, CommandRejectReason::Unreachable));
@@ -210,6 +234,7 @@ mod tests {
     use bevy::prelude::World;
 
     use super::*;
+    use crate::movement::{SIM_STEP_SECONDS, step_movement};
 
     fn open_map() -> GridMap {
         GridMap::new(24, 24)
@@ -369,5 +394,104 @@ mod tests {
 
         assert_eq!(destinations.len(), 4);
         assert!(destinations.iter().all(|cell| map.is_walkable(*cell)));
+    }
+
+    #[test]
+    fn sequential_commands_do_not_collapse_onto_occupied_destination() {
+        let mut world = World::new();
+        let map = open_map();
+        let first = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(2.5, 2.5), 20.0);
+        let second = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(2.5, 4.5), 20.0);
+
+        // Command 1: move the first unit to the target.
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(1)], Vec2::new(18.5, 18.5)),
+        );
+        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        for _ in 0..200 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        assert!(
+            world.get::<MoveOrder>(first).is_none(),
+            "first unit should have arrived"
+        );
+
+        // Command 2: move the second unit to the SAME target.
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(2)], Vec2::new(18.5, 18.5)),
+        );
+        assert_eq!(outcome.accepted, vec![UnitId(2)]);
+        for _ in 0..200 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        assert!(
+            world.get::<MoveOrder>(second).is_none(),
+            "second unit should have arrived"
+        );
+
+        let first_pos = world.get::<SimPosition>(first).unwrap().current;
+        let second_pos = world.get::<SimPosition>(second).unwrap().current;
+        assert!(
+            first_pos.distance(second_pos) >= 0.9,
+            "units collapsed at first={first_pos:?} second={second_pos:?}"
+        );
+    }
+
+    #[test]
+    fn unreachable_move_preserves_an_active_order() {
+        let mut world = World::new();
+        let mut map = open_map();
+        map.set_blocked_rect(GridPos::new(10, 10), GridPos::new(12, 12));
+        let unit = spawn_unit(&mut world, UnitId(4), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
+        world
+            .entity_mut(unit)
+            .insert(test_order(&map, Vec2::new(3.5, 2.5)));
+
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(4)], Vec2::new(11.5, 11.5)),
+        );
+
+        assert_eq!(
+            outcome.rejected,
+            vec![(UnitId(4), CommandRejectReason::Unreachable)]
+        );
+        assert_eq!(
+            world.get::<MoveOrder>(unit).unwrap().waypoints,
+            vec![Vec2::new(3.5, 2.5)]
+        );
+    }
+
+    #[test]
+    fn unreachable_route_preserves_an_active_order() {
+        let mut world = World::new();
+        let mut map = open_map();
+        // Wall off the unit from the target region so the target is walkable
+        // but no destination slot is reachable.
+        map.set_blocked_rect(GridPos::new(0, 3), GridPos::new(23, 3));
+        let unit = spawn_unit(&mut world, UnitId(5), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
+        world
+            .entity_mut(unit)
+            .insert(test_order(&map, Vec2::new(1.5, 2.5)));
+
+        let outcome = apply_command(
+            &mut world,
+            &map,
+            move_command(TeamId(1), vec![UnitId(5)], Vec2::new(5.5, 5.5)),
+        );
+
+        assert_eq!(
+            outcome.rejected,
+            vec![(UnitId(5), CommandRejectReason::Unreachable)]
+        );
+        assert_eq!(
+            world.get::<MoveOrder>(unit).unwrap().waypoints,
+            vec![Vec2::new(1.5, 2.5)]
+        );
     }
 }
