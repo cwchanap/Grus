@@ -37,10 +37,10 @@ pub struct MoveOrder {
     pub next: usize,
     pub goal: GridPos,
     pub map_revision: u64,
-    /// Revision at which a forced replan from the unit's current cell last
-    /// failed to find a route to `goal`. While `map.revision()` matches this,
-    /// the movement step skips re-running A* and waits for a map change
-    /// instead of recomputing a path that is already known to be unreachable.
+    /// Revision at which a replan last failed to find a route to `goal`.
+    /// While `map.revision()` matches this, the movement step skips
+    /// re-running A* and waits for a map change instead of recomputing a
+    /// path that is already known to be unreachable.
     pub last_failed_replan: Option<u64>,
 }
 
@@ -116,7 +116,15 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     }
                 }
             } else {
-                order = None;
+                // A newer map revision triggered a replan that found no
+                // route to the goal. Preserve the order and record the
+                // failed revision so the unit waits for a later map change
+                // that may reopen a path instead of dropping an order that
+                // is still wanted — matching the blocked-step policy above.
+                if let Some(preserved) = order.as_mut() {
+                    preserved.map_revision = map.revision();
+                    preserved.last_failed_replan = Some(map.revision());
+                }
             }
         }
 
@@ -418,6 +426,69 @@ mod tests {
         assert_vec2_near(
             world.get::<SimPosition>(entity).unwrap().current,
             map.cell_center(GridPos::new(5, 5)),
+        );
+    }
+
+    #[test]
+    fn failed_revision_replan_preserves_order_until_route_reopens() {
+        let mut world = World::new();
+        let mut map = GridMap::new(16, 16);
+        let goal = GridPos::new(5, 5);
+        let entity = spawn_unit(&mut world, UnitId(8), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        world.entity_mut(entity).insert(MoveOrder {
+            waypoints: vec![map.cell_center(GridPos::new(2, 1)), map.cell_center(goal)],
+            next: 0,
+            goal,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+
+        // An occupancy change walls the unit in: the revision bumps and the
+        // goal becomes unreachable, so the refresh finds no route. The order
+        // must be preserved with the failed revision recorded rather than
+        // cancelled before the preserved-order branch can run.
+        for cell in [
+            GridPos::new(2, 1),
+            GridPos::new(0, 1),
+            GridPos::new(1, 2),
+            GridPos::new(1, 0),
+        ] {
+            map.set_blocked(cell, true);
+        }
+        let failed_revision = map.revision();
+
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        let order = world
+            .get::<MoveOrder>(entity)
+            .expect("order preserved after failed revision replan");
+        assert_eq!(order.map_revision, failed_revision);
+        assert_eq!(order.last_failed_replan, Some(failed_revision));
+
+        // While the map is unchanged, no further A* runs and the unit waits.
+        let calls = map.path_call_count();
+        for _ in 0..50 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        assert_eq!(
+            map.path_call_count(),
+            calls,
+            "A* re-ran while the failed revision was still current"
+        );
+        assert!(world.get::<MoveOrder>(entity).is_some());
+
+        // A later revision that reopens the route lets the unit finish.
+        map.set_blocked(GridPos::new(2, 1), false);
+        assert!(map.revision() > failed_revision);
+        for _ in 0..200 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        assert!(
+            world.get::<MoveOrder>(entity).is_none(),
+            "unit should reach the goal once the route reopens"
+        );
+        assert_vec2_near(
+            world.get::<SimPosition>(entity).unwrap().current,
+            map.cell_center(goal),
         );
     }
 
