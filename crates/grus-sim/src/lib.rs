@@ -6,6 +6,7 @@ pub mod fixture;
 pub mod ids;
 pub mod map;
 pub mod movement;
+pub mod production;
 
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
@@ -28,3 +29,7 @@ pub use fixture::{MapFixture, ResourceSpawn, TeamStart, seed_skirmish};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
 pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};
+pub use production::{
+    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, population_cap, population_used,
+    produces, step_production,
+};

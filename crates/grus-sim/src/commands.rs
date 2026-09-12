@@ -9,6 +9,7 @@ use crate::economy::{apply_gather, cancel_worker_activity};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
 
 #[derive(Clone, Debug)]
 pub enum UnitCommandKind {
@@ -42,6 +43,20 @@ pub enum PlayerCommand {
         issuer: TeamId,
         workers: Vec<UnitId>,
         source: ResourceId,
+    },
+    EnqueueUnit {
+        issuer: TeamId,
+        building: BuildingId,
+        kind: UnitKind,
+    },
+    EnqueueAgeUp {
+        issuer: TeamId,
+        building: BuildingId,
+    },
+    SetRally {
+        issuer: TeamId,
+        building: BuildingId,
+        target: GridPos,
     },
 }
 
@@ -136,6 +151,19 @@ pub fn apply_player_command(
             workers,
             source,
         } => apply_gather(world, map, issuer, workers, source),
+        PlayerCommand::EnqueueUnit {
+            issuer,
+            building,
+            kind,
+        } => apply_enqueue_unit(world, issuer, building, kind),
+        PlayerCommand::EnqueueAgeUp { issuer, building } => {
+            apply_enqueue_age_up(world, issuer, building)
+        }
+        PlayerCommand::SetRally {
+            issuer,
+            building,
+            target,
+        } => apply_set_rally(world, issuer, building, target),
     }
 }
 
