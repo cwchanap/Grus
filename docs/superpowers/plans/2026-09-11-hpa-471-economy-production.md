@@ -4,7 +4,7 @@
 
 **Goal:** Extend the HPA-470 battlefield into the complete HPA-471 gather/build/train/advance loop without creating a second gameplay state model.
 
-**Architecture:** Bevy ECS remains authoritative. Four focused simulation modules (`catalog`, `economy`, `buildings`, `production`) extend the existing movement/command core; one `PlayerCommand` dispatcher owns validation/application, and Godot remains a thin input/HUD/presentation layer. HPA-470 destination-slot reservation, `GridMap` revision-based occupancy, and one-way Bevy → Godot presentation are reused rather than replaced.
+**Architecture:** Bevy ECS remains authoritative. Four focused simulation modules (`catalog`, `economy`, `buildings`, `production`) extend the existing movement/command core; `PlayerCommand` grows only as each owning feature lands, and Godot remains a thin input/HUD/presentation layer. HPA-470 destination-slot reservation, `GridMap` revision-based occupancy, and one-way Bevy → Godot presentation are reused rather than replaced.
 
 **Tech Stack:** Rust 1.89, Bevy 0.18.1 ECS/time, godot-bevy 0.11.0, godot-rust 0.4.5, Godot 4.6.2, GDScript, existing GitHub Actions CI.
 
@@ -16,14 +16,15 @@
 - Bevy owns every mutable gameplay rule/state; Godot may cache only presentation and selection state.
 - Keep the authoritative 20 Hz fixed simulation and interpolated Bevy → Godot transforms.
 - Fixed tick order ends as `commands → movement → economy → construction → production`.
-- All walkability mutations continue through `GridMap::set_blocked` / `set_blocked_rect` or replacement of the entire map resource during reset.
-- Move, Gather, and construction approach share HPA-470 destination-slot reservation; do not add a second navigation subsystem.
+- All walkability mutations continue through `GridMap::set_blocked` / `set_blocked_rect`, except reset replacing the whole map resource with a fresh authored map.
+- Move, Gather, construction approach, drop-off approach, and rally/spawn path assignment reuse HPA-470 destination-slot/reservation logic; do not add a second navigation subsystem.
 - Replacement worker commands validate first and cancel the old worker task only for accepted units; rejected commands preserve the old task/order.
 - Stockpile/source/carry amounts remain `u32`; fractional gather progress is `f32` per worker.
 - Fixed content ceiling: Food/Wood/Gold, four unit kinds, seven building kinds, two ages, 100 population.
 - Normal start: four villagers/team, 200 Food, 300 Wood, 100 Gold, one Town Center/team.
 - Carry 10; gather 2.0/s in Age 1 and 2.2/s in Age 2.
-- Runtime-trained units, placed buildings, and completed Farms must receive Godot views through the same attachment system as fixture entities.
+- Runtime-trained units, placed buildings, and runtime resource sources must receive Godot views through the same attachment system as fixture entities.
+- A Farm has both `Building` and `ResourceSource` but exactly one Godot building view; its `resource_id` is exposed on that building view for Gather targeting.
 - The 200-unit speed-12 fixture remains benchmark-only.
 - No combat, fog, AI, destruction/refunds, save/load, content editor, hot reload, generic research tree, generic service/repository layer, or new rendering framework.
 
@@ -103,7 +104,7 @@ pub struct IdAllocator {
 }
 ```
 
-Add monotonic allocation methods that never emit zero. Extend `Unit` with `kind`. Update existing `spawn_unit` callers so the benchmark still seeds speed-12 units and normal catalogue villagers use speed 6.0 later.
+Add monotonic allocation methods that never emit zero. Extend `Unit` with `kind`. Update existing `spawn_unit` callers so the benchmark still seeds speed-12 units; catalogue villagers use speed 6.0 when the normal fixture lands.
 
 - [ ] **Step 4: Pin exact normal-start cells**
 
@@ -112,8 +113,9 @@ In `fixture.rs` define:
 ```rust
 pub struct TeamStart {
     pub team: TeamId,
+    pub town_center_id: BuildingId,
     pub town_center_anchor: GridPos,
-    pub villagers: [GridPos; 4],
+    pub villagers: [(UnitId, GridPos); 4],
 }
 
 pub struct ResourceSpawn {
@@ -124,7 +126,7 @@ pub struct ResourceSpawn {
 }
 ```
 
-Use these exact cells from the spec:
+Use these exact cells:
 
 ```text
 T1 TC anchor: (12,46)    T2 TC anchor: (112,46)
@@ -142,6 +144,8 @@ Expansion SW: gold (45,16), trees (43,18) (47,18)
 Expansion NE: gold (82,79), trees (84,77) (80,77)
 ```
 
+Assign deterministic authored IDs and initialize allocator counters above their maxima.
+
 - [ ] **Step 5: Add fixture occupancy regressions**
 
 ```rust
@@ -150,9 +154,11 @@ fn villager_starts_remain_walkable_after_town_centers_are_blocked() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     for start in fixture.team_starts() {
-        block_footprint_for_test(&mut map, start.town_center_anchor, (4, 4));
+        for cell in footprint_cells(start.town_center_anchor, 4, 4) {
+            map.set_blocked(cell, true);
+        }
     }
-    assert!(fixture.team_starts().iter().flat_map(|s| s.villagers).all(|cell| map.is_walkable(cell)));
+    assert!(fixture.team_starts().iter().flat_map(|s| s.villagers.iter()).all(|(_, cell)| map.is_walkable(*cell)));
 }
 
 #[test]
@@ -163,7 +169,7 @@ fn resource_cells_do_not_overlap_town_center_footprints() {
 }
 ```
 
-Also assert authored resources are in bounds and both teams have identical safe-source counts.
+Also assert every authored resource is in bounds and both teams have identical safe-source counts.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -177,7 +183,7 @@ git commit -m "feat: define HPA-471 catalogue and authored start"
 
 ---
 
-### Task 2: Centralize player commands, shared approach slots, and finite gathering
+### Task 2: Centralize Move/Gather commands, shared approach slots, finite gathering, and starting drop-offs
 
 **Files:**
 - Create: `crates/grus-sim/src/economy.rs`
@@ -189,52 +195,41 @@ git commit -m "feat: define HPA-471 catalogue and authored start"
 - Create: `crates/grus-sim/tests/worker_commands.rs`
 
 **Interfaces:**
-- Produces `PlayerCommand` and `apply_player_command()`.
-- Promotes the existing ownership lookup to a reusable internal `owned_unit_entity()` helper.
-- Produces shared destination-slot reservation usable with a blocked center.
+- Produces the first fully implemented `PlayerCommand` surface: `Units(UnitCommand)` and `Gather` only.
+- Promotes the existing ownership lookup to `pub(crate) fn owned_unit_entity(...)`.
+- Produces shared destination-slot reservation usable with blocked source/drop-off footprints.
 - Produces `TeamEconomy`, `ResourceStockpile`, `ResourceSource`, `Carry`, `GatherProgress`, `WorkerTask`, `Dropoff`, `ResourceIndex`.
-- Produces `cancel_worker_activity()` and `step_economy()`.
-- Does **not** implement Farm yet; Farm is added after buildings in Task 3.
+- Produces the initial `cancel_worker_activity()` and `step_economy()`.
+- Seeds authored finite resources and starting Town Center `Dropoff` entities, but does **not** add the full `Building` component or Farm yet.
 
-- [ ] **Step 1: Introduce one command dispatcher while preserving Move/Stop public behavior**
+- [ ] **Step 1: Add the first exhaustive PlayerCommand enum**
 
 ```rust
 pub enum PlayerCommand {
     Units(UnitCommand),
-    Gather { issuer: TeamId, workers: Vec<UnitId>, source: ResourceId },
-    PlaceBuilding { issuer: TeamId, builder: UnitId, kind: BuildingKind, anchor: GridPos },
-    ResumeConstruction { issuer: TeamId, builder: UnitId, building: BuildingId },
-    EnqueueUnit { issuer: TeamId, building: BuildingId, kind: UnitKind },
-    EnqueueAgeUp { issuer: TeamId, town_center: BuildingId },
-    SetRally { issuer: TeamId, building: BuildingId, target: Vec2 },
+    Gather {
+        issuer: TeamId,
+        workers: Vec<UnitId>,
+        source: ResourceId,
+    },
 }
 ```
 
-Move current unit ownership validation into `pub(crate) fn owned_unit_entity(...)`. `apply_player_command()` dispatches `PlayerCommand`; the Godot bridge only queues it and formats outcomes.
+`apply_player_command()` handles both variants exhaustively. Move current unit ownership validation into `owned_unit_entity()`. Keep Godot `move_units()` / `stop_units()` signatures unchanged; they queue `PlayerCommand::Units`.
 
-At this task only `Units` and `Gather` are implemented; later variants return a typed `NotImplementedForCurrentStage` only inside tests until their owning task lands, then that temporary test-only branch is removed before Task 2 commit. Do not merge a production placeholder path.
+Task 3 extends this enum with Place/Resume; Task 4 extends it with production/age/rally. No placeholder variants exist in intermediate commits.
 
-- [ ] **Step 2: Generalize HPA-470 slot reservation instead of adding one-worker routing**
+- [ ] **Step 2: Generalize HPA-470 reservation logic for blocked targets/footprints**
 
-Refactor the existing `destination_slots`/reference-counted reservation flow so it can generate ring candidates when the target center is blocked. Keep Move's explicit `target_is_walkable` guard.
+Extract the current reference-counted reservation loop so callers can request candidate slots around a one-cell source or rectangular footprint while preserving current-cell/existing-goal reservations.
 
-Add these regressions:
+Keep Move's target walkability rule. Add concrete tests that:
 
-```rust
-#[test]
-fn normal_move_to_blocked_source_is_unreachable() {
-    // block source cell, issue Move to its center, assert Unreachable and old order preserved
-}
+- Move to a blocked source cell returns `Unreachable` and preserves the prior order;
+- four villagers gathering the same blocked source receive four unique walkable `MoveOrder.goal` cells;
+- rejected workers keep their old reservations so accepted siblings cannot steal their cell/goal.
 
-#[test]
-fn gather_assigns_distinct_slots_around_one_blocked_source() {
-    // four villagers gather one blocked source; accepted MoveOrder goals are unique walkable perimeter cells
-}
-```
-
-The group reservation loop must continue reserving current cells and existing goals so accepted siblings cannot stack.
-
-- [ ] **Step 3: Add stockpile/source/worker/drop-off state with fractional gather progress**
+- [ ] **Step 3: Add stockpile/source/worker/drop-off state with fractional progress**
 
 ```rust
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -257,81 +252,38 @@ pub enum WorkerTask {
 }
 
 #[derive(Component, Debug)]
-pub struct Dropoff { pub team: TeamId, pub building: BuildingId }
+pub struct Dropoff {
+    pub team: TeamId,
+    pub building: BuildingId,
+    pub anchor: GridPos,
+    pub width: u8,
+    pub height: u8,
+}
 ```
 
-`ResourceSource.remaining` is `Some(u32)` for berries/trees/gold. Economy tests may spawn a minimal test-only entity with `Dropoff`; the real starting Town Center receives it in Task 3 when `Building` exists.
+`ResourceSource.remaining` is `Some(u32)` for berries/trees/gold. Seed one starting Dropoff entity per Town Center using the authored `BuildingId`, anchor, and 4×4 geometry. Task 3 adds the full `Building` component to those same entities; it does not replace them.
 
-Gather accumulation is exact at 20 Hz:
+- [ ] **Step 4: Implement exact 20 Hz fractional gathering**
+
+For finite sources:
 
 ```rust
 progress.0 += gather_rate * SIM_STEP_SECONDS;
 let whole = progress.0.floor() as u32;
-let transferable = whole.min(carry_space).min(source_remaining);
+let source_remaining = source.remaining.expect("finite source");
+let transferable = whole.min(CARRY_LIMIT - carry.amount).min(source_remaining);
 carry.amount += transferable;
-source.remaining -= transferable;
+source.remaining = Some(source_remaining - transferable);
 progress.0 -= transferable as f32;
 ```
 
-When the worker leaves/cancels a gather job, reset `GatherProgress(0.0)`.
+When a worker cancels/leaves the gathering job, reset `GatherProgress(0.0)`.
 
-- [ ] **Step 4: Add validate-then-cancel worker replacement semantics**
-
-`cancel_worker_activity(world, entity)` must:
-
-1. inspect the old `WorkerTask`;
-2. release an assigned Farm slot if one exists (Task 3 fills this branch);
-3. clear an active construction builder if one exists (Task 3 fills this branch);
-4. set `WorkerTask::Idle`;
-5. reset `GatherProgress`;
-6. remove old `MoveOrder` when replacing/stopping movement.
-
-Do not cancel before validating the new command. Add tests:
+Required test:
 
 ```rust
 #[test]
-fn accepted_move_cancels_gather_task() { /* accepted route -> WorkerTask::Idle + new MoveOrder */ }
-
-#[test]
-fn rejected_move_preserves_existing_gather_task() { /* blocked target -> old task/order remain */ }
-
-#[test]
-fn stop_clears_worker_task_and_move_order() { /* explicit cancel */ }
-```
-
-Implement the test bodies with concrete spawned worker/source/drop-off entities; do not leave comment-only test shells in the branch.
-
-- [ ] **Step 5: Implement finite gather/carry/deposit transitions**
-
-`Gather` validates ownership/villager/source and reserves distinct source approach slots. For each accepted worker only: cancel old activity, install `ToSource`, and install the reserved `MoveOrder`.
-
-`step_economy()` transitions `ToSource → Gathering → ToDropoff → repeat/Idle`, searches completed `Dropoff` components rather than building kinds, deposits only on arrival, and on finite depletion:
-
-```rust
-resource_index.remove(source_id);
-map.set_blocked(source_cell, false);
-world.despawn(source_entity);
-```
-
-If a required later route becomes unreachable, cancel the worker job and publish a typed rejection/feedback event rather than retrying pathfinding every tick.
-
-- [ ] **Step 6: Lock the fixed-step order as new systems arrive**
-
-Replace the old movement-only `advance_simulation()` integration with explicit systems ordered as:
-
-```rust
-(apply_pending_commands, advance_movement, advance_economy).chain()
-```
-
-Task 3 appends construction after economy; Task 4 appends production last. Do not create parallel fixed-update paths.
-
-- [ ] **Step 7: Verify finite gathering and command semantics**
-
-Required tests include:
-
-```rust
-#[test]
-fn two_resources_per_second_accumulates_whole_units_at_twenty_hz() {
+fn two_resources_per_second_yields_one_whole_resource_after_ten_fixed_ticks() {
     let mut progress = 0.0_f32;
     let mut gathered = 0_u32;
     for _ in 0..10 {
@@ -344,21 +296,82 @@ fn two_resources_per_second_accumulates_whole_units_at_twenty_hz() {
 }
 ```
 
-Also prove no stockpile income before deposit, final load after depletion, and idle settlement.
+- [ ] **Step 5: Add initial validate-then-cancel worker replacement semantics**
 
-- [ ] **Step 8: Verify and commit**
+In Task 2, `cancel_worker_activity()` handles the components that exist now:
+
+```text
+set WorkerTask::Idle
+reset GatherProgress
+remove the old MoveOrder when replacement/Stop requires it
+```
+
+Move and Gather validate route/source/ownership before invoking it for an accepted worker. Stop invokes it unconditionally for each owned worker. Task 3 extends this same helper to release Farm assignment and clear active construction builder.
+
+Add fully implemented tests for these outcomes:
+
+- accepted Move while Gathering leaves the worker `Idle` with the new MoveOrder;
+- rejected Move to a blocked target leaves the previous Gather task/order unchanged;
+- accepted Gather to a new source replaces the old Gather task and resets fractional progress;
+- Stop clears WorkerTask, fractional progress, and MoveOrder.
+
+- [ ] **Step 6: Implement finite Gather → Dropoff → repeat/Idle**
+
+`Gather` validates owned villagers/source, reserves distinct source approach slots, then cancels and replaces only accepted workers.
+
+`step_economy()`:
+
+1. switches `ToSource → Gathering` when the worker reaches its reserved source slot;
+2. accumulates/whole-transfers finite resources into Carry;
+3. finds the nearest reachable same-team `Dropoff` footprint using the shared reservation helper;
+4. routes `ToDropoff` and deposits the whole Carry only on arrival;
+5. routes back if the source still exists;
+6. after depletion, delivers any final Carry and settles Idle;
+7. if a required later route cannot be found, settles Idle with typed feedback rather than retrying A* every tick.
+
+When a finite source reaches zero:
+
+```rust
+resource_index.remove(source_id);
+map.set_blocked(source_cell, false);
+world.despawn(source_entity);
+```
+
+- [ ] **Step 7: Seed the normal finite economy start**
+
+Normal setup inserts:
+
+- `TeamEconomy` for both teams with `200/300/100`, Age 1;
+- two Town Center Dropoff entities at the exact authored anchors;
+- eight Villagers with `Carry`, `GatherProgress`, `WorkerTask::Idle`;
+- all authored berries/trees/gold as blocked one-cell `ResourceSource` entities;
+- `UnitIndex`, `ResourceIndex`, and allocator counters.
+
+The full `Building`/`BuildingIndex` representation is deliberately deferred to Task 3.
+
+- [ ] **Step 8: Lock the first part of fixed-step ordering**
+
+Replace the old movement-only advancement with:
+
+```rust
+(apply_pending_commands, advance_movement, advance_economy).chain()
+```
+
+Task 3 appends construction; Task 4 appends production. Do not create a parallel update path.
+
+- [ ] **Step 9: Verify and commit**
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test -p grus-sim
 git add crates/grus-sim crates/grus-godot
-git commit -m "feat: add player commands and finite worker economy"
+git commit -m "feat: add commands and finite worker economy"
 ```
 
 ---
 
-### Task 3: Add buildings, real drop-offs, Farm resources, construction, and full reset semantics
+### Task 3: Add buildings, construction, Storehouse drop-offs, Farm sources, and full reset semantics
 
 **Files:**
 - Create: `crates/grus-sim/src/buildings.rs`
@@ -370,15 +383,30 @@ git commit -m "feat: add player commands and finite worker economy"
 - Create: `crates/grus-sim/tests/construction.rs`
 
 **Interfaces:**
+- Extends `PlayerCommand` with `PlaceBuilding` and `ResumeConstruction`; both are fully implemented in the same commit.
 - Produces `Building`, `ConstructionState`, `BuildingIndex`.
 - Produces `validate_placement()`, `place_building()`, `assign_builder()`, `step_construction()`.
-- Starting Town Centers and completed Storehouses insert `Dropoff`.
-- Completed Farms allocate `ResourceId` and insert renewable `ResourceSource` with one-worker assignment.
-- Produces `reset_normal_fixture()` and `reset_benchmark_fixture()` through one clear-and-seed helper.
+- Upgrades the existing starting Town Center Dropoff entities with complete `Building` components.
+- Completed Storehouses insert `Dropoff`; completed Farms allocate `ResourceId` and insert renewable one-worker `ResourceSource`.
+- Extends `cancel_worker_activity()` with Farm/construction cleanup.
+- Produces normal/benchmark reset through one clear-and-seed helper.
 
-- [ ] **Step 1: Write placement/cost/occupancy tests before implementation**
+- [ ] **Step 1: Extend PlayerCommand exhaustively for construction**
 
-Cover out-of-bounds, occupied footprint, insufficient resources, locked Stable, non-villager builder, and unreachable perimeter. Pin one-time charging:
+```rust
+pub enum PlayerCommand {
+    Units(UnitCommand),
+    Gather { issuer: TeamId, workers: Vec<UnitId>, source: ResourceId },
+    PlaceBuilding { issuer: TeamId, builder: UnitId, kind: BuildingKind, anchor: GridPos },
+    ResumeConstruction { issuer: TeamId, builder: UnitId, building: BuildingId },
+}
+```
+
+Add matching dispatcher branches in the same change.
+
+- [ ] **Step 2: Write placement/cost/occupancy tests**
+
+Cover out-of-bounds, occupied footprint, insufficient resources, locked Stable, non-villager builder, unreachable approach, and one-time charging.
 
 ```rust
 #[test]
@@ -401,58 +429,43 @@ fn accepted_house_charges_once_and_blocks_four_cells() {
 }
 ```
 
-- [ ] **Step 2: Implement building identity and validate-then-cancel placement**
+- [ ] **Step 3: Implement validate-then-cancel placement/construction**
 
-`Building` contains `id`, `team`, `kind`, `anchor`, and construction state. Validation follows the spec order. Only after validation and a reachable reserved approach slot exist:
+Only after placement validation and a reachable reserved builder slot succeed:
 
-1. cancel the accepted builder's old worker activity;
+1. call `cancel_worker_activity()` for the accepted builder;
 2. deduct cost once;
 3. allocate `BuildingId`;
-4. block every footprint cell through `GridMap::set_blocked`;
-5. spawn the under-construction entity;
-6. assign the builder route/task.
+4. block every footprint cell using `GridMap::set_blocked`;
+5. spawn the incomplete Building;
+6. assign builder MoveOrder/WorkerTask.
 
-Rejected placement preserves the previous worker job.
+Rejected placement preserves the previous worker task/order.
 
-- [ ] **Step 3: Implement one active builder and shared cancellation**
+`ResumeConstruction` similarly validates building ownership/completion/reachable slot before replacing the builder's previous work.
 
-`step_construction()` advances only while the assigned worker is adjacent and still constructing that `BuildingId`. `Move`, `Stop`, and accepted `Gather` call the same cancellation helper and clear `active_builder`; progress remains paused, not reset.
+- [ ] **Step 4: Extend worker cancellation for Farm/construction state**
 
-`ResumeConstruction` validates ownership/building/reachable approach first, then cancels the new worker's previous activity and replaces the old active builder. Add tests proving two workers never stack build speed and reassignment resumes existing progress.
+When the old task references a Farm assignment, clear that source's `assigned_worker` if it matches. When it references active construction, clear `ConstructionState.active_builder` if it matches. Then perform the existing Idle/progress/MoveOrder cleanup.
 
-- [ ] **Step 4: Bootstrap the exact starting Town Centers and attach generic drop-offs**
+Tests must prove Move/Stop/Gather pause construction and release a Farm, while a rejected replacement command preserves both.
 
-Seed complete Town Centers at `(12,46)` and `(112,46)` without charging cost, through the same `Building`/`BuildingIndex` representation. Block their 4×4 footprints and insert:
+- [ ] **Step 5: Upgrade authored Town Center entities to full Buildings**
 
-```rust
-Dropoff { team, building: town_center_id }
-```
+Reuse the exact two entities/`BuildingId`s created in Task 2. Insert completed `Building` plus `BuildingIndex` entries; do not spawn replacement Town Centers. Their 4×4 footprints are already blocked and their `Dropoff` components remain authoritative routing geometry.
 
-Spawn the eight normal villagers only after those footprints are blocked and assert their authored cells remain walkable.
+- [ ] **Step 6: Implement one active builder and completion effects**
 
-On Storehouse completion insert `Dropoff` exactly once.
+`step_construction()` advances one active builder only. Pausing leaves accumulated progress intact. On completion:
 
-- [ ] **Step 5: Add Farm only after building completion**
+- House affects only derived population cap;
+- Storehouse inserts `Dropoff { team, building, anchor, width: 2, height: 2 }` exactly once;
+- Farm allocates a new `ResourceId` and inserts a renewable Food `ResourceSource { remaining: None, assigned_worker: None, ... }` on the same entity;
+- Barracks/Archery Range/Stable become complete producers for Task 4.
 
-On Farm completion:
+Required tests: two builders never double speed; reassignment resumes progress; Storehouse becomes a drop-off; Farm gets a unique runtime `ResourceId` and only one worker can reserve it.
 
-```rust
-let resource_id = id_allocator.allocate_resource();
-commands.entity(farm_entity).insert(ResourceSource {
-    id: resource_id,
-    kind: ResourceKind::Food,
-    remaining: None,
-    cell: farm.anchor,
-    assigned_worker: None,
-});
-resource_index.insert(resource_id, farm_entity);
-```
-
-Do not create a Farm source before construction completes. `Gather` reserves the Farm's one worker; accepted Move/Stop/Gather-to-another-source releases it through `cancel_worker_activity()`. Add one-worker acceptance/rejection/release tests.
-
-- [ ] **Step 6: Complete the fixed order with construction**
-
-The integration chain becomes:
+- [ ] **Step 7: Append construction to the fixed chain**
 
 ```rust
 (
@@ -463,11 +476,13 @@ The integration chain becomes:
 ).chain()
 ```
 
-Do not change the earlier ordering.
+Do not change prior order.
 
-- [ ] **Step 7: Replace unit-only reset with full gameplay clear-and-seed**
+- [ ] **Step 8: Replace unit-only reset with full unique-entity clear and fresh map**
 
-Before either reset mode, despawn every `Unit`, `Building`, and `ResourceSource`, then remove/reinitialize:
+Collect a `HashSet<Entity>` containing every entity with `Unit`, `Building`, or `ResourceSource`, then despawn each once so Farm entities are not double-despawned.
+
+Remove/reinitialize:
 
 ```text
 UnitIndex
@@ -482,12 +497,12 @@ GridMap (replace with fresh MapFixture::battlefield().map)
 
 Then seed exactly one mode:
 
-- `reset_fixture()` → normal Town Centers/resources/economy/eight villagers;
+- `reset_fixture()` → normal Town Centers/drop-offs/buildings/resources/eight villagers/economy;
 - `reset_benchmark_fixture()` → only `units_200()` on a fresh battlefield map.
 
-Update `reset_test.gd` to assert deterministic normal IDs and no duplicate views. The benchmark's exact 200-unit assertion remains in its own path.
+Update `reset_test.gd` for deterministic normal IDs/no duplicate views. Benchmark exact-200 coverage stays in benchmark smoke.
 
-- [ ] **Step 8: Verify and commit**
+- [ ] **Step 9: Verify and commit**
 
 ```bash
 cargo fmt --all -- --check
@@ -512,31 +527,48 @@ git commit -m "feat: add construction farms dropoffs and reset state"
 - Create: `crates/grus-sim/tests/production_queue.rs`
 
 **Interfaces:**
+- Extends `PlayerCommand` with `EnqueueUnit`, `EnqueueAgeUp`, and `SetRally`; all three are fully implemented in this task.
 - Produces `ProductionQueue`, `ProductionJob`, `RallyPoint`.
 - Produces `population_used()`, `population_cap()`, `enqueue_unit()`, `enqueue_age_up()`, `set_rally_point()`, `step_production()`.
-- New units use existing movement components and catalogue speeds.
+- Runtime units use existing movement components and catalogue speeds.
 
-- [ ] **Step 1: Add concrete queue charging/lock tests**
+- [ ] **Step 1: Extend PlayerCommand exhaustively for production**
 
-Pin these outcomes with fully constructed test worlds:
+Final enum:
+
+```rust
+pub enum PlayerCommand {
+    Units(UnitCommand),
+    Gather { issuer: TeamId, workers: Vec<UnitId>, source: ResourceId },
+    PlaceBuilding { issuer: TeamId, builder: UnitId, kind: BuildingKind, anchor: GridPos },
+    ResumeConstruction { issuer: TeamId, builder: UnitId, building: BuildingId },
+    EnqueueUnit { issuer: TeamId, building: BuildingId, kind: UnitKind },
+    EnqueueAgeUp { issuer: TeamId, town_center: BuildingId },
+    SetRally { issuer: TeamId, building: BuildingId, target: Vec2 },
+}
+```
+
+Add all dispatcher branches in the same change.
+
+- [ ] **Step 2: Add concrete queue charging/lock tests**
+
+Construct real test worlds and pin these results:
 
 ```text
-Villager from TC deducts 50 Food once.
+Villager from TC deducts 50 Food exactly once.
 Archer from Barracks rejects WrongProducer and deducts nothing.
 Stable placement/cavalry enqueue reject before Age 2.
 Second Age 2 enqueue rejects as soon as the first is accepted.
-A 100%-complete unit job stays queued without a second charge when population/spawn is blocked.
+A 100%-complete unit job remains queued without another charge when population or spawn is blocked.
 ```
 
-- [ ] **Step 2: Implement derived population**
+- [ ] **Step 3: Implement derived population**
 
 `population_used()` counts live team units. `population_cap()` sums completed Town Center/House capacity and clamps to 100. Do not store a mutable duplicate counter.
 
-- [ ] **Step 3: Implement deterministic FIFO completion**
+- [ ] **Step 4: Implement deterministic FIFO completion**
 
-Front jobs advance at 20 Hz. Unit jobs at 100% wait when cap/spawn clearance fails. Sort ready producers by `BuildingId` before processing. After each spawn, recompute live population before the next producer.
-
-Required regression:
+Front jobs advance at 20 Hz. Unit jobs at 100% wait when cap/spawn clearance fails. Sort ready producers by `BuildingId`; after each successful spawn recompute live population.
 
 ```rust
 #[test]
@@ -550,15 +582,15 @@ fn two_ready_buildings_competing_for_last_slot_spawn_exactly_one() {
 }
 ```
 
-- [ ] **Step 4: Add spawn clearance and rally behavior**
+- [ ] **Step 5: Add spawn clearance and rally behavior**
 
-Spawn on an unblocked, unoccupied perimeter cell. Allocate runtime `UnitId`. If a rally target exists, reuse the normal Move assignment after spawn; a failed rally route leaves the trained unit spawned and idle.
+Reserve an unblocked, unoccupied perimeter slot using the shared reservation helper. Allocate runtime `UnitId`. If a rally target exists, assign a normal Move after spawn; failed rally routing leaves the trained unit spawned and idle.
 
-- [ ] **Step 5: Add Age 2 as a Town Center FIFO job**
+- [ ] **Step 6: Add Age 2 as a Town Center FIFO job**
 
-Age-up costs 300 Food + 200 Gold, takes 45 seconds, and competes with Villager production. Completion changes the team age only in `step_production`; because production is last, the 2.2/s gather rate applies beginning with the next economy tick.
+Age-up costs 300 Food + 200 Gold, takes 45 seconds, and competes with Villager production. Completion changes age only in `step_production`; because production is last, the 2.2/s gather rate starts on the next economy tick.
 
-- [ ] **Step 6: Finalize the canonical fixed-update chain**
+- [ ] **Step 7: Finalize canonical fixed-update order**
 
 ```rust
 .add_systems(
@@ -573,9 +605,9 @@ Age-up costs 300 Food + 200 Gold, takes 45 seconds, and competes with Villager p
 )
 ```
 
-Add one integration test/system-order assertion that a movement arrival is visible to economy before construction/production and an age completion does not retroactively change the same tick's gather amount.
+Add an integration test proving an arrival can be consumed by economy/construction after movement in that tick and an age completion does not change the already-run economy step.
 
-- [ ] **Step 7: Verify and commit**
+- [ ] **Step 8: Verify and commit**
 
 ```bash
 cargo fmt --all -- --check
@@ -600,17 +632,17 @@ git commit -m "feat: add production population rally and age advancement"
 - Modify: `godot/scenes/battlefield.tscn`
 
 **Interfaces:**
-- `PendingCommands` is `Vec<PlayerCommand>`.
+- `PendingCommands` is now the final `Vec<PlayerCommand>`.
 - Bridge write methods: existing Move/Stop plus Gather, Place, Resume, Enqueue Unit, Enqueue Age, Set Rally.
 - Bridge reads: economy/building/catalogue/placement/idle-worker snapshots.
 - Produces `set_sim_speed(relative_speed)` for integration tests.
-- Produces one `attach_missing_gameplay_views` system for Unit/Building/ResourceSource.
+- Produces one `attach_missing_gameplay_views` system; Farm is handled by the Building branch only.
 
-- [ ] **Step 1: Keep Godot as a queue/snapshot boundary**
+- [ ] **Step 1: Keep Godot as queue/snapshot boundary**
 
 Map integer kind codes to Rust enums in one function and reject unknown codes. `move_units()` / `stop_units()` keep their current GDScript signatures but queue `PlayerCommand::Units(...)`.
 
-Snapshot keys stay stable:
+Stable snapshot keys:
 
 ```text
 economy: food wood gold age population_used population_cap idle_workers
@@ -618,37 +650,39 @@ building: id kind complete construction_progress queue_label queue_progress bloc
 placement: valid anchor_x anchor_y width height reason
 ```
 
-Compute snapshots directly from ECS each call.
+Compute snapshots from ECS each call; do not maintain mirrored stockpiles/queues in GDScript.
 
-- [ ] **Step 2: Replace fixture-only `GodotScene` attachment with one runtime system**
+- [ ] **Step 2: Replace fixture-only scene insertion with one runtime attachment system**
 
-Create an integration-only marker such as `GameplayViewRequested`. Each `Update`, query gameplay entities missing that marker and attach the correct scene plus transform metadata:
-
-```text
-Unit           -> res://scenes/unit_view.tscn
-Building       -> res://scenes/building_view.tscn
-ResourceSource -> res://scenes/resource_view.tscn
-```
-
-Fixture seeding and runtime spawning must **not** separately insert `GodotScene`. All entity types use this one path. A later metadata initializer waits for `GodotNodeHandle` and sets:
+Create `GameplayViewRequested` in `grus-godot`. In one Update system:
 
 ```text
-unit_id unit_kind team_id
-building_id building_kind team_id
-resource_id resource_kind
+Unit                                      -> unit_view.tscn
+Building                                  -> building_view.tscn
+ResourceSource AND NOT Building           -> resource_view.tscn
 ```
 
-Add a Godot smoke assertion that one trained runtime unit and one placed runtime building both obtain views; this prevents Task 7 from discovering invisible ECS entities.
+Insert the appropriate `GodotScene`, static/initial transform, sync metadata, and marker exactly once. Fixture seeding and runtime spawn code must not directly insert `GodotScene` anymore.
 
-- [ ] **Step 3: Add primitive presentation only**
+A metadata initializer waits for `GodotNodeHandle` and sets:
 
-`resource_view.gd` and `building_view.gd` join `resource_views`/`building_views`; style kind/team/progress with primitive meshes/materials. `unit_view.gd` adds kind cues while retaining team tint and selection ring. Remove old static base markers because authoritative Town Center views replace them.
+```text
+unit:     unit_id unit_kind team_id
+building: building_id building_kind team_id
+resource: resource_id resource_kind
+```
 
-- [ ] **Step 4: Add Bevy virtual-time speed bridge for smoke tests**
+If a Building also has `ResourceSource` (Farm), add `resource_id`/`resource_kind` to **that same building node**. Do not attach `resource_view.tscn` to Farm.
 
-The pinned godot-bevy 0.11.0 calls Bevy `app.update()` from Godot `_process` and installs `TimePlugin`; do not use `Engine.time_scale` as the economy-smoke acceleration contract.
+Add integration coverage that a newly trained unit, newly placed building, and completed Farm all receive exactly one appropriate view.
 
-Add:
+- [ ] **Step 3: Add primitive presentation**
+
+`resource_view.gd` and `building_view.gd` join their groups and style kind/team/progress with primitive meshes/materials. `unit_view.gd` adds kind cues while retaining team tint/selection ring. Remove old static base markers; authoritative Town Center views replace them.
+
+- [ ] **Step 4: Add Bevy virtual-time speed bridge**
+
+The pinned godot-bevy 0.11.0 runs Bevy `app.update()` from Godot `_process` and installs Bevy `TimePlugin`; do not use `Engine.time_scale` as the economy-smoke contract.
 
 ```rust
 #[func]
@@ -656,16 +690,17 @@ fn set_sim_speed(&self, relative_speed: f64) -> bool {
     if !relative_speed.is_finite() || relative_speed <= 0.0 {
         return false;
     }
-    with_app_mut(|app| {
-        app.world_mut()
-            .resource_mut::<Time<Virtual>>()
-            .set_relative_speed(relative_speed as f32);
-    })
-    .is_some()
+    let Some(mut app_node) = bevy_app_singleton() else { return false; };
+    let mut app_node = app_node.bind_mut();
+    let Some(app) = app_node.get_app_mut() else { return false; };
+    app.world_mut()
+        .resource_mut::<Time<Virtual>>()
+        .set_relative_speed(relative_speed as f32);
+    true
 }
 ```
 
-Use the existing singleton/app access pattern; if a mutable helper is extracted, keep it local to `grus-godot`. No gameplay UI calls this method.
+No gameplay UI calls this method.
 
 - [ ] **Step 5: Build/import smoke**
 
@@ -694,12 +729,12 @@ git commit -m "feat: attach runtime economy views and bridge state"
 - Modify: `godot/scripts/battlefield_controller.gd`
 
 **Interfaces:**
-- Existing controller remains the interaction owner; no new UI framework.
+- Existing controller remains interaction owner; no new UI framework.
 - Every cost/unlock/progress/blocked label comes from bridge snapshots.
 
-- [ ] **Step 1: Expand the HUD**
+- [ ] **Step 1: Expand HUD**
 
-Add Food/Wood/Gold, population, age, idle workers, selected entity, queue/progress, command feedback, and action buttons for the fixed seven buildings/four units/Advance Age. Hide or disable irrelevant actions instead of adding separate screens.
+Add Food/Wood/Gold, population, age, idle workers, selected entity, queue/progress, command feedback, and action buttons for the fixed seven buildings/four units/Advance Age. Hide/disable irrelevant actions instead of adding separate screens.
 
 - [ ] **Step 2: Extend selection without breaking HPA-470 behavior**
 
@@ -710,7 +745,8 @@ Keep `selected_ids` for units plus one `selected_building_id`. Box selection rem
 Order:
 
 ```text
-selected villager(s) + resource view -> Gather
+selected villager(s) + standalone resource view -> Gather(resource_id)
+selected villager(s) + completed Farm building view -> Gather(resource_id metadata)
 selected villager + incomplete owned building -> ResumeConstruction
 selected production building + ground -> SetRally
 selected unit(s) + ground -> Move
@@ -720,11 +756,11 @@ Military units never gather/build.
 
 - [ ] **Step 4: Implement one placement mode**
 
-A build button stores only the requested `BuildingKind` code. Mouse motion requests an authoritative preview and updates one translucent box. Left click valid preview sends Place using the lowest selected villager ID. Escape/right-click cancels preview without command/cost.
+A build button stores only the requested `BuildingKind` code. Mouse motion requests authoritative preview and updates one translucent box. Left click valid preview sends Place using the lowest selected villager ID. Escape/right-click cancels preview without command/cost.
 
 - [ ] **Step 5: Wire production/age/idle-worker navigation**
 
-Buttons send enqueue commands against the selected building. The idle-worker control cycles bridge-provided stable IDs; no Godot-maintained idle list becomes authoritative.
+Buttons send enqueue commands against the selected building. Idle-worker control cycles bridge-provided stable IDs; no Godot-maintained idle list becomes authoritative.
 
 - [ ] **Step 6: Manually verify normal start**
 
@@ -759,13 +795,13 @@ git commit -m "feat: add economy construction and production controls"
 
 Keep click/additive/box selection, control groups, move, stop, HUD shielding, unreachable feedback, camera pan/zoom, 20 Hz cadence, and interpolation.
 
-The old speed-12 one-second assertion (`8..16` world units) is no longer valid. For a speed-6 normal villager, assert a measured one-second travel band centered on 6; use `4.0..8.0` to allow frame/headless scheduling variance while still detecting a 2×/0.5× cadence regression. Keep the interpolation max-step assertion scaled below the 0.3 fixed-tick movement step (for example `< 0.25`).
+The old speed-12 one-second assertion (`8..16` world units) is invalid after normal units move at 6.0. Use a `4.0..8.0` one-second distance band and keep the visual-step assertion below the 0.3-unit fixed-tick step (target `< 0.25`).
 
 - [ ] **Step 2: Verify both reset modes**
 
-`reset_test.gd` calls normal reset and checks eight villager views, two Town Centers, authored resource count/IDs, no duplicates, and starting stockpiles. `benchmark_200.gd` calls `reset_benchmark_fixture()` before waiting for exactly 200 unique UnitIds.
+`reset_test.gd` calls normal reset and checks eight villager views, two Town Centers, authored standalone resource IDs/views, starting stockpiles, and no duplicates. `benchmark_200.gd` calls `reset_benchmark_fixture()` before waiting for exactly 200 unique UnitIds.
 
-- [ ] **Step 3: Build an economy smoke that is solvent without debug grants**
+- [ ] **Step 3: Build a solvent economy smoke without debug grants**
 
 At startup:
 
@@ -775,44 +811,47 @@ if not GrusBridge.set_sim_speed(20.0):
     return
 ```
 
-Drive actual selection/right-click/buttons/placement and gather enough of all three resources. The starting 300 Wood is insufficient for the required loop, so the smoke must gather Wood before later buildings.
+Drive actual selection/right-click/buttons/placement. Required sequence:
 
-The smoke sequence is:
+1. assign villagers to berries, trees, and gold; verify stockpile changes only on return/deposit;
+2. continue gathering enough Wood over the run to pay House + Storehouse + Farm + Barracks + Archery Range + Archer Wood + Stable (615 Wood total, so starting 300 is insufficient);
+3. gather enough Food/Gold for Spearman + Archer + Age 2 + Cavalry (480 Food and 260 Gold total, so starts are also insufficient);
+4. build House; assert cap `10 → 20`;
+5. build Storehouse; verify a later delivery can choose it as Dropoff;
+6. build Farm; gather it with one worker and verify a second worker receives Farm-occupied feedback;
+7. build Barracks, train Spearman, assert runtime `unit_view` appears;
+8. build Archery Range, train Archer, assert its runtime view appears;
+9. enqueue Age 2 in Town Center, assert Age becomes 2;
+10. verify Stable unlocks, build it, train Cavalry, assert runtime view appears;
+11. verify construction/queue progress and command feedback through normal snapshots.
 
-1. assign villagers to berries, trees, and gold; verify stockpile does not change until the first return/deposit;
-2. continue gathering until at least the costs for House + Storehouse + Farm + Barracks + Archery Range + Archer Wood + Stable are available over the run;
-3. build House and assert cap `10 → 20`;
-4. build Storehouse and verify subsequent delivery can use it as a `Dropoff`;
-5. build Farm, then assign one worker; verify a second worker receives Farm-occupied feedback;
-6. build Barracks, enqueue/train Spearman, and assert a runtime `unit_view` appears;
-7. build Archery Range, enqueue/train Archer, and assert its view appears;
-8. gather enough Food/Gold, enqueue Age 2 in Town Center, assert Age becomes 2;
-9. verify Stable unlocks, build it, train Cavalry, assert its view appears;
-10. verify construction/queue progress and command feedback changed through normal snapshots.
+Before success exit:
 
-Before successful exit call `GrusBridge.set_sim_speed(1.0)`.
+```gdscript
+if not GrusBridge.set_sim_speed(1.0):
+    _fail("failed to restore Bevy virtual time")
+    return
+```
 
 The smoke may accelerate Bevy virtual time only. It must not grant stockpiles, force progress, mutate age, spawn entities directly, or bypass command validation.
 
 - [ ] **Step 4: Measure real smoke duration before choosing CI timeout**
 
-Build/stage the extension, then run:
-
 ```bash
 /usr/bin/time -f 'elapsed=%e' godot --headless --path godot res://scenes/economy_smoke_test.tscn
 ```
 
-Record the successful elapsed seconds in the PR verification notes. Configure the CI timeout to the next whole 15-second bucket that is at least `2 × measured elapsed + 10 seconds`. Example: a 19-second measured run requires at least 48 seconds, so use 60 seconds. Do not choose the timeout before this measurement.
+Record successful elapsed seconds in PR verification notes. Set CI timeout to the next whole 15-second bucket that is at least `2 × measured elapsed + 10 seconds`. Example: measured 19 seconds → requirement 48 seconds → choose 60 seconds. Do not preselect 60 seconds before measurement.
 
-- [ ] **Step 5: Add CI economy smoke with the measured timeout**
+- [ ] **Step 5: Add CI smoke with measured timeout**
 
-Place it after existing bridge/reset smoke and before export/benchmark. Keep export and the HPA-470 benchmark otherwise unchanged.
+Place it after bridge/reset smoke and before export/benchmark. Keep export and HPA-470 benchmark logic unchanged except benchmark fixture reset.
 
 - [ ] **Step 6: Update README**
 
-Document current controls, economy architecture, reset modes, build/import sequence, and that the retained performance baseline uses the benchmark-only 200-unit fixture. Preserve the pinned toolchain/export instructions and historical HPA-470 baseline numbers.
+Document current controls, economy architecture, reset modes, build/import sequence, and benchmark-only 200-unit fixture. Preserve pinned toolchain/export instructions and historical HPA-470 baseline numbers.
 
-- [ ] **Step 7: Run the final gate**
+- [ ] **Step 7: Run final gate**
 
 ```bash
 cargo fmt --all -- --check
@@ -827,7 +866,7 @@ godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
 ```
 
-Expected: every command exits 0; old movement smoke proves the speed-6 normal fixture still runs at 20 Hz with interpolation; economy smoke prints its success marker after the full solvent gather/build/train/advance loop.
+Expected: every command exits 0; movement smoke proves speed-6 normal fixture still runs at 20 Hz with interpolation; economy smoke prints its success marker after the full solvent gather/build/train/advance loop.
 
 - [ ] **Step 8: Commit final verification changes**
 
@@ -840,9 +879,11 @@ git commit -m "test: verify complete HPA-471 economy loop"
 
 ## Plan self-review
 
-- Every HPA-471 acceptance item maps to one task in this plan.
+- Every HPA-471 acceptance item maps to one task above.
 - Review blockers are closed before implementation: Bevy virtual-time acceleration, runtime view attachment, fractional gather accounting, worker cancellation, shared approach-slot reservation, Farm/drop-off ordering, full reset, explicit fixed-tick order, and exact fixture coordinates.
-- The plan reuses `UnitIndex`, destination-slot reservation, `GridMap::set_blocked`, `PendingCommands`, existing Godot views/controllers, reset smoke, and CI instead of introducing replacement frameworks.
+- `PlayerCommand` grows only with implemented behavior; no intermediate placeholder variants are required.
+- Completed Farm gets one building view plus `resource_id` metadata, not overlapping building/resource views.
+- The plan reuses `UnitIndex`, destination-slot reservation, `GridMap::set_blocked`, `PendingCommands`, existing Godot view/controller patterns, reset smoke, and CI instead of introducing replacement frameworks.
 - Costs, durations, footprints, age locks, population, speeds, and gather rates have one Rust source of truth.
 - Normal gameplay never boots the 200-unit benchmark fixture; benchmark coverage remains explicit.
 - No implementation step requires image generation or an asset-production pipeline.
