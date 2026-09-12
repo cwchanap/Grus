@@ -150,6 +150,19 @@ pub(crate) fn apply_enqueue_unit(
     };
 
     let cost = job.cost();
+    let affordable = world
+        .get_resource::<TeamEconomy>()
+        .and_then(|economy| economy.0.get(&issuer))
+        .is_some_and(|state| {
+            state.stockpile.food >= cost.food
+                && state.stockpile.wood >= cost.wood
+                && state.stockpile.gold >= cost.gold
+        });
+    if !affordable {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
+    }
+
     if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
         && let Some(state) = economy.0.get_mut(&issuer)
     {
@@ -695,6 +708,35 @@ mod tests {
         assert_eq!(queue_of(&world, town_center).jobs.len(), 0);
         assert_eq!(population_used(&world, TEAM), 1);
         assert_eq!(population_cap(&world, TEAM), 10);
+    }
+
+    #[test]
+    fn enqueue_with_insufficient_stockpile_rejects_and_never_charges() {
+        let (mut world, mut map) = open_world();
+        let town_center = complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(100),
+            BuildingKind::TownCenter,
+            GridPos::new(30, 30),
+            TEAM,
+        );
+        // 49 Food cannot afford the 50-Food Villager.
+        world
+            .resource_mut::<TeamEconomy>()
+            .0
+            .get_mut(&TEAM)
+            .unwrap()
+            .stockpile
+            .food = 49;
+
+        let result = enqueue(&mut world, &mut map, BuildingId(100), UnitKind::Villager);
+        assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+        assert_eq!(stockpile(&world, TEAM).food, 49, "rejected enqueue charged");
+        assert!(
+            world.get::<ProductionQueue>(town_center).is_none(),
+            "rejected enqueue created a queue or pushed a job"
+        );
     }
 
     #[test]
@@ -1283,7 +1325,11 @@ mod tests {
             GridPos::new(20, 20),
             TEAM,
         );
-        assert_eq!(population_cap(&world, TEAM), 10, "incomplete House counts");
+        assert_eq!(
+            population_cap(&world, TEAM),
+            10,
+            "incomplete House must not count"
+        );
 
         complete_building(
             &mut world,
