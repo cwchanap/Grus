@@ -7,9 +7,11 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
-use crate::catalog::{BuildingKind, UnitKind, building_spec};
+use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
-use crate::economy::{Dropoff, TeamEconomy, WorkerTask, cancel_worker_activity};
+use crate::economy::{
+    Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_worker_activity,
+};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -369,8 +371,9 @@ fn reachable_builder_slot(
 /// `ToConstruction → Constructing` once its current cell equals the stored
 /// slot; each building then advances only while its single `active_builder` is
 /// the worker in `Constructing` state, so a second builder can never double
-/// the rate. Completion clears the assignment, idles the builder, and grants a
-/// Storehouse its `Dropoff` marker exactly once.
+/// the rate. Completion clears the assignment, idles the builder, grants a
+/// Storehouse its `Dropoff` marker, and grants a Farm its renewable
+/// `ResourceSource` under a fresh runtime `ResourceId` — each exactly once.
 pub fn step_construction(world: &mut World, seconds: f32) {
     // Arrival transitions happen before advancement so movement completion is
     // visible to construction in the same fixed tick.
@@ -446,25 +449,41 @@ pub fn step_construction(world: &mut World, seconds: f32) {
         if kind == BuildingKind::Storehouse {
             world.entity_mut(building_entity).insert(Dropoff { team });
         }
+        if kind == BuildingKind::Farm {
+            // The completed Farm gains a renewable Food source on the same
+            // building entity under a fresh runtime `ResourceId`.
+            let id = world.resource_mut::<IdAllocator>().allocate_resource();
+            world.entity_mut(building_entity).insert(ResourceSource {
+                id,
+                kind: ResourceKind::Food,
+                remaining: None,
+                assigned_worker: None,
+            });
+            world
+                .get_resource_or_insert_with(ResourceIndex::default)
+                .insert(id, building_entity);
+        }
     }
 }
 
 /// A worker has reached its stored slot when its current cell equals the slot.
 /// Cell equality (not exact-center distance) absorbs post-arrival separation
 /// nudges of up to `MAX_SEPARATION_STEP`.
-fn worker_at_slot(position: &SimPosition, slot: GridPos) -> bool {
+pub(crate) fn worker_at_slot(position: &SimPosition, slot: GridPos) -> bool {
     position.current.x.floor() as i32 == slot.x && position.current.y.floor() as i32 == slot.y
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{Age, unit_spec};
+    use crate::catalog::{Age, ResourceKind, unit_spec};
     use crate::commands::{
         PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
     };
-    use crate::economy::{Carry, GatherProgress, ResourceStockpile, TeamEconomy};
-    use crate::ids::IdAllocator;
+    use crate::economy::{
+        Carry, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
+    };
+    use crate::ids::{IdAllocator, ResourceId};
     use crate::movement::{SIM_STEP_SECONDS, step_movement};
 
     fn setup_build_test() -> (World, GridMap, Entity) {
@@ -969,6 +988,72 @@ mod tests {
             Some(&Dropoff { team: TeamId(1) })
         );
         assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    }
+
+    #[test]
+    fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
+        let (mut world, mut map, villager) = setup_build_test();
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::Farm,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None);
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+            440
+        );
+
+        let farm_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("building registered");
+        for _ in 0..1000 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            step_construction(&mut world, SIM_STEP_SECONDS);
+            if world
+                .get::<Building>(farm_entity)
+                .unwrap()
+                .construction
+                .complete
+            {
+                break;
+            }
+        }
+        assert!(
+            world
+                .get::<Building>(farm_entity)
+                .unwrap()
+                .construction
+                .complete
+        );
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+
+        // The completed Farm building entity carries its renewable source.
+        let source = world
+            .get::<ResourceSource>(farm_entity)
+            .expect("farm source");
+        assert_eq!(source.id, ResourceId(10));
+        assert_eq!(source.kind, ResourceKind::Food);
+        assert_eq!(source.remaining, None);
+        assert_eq!(source.assigned_worker, None);
+        assert_eq!(
+            world.resource::<ResourceIndex>().entity(source.id),
+            Some(farm_entity)
+        );
+        assert_eq!(world.resource::<IdAllocator>().next_resource, 11);
+
+        // Still exactly one entity, carrying both the building and the source.
+        let mut buildings = world.query::<&Building>();
+        assert_eq!(buildings.iter(&world).count(), 1);
+        let mut sources = world.query::<&ResourceSource>();
+        assert_eq!(sources.iter(&world).count(), 1);
     }
 
     #[test]

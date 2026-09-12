@@ -5,8 +5,8 @@ use bevy::prelude::{Entity, Resource, World};
 
 use crate::buildings::{apply_place_building, apply_resume_construction};
 use crate::catalog::{BuildingKind, UnitKind};
-use crate::economy::cancel_worker_activity;
-use crate::ids::{BuildingId, TeamId, UnitId};
+use crate::economy::{apply_gather, cancel_worker_activity};
+use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 
@@ -37,6 +37,11 @@ pub enum PlayerCommand {
         issuer: TeamId,
         builder: UnitId,
         building: BuildingId,
+    },
+    Gather {
+        issuer: TeamId,
+        workers: Vec<UnitId>,
+        source: ResourceId,
     },
 }
 
@@ -126,6 +131,11 @@ pub fn apply_player_command(
             builder,
             building,
         } => apply_resume_construction(world, map, issuer, builder, building),
+        PlayerCommand::Gather {
+            issuer,
+            workers,
+            source,
+        } => apply_gather(world, map, issuer, workers, source),
     }
 }
 
@@ -320,13 +330,13 @@ pub(crate) fn approach_slots(
 /// Reference-counted reservation for a destination cell. A cell shared by
 /// several units (e.g. two units with the same existing goal) stays reserved
 /// until every one of them releases it.
-fn reserve_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
+pub(crate) fn reserve_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
     *used.entry(cell).or_default() += 1;
 }
 
 /// Release one reference to a reserved cell, removing it entirely once the
 /// last unit that claimed it has let go.
-fn release_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
+pub(crate) fn release_slot(used: &mut HashMap<GridPos, usize>, cell: GridPos) {
     if let Some(count) = used.get_mut(&cell) {
         *count = count.saturating_sub(1);
         if *count == 0 {
