@@ -3,8 +3,10 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
-use crate::catalog::UnitKind;
-use crate::ids::{TeamId, UnitId};
+use crate::buildings::{apply_place_building, apply_resume_construction};
+use crate::catalog::{BuildingKind, UnitKind};
+use crate::economy::cancel_worker_activity;
+use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 
@@ -25,6 +27,17 @@ pub struct UnitCommand {
 #[derive(Clone, Debug)]
 pub enum PlayerCommand {
     Units(UnitCommand),
+    PlaceBuilding {
+        issuer: TeamId,
+        builder: UnitId,
+        kind: BuildingKind,
+        anchor: GridPos,
+    },
+    ResumeConstruction {
+        issuer: TeamId,
+        builder: UnitId,
+        building: BuildingId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +115,17 @@ pub fn apply_player_command(
 ) -> CommandResult {
     match command {
         PlayerCommand::Units(units) => apply_unit_command(world, map, units),
+        PlayerCommand::PlaceBuilding {
+            issuer,
+            builder,
+            kind,
+            anchor,
+        } => apply_place_building(world, map, issuer, builder, kind, anchor),
+        PlayerCommand::ResumeConstruction {
+            issuer,
+            builder,
+            building,
+        } => apply_resume_construction(world, map, issuer, builder, building),
     }
 }
 
@@ -121,7 +145,8 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
             for id in units {
                 match owned_unit_entity(world, id, issuer) {
                     Ok(entity) => {
-                        world.entity_mut(entity).remove::<MoveOrder>();
+                        // Stop is unconditional activity cancellation.
+                        cancel_worker_activity(world, entity);
                         outcome.accepted_units.push(id);
                     }
                     Err(reason) => outcome.rejected_units.push((id, reason)),
@@ -235,9 +260,11 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     .map(|cell| map.cell_center(cell))
                     .collect::<Vec<_>>();
 
-                if waypoints.is_empty() {
-                    world.entity_mut(entity).remove::<MoveOrder>();
-                } else {
+                // Accepted replacement: cancel the worker's previous task
+                // (which also drops its old order) before installing the new
+                // route. Rejected units above never reach this.
+                cancel_worker_activity(world, entity);
+                if !waypoints.is_empty() {
                     world.entity_mut(entity).insert(MoveOrder {
                         waypoints,
                         next: 0,
@@ -274,10 +301,8 @@ pub(crate) fn owned_unit_entity(
 
 /// Immediate-perimeter candidate generator for gather/build/drop-off tasking.
 /// Returns at most `count` walkable, unreserved cells from the target
-/// footprint's immediate perimeter and never scans a wider ring. Wired into
-/// gather/build commands by later HPA-471 tasks; Move keeps
-/// `destination_slots`.
-#[allow(dead_code)]
+/// footprint's immediate perimeter and never scans a wider ring. Move keeps
+/// its own `destination_slots` ring generation.
 pub(crate) fn approach_slots(
     map: &GridMap,
     footprint: Footprint,

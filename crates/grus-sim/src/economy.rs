@@ -1,18 +1,21 @@
-//! Team stockpiles, worker task state, and drop-off contracts. Gather and
-//! deposit behavior land in a later HPA-471 task.
+//! Team stockpiles, worker task state, drop-off contracts, and the single
+//! worker-cancellation helper. Gather and deposit behavior land in a later
+//! HPA-471 task.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 
-use bevy::prelude::{Component, Resource};
+use bevy::prelude::{Component, Entity, Resource, World};
 
+use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{Age, ResourceKind};
 use crate::ids::{BuildingId, ResourceId, TeamId};
 use crate::map::GridPos;
+use crate::movement::{MoveOrder, Unit};
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Component, Clone, Debug, Eq, PartialEq)]
 pub enum Carry {
     Empty,
     Holding {
@@ -86,4 +89,30 @@ impl TeamEconomy {
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Dropoff {
     pub team: TeamId,
+}
+
+/// The one worker-activity cleanup path: clears any construction assignment
+/// the worker held, resets its gather progress, returns it to `Idle`, and
+/// drops its route. Replacement commands cancel only after validating, and
+/// rejected commands never reach this. `Carry` is never touched.
+pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
+    let building = match world.get::<WorkerTask>(entity) {
+        Some(WorkerTask::ToConstruction { building, .. })
+        | Some(WorkerTask::Constructing { building }) => Some(*building),
+        _ => None,
+    };
+    if let Some(building) = building {
+        let unit_id = world.get::<Unit>(entity).map(|unit| unit.id);
+        if let Some(building_entity) = world
+            .get_resource::<BuildingIndex>()
+            .and_then(|index| index.entity(building))
+            && let Some(mut state) = world.get_mut::<Building>(building_entity)
+            && state.construction.active_builder == unit_id
+        {
+            state.construction.active_builder = None;
+        }
+    }
+    world.entity_mut(entity).insert(WorkerTask::Idle);
+    world.entity_mut(entity).insert(GatherProgress::default());
+    world.entity_mut(entity).remove::<MoveOrder>();
 }

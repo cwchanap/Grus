@@ -1,8 +1,12 @@
 use bevy::math::Vec2;
+use bevy::prelude::World;
 
-use crate::catalog::{ResourceKind, resource_amount};
-use crate::ids::{ResourceId, TeamId, UnitId};
-use crate::map::{GridMap, GridPos};
+use crate::buildings::{Building, BuildingIndex, ConstructionState};
+use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, resource_amount, unit_spec};
+use crate::commands::spawn_unit;
+use crate::economy::{Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask};
+use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
+use crate::map::{Footprint, GridMap, GridPos};
 
 #[derive(Clone, Copy, Debug)]
 pub struct UnitSpawn {
@@ -141,6 +145,83 @@ impl MapFixture {
     }
 }
 
+/// The pure simulation skirmish seed for one normal match: real completed
+/// Town Center Buildings (4×4 Footprints + `Dropoff` from birth), four
+/// Villagers per team with fresh worker components, both teams' economies
+/// (200 Food / 300 Wood / 100 Gold, Age 1), Town Center map occupancy, and
+/// `UnitIndex`/`BuildingIndex`/`IdAllocator` counters above the authored
+/// maxima. Every starting entity flows through the production constructors —
+/// there is no temporary Dropoff-only Town Center. The `fixture` parameter
+/// carries the resource spawns Task 3 adds to this seed.
+pub fn seed_skirmish(world: &mut World, map: &mut GridMap, _fixture: &MapFixture) {
+    let mut economy = TeamEconomy::default();
+    economy.insert_team(
+        TeamId(1),
+        ResourceStockpile {
+            food: 200,
+            wood: 300,
+            gold: 100,
+        },
+        Age::Age1,
+    );
+    economy.insert_team(
+        TeamId(2),
+        ResourceStockpile {
+            food: 200,
+            wood: 300,
+            gold: 100,
+        },
+        Age::Age1,
+    );
+    world.insert_resource(economy);
+
+    let mut unit_counter: u32 = 0;
+    for (index, start) in MapFixture::team_starts().into_iter().enumerate() {
+        let building_id = BuildingId(index as u32 + 1);
+        let footprint = Footprint::new(start.town_center_anchor, 4, 4);
+        for cell in footprint.cells() {
+            map.set_blocked(cell, true);
+        }
+        let entity = world
+            .spawn((
+                Building {
+                    id: building_id,
+                    team: start.team,
+                    kind: BuildingKind::TownCenter,
+                    construction: ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                footprint,
+                Dropoff { team: start.team },
+            ))
+            .id();
+        let mut buildings = world.get_resource_or_insert_with(BuildingIndex::default);
+        buildings.insert(building_id, entity);
+
+        for cell in start.villagers {
+            unit_counter += 1;
+            let villager = spawn_unit(
+                world,
+                UnitId(unit_counter),
+                start.team,
+                map.cell_center(cell),
+                UnitKind::Villager,
+                unit_spec(UnitKind::Villager).speed,
+            );
+            world.entity_mut(villager).insert((
+                Carry::Empty,
+                GatherProgress::default(),
+                WorkerTask::Idle,
+            ));
+        }
+    }
+
+    world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 1));
+}
+
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
     ResourceSpawn {
         id,
@@ -152,10 +233,17 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use bevy::prelude::Entity;
     use std::collections::HashSet;
 
-    use super::*;
+    use crate::buildings::Building;
+    use crate::catalog::Age;
+    use crate::commands::UnitIndex;
+    use crate::economy::TeamEconomy;
+    use crate::ids::IdAllocator;
     use crate::map::Footprint;
+    use crate::movement::{SimPosition, Unit};
 
     #[test]
     fn retained_battlefield_has_multiple_routes_between_base_zones() {
@@ -271,5 +359,101 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        // Both teams start solvent at Age 1.
+        for team in [TeamId(1), TeamId(2)] {
+            let state = &world.resource::<TeamEconomy>().0[&team];
+            assert_eq!(
+                state.stockpile,
+                ResourceStockpile {
+                    food: 200,
+                    wood: 300,
+                    gold: 100
+                }
+            );
+            assert_eq!(state.age, Age::Age1);
+        }
+
+        // Two completed Town Center Buildings, each owning a 4×4 Footprint,
+        // a Dropoff marker, and blocked map cells.
+        let mut town_centers = world.query::<(&Building, &Footprint, &Dropoff)>();
+        let town_centers: Vec<_> = town_centers.iter(&world).collect();
+        assert_eq!(town_centers.len(), 2);
+        for (building, footprint, dropoff) in &town_centers {
+            assert_eq!(building.kind, BuildingKind::TownCenter);
+            assert!(building.construction.complete);
+            assert_eq!(building.construction.active_builder, None);
+            assert_eq!((footprint.width, footprint.height), (4, 4));
+            assert_eq!(dropoff.team, building.team);
+            for cell in footprint.cells() {
+                assert!(!map.is_walkable(cell), "TC cell {cell:?} unblocked");
+            }
+        }
+        assert_eq!(
+            town_centers
+                .iter()
+                .map(|(b, ..)| b.team)
+                .collect::<HashSet<_>>()
+                .len(),
+            2,
+            "one Town Center per team"
+        );
+
+        // Every Dropoff lives on a real Building entity — no temporary
+        // Dropoff-only Town Center exists.
+        let mut dropoffs = world.query::<(Entity, &Dropoff)>();
+        for (entity, _) in dropoffs.iter(&world) {
+            assert!(world.get::<Building>(entity).is_some());
+        }
+
+        // Four villagers per team with fresh worker components, standing on
+        // walkable authored cells.
+        let mut villagers =
+            world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
+        let villagers: Vec<_> = villagers
+            .iter(&world)
+            .filter(|(unit, ..)| unit.kind == UnitKind::Villager)
+            .collect();
+        assert_eq!(villagers.len(), 8);
+        for team in [TeamId(1), TeamId(2)] {
+            assert_eq!(
+                villagers
+                    .iter()
+                    .filter(|(unit, ..)| unit.team == team)
+                    .count(),
+                4
+            );
+        }
+        assert!(
+            villagers
+                .iter()
+                .all(|(_, position, carry, progress, task)| map
+                    .is_walkable(map.world_to_cell(position.current))
+                    && **carry == Carry::Empty
+                    && progress.0 == 0.0
+                    && **task == WorkerTask::Idle)
+        );
+
+        // Indexes and allocator counters sit above the authored maxima.
+        assert_eq!(world.resource::<UnitIndex>().iter().count(), 8);
+        assert_eq!(world.resource::<BuildingIndex>().iter().count(), 2);
+        let allocator = world.resource::<IdAllocator>();
+        assert_eq!(
+            (
+                allocator.next_unit,
+                allocator.next_building,
+                allocator.next_resource
+            ),
+            (9, 3, 1)
+        );
     }
 }
