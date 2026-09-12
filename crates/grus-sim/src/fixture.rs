@@ -4,7 +4,10 @@ use bevy::prelude::World;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
 use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, resource_amount, unit_spec};
 use crate::commands::spawn_unit;
-use crate::economy::{Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask};
+use crate::economy::{
+    Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
+    spawn_resource_source,
+};
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 
@@ -38,6 +41,8 @@ pub struct MapFixture {
     pub map: GridMap,
     pub left_spawn: Vec2,
     pub right_spawn: Vec2,
+    /// Authored finite resource nodes for the skirmish seed.
+    pub resources: Vec<ResourceSpawn>,
 }
 
 impl MapFixture {
@@ -113,6 +118,10 @@ impl MapFixture {
             map,
             left_spawn: Vec2::new(14.5, 48.5),
             right_spawn: Vec2::new(113.5, 48.5),
+            resources: Self::starting_resources()
+                .into_iter()
+                .chain(Self::expansion_resources())
+                .collect(),
         }
     }
 
@@ -148,12 +157,12 @@ impl MapFixture {
 /// The pure simulation skirmish seed for one normal match: real completed
 /// Town Center Buildings (4×4 Footprints + `Dropoff` from birth), four
 /// Villagers per team with fresh worker components, both teams' economies
-/// (200 Food / 300 Wood / 100 Gold, Age 1), Town Center map occupancy, and
-/// `UnitIndex`/`BuildingIndex`/`IdAllocator` counters above the authored
-/// maxima. Every starting entity flows through the production constructors —
-/// there is no temporary Dropoff-only Town Center. The `fixture` parameter
-/// carries the resource spawns Task 3 adds to this seed.
-pub fn seed_skirmish(world: &mut World, map: &mut GridMap, _fixture: &MapFixture) {
+/// (200 Food / 300 Wood / 100 Gold, Age 1), Town Center map occupancy, the
+/// authored finite resource sources, and `UnitIndex`/`BuildingIndex`
+/// `IdAllocator` counters above the authored maxima. Every starting entity
+/// flows through the production constructors — there is no temporary
+/// Dropoff-only Town Center.
+pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture) {
     let mut economy = TeamEconomy::default();
     economy.insert_team(
         TeamId(1),
@@ -219,7 +228,20 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, _fixture: &MapFixture
         }
     }
 
-    world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 1));
+    // Authored finite sources (deterministic IDs 1..=18) block their cells
+    // and register in the resource index.
+    for resource in &fixture.resources {
+        spawn_resource_source(
+            world,
+            map,
+            resource.id,
+            resource.kind,
+            resource.cell,
+            resource.amount,
+        );
+    }
+
+    world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 19));
 }
 
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
@@ -238,9 +260,9 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::buildings::Building;
-    use crate::catalog::Age;
+    use crate::catalog::{Age, resource_amount};
     use crate::commands::UnitIndex;
-    use crate::economy::TeamEconomy;
+    use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
     use crate::ids::IdAllocator;
     use crate::map::Footprint;
     use crate::movement::{SimPosition, Unit};
@@ -443,7 +465,25 @@ mod tests {
                     && **task == WorkerTask::Idle)
         );
 
-        // Indexes and allocator counters sit above the authored maxima.
+        // Eighteen authored finite sources: 1×1 blocked footprints, full
+        // authored amounts, registered in the index.
+        let mut sources = world.query::<(&ResourceSource, &Footprint)>();
+        let sources: Vec<_> = sources.iter(&world).collect();
+        assert_eq!(sources.len(), 18);
+        for (source, footprint) in &sources {
+            assert_eq!((footprint.width, footprint.height), (1, 1));
+            assert_eq!(source.remaining, Some(resource_amount(source.kind)));
+            assert_eq!(source.assigned_worker, None);
+            assert!(
+                !map.is_walkable(footprint.anchor),
+                "source cell {:?} unblocked",
+                footprint.anchor
+            );
+        }
+        assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
+
+        // Indexes and allocator counters sit above the authored maxima
+        // (8 units, 2 buildings, resource IDs 1..=18).
         assert_eq!(world.resource::<UnitIndex>().iter().count(), 8);
         assert_eq!(world.resource::<BuildingIndex>().iter().count(), 2);
         let allocator = world.resource::<IdAllocator>();
@@ -453,7 +493,7 @@ mod tests {
                 allocator.next_building,
                 allocator.next_resource
             ),
-            (9, 3, 1)
+            (9, 3, 19)
         );
     }
 }

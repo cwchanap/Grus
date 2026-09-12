@@ -21,7 +21,8 @@ pub use commands::{
     apply_player_command, spawn_unit,
 };
 pub use economy::{
-    Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, TeamState, WorkerTask,
+    Carry, Dropoff, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
+    TeamState, WorkerTask, step_economy,
 };
 pub use fixture::{MapFixture, ResourceSpawn, TeamStart, seed_skirmish};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
