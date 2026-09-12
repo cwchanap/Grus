@@ -1,28 +1,35 @@
 use bevy::math::Vec2;
 use bevy::prelude::World;
 use grus_sim::{
-    GridMap, GridPos, MoveOrder, SIM_STEP_SECONDS, SimPosition, TeamId, UnitCommand,
-    UnitCommandKind, UnitId, apply_command, spawn_unit, step_movement,
+    GridMap, GridPos, MoveOrder, PlayerCommand, SIM_STEP_SECONDS, SimPosition, TeamId, UnitCommand,
+    UnitCommandKind, UnitId, UnitKind, apply_player_command, spawn_unit, step_movement,
 };
 
 #[test]
 fn active_move_replans_when_new_obstacle_intersects_route() {
     let mut world = World::new();
     let mut map = GridMap::new(16, 8);
-    let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 3.5), 4.0);
-
-    let outcome = apply_command(
+    let unit = spawn_unit(
         &mut world,
-        &map,
-        UnitCommand {
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(1.5, 3.5),
+        UnitKind::Villager,
+        4.0,
+    );
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units: vec![UnitId(1)],
             kind: UnitCommandKind::Move {
                 target: Vec2::new(12.5, 3.5),
             },
-        },
+        }),
     );
-    assert_eq!(outcome.accepted, vec![UnitId(1)]);
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
 
     for _ in 0..5 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);

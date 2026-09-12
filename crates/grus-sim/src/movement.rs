@@ -1,6 +1,7 @@
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, World};
 
+use crate::catalog::UnitKind;
 use crate::ids::{TeamId, UnitId};
 use crate::map::{GridMap, GridPos};
 
@@ -13,6 +14,7 @@ const MAX_SEPARATION_STEP: f32 = 0.08;
 pub struct Unit {
     pub id: UnitId,
     pub team: TeamId,
+    pub kind: UnitKind,
     pub speed: f32,
 }
 
@@ -236,7 +238,9 @@ mod tests {
     use bevy::prelude::World;
 
     use super::*;
-    use crate::commands::{UnitCommand, UnitCommandKind, apply_command, spawn_unit};
+    use crate::commands::{
+        PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
+    };
     use crate::fixture::MapFixture;
 
     fn assert_vec2_near(actual: Vec2, expected: Vec2) {
@@ -261,7 +265,14 @@ mod tests {
     fn fixed_step_moves_by_speed_times_delta() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let entity = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 2.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            2.0,
+        );
         world
             .entity_mut(entity)
             .insert(test_order(&map, Vec2::new(8.5, 1.5)));
@@ -277,7 +288,14 @@ mod tests {
     fn route_finishes_and_removes_move_order() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let entity = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 20.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            20.0,
+        );
         world
             .entity_mut(entity)
             .insert(test_order(&map, Vec2::new(2.5, 1.5)));
@@ -296,7 +314,14 @@ mod tests {
         let mut world = World::new();
         let mut map = GridMap::new(16, 16);
         map.set_blocked_rect(GridPos::new(2, 1), GridPos::new(2, 1));
-        let entity = spawn_unit(&mut world, UnitId(3), TeamId(1), Vec2::new(1.5, 1.5), 20.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(3),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            20.0,
+        );
         world.entity_mut(entity).insert((
             SimPosition {
                 previous: Vec2::ZERO,
@@ -318,7 +343,14 @@ mod tests {
         let mut world = World::new();
         let mut map = GridMap::new(16, 16);
         map.set_blocked_rect(GridPos::new(2, 1), GridPos::new(2, 1));
-        let entity = spawn_unit(&mut world, UnitId(6), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(6),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            12.0,
+        );
         // Stale cached route that would step straight through the blocked cell.
         world.entity_mut(entity).insert(MoveOrder {
             waypoints: vec![
@@ -365,7 +397,14 @@ mod tests {
         ] {
             map.set_blocked(cell, true);
         }
-        let entity = spawn_unit(&mut world, UnitId(7), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(7),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            12.0,
+        );
         // Stale cached route whose first step lands on the blocked cell (2, 1),
         // forcing the movement step into the forced-replan branch.
         world.entity_mut(entity).insert(MoveOrder {
@@ -434,7 +473,14 @@ mod tests {
         let mut world = World::new();
         let mut map = GridMap::new(16, 16);
         let goal = GridPos::new(5, 5);
-        let entity = spawn_unit(&mut world, UnitId(8), TeamId(1), Vec2::new(1.5, 1.5), 12.0);
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(8),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            12.0,
+        );
         world.entity_mut(entity).insert(MoveOrder {
             waypoints: vec![map.cell_center(GridPos::new(2, 1)), map.cell_center(goal)],
             next: 0,
@@ -496,8 +542,22 @@ mod tests {
     fn neighboring_units_separate_instead_of_collapsing() {
         let mut world = World::new();
         let map = GridMap::new(16, 16);
-        let first = spawn_unit(&mut world, UnitId(4), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
-        let second = spawn_unit(&mut world, UnitId(5), TeamId(1), Vec2::new(5.5, 5.5), 2.0);
+        let first = spawn_unit(
+            &mut world,
+            UnitId(4),
+            TeamId(1),
+            Vec2::new(5.5, 5.5),
+            UnitKind::Villager,
+            2.0,
+        );
+        let second = spawn_unit(
+            &mut world,
+            UnitId(5),
+            TeamId(1),
+            Vec2::new(5.5, 5.5),
+            UnitKind::Villager,
+            2.0,
+        );
         for entity in [first, second] {
             world
                 .entity_mut(entity)
@@ -516,7 +576,7 @@ mod tests {
 
     #[test]
     fn hundred_unit_group_finishes_representative_battlefield_route() {
-        let fixture = MapFixture::battlefield();
+        let mut fixture = MapFixture::battlefield();
         let mut world = World::new();
         let mut ids = Vec::new();
 
@@ -529,24 +589,25 @@ mod tests {
                     id,
                     TeamId(1),
                     Vec2::new(10.5 + column as f32, 43.5 + row as f32),
+                    UnitKind::Villager,
                     12.0,
                 );
             }
         }
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &fixture.map,
-            UnitCommand {
+            &mut fixture.map,
+            PlayerCommand::Units(UnitCommand {
                 issuer: TeamId(1),
                 units: ids,
                 kind: UnitCommandKind::Move {
                     target: fixture.right_spawn,
                 },
-            },
+            }),
         );
-        assert_eq!(outcome.accepted.len(), 100);
-        assert!(outcome.rejected.is_empty());
+        assert_eq!(outcome.accepted_units.len(), 100);
+        assert!(outcome.rejected_units.is_empty());
 
         for _ in 0..600 {
             step_movement(&mut world, &fixture.map, SIM_STEP_SECONDS);
