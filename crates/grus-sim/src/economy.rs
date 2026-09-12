@@ -213,7 +213,7 @@ pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).remove::<MoveOrder>();
 }
 
-fn gather_rate_for_age(age: Age) -> f32 {
+pub(crate) fn gather_rate_for_age(age: Age) -> f32 {
     match age {
         Age::Age1 => BASE_GATHER_RATE,
         Age::Age2 => AGE_TWO_GATHER_RATE,

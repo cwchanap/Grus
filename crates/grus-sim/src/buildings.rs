@@ -15,6 +15,7 @@ use crate::economy::{
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::production::{ProductionQueue, is_producer};
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -448,6 +449,12 @@ pub fn step_construction(world: &mut World, seconds: f32) {
         world.entity_mut(builder_entity).insert(WorkerTask::Idle);
         if kind == BuildingKind::Storehouse {
             world.entity_mut(building_entity).insert(Dropoff { team });
+        }
+        if is_producer(kind) {
+            // Completed producers own their FIFO production queue from birth.
+            world
+                .entity_mut(building_entity)
+                .insert(ProductionQueue::default());
         }
         if kind == BuildingKind::Farm {
             // The completed Farm gains a renewable Food source on the same
@@ -988,6 +995,54 @@ mod tests {
             Some(&Dropoff { team: TeamId(1) })
         );
         assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    }
+
+    #[test]
+    fn completed_barracks_gains_an_empty_production_queue() {
+        let (mut world, mut map, _villager) = setup_build_test();
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::Barracks,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None);
+        let building_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("building registered");
+        assert!(world.get::<ProductionQueue>(building_entity).is_none());
+
+        for _ in 0..1000 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            step_construction(&mut world, SIM_STEP_SECONDS);
+            if world
+                .get::<Building>(building_entity)
+                .unwrap()
+                .construction
+                .complete
+            {
+                break;
+            }
+        }
+        assert!(
+            world
+                .get::<Building>(building_entity)
+                .unwrap()
+                .construction
+                .complete
+        );
+        let queue = world
+            .get::<ProductionQueue>(building_entity)
+            .expect("completed producer owns a queue");
+        assert!(queue.jobs.is_empty());
+        assert_eq!(queue.progress_seconds, 0.0);
+        assert_eq!(queue.blocked, None);
     }
 
     #[test]
