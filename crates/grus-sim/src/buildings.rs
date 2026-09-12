@@ -58,9 +58,10 @@ pub struct PlacementPlan {
 }
 
 /// Authoritative placement validation. Checks, in order: owned villager →
-/// kind unlocked/buildable → footprint in bounds → footprint cells walkable →
-/// affordability → reachable immediate-perimeter builder slot. Mutates
-/// nothing; apply the returned plan only after every check passes.
+/// kind unlocked/buildable → footprint in bounds → footprint cells walkable
+/// and free of any live unit's current cell → affordability → reachable
+/// reserved immediate-perimeter builder slot. Mutates nothing; apply the
+/// returned plan only after every check passes.
 pub fn validate_placement(
     world: &World,
     map: &GridMap,
@@ -95,8 +96,27 @@ pub fn validate_placement(
         return Err(RejectReason::OutOfBounds);
     }
 
-    // 4. footprint cells walkable.
-    if !footprint.cells().iter().all(|cell| map.is_walkable(*cell)) {
+    // 4. footprint cells walkable and free of any live unit's current cell:
+    // placement would block the cells and permanently entomb a unit standing
+    // inside the footprint (find_path needs a walkable start).
+    let unit_cells: HashSet<GridPos> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(_, entity)| {
+                    world
+                        .get::<SimPosition>(*entity)
+                        .map(|position| map.world_to_cell(position.current))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !footprint
+        .cells()
+        .iter()
+        .all(|cell| map.is_walkable(*cell) && !unit_cells.contains(cell))
+    {
         return Err(RejectReason::Occupied);
     }
 
@@ -297,7 +317,8 @@ fn validate_resume(
 }
 
 /// Picks the builder's approach slot: the first reachable walkable cell on the
-/// footprint's immediate perimeter. Returns the slot and its route waypoints.
+/// footprint's immediate perimeter that no live unit stands on or moves to.
+/// Returns the slot and its route waypoints.
 fn reachable_builder_slot(
     world: &World,
     map: &GridMap,
@@ -308,7 +329,29 @@ fn reachable_builder_slot(
         .get::<SimPosition>(builder)
         .ok_or(RejectReason::UnknownUnit)?;
     let start = map.world_to_cell(position.current);
-    let used = HashSet::new();
+
+    // Same reservation seam as Move: seed every live unit's current cell and
+    // existing MoveOrder goal, excluding the builder's own current cell and
+    // old goal exactly as Move releases a commanded unit's reservations before
+    // reassignment. When the placement order replaces the old one,
+    // `cancel_worker_activity` drops the old route (releasing its goal) and
+    // the new order claims the slot; on rejection nothing here mutated.
+    let mut used = HashSet::new();
+    let entities: Vec<Entity> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| index.iter().map(|(_, entity)| *entity).collect())
+        .unwrap_or_default();
+    for entity in entities {
+        if entity == builder {
+            continue;
+        }
+        if let Some(position) = world.get::<SimPosition>(entity) {
+            used.insert(map.world_to_cell(position.current));
+        }
+        if let Some(order) = world.get::<MoveOrder>(entity) {
+            used.insert(order.goal);
+        }
+    }
     for slot in approach_slots(map, footprint, &used, footprint.perimeter_cells().len()) {
         if let Some(path) = map.find_path(start, slot) {
             let route = path
@@ -550,12 +593,12 @@ mod tests {
     #[test]
     fn invalid_placement_never_charges_or_reserves() {
         let (mut world, mut map, _villager) = setup_build_test();
-        // Not a villager.
+        // Not a villager. Parked away from every footprint used below.
         spawn_unit(
             &mut world,
             UnitId(2),
             TeamId(1),
-            Vec2::new(20.5, 20.5),
+            Vec2::new(2.5, 2.5),
             UnitKind::Spearman,
             unit_spec(UnitKind::Spearman).speed,
         );
@@ -926,5 +969,95 @@ mod tests {
             Some(&Dropoff { team: TeamId(1) })
         );
         assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    }
+
+    #[test]
+    fn placement_rejects_a_footprint_under_a_standing_unit() {
+        let (mut world, mut map, _villager) = setup_build_test();
+        let anchor = GridPos::new(13, 10);
+        // A live unit stands inside the would-be footprint.
+        spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            map.cell_center(GridPos::new(13, 10)),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor,
+            },
+        );
+
+        assert_eq!(result.reject, Some(RejectReason::Occupied));
+
+        // No cost was charged and no footprint cell was blocked.
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+            500
+        );
+        for cell in Footprint::new(anchor, 2, 2).cells() {
+            assert!(map.is_walkable(cell), "footprint cell {cell:?} blocked");
+        }
+        assert_eq!(
+            world
+                .get_resource::<BuildingIndex>()
+                .map(|index| index.iter().count())
+                .unwrap_or(0),
+            0
+        );
+    }
+
+    #[test]
+    fn placement_slot_is_not_assigned_onto_a_live_unit() {
+        let (mut world, mut map, villager) = setup_build_test();
+        // An idle unit squats on the footprint's first perimeter candidate,
+        // which an empty reservation set would hand to the builder.
+        let squatter_cell = GridPos::new(12, 9);
+        let squatter = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            map.cell_center(squatter_cell),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+        world.entity_mut(squatter).insert(WorkerTask::Idle);
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None);
+
+        let task = world.get::<WorkerTask>(villager).unwrap().clone();
+        let WorkerTask::ToConstruction {
+            building: BuildingId(10),
+            slot,
+        } = task
+        else {
+            panic!("expected ToConstruction, got {task:?}");
+        };
+        assert_ne!(
+            slot, squatter_cell,
+            "builder was sent onto a live unit's cell"
+        );
+
+        // With an unoccupied slot the builder actually reaches the site and
+        // starts building instead of being separated off its slot forever.
+        run_until_constructing(&mut world, &map, villager);
     }
 }
