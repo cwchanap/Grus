@@ -170,13 +170,26 @@ Gathering uses fractional progress because a 2.0/s rate at a 0.05 s fixed step i
 
 ### Generic drop-offs
 
-`Dropoff { team: TeamId, building: BuildingId }` is an economy component. Economy routing searches completed entities with `Dropoff`; it does not branch on `BuildingKind` names.
+`Dropoff` is an economy component and carries the immutable routing geometry needed by the gather loop:
 
-- Starting Town Centers receive `Dropoff` when bootstrapped.
+```rust
+pub struct Dropoff {
+    pub team: TeamId,
+    pub building: BuildingId,
+    pub anchor: GridPos,
+    pub width: u8,
+    pub height: u8,
+}
+```
+
+Economy routing searches `Dropoff` components directly and generates reachable reserved slots around that footprint; it does not branch on `BuildingKind` names or require a Godot node.
+
+- Starting Town Centers receive `Dropoff` during economy bootstrap using their authored 4×4 anchors.
+- When Task 3 adds the full `Building` component, the same starting entities keep their `Dropoff`; they are not replaced by a second Town Center entity.
 - Completed Storehouses receive `Dropoff` on construction completion.
 - No other building is a drop-off in HPA-471.
 
-This keeps the gather loop independent of building-type conditionals.
+This lets finite gathering be implemented/tested before the full construction subsystem without creating a throwaway building model.
 
 ### Resource sources
 
@@ -190,10 +203,10 @@ A completed Farm remains a building and creates a renewable Food `ResourceSource
 
 HPA-470 already has `destination_slots` plus reference-counted current/goal reservations for group Move. Generalize that code rather than adding a separate single-worker route helper.
 
-The shared reservation routine accepts a target cell and whether the target center itself may be blocked:
+The shared reservation routine accepts a target cell/footprint and whether the target itself may be blocked:
 
-- normal Move requires the center to be walkable;
-- Gather/build approach may use a blocked source/building center and generates perimeter/ring candidates;
+- normal Move requires the target cell to be walkable;
+- Gather/build/drop-off approach may target blocked resource/building footprints and generates walkable perimeter/ring candidates;
 - current cells and existing goals remain reference-counted reservations;
 - each accepted worker receives a distinct reachable slot;
 - rejected workers keep their existing reservation/order.
@@ -202,7 +215,7 @@ Required regression: a normal Move onto a blocked source remains `Unreachable`, 
 
 ## Player commands and worker cancellation
 
-Use one top-level simulation command enum and dispatcher:
+The final command surface is one top-level simulation enum:
 
 ```rust
 pub enum PlayerCommand {
@@ -216,17 +229,18 @@ pub enum PlayerCommand {
 }
 ```
 
+The implementation may grow this enum as each owning task lands (`Units/Gather` first, construction variants next, production variants last) so every intermediate commit remains fully implemented and exhaustive; do not add placeholder command variants.
+
 `apply_player_command()` lives in `grus-sim`; Godot only queues commands and formats returned feedback. Move/Stop remain `UnitCommand` variants inside `PlayerCommand::Units`.
 
 Promote the existing unit ownership lookup to one reusable internal helper rather than duplicating ownership checks across economy/buildings/production.
 
-A single `cancel_worker_activity()` helper performs the worker-side cleanup needed when an accepted replacement command takes over:
+A single `cancel_worker_activity()` helper owns worker-side cleanup. It starts with worker/movement cleanup in Task 2 and is extended in Task 3, when Farm/construction components exist, to also:
 
 - release an assigned Farm slot if the current task owns one;
-- clear the building's active builder if this worker was constructing;
-- set `WorkerTask::Idle`;
-- reset `GatherProgress`;
-- remove the old `MoveOrder` when appropriate.
+- clear the building's active builder if this worker was constructing.
+
+In its final form it sets `WorkerTask::Idle`, resets `GatherProgress`, and removes/replaces the old `MoveOrder` as required.
 
 Command semantics are **validate → cancel old accepted worker job → apply replacement**. A rejected Move/Gather/Place/Resume command does not destroy a valid existing worker job/order. `Stop` is the explicit unconditional cancellation command for owned units.
 
@@ -247,7 +261,7 @@ Only after all checks pass does the simulation cancel the accepted builder's pri
 
 One active builder advances a site's catalogue build time. If that villager receives an accepted replacement command or Stop, construction pauses. Right-clicking the incomplete owned building with a villager selected validates, cancels the villager's previous accepted job, assigns it, and resumes construction. No multi-builder speed stacking is implemented.
 
-Starting Town Centers are bootstrapped complete through the same `Building`/`BuildingIndex` representation without charging cost. They immediately receive `Dropoff` and reserve their exact 4×4 footprints.
+The two authored Town Center entities created by economy bootstrap receive the full completed `Building` component and `BuildingIndex` entry when the building subsystem lands; they keep the same `BuildingId`, footprint, and `Dropoff` rather than being respawned.
 
 Completed Storehouses receive `Dropoff`. Completed Farms allocate a new `ResourceId` and create their renewable one-worker Food source. This happens only after the building subsystem exists; Farm is not modeled as a pre-building economy special case.
 
@@ -319,11 +333,13 @@ Fixture spawn and runtime spawn must use the same presentation path. Add one God
 
 - `Unit` → `unit_view.tscn`;
 - `Building` → `building_view.tscn`;
-- `ResourceSource` → `resource_view.tscn`.
+- standalone `ResourceSource` without `Building` → `resource_view.tscn`.
+
+A completed Farm has both `Building` and `ResourceSource`, so it receives **only** `building_view.tscn`. Its building-view metadata also includes the Farm's `resource_id`, allowing contextual Gather targeting without a second overlapping resource node.
 
 Use a small integration-only marker to prevent duplicate attachment. `grus-sim` never imports Godot types. Metadata initialization runs after `GodotNodeHandle` exists.
 
-This guarantees trained units, newly placed buildings, completed Farms/resources, and authored fixture entities all become visible without special-case scene attachment in `setup_fixture`. Despawning an ECS resource/building/unit removes its Godot node through the existing godot-bevy scene ownership path.
+This guarantees trained units, newly placed buildings, completed Farms/resources, and authored fixture entities all become visible without special-case scene attachment in fixture seeding. Despawning an ECS resource/building/unit removes its Godot node through the existing godot-bevy scene ownership path.
 
 ### Simulation speed for integration smoke
 
@@ -344,7 +360,7 @@ Use one clear-and-seed path for both normal and benchmark resets.
 
 Before reseeding, reset must:
 
-- despawn every entity with `Unit`, `Building`, or `ResourceSource`;
+- collect the unique gameplay entities carrying `Unit`, `Building`, or `ResourceSource` and despawn each entity once;
 - remove/reinitialize `UnitIndex`, `BuildingIndex`, `ResourceIndex`, `TeamEconomy`, and `IdAllocator`;
 - clear pending commands and reset feedback;
 - replace the `GridMap` resource with a fresh `MapFixture::battlefield().map`, so previous construction/resource blocking cannot leak across resets.
@@ -363,7 +379,7 @@ Use primitive low-poly scenes; HPA-471 does not require generated art.
 Add:
 
 - `resource_view.tscn` + `resource_view.gd`: one simple mesh styled by resource kind and tagged with `resource_id`;
-- `building_view.tscn` + `building_view.gd`: one simple mesh scaled/styled by building kind, team color, construction progress, and selection state;
+- `building_view.tscn` + `building_view.gd`: one simple mesh scaled/styled by building kind, team color, construction progress, selection state, and Farm `resource_id` metadata when present;
 - extend `unit_view.gd` to style the four unit kinds while preserving team color and selection rings.
 
 Godot never decides whether a resource is depleted, a building is complete, or a queue is blocked.
@@ -374,7 +390,7 @@ Keep the current battlefield controller as the interaction owner to avoid adding
 
 - Box selection remains units only.
 - Left click can select friendly units or one owned building.
-- Right click with villagers over a resource view issues Gather.
+- Right click with villagers over a resource view or completed Farm building view issues Gather using `resource_id`.
 - Right click with a villager over an incomplete owned building issues ResumeConstruction.
 - Right click on normal ground keeps the existing Move behavior.
 - Build buttons appear when a villager is selected and enter a single placement mode.
@@ -418,7 +434,7 @@ Add one `economy_smoke_test.tscn` that uses real selection, contextual right-cli
 
 The smoke must gather enough Wood before Stable/Archer/building costs; it may not rely on the starting 300 Wood. It also gathers enough Food and Gold for unit/age costs. It must not grant resources, force completion, mutate age, or bypass command validation.
 
-The smoke verifies runtime-spawned resource/building/unit views, stockpile changes only after deposit, population-cap changes, construction/queue progress, unlock/blocked feedback, and age transition through the same bridge snapshots used by the playable HUD.
+The smoke verifies runtime-spawned resource/building/unit views, Farm gather targeting through its building view, stockpile changes only after deposit, population-cap changes, construction/queue progress, unlock/blocked feedback, and age transition through the same bridge snapshots used by the playable HUD.
 
 Measure the smoke's real wall-clock duration at 20× after implementation. The CI timeout is chosen from that measured run with startup margin rather than assuming 60 seconds in advance.
 
