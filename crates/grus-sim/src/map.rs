@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use bevy::math::Vec2;
-use bevy::prelude::Resource;
+use bevy::prelude::{Component, Resource};
 use pathfinding::prelude::astar;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -13,6 +13,71 @@ pub struct GridPos {
 impl GridPos {
     pub const fn new(x: i32, y: i32) -> Self {
         Self { x, y }
+    }
+}
+
+/// One spatial rectangle contract shared by buildings and 1×1 resource
+/// sources. `anchor` is the inclusive top-left cell.
+#[derive(Clone, Copy, Component, Debug, Eq, PartialEq)]
+pub struct Footprint {
+    pub anchor: GridPos,
+    pub width: u8,
+    pub height: u8,
+}
+
+impl Footprint {
+    pub const fn new(anchor: GridPos, width: u8, height: u8) -> Self {
+        Self {
+            anchor,
+            width,
+            height,
+        }
+    }
+
+    /// All covered cells, row-major from the anchor.
+    pub fn cells(&self) -> Vec<GridPos> {
+        let mut cells = Vec::with_capacity(self.width as usize * self.height as usize);
+        for dy in 0..i32::from(self.height) {
+            for dx in 0..i32::from(self.width) {
+                cells.push(GridPos::new(self.anchor.x + dx, self.anchor.y + dy));
+            }
+        }
+        cells
+    }
+
+    /// The ring of cells immediately surrounding the footprint, row-major.
+    /// Never contains a footprint cell and never scans a wider ring.
+    pub fn perimeter_cells(&self) -> Vec<GridPos> {
+        let min_x = self.anchor.x - 1;
+        let max_x = self.anchor.x + i32::from(self.width);
+        let min_y = self.anchor.y - 1;
+        let max_y = self.anchor.y + i32::from(self.height);
+        let mut cells = Vec::new();
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                if x > min_x && x < max_x && y > min_y && y < max_y {
+                    continue;
+                }
+                cells.push(GridPos::new(x, y));
+            }
+        }
+        cells
+    }
+
+    /// True when `cell` is on the immediate perimeter of the footprint.
+    pub fn is_immediately_adjacent(&self, cell: GridPos) -> bool {
+        !self.contains(cell)
+            && cell.x >= self.anchor.x - 1
+            && cell.x <= self.anchor.x + i32::from(self.width)
+            && cell.y >= self.anchor.y - 1
+            && cell.y <= self.anchor.y + i32::from(self.height)
+    }
+
+    fn contains(&self, cell: GridPos) -> bool {
+        cell.x >= self.anchor.x
+            && cell.x < self.anchor.x + i32::from(self.width)
+            && cell.y >= self.anchor.y
+            && cell.y < self.anchor.y + i32::from(self.height)
     }
 }
 
@@ -192,5 +257,39 @@ mod tests {
         for cell in [GridPos::new(0, 0), GridPos::new(3, 5), GridPos::new(7, 7)] {
             assert_eq!(map.world_to_cell(map.cell_center(cell)), cell);
         }
+    }
+
+    #[test]
+    fn footprint_cells_perimeter_and_adjacency_stay_disjoint_and_deterministic() {
+        let footprint = Footprint::new(GridPos::new(3, 3), 2, 2);
+
+        let cells = footprint.cells();
+        assert_eq!(
+            cells,
+            vec![
+                GridPos::new(3, 3),
+                GridPos::new(4, 3),
+                GridPos::new(3, 4),
+                GridPos::new(4, 4)
+            ]
+        );
+
+        let perimeter = footprint.perimeter_cells();
+        assert_eq!(perimeter.len(), 12);
+        assert!(!perimeter.contains(&GridPos::new(3, 3)));
+        assert!(!perimeter.contains(&GridPos::new(4, 4)));
+        assert!(perimeter.contains(&GridPos::new(2, 2)));
+        assert!(perimeter.contains(&GridPos::new(5, 5)));
+        assert_eq!(perimeter.first().copied(), Some(GridPos::new(2, 2)));
+        assert!(
+            perimeter
+                .iter()
+                .all(|cell| footprint.is_immediately_adjacent(*cell))
+        );
+        assert!(perimeter.iter().all(|cell| !cells.contains(cell)));
+
+        assert!(footprint.is_immediately_adjacent(GridPos::new(2, 3)));
+        assert!(!footprint.is_immediately_adjacent(GridPos::new(1, 1)));
+        assert!(!footprint.is_immediately_adjacent(GridPos::new(3, 3)));
     }
 }

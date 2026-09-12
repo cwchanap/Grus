@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
+use crate::catalog::UnitKind;
 use crate::ids::{TeamId, UnitId};
-use crate::map::{GridMap, GridPos};
+use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 
 #[derive(Clone, Debug)]
@@ -20,17 +21,38 @@ pub struct UnitCommand {
     pub kind: UnitCommandKind,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandRejectReason {
-    UnknownUnit,
-    NotOwned,
-    Unreachable,
+/// Top-level player command. Grows only when its owning behavior lands.
+#[derive(Clone, Debug)]
+pub enum PlayerCommand {
+    Units(UnitCommand),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RejectReason {
+    UnknownUnit,
+    NotOwned,
+    NotVillager,
+    Unreachable,
+    Crowded,
+    SourceMissing,
+    BuildingMissing,
+    Locked,
+    InsufficientResources,
+    OutOfBounds,
+    Occupied,
+    WrongProducer,
+    FarmOccupied,
+    PopulationFull,
+    NoSpawnSpace,
+}
+
+/// Typed result of one player command. Batch unit commands report per-unit
+/// outcomes; single building/production commands use `reject`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct CommandOutcome {
-    pub accepted: Vec<UnitId>,
-    pub rejected: Vec<(UnitId, CommandRejectReason)>,
+pub struct CommandResult {
+    pub accepted_units: Vec<UnitId>,
+    pub rejected_units: Vec<(UnitId, RejectReason)>,
+    pub reject: Option<RejectReason>,
 }
 
 #[derive(Debug, Default, Resource)]
@@ -51,10 +73,19 @@ pub fn spawn_unit(
     id: UnitId,
     team: TeamId,
     position: Vec2,
+    kind: UnitKind,
     speed: f32,
 ) -> Entity {
     let entity = world
-        .spawn((Unit { id, team, speed }, SimPosition::new(position)))
+        .spawn((
+            Unit {
+                id,
+                team,
+                kind,
+                speed,
+            },
+            SimPosition::new(position),
+        ))
         .id();
     let mut index = world.get_resource_or_insert_with(UnitIndex::default);
     assert!(
@@ -64,7 +95,17 @@ pub fn spawn_unit(
     entity
 }
 
-pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> CommandOutcome {
+pub fn apply_player_command(
+    world: &mut World,
+    map: &mut GridMap,
+    command: PlayerCommand,
+) -> CommandResult {
+    match command {
+        PlayerCommand::Units(units) => apply_unit_command(world, map, units),
+    }
+}
+
+fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand) -> CommandResult {
     let UnitCommand {
         issuer,
         mut units,
@@ -73,17 +114,17 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
     units.sort_unstable();
     units.dedup();
 
-    let mut outcome = CommandOutcome::default();
+    let mut outcome = CommandResult::default();
 
     match kind {
         UnitCommandKind::Stop => {
             for id in units {
-                match owned_entity(world, id, issuer) {
+                match owned_unit_entity(world, id, issuer) {
                     Ok(entity) => {
                         world.entity_mut(entity).remove::<MoveOrder>();
-                        outcome.accepted.push(id);
+                        outcome.accepted_units.push(id);
                     }
-                    Err(reason) => outcome.rejected.push((id, reason)),
+                    Err(reason) => outcome.rejected_units.push((id, reason)),
                 }
             }
         }
@@ -140,27 +181,23 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
             };
 
             for id in units {
-                let entity = match owned_entity(world, id, issuer) {
+                let entity = match owned_unit_entity(world, id, issuer) {
                     Ok(entity) => entity,
                     Err(reason) => {
                         // Rejected before any reservation is touched: the unit
                         // keeps its current cell and existing goal reserved.
-                        outcome.rejected.push((id, reason));
+                        outcome.rejected_units.push((id, reason));
                         continue;
                     }
                 };
 
                 if !target_is_walkable {
-                    outcome
-                        .rejected
-                        .push((id, CommandRejectReason::Unreachable));
+                    outcome.rejected_units.push((id, RejectReason::Unreachable));
                     continue;
                 }
 
                 let Some(position) = world.get::<SimPosition>(entity).copied() else {
-                    outcome
-                        .rejected
-                        .push((id, CommandRejectReason::UnknownUnit));
+                    outcome.rejected_units.push((id, RejectReason::UnknownUnit));
                     continue;
                 };
                 let start = map.world_to_cell(position.current);
@@ -187,9 +224,7 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                     if let Some(goal) = old_goal {
                         reserve_slot(&mut used_slots, goal);
                     }
-                    outcome
-                        .rejected
-                        .push((id, CommandRejectReason::Unreachable));
+                    outcome.rejected_units.push((id, RejectReason::Unreachable));
                     continue;
                 };
 
@@ -211,7 +246,7 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
                         last_failed_replan: None,
                     });
                 }
-                outcome.accepted.push(id);
+                outcome.accepted_units.push(id);
             }
         }
     }
@@ -219,20 +254,42 @@ pub fn apply_command(world: &mut World, map: &GridMap, command: UnitCommand) -> 
     outcome
 }
 
-fn owned_entity(world: &World, id: UnitId, issuer: TeamId) -> Result<Entity, CommandRejectReason> {
+pub(crate) fn owned_unit_entity(
+    world: &World,
+    id: UnitId,
+    issuer: TeamId,
+) -> Result<Entity, RejectReason> {
     let entity = world
         .get_resource::<UnitIndex>()
         .and_then(|index| index.entity(id))
-        .ok_or(CommandRejectReason::UnknownUnit)?;
-    let unit = world
-        .get::<Unit>(entity)
-        .ok_or(CommandRejectReason::UnknownUnit)?;
+        .ok_or(RejectReason::UnknownUnit)?;
+    let unit = world.get::<Unit>(entity).ok_or(RejectReason::UnknownUnit)?;
 
     if unit.team != issuer {
-        return Err(CommandRejectReason::NotOwned);
+        return Err(RejectReason::NotOwned);
     }
 
     Ok(entity)
+}
+
+/// Immediate-perimeter candidate generator for gather/build/drop-off tasking.
+/// Returns at most `count` walkable, unreserved cells from the target
+/// footprint's immediate perimeter and never scans a wider ring. Wired into
+/// gather/build commands by later HPA-471 tasks; Move keeps
+/// `destination_slots`.
+#[allow(dead_code)]
+pub(crate) fn approach_slots(
+    map: &GridMap,
+    footprint: Footprint,
+    used: &HashSet<GridPos>,
+    count: usize,
+) -> Vec<GridPos> {
+    footprint
+        .perimeter_cells()
+        .into_iter()
+        .filter(|cell| map.is_walkable(*cell) && !used.contains(cell))
+        .take(count)
+        .collect()
 }
 
 /// Reference-counted reservation for a destination cell. A cell shared by
@@ -306,12 +363,20 @@ mod tests {
         GridMap::new(24, 24)
     }
 
-    fn move_command(issuer: TeamId, units: Vec<UnitId>, target: Vec2) -> UnitCommand {
-        UnitCommand {
+    fn move_command(issuer: TeamId, units: Vec<UnitId>, target: Vec2) -> PlayerCommand {
+        PlayerCommand::Units(UnitCommand {
             issuer,
             units,
             kind: UnitCommandKind::Move { target },
-        }
+        })
+    }
+
+    fn stop_command(issuer: TeamId, units: Vec<UnitId>) -> PlayerCommand {
+        PlayerCommand::Units(UnitCommand {
+            issuer,
+            units,
+            kind: UnitCommandKind::Stop,
+        })
     }
 
     fn test_order(map: &GridMap, waypoint: Vec2) -> MoveOrder {
@@ -327,21 +392,28 @@ mod tests {
     #[test]
     fn enemy_units_are_rejected_without_mutating_their_order() {
         let mut world = World::new();
-        let map = open_map();
-        let enemy = spawn_unit(&mut world, UnitId(9), TeamId(2), Vec2::new(2.5, 2.5), 6.0);
+        let mut map = open_map();
+        let enemy = spawn_unit(
+            &mut world,
+            UnitId(9),
+            TeamId(2),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
         world
             .entity_mut(enemy)
             .insert(test_order(&map, Vec2::new(3.5, 2.5)));
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(9)], Vec2::new(18.5, 18.5)),
         );
 
         assert_eq!(
-            outcome.rejected,
-            vec![(UnitId(9), CommandRejectReason::NotOwned)]
+            outcome.rejected_units,
+            vec![(UnitId(9), RejectReason::NotOwned)]
         );
         assert_eq!(
             world.get::<MoveOrder>(enemy).unwrap().waypoints,
@@ -352,19 +424,26 @@ mod tests {
     #[test]
     fn replacement_move_discards_the_previous_route() {
         let mut world = World::new();
-        let map = open_map();
-        let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
+        let mut map = open_map();
+        let unit = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
         world
             .entity_mut(unit)
             .insert(test_order(&map, Vec2::new(3.5, 1.5)));
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(1)], Vec2::new(19.5, 19.5)),
         );
 
-        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
         let order = world.get::<MoveOrder>(unit).expect("replacement order");
         assert_eq!(order.waypoints.last().copied(), Some(Vec2::new(19.5, 19.5)));
         assert_ne!(order.waypoints, vec![Vec2::new(3.5, 1.5)]);
@@ -373,23 +452,26 @@ mod tests {
     #[test]
     fn stop_removes_an_active_move_order() {
         let mut world = World::new();
-        let map = open_map();
-        let unit = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(1.5, 1.5), 6.0);
+        let mut map = open_map();
+        let unit = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
         world
             .entity_mut(unit)
             .insert(test_order(&map, Vec2::new(8.5, 1.5)));
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
-            UnitCommand {
-                issuer: TeamId(1),
-                units: vec![UnitId(2)],
-                kind: UnitCommandKind::Stop,
-            },
+            &mut map,
+            stop_command(TeamId(1), vec![UnitId(2)]),
         );
 
-        assert_eq!(outcome.accepted, vec![UnitId(2)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(2)]);
         assert!(world.get::<MoveOrder>(unit).is_none());
     }
 
@@ -398,17 +480,24 @@ mod tests {
         let mut world = World::new();
         let mut map = open_map();
         map.set_blocked_rect(GridPos::new(10, 10), GridPos::new(12, 12));
-        let unit = spawn_unit(&mut world, UnitId(3), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
-
-        let outcome = apply_command(
+        let unit = spawn_unit(
             &mut world,
-            &map,
+            UnitId(3),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(3)], Vec2::new(11.5, 11.5)),
         );
 
         assert_eq!(
-            outcome.rejected,
-            vec![(UnitId(3), CommandRejectReason::Unreachable)]
+            outcome.rejected_units,
+            vec![(UnitId(3), RejectReason::Unreachable)]
         );
         assert!(world.get::<MoveOrder>(unit).is_none());
     }
@@ -416,20 +505,21 @@ mod tests {
     #[test]
     fn group_targets_distinct_walkable_destination_slots() {
         let mut world = World::new();
-        let map = open_map();
+        let mut map = open_map();
         for id in 1..=4 {
             spawn_unit(
                 &mut world,
                 UnitId(id),
                 TeamId(1),
                 Vec2::new(2.5, id as f32 + 1.5),
+                UnitKind::Villager,
                 6.0,
             );
         }
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(
                 TeamId(1),
                 vec![UnitId(4), UnitId(2), UnitId(1), UnitId(3)],
@@ -438,7 +528,7 @@ mod tests {
         );
 
         assert_eq!(
-            outcome.accepted,
+            outcome.accepted_units,
             vec![UnitId(1), UnitId(2), UnitId(3), UnitId(4)]
         );
         let index = world.resource::<UnitIndex>();
@@ -466,17 +556,31 @@ mod tests {
     #[test]
     fn sequential_commands_do_not_collapse_onto_occupied_destination() {
         let mut world = World::new();
-        let map = open_map();
-        let first = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(2.5, 2.5), 20.0);
-        let second = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(2.5, 4.5), 20.0);
+        let mut map = open_map();
+        let first = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            20.0,
+        );
+        let second = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(2.5, 4.5),
+            UnitKind::Villager,
+            20.0,
+        );
 
         // Command 1: move the first unit to the target.
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(1)], Vec2::new(18.5, 18.5)),
         );
-        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
         for _ in 0..200 {
             step_movement(&mut world, &map, SIM_STEP_SECONDS);
         }
@@ -486,12 +590,12 @@ mod tests {
         );
 
         // Command 2: move the second unit to the SAME target.
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(2)], Vec2::new(18.5, 18.5)),
         );
-        assert_eq!(outcome.accepted, vec![UnitId(2)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(2)]);
         for _ in 0..200 {
             step_movement(&mut world, &map, SIM_STEP_SECONDS);
         }
@@ -511,7 +615,7 @@ mod tests {
     #[test]
     fn destination_slots_keep_scanning_past_reserved_candidates() {
         let mut world = World::new();
-        let map = open_map();
+        let mut map = open_map();
         // Reserve the four closest destination candidates (the target cell and
         // the first three ring-1 cells in slot order) with units that are not part
         // of the command, so a fixed 4*units.len() slot list would be exhausted
@@ -529,18 +633,26 @@ mod tests {
                 UnitId(100 + i as u32),
                 TeamId(2),
                 map.cell_center(*cell),
+                UnitKind::Villager,
                 6.0,
             );
         }
-        let unit = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
-
-        let outcome = apply_command(
+        let unit = spawn_unit(
             &mut world,
-            &map,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(1)], Vec2::new(18.5, 18.5)),
         );
 
-        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
         let order = world.get::<MoveOrder>(unit).expect("order accepted");
         assert!(
             !reserved.contains(&order.goal),
@@ -555,20 +667,27 @@ mod tests {
         let mut world = World::new();
         let mut map = open_map();
         map.set_blocked_rect(GridPos::new(10, 10), GridPos::new(12, 12));
-        let unit = spawn_unit(&mut world, UnitId(4), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
+        let unit = spawn_unit(
+            &mut world,
+            UnitId(4),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
         world
             .entity_mut(unit)
             .insert(test_order(&map, Vec2::new(3.5, 2.5)));
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(4)], Vec2::new(11.5, 11.5)),
         );
 
         assert_eq!(
-            outcome.rejected,
-            vec![(UnitId(4), CommandRejectReason::Unreachable)]
+            outcome.rejected_units,
+            vec![(UnitId(4), RejectReason::Unreachable)]
         );
         assert_eq!(
             world.get::<MoveOrder>(unit).unwrap().waypoints,
@@ -583,20 +702,27 @@ mod tests {
         // Wall off the unit from the target region so the target is walkable
         // but no destination slot is reachable.
         map.set_blocked_rect(GridPos::new(0, 3), GridPos::new(23, 3));
-        let unit = spawn_unit(&mut world, UnitId(5), TeamId(1), Vec2::new(2.5, 2.5), 6.0);
+        let unit = spawn_unit(
+            &mut world,
+            UnitId(5),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
         world
             .entity_mut(unit)
             .insert(test_order(&map, Vec2::new(1.5, 2.5)));
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(5)], Vec2::new(5.5, 5.5)),
         );
 
         assert_eq!(
-            outcome.rejected,
-            vec![(UnitId(5), CommandRejectReason::Unreachable)]
+            outcome.rejected_units,
+            vec![(UnitId(5), RejectReason::Unreachable)]
         );
         assert_eq!(
             world.get::<MoveOrder>(unit).unwrap().waypoints,
@@ -612,7 +738,14 @@ mod tests {
         let target_cell = map.world_to_cell(target);
 
         // Unit A is on the right side and can reach the target.
-        let a = spawn_unit(&mut world, UnitId(1), TeamId(1), Vec2::new(18.5, 2.5), 12.0);
+        let a = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(18.5, 2.5),
+            UnitKind::Villager,
+            12.0,
+        );
         // Unit B is walled into a pocket on the left so it is Unreachable, but
         // it already holds a MoveOrder to the target cell. B must keep that goal
         // reserved so the accepted A is not sent to the same cell.
@@ -624,7 +757,14 @@ mod tests {
         ] {
             map.set_blocked(cell, true);
         }
-        let b = spawn_unit(&mut world, UnitId(2), TeamId(1), Vec2::new(2.5, 2.5), 12.0);
+        let b = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            12.0,
+        );
         world.entity_mut(b).insert(MoveOrder {
             waypoints: vec![map.cell_center(target_cell)],
             next: 0,
@@ -633,16 +773,16 @@ mod tests {
             last_failed_replan: None,
         });
 
-        let outcome = apply_command(
+        let outcome = apply_player_command(
             &mut world,
-            &map,
+            &mut map,
             move_command(TeamId(1), vec![UnitId(1), UnitId(2)], target),
         );
 
-        assert_eq!(outcome.accepted, vec![UnitId(1)]);
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
         assert_eq!(
-            outcome.rejected,
-            vec![(UnitId(2), CommandRejectReason::Unreachable)]
+            outcome.rejected_units,
+            vec![(UnitId(2), RejectReason::Unreachable)]
         );
 
         // A must not have been assigned the target cell B is already moving to.
@@ -656,5 +796,26 @@ mod tests {
         let b_order = world.get::<MoveOrder>(b).expect("B keeps its order");
         assert_eq!(b_order.goal, target_cell);
         assert_eq!(b_order.waypoints, vec![map.cell_center(target_cell)]);
+    }
+
+    #[test]
+    fn approach_slots_stay_on_the_immediate_perimeter() {
+        let mut map = GridMap::new(8, 8);
+        let footprint = Footprint::new(GridPos::new(3, 3), 2, 2);
+        for cell in footprint.cells() {
+            map.set_blocked(cell, true);
+        }
+
+        let used = std::collections::HashSet::new();
+        let slots = approach_slots(&map, footprint, &used, 8);
+
+        assert!(!slots.is_empty());
+        assert!(slots.iter().all(|slot| map.is_walkable(*slot)));
+        assert!(
+            slots
+                .iter()
+                .all(|slot| footprint.is_immediately_adjacent(*slot))
+        );
+        assert!(slots.iter().all(|slot| !footprint.cells().contains(slot)));
     }
 }

@@ -5,18 +5,19 @@ use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::{
-    CommandOutcome, CommandRejectReason, GridMap, MapFixture, SIM_STEP_SECONDS, SimPosition,
-    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, apply_command, spawn_unit,
-    step_movement,
+    CommandResult, GridMap, MapFixture, PlayerCommand, RejectReason, SIM_STEP_SECONDS, SimPosition,
+    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, apply_player_command,
+    spawn_unit, step_movement,
 };
 
 #[derive(Default, Resource)]
-struct PendingCommands(Vec<UnitCommand>);
+struct PendingCommands(Vec<PlayerCommand>);
 
 #[derive(Resource)]
 struct CommandFeedback {
     revision: u64,
     text: String,
+    last_reject_code: Option<RejectReason>,
 }
 
 impl Default for CommandFeedback {
@@ -24,6 +25,7 @@ impl Default for CommandFeedback {
         Self {
             revision: 0,
             text: "Ready".to_string(),
+            last_reject_code: None,
         }
     }
 }
@@ -53,13 +55,13 @@ impl GrusBridgeNode {
             return false;
         }
 
-        queue_command(UnitCommand {
+        queue_command(PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units,
             kind: UnitCommandKind::Move {
                 target: Vec2::new(target.x, target.y),
             },
-        })
+        }))
     }
 
     #[func]
@@ -69,30 +71,30 @@ impl GrusBridgeNode {
             return false;
         }
 
-        queue_command(UnitCommand {
+        queue_command(PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units,
             kind: UnitCommandKind::Stop,
-        })
+        }))
     }
 
     #[func]
     fn benchmark_move_all(&self) -> bool {
         let fixture = MapFixture::battlefield();
-        let player_queued = queue_command(UnitCommand {
+        let player_queued = queue_command(PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units: (1_u32..=100).map(UnitId).collect(),
             kind: UnitCommandKind::Move {
                 target: fixture.right_spawn,
             },
-        });
-        let enemy_queued = queue_command(UnitCommand {
+        }));
+        let enemy_queued = queue_command(PlayerCommand::Units(UnitCommand {
             issuer: TeamId(2),
             units: (101_u32..=200).map(UnitId).collect(),
             kind: UnitCommandKind::Move {
                 target: fixture.left_spawn,
             },
-        });
+        }));
 
         player_queued && enemy_queued
     }
@@ -131,6 +133,20 @@ impl GrusBridgeNode {
                 .unwrap_or_else(|| GString::from("Bridge unavailable"))
         })
         .unwrap_or_else(|| GString::from("Bridge unavailable"))
+    }
+
+    /// Typed code of the latest rejection, `0` when nothing was rejected.
+    /// Discriminant order follows `RejectReason` declaration order.
+    #[func]
+    fn last_reject_code(&self) -> i32 {
+        with_app(|app| {
+            app.world()
+                .get_resource::<CommandFeedback>()
+                .and_then(|feedback| feedback.last_reject_code)
+                .map(|reason| reason as i32)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
     }
 }
 
@@ -172,7 +188,7 @@ fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
         .try_get_node_as::<BevyApp>("BevyAppSingleton")
 }
 
-fn queue_command(command: UnitCommand) -> bool {
+fn queue_command(command: PlayerCommand) -> bool {
     let Some(mut app_node) = bevy_app_singleton() else {
         return false;
     };
@@ -199,7 +215,14 @@ fn setup_fixture(world: &mut World) {
     world.insert_resource(fixture.map);
 
     for spawn in spawns {
-        let entity = spawn_unit(world, spawn.id, spawn.team, spawn.position, 12.0);
+        let entity = spawn_unit(
+            world,
+            spawn.id,
+            spawn.team,
+            spawn.position,
+            UnitKind::Villager,
+            12.0,
+        );
         world.entity_mut(entity).insert((
             Transform::from_xyz(spawn.position.x, 0.0, spawn.position.y),
             TransformSyncMetadata::default(),
@@ -255,46 +278,53 @@ fn apply_pending_commands(world: &mut World) {
         return;
     }
 
-    let mut latest_feedback = None;
-    world.resource_scope(|world, map: Mut<GridMap>| {
+    let mut latest_feedback: Option<(String, Option<RejectReason>)> = None;
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
         for command in commands {
-            let outcome = apply_command(world, &map, command);
-            latest_feedback = Some(format_command_outcome(&outcome));
+            let result = apply_player_command(world, &mut map, command);
+            let reject_code = result
+                .reject
+                .or_else(|| result.rejected_units.first().map(|(_, reason)| *reason));
+            latest_feedback = Some((format_command_result(&result), reject_code));
         }
     });
 
-    if let Some(text) = latest_feedback {
+    if let Some((text, reject_code)) = latest_feedback {
         let mut feedback = world.resource_mut::<CommandFeedback>();
         feedback.revision = feedback.revision.wrapping_add(1);
         feedback.text = text;
+        feedback.last_reject_code = reject_code;
     }
 }
 
-fn format_command_outcome(outcome: &CommandOutcome) -> String {
-    let unreachable = outcome
-        .rejected
+fn format_command_result(result: &CommandResult) -> String {
+    let unreachable = result
+        .rejected_units
         .iter()
-        .filter(|(_, reason)| *reason == CommandRejectReason::Unreachable)
+        .filter(|(_, reason)| *reason == RejectReason::Unreachable)
         .count();
-    let not_owned = outcome
-        .rejected
+    let not_owned = result
+        .rejected_units
         .iter()
-        .filter(|(_, reason)| *reason == CommandRejectReason::NotOwned)
+        .filter(|(_, reason)| *reason == RejectReason::NotOwned)
         .count();
-    let unknown = outcome
-        .rejected
+    let unknown = result
+        .rejected_units
         .iter()
-        .filter(|(_, reason)| *reason == CommandRejectReason::UnknownUnit)
+        .filter(|(_, reason)| *reason == RejectReason::UnknownUnit)
         .count();
 
-    if outcome.rejected.is_empty() {
-        format!("Command accepted for {} unit(s)", outcome.accepted.len())
-    } else if outcome.accepted.is_empty() && unreachable > 0 {
+    if result.rejected_units.is_empty() {
+        format!(
+            "Command accepted for {} unit(s)",
+            result.accepted_units.len()
+        )
+    } else if result.accepted_units.is_empty() && unreachable > 0 {
         format!("Destination unreachable for {unreachable} unit(s)")
     } else {
         format!(
             "Command: {} accepted, {} unreachable, {} not owned, {} missing",
-            outcome.accepted.len(),
+            result.accepted_units.len(),
             unreachable,
             not_owned,
             unknown
