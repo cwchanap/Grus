@@ -1,0 +1,930 @@
+//! Building entities, authoritative placement validation, and construction
+//! stepping. One assigned builder advances construction; accepted replacement
+//! commands pause or retask it, rejected ones preserve the current work.
+
+use std::collections::{HashMap, HashSet};
+
+use bevy::math::Vec2;
+use bevy::prelude::{Component, Entity, Resource, World};
+
+use crate::catalog::{BuildingKind, UnitKind, building_spec};
+use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
+use crate::economy::{Dropoff, TeamEconomy, WorkerTask, cancel_worker_activity};
+use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
+use crate::map::{Footprint, GridMap, GridPos};
+use crate::movement::{MoveOrder, SimPosition, Unit};
+
+#[derive(Component, Debug)]
+pub struct Building {
+    pub id: BuildingId,
+    pub team: TeamId,
+    pub kind: BuildingKind,
+    pub construction: ConstructionState,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ConstructionState {
+    pub progress_seconds: f32,
+    pub complete: bool,
+    pub active_builder: Option<UnitId>,
+}
+
+/// Stable lookup from `BuildingId` to its entity, mirroring `UnitIndex`.
+#[derive(Debug, Default, Resource)]
+pub struct BuildingIndex(HashMap<BuildingId, Entity>);
+
+impl BuildingIndex {
+    pub fn entity(&self, id: BuildingId) -> Option<Entity> {
+        self.0.get(&id).copied()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&BuildingId, &Entity)> {
+        self.0.iter()
+    }
+
+    pub(crate) fn insert(&mut self, id: BuildingId, entity: Entity) {
+        self.0.insert(id, entity);
+    }
+}
+
+/// Everything an accepted placement needs to apply: the builder entity, the
+/// authored footprint, and the immediate-perimeter slot plus route the builder
+/// was assigned.
+pub struct PlacementPlan {
+    pub builder: Entity,
+    pub footprint: Footprint,
+    pub slot: GridPos,
+    pub route: Vec<Vec2>,
+}
+
+/// Authoritative placement validation. Checks, in order: owned villager →
+/// kind unlocked/buildable → footprint in bounds → footprint cells walkable →
+/// affordability → reachable immediate-perimeter builder slot. Mutates
+/// nothing; apply the returned plan only after every check passes.
+pub fn validate_placement(
+    world: &World,
+    map: &GridMap,
+    issuer: TeamId,
+    builder: UnitId,
+    kind: BuildingKind,
+    anchor: GridPos,
+) -> Result<PlacementPlan, RejectReason> {
+    // 1. owned villager.
+    let entity = owned_unit_entity(world, builder, issuer)?;
+    if !world
+        .get::<Unit>(entity)
+        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+    {
+        return Err(RejectReason::NotVillager);
+    }
+
+    // 2. kind unlocked/buildable. Town Centers are seeded, never placed.
+    let spec = building_spec(kind);
+    let team_age = world
+        .get_resource::<TeamEconomy>()
+        .and_then(|economy| economy.0.get(&issuer))
+        .map(|state| state.age);
+    if kind == BuildingKind::TownCenter || team_age.is_some_and(|age| age < spec.required_age) {
+        return Err(RejectReason::Locked);
+    }
+
+    let footprint = Footprint::new(anchor, spec.width, spec.height);
+
+    // 3. footprint in bounds.
+    if !footprint.cells().iter().all(|cell| map.in_bounds(*cell)) {
+        return Err(RejectReason::OutOfBounds);
+    }
+
+    // 4. footprint cells walkable.
+    if !footprint.cells().iter().all(|cell| map.is_walkable(*cell)) {
+        return Err(RejectReason::Occupied);
+    }
+
+    // 5. affordable.
+    let affordable = world
+        .get_resource::<TeamEconomy>()
+        .and_then(|economy| economy.0.get(&issuer))
+        .is_some_and(|state| {
+            state.stockpile.food >= spec.cost.food
+                && state.stockpile.wood >= spec.cost.wood
+                && state.stockpile.gold >= spec.cost.gold
+        });
+    if !affordable {
+        return Err(RejectReason::InsufficientResources);
+    }
+
+    // 6. reachable immediate-perimeter builder slot.
+    let (slot, route) = reachable_builder_slot(world, map, entity, footprint)?;
+    Ok(PlacementPlan {
+        builder: entity,
+        footprint,
+        slot,
+        route,
+    })
+}
+
+/// Applies an accepted `PlaceBuilding`: validates first, then cancels the
+/// builder's old activity, deducts the cost once, allocates the `BuildingId`,
+/// blocks the footprint, spawns `Building + Footprint`, and routes the builder
+/// to its stored approach slot.
+pub(crate) fn apply_place_building(
+    world: &mut World,
+    map: &mut GridMap,
+    issuer: TeamId,
+    builder: UnitId,
+    kind: BuildingKind,
+    anchor: GridPos,
+) -> CommandResult {
+    let mut result = CommandResult::default();
+    let plan = match validate_placement(world, map, issuer, builder, kind, anchor) {
+        Ok(plan) => plan,
+        Err(reason) => {
+            result.reject = Some(reason);
+            return result;
+        }
+    };
+
+    cancel_worker_activity(world, plan.builder);
+
+    let spec = building_spec(kind);
+    {
+        let mut economy = world
+            .get_resource_mut::<TeamEconomy>()
+            .expect("validated economy");
+        let state = economy.0.get_mut(&issuer).expect("validated team");
+        state.stockpile.food -= spec.cost.food;
+        state.stockpile.wood -= spec.cost.wood;
+        state.stockpile.gold -= spec.cost.gold;
+    }
+
+    let id = world.resource_mut::<IdAllocator>().allocate_building();
+
+    for cell in plan.footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+
+    let building_entity = world
+        .spawn((
+            Building {
+                id,
+                team: issuer,
+                kind,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: false,
+                    active_builder: Some(builder),
+                },
+            },
+            plan.footprint,
+        ))
+        .id();
+    let mut index = world.get_resource_or_insert_with(BuildingIndex::default);
+    index.insert(id, building_entity);
+
+    world
+        .entity_mut(plan.builder)
+        .insert(WorkerTask::ToConstruction {
+            building: id,
+            slot: plan.slot,
+        });
+    if !plan.route.is_empty() {
+        world.entity_mut(plan.builder).insert(MoveOrder {
+            waypoints: plan.route,
+            next: 0,
+            goal: plan.slot,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+    }
+
+    result
+}
+
+/// Applies an accepted `ResumeConstruction` on an incomplete owned building:
+/// validates first, then retasks the builder to an immediate-perimeter slot of
+/// the site. Accumulated progress is untouched.
+pub(crate) fn apply_resume_construction(
+    world: &mut World,
+    map: &mut GridMap,
+    issuer: TeamId,
+    builder: UnitId,
+    building: BuildingId,
+) -> CommandResult {
+    let mut result = CommandResult::default();
+    let (builder_entity, building_entity) = match validate_resume(world, issuer, builder, building)
+    {
+        Ok(entities) => entities,
+        Err(reason) => {
+            result.reject = Some(reason);
+            return result;
+        }
+    };
+    let footprint = world
+        .get::<Footprint>(building_entity)
+        .copied()
+        .expect("building footprint");
+    let (slot, route) = match reachable_builder_slot(world, map, builder_entity, footprint) {
+        Ok(slot) => slot,
+        Err(reason) => {
+            result.reject = Some(reason);
+            return result;
+        }
+    };
+
+    // The site's previous builder is paused before the new one takes over:
+    // one active builder per building, never two.
+    let previous_builder = world
+        .get::<Building>(building_entity)
+        .and_then(|state| state.construction.active_builder);
+    if let Some(previous) = previous_builder
+        && previous != builder
+        && let Some(previous_entity) = world
+            .get_resource::<UnitIndex>()
+            .and_then(|index| index.entity(previous))
+    {
+        cancel_worker_activity(world, previous_entity);
+    }
+
+    cancel_worker_activity(world, builder_entity);
+    world
+        .entity_mut(builder_entity)
+        .insert(WorkerTask::ToConstruction { building, slot });
+    if !route.is_empty() {
+        world.entity_mut(builder_entity).insert(MoveOrder {
+            waypoints: route,
+            next: 0,
+            goal: slot,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+    }
+    if let Some(mut state) = world.get_mut::<Building>(building_entity) {
+        state.construction.active_builder = Some(builder);
+    }
+
+    result
+}
+
+/// Resume validation: owned villager → building exists → owned → incomplete.
+fn validate_resume(
+    world: &World,
+    issuer: TeamId,
+    builder: UnitId,
+    building: BuildingId,
+) -> Result<(Entity, Entity), RejectReason> {
+    let entity = owned_unit_entity(world, builder, issuer)?;
+    if !world
+        .get::<Unit>(entity)
+        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+    {
+        return Err(RejectReason::NotVillager);
+    }
+
+    let building_entity = world
+        .get_resource::<BuildingIndex>()
+        .and_then(|index| index.entity(building))
+        .ok_or(RejectReason::BuildingMissing)?;
+    let state = world
+        .get::<Building>(building_entity)
+        .ok_or(RejectReason::BuildingMissing)?;
+    if state.team != issuer {
+        return Err(RejectReason::NotOwned);
+    }
+    if state.construction.complete {
+        return Err(RejectReason::Locked);
+    }
+    Ok((entity, building_entity))
+}
+
+/// Picks the builder's approach slot: the first reachable walkable cell on the
+/// footprint's immediate perimeter. Returns the slot and its route waypoints.
+fn reachable_builder_slot(
+    world: &World,
+    map: &GridMap,
+    builder: Entity,
+    footprint: Footprint,
+) -> Result<(GridPos, Vec<Vec2>), RejectReason> {
+    let position = world
+        .get::<SimPosition>(builder)
+        .ok_or(RejectReason::UnknownUnit)?;
+    let start = map.world_to_cell(position.current);
+    let used = HashSet::new();
+    for slot in approach_slots(map, footprint, &used, footprint.perimeter_cells().len()) {
+        if let Some(path) = map.find_path(start, slot) {
+            let route = path
+                .into_iter()
+                .skip(1)
+                .map(|cell| map.cell_center(cell))
+                .collect();
+            return Ok((slot, route));
+        }
+    }
+    Err(RejectReason::Unreachable)
+}
+
+/// Advances construction one fixed tick. A worker transitions
+/// `ToConstruction → Constructing` once its current cell equals the stored
+/// slot; each building then advances only while its single `active_builder` is
+/// the worker in `Constructing` state, so a second builder can never double
+/// the rate. Completion clears the assignment, idles the builder, and grants a
+/// Storehouse its `Dropoff` marker exactly once.
+pub fn step_construction(world: &mut World, seconds: f32) {
+    // Arrival transitions happen before advancement so movement completion is
+    // visible to construction in the same fixed tick.
+    let mut arrivals = Vec::new();
+    {
+        let mut query = world.query::<(Entity, &WorkerTask, &SimPosition)>();
+        for (entity, task, position) in query.iter(world) {
+            if let WorkerTask::ToConstruction { building, slot } = task
+                && worker_at_slot(position, *slot)
+            {
+                arrivals.push((entity, *building));
+            }
+        }
+    }
+    for (entity, building) in arrivals {
+        world
+            .entity_mut(entity)
+            .insert(WorkerTask::Constructing { building });
+    }
+
+    let buildings: Vec<(Entity, BuildingId, BuildingKind, TeamId, ConstructionState)> = {
+        let mut query = world.query::<(Entity, &Building)>();
+        query
+            .iter(world)
+            .map(|(entity, building)| {
+                (
+                    entity,
+                    building.id,
+                    building.kind,
+                    building.team,
+                    building.construction,
+                )
+            })
+            .collect()
+    };
+
+    let mut completions = Vec::new();
+    for (building_entity, id, kind, team, state) in buildings {
+        if state.complete {
+            continue;
+        }
+        let Some(builder) = state.active_builder else {
+            continue;
+        };
+        let Some(builder_entity) = world
+            .get_resource::<UnitIndex>()
+            .and_then(|index| index.entity(builder))
+        else {
+            continue;
+        };
+        let constructing_this = matches!(
+            world.get::<WorkerTask>(builder_entity),
+            Some(WorkerTask::Constructing { building }) if *building == id
+        );
+        if !constructing_this {
+            continue;
+        }
+
+        let progress = state.progress_seconds + seconds;
+        if progress >= building_spec(kind).build_seconds as f32 {
+            completions.push((building_entity, builder_entity, kind, team));
+        } else if let Some(mut building) = world.get_mut::<Building>(building_entity) {
+            building.construction.progress_seconds = progress;
+        }
+    }
+
+    for (building_entity, builder_entity, kind, team) in completions {
+        if let Some(mut building) = world.get_mut::<Building>(building_entity) {
+            building.construction.complete = true;
+            building.construction.active_builder = None;
+        }
+        world.entity_mut(builder_entity).insert(WorkerTask::Idle);
+        if kind == BuildingKind::Storehouse {
+            world.entity_mut(building_entity).insert(Dropoff { team });
+        }
+    }
+}
+
+/// A worker has reached its stored slot when its current cell equals the slot.
+/// Cell equality (not exact-center distance) absorbs post-arrival separation
+/// nudges of up to `MAX_SEPARATION_STEP`.
+fn worker_at_slot(position: &SimPosition, slot: GridPos) -> bool {
+    position.current.x.floor() as i32 == slot.x && position.current.y.floor() as i32 == slot.y
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::{Age, unit_spec};
+    use crate::commands::{
+        PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
+    };
+    use crate::economy::{Carry, GatherProgress, ResourceStockpile, TeamEconomy};
+    use crate::ids::IdAllocator;
+    use crate::movement::{SIM_STEP_SECONDS, step_movement};
+
+    fn setup_build_test() -> (World, GridMap, Entity) {
+        let mut world = World::new();
+        let mut economy = TeamEconomy::default();
+        economy.insert_team(
+            TeamId(1),
+            ResourceStockpile {
+                food: 500,
+                wood: 500,
+                gold: 500,
+            },
+            Age::Age1,
+        );
+        world.insert_resource(economy);
+        world.insert_resource(IdAllocator::new(10, 10, 10));
+
+        let map = GridMap::new(64, 64);
+        let villager = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(10.5, 10.5),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+        world.entity_mut(villager).insert((
+            Carry::Empty,
+            GatherProgress::default(),
+            WorkerTask::Idle,
+        ));
+        (world, map, villager)
+    }
+
+    /// Places a House next to the test villager and drives the production API
+    /// until the villager is actively constructing it.
+    fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
+        let (mut world, mut map, villager) = setup_build_test();
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert!(result.reject.is_none(), "placement rejected: {result:?}");
+        let building = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("allocated building registered");
+
+        for _ in 0..300 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            step_construction(&mut world, SIM_STEP_SECONDS);
+            if matches!(
+                world.get::<WorkerTask>(villager),
+                Some(WorkerTask::Constructing { .. })
+            ) {
+                break;
+            }
+        }
+        assert!(
+            matches!(
+                world.get::<WorkerTask>(villager),
+                Some(WorkerTask::Constructing {
+                    building: BuildingId(10)
+                })
+            ),
+            "builder never reached Constructing"
+        );
+        (world, map, villager, building)
+    }
+
+    /// Drives movement + construction until the given worker is Constructing.
+    fn run_until_constructing(world: &mut World, map: &GridMap, worker: Entity) {
+        for _ in 0..300 {
+            step_movement(world, map, SIM_STEP_SECONDS);
+            step_construction(world, SIM_STEP_SECONDS);
+            if matches!(
+                world.get::<WorkerTask>(worker),
+                Some(WorkerTask::Constructing { .. })
+            ) {
+                return;
+            }
+        }
+        panic!("worker never reached Constructing");
+    }
+
+    #[test]
+    fn rejected_move_preserves_active_builder() {
+        let (mut world, mut map, villager, building) = setup_active_builder();
+        let old_task = world.get::<WorkerTask>(villager).unwrap().clone();
+        let blocked = GridPos::new(20, 20);
+        map.set_blocked(blocked, true);
+        let target = map.cell_center(blocked);
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(1)],
+                kind: UnitCommandKind::Move { target },
+            }),
+        );
+
+        assert_eq!(
+            result.rejected_units,
+            vec![(UnitId(1), RejectReason::Unreachable)]
+        );
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&old_task));
+        assert_eq!(
+            world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .active_builder,
+            Some(UnitId(1))
+        );
+    }
+
+    #[test]
+    fn invalid_placement_never_charges_or_reserves() {
+        let (mut world, mut map, _villager) = setup_build_test();
+        // Not a villager.
+        spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(20.5, 20.5),
+            UnitKind::Spearman,
+            unit_spec(UnitKind::Spearman).speed,
+        );
+
+        // Not a villager.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(2),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::NotVillager));
+
+        // Town Centers are seeded, never placed.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::TownCenter,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::Locked));
+
+        // Footprint out of bounds (2×2 house at the map edge).
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(63, 63),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::OutOfBounds));
+
+        // Footprint cell blocked.
+        map.set_blocked(GridPos::new(13, 10), true);
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::Occupied));
+
+        // Unaffordable.
+        world
+            .resource_mut::<TeamEconomy>()
+            .0
+            .get_mut(&TeamId(1))
+            .unwrap()
+            .stockpile
+            .wood = 10;
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(20, 20),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+
+        // Validation order: a blocked AND unaffordable site rejects as
+        // Occupied because walkability precedes affordability.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::Occupied));
+
+        // Nothing was charged, spawned, or allocated by any rejection.
+        let state = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+        assert_eq!(
+            state,
+            ResourceStockpile {
+                food: 500,
+                wood: 10,
+                gold: 500
+            }
+        );
+        let mut buildings = world.query::<&Building>();
+        assert_eq!(buildings.iter(&world).count(), 0);
+        assert_eq!(
+            world
+                .get_resource::<BuildingIndex>()
+                .map(|index| index.iter().count())
+                .unwrap_or(0),
+            0
+        );
+        assert_eq!(world.resource::<IdAllocator>().next_building, 10);
+    }
+
+    #[test]
+    fn accepted_house_deducts_fifty_wood_and_blocks_four_cells() {
+        let (mut world, mut map, villager) = setup_build_test();
+        let anchor = GridPos::new(13, 10);
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor,
+            },
+        );
+
+        assert_eq!(result.reject, None);
+
+        let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
+        assert_eq!(state.stockpile.wood, 450);
+        assert_eq!(state.stockpile.food, 500);
+        assert_eq!(state.stockpile.gold, 500);
+
+        let footprint = Footprint::new(anchor, 2, 2);
+        for cell in footprint.cells() {
+            assert!(!map.is_walkable(cell), "footprint cell {cell:?} unblocked");
+        }
+
+        let building_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("building registered");
+        let building = world.get::<Building>(building_entity).unwrap();
+        assert_eq!(building.id, BuildingId(10));
+        assert_eq!(building.team, TeamId(1));
+        assert_eq!(building.kind, BuildingKind::House);
+        assert_eq!(building.construction.active_builder, Some(UnitId(1)));
+        assert!(!building.construction.complete);
+        assert_eq!(world.get::<Footprint>(building_entity), Some(&footprint));
+
+        // The builder is tasked to an immediate-perimeter slot with a route.
+        let task = world.get::<WorkerTask>(villager).unwrap();
+        let WorkerTask::ToConstruction { building: id, slot } = task else {
+            panic!("expected ToConstruction, got {task:?}");
+        };
+        assert_eq!(*id, BuildingId(10));
+        assert!(footprint.is_immediately_adjacent(*slot));
+        let order = world.get::<MoveOrder>(villager).expect("route installed");
+        assert_eq!(order.goal, *slot);
+        assert_eq!(
+            order.waypoints.last().copied(),
+            Some(map.cell_center(*slot))
+        );
+    }
+
+    #[test]
+    fn two_builders_never_double_speed() {
+        let (mut world, mut map, first, building) = setup_active_builder();
+        let building_id = world.get::<Building>(building).unwrap().id;
+
+        let second = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+        world.entity_mut(second).insert((
+            Carry::Empty,
+            GatherProgress::default(),
+            WorkerTask::Idle,
+        ));
+
+        // Resuming with the second builder cancels the first's assignment.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(2),
+                building: building_id,
+            },
+        );
+        assert_eq!(result.reject, None);
+        assert_eq!(world.get::<WorkerTask>(first), Some(&WorkerTask::Idle));
+        assert_eq!(
+            world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .active_builder,
+            Some(UnitId(2))
+        );
+
+        run_until_constructing(&mut world, &map, second);
+
+        let start = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+        for _ in 0..40 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+        let end = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+        let expected = 40.0 * SIM_STEP_SECONDS;
+        assert!(
+            (end - start - expected).abs() < 1e-3,
+            "progress advanced {start} → {end}, expected a single builder's {expected}"
+        );
+        assert_eq!(world.get::<WorkerTask>(first), Some(&WorkerTask::Idle));
+    }
+
+    #[test]
+    fn resume_keeps_accumulated_progress() {
+        let (mut world, mut map, villager, building) = setup_active_builder();
+        let building_id = world.get::<Building>(building).unwrap().id;
+        // setup_active_builder's arrival tick already advanced one step.
+        let baseline = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+
+        for _ in 0..60 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+        let accumulated = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+        assert!((accumulated - baseline - 60.0 * SIM_STEP_SECONDS).abs() < 1e-3);
+
+        // An accepted move pauses the work immediately.
+        let target = map.cell_center(GridPos::new(2, 2));
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(1)],
+                kind: UnitCommandKind::Move { target },
+            }),
+        );
+        assert_eq!(result.accepted_units, vec![UnitId(1)]);
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+        assert_eq!(
+            world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .active_builder,
+            None
+        );
+
+        // Walk the builder away before resuming so the resume has to route
+        // back to the site.
+        for _ in 0..10 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                building: building_id,
+            },
+        );
+        assert_eq!(result.reject, None);
+
+        run_until_constructing(&mut world, &map, villager);
+        // The arrival tick already advanced one step; 59 more completes the
+        // same 60-tick batch as before the pause.
+        for _ in 0..59 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+
+        let resumed = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+        assert!(
+            (resumed - baseline - 120.0 * SIM_STEP_SECONDS).abs() < 1e-3,
+            "progress was {resumed}, expected the baseline plus 120 ticks' worth"
+        );
+        assert!(
+            !world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .complete
+        );
+    }
+
+    #[test]
+    fn completed_storehouse_gains_dropoff_exactly_once() {
+        let (mut world, mut map, villager) = setup_build_test();
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::Storehouse,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None);
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+            425
+        );
+
+        let building_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("building registered");
+        for _ in 0..1000 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            step_construction(&mut world, SIM_STEP_SECONDS);
+            if world
+                .get::<Building>(building_entity)
+                .unwrap()
+                .construction
+                .complete
+            {
+                break;
+            }
+        }
+        let state = world.get::<Building>(building_entity).unwrap();
+        assert!(state.construction.complete);
+        assert_eq!(state.construction.active_builder, None);
+        assert_eq!(
+            world.get::<Dropoff>(building_entity),
+            Some(&Dropoff { team: TeamId(1) })
+        );
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+
+        // Further ticks never grant a second marker or restart work.
+        for _ in 0..10 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+        assert_eq!(
+            world.get::<Dropoff>(building_entity),
+            Some(&Dropoff { team: TeamId(1) })
+        );
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    }
+}
