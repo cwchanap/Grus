@@ -89,11 +89,11 @@ func _run() -> void:
 	for _frame in range(160):
 		await get_tree().physics_frame
 		units = get_tree().get_nodes_in_group("unit_views")
-		if units.size() == 200:
+		if units.size() == 8:
 			break
 
-	if units.size() != 200:
-		_fail("expected 200 ECS-backed unit views, found %d" % units.size())
+	if units.size() != 8:
+		_fail("expected 8 ECS-backed unit views, found %d" % units.size())
 		return
 
 	var unit_one: Node3D = null
@@ -106,12 +106,20 @@ func _run() -> void:
 		unit_one = _find_unit(units, 1)
 		unit_two = _find_unit(units, 2)
 		unit_three = _find_unit(units, 3)
-		enemy = _find_unit(units, 101)
+		enemy = _find_unit(units, 5)
 		if unit_one != null and unit_two != null and unit_three != null and enemy != null:
 			break
 
 	if unit_one == null or unit_two == null or unit_three == null or enemy == null:
-		_fail("stable UnitId metadata did not initialize for retained fixture")
+		_fail("stable UnitId metadata did not initialize for skirmish fixture")
+		return
+	for id in range(1, 5):
+		var member := _find_unit(units, id)
+		if member == null or int(member.get_meta("team_id", -1)) != 1:
+			_fail("Team 1 villager %d is missing or has the wrong team metadata" % id)
+			return
+	if int(enemy.get_meta("team_id", -1)) != 2:
+		_fail("Team 2 villager does not start at UnitId 5")
 		return
 
 	var camera := get_node("Main/Camera3D") as Camera3D
@@ -244,12 +252,12 @@ func _run() -> void:
 		previous_visual = visual_position
 
 	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
-	if cadence_distance < 8.0 or cadence_distance > 16.0:
-		_fail("authoritative simulation is not running near 20 Hz: speed-12 unit moved %.2f units in one second" % cadence_distance)
+	if cadence_distance < 4.0 or cadence_distance > 8.0:
+		_fail("authoritative simulation is not running near 20 Hz: speed-6 unit moved %.2f units in one second" % cadence_distance)
 		return
-	if max_visual_step >= 0.45:
+	if max_visual_step >= 0.25:
 		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=200 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=8 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
 	get_tree().quit(0)

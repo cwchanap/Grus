@@ -1,13 +1,20 @@
+use std::collections::HashSet;
+
 use bevy::prelude::*;
-use godot::builtin::{GString, PackedInt32Array, Vector2};
+use godot::builtin::{GString, PackedInt32Array, VarDictionary, Vector2};
 use godot::classes::{Engine, INode, Node, Node3D, SceneTree};
 use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
+use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
-    CommandResult, GridMap, MapFixture, PlayerCommand, RejectReason, SIM_STEP_SECONDS, SimPosition,
-    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, apply_player_command,
-    spawn_unit, step_movement,
+    AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind, CommandResult,
+    Footprint, GridMap, GridPos, IdAllocator, MapFixture, PlayerCommand, ProductionJob,
+    ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId, ResourceIndex,
+    ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit, UnitCommand,
+    UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, apply_player_command, population_cap,
+    population_used, seed_skirmish, spawn_unit, step_construction, step_economy, step_movement,
+    step_production, validate_placement,
 };
 
 #[derive(Default, Resource)]
@@ -31,7 +38,7 @@ impl Default for CommandFeedback {
 }
 
 #[derive(Component)]
-struct UnitViewInitialized;
+struct ViewMetaInitialized;
 
 #[derive(Component)]
 struct GameplayViewRequested;
@@ -82,6 +89,91 @@ impl GrusBridgeNode {
     }
 
     #[func]
+    fn gather(&self, packed_workers: PackedInt32Array, source_id: i32) -> bool {
+        let workers = decode_unit_ids(&packed_workers);
+        if workers.is_empty() {
+            return false;
+        }
+        let Ok(source) = u32::try_from(source_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::Gather {
+            issuer: TeamId(1),
+            workers,
+            source: ResourceId(source),
+        })
+    }
+
+    #[func]
+    fn place_building(&self, builder_id: i32, kind: GString, anchor_x: i32, anchor_y: i32) -> bool {
+        let Some(kind) = parse_building_kind(&kind) else {
+            return false;
+        };
+        let Ok(builder) = u32::try_from(builder_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(builder),
+            kind,
+            anchor: GridPos::new(anchor_x, anchor_y),
+        })
+    }
+
+    #[func]
+    fn resume_construction(&self, builder_id: i32, building_id: i32) -> bool {
+        let Ok(builder) = u32::try_from(builder_id) else {
+            return false;
+        };
+        let Ok(building) = u32::try_from(building_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::ResumeConstruction {
+            issuer: TeamId(1),
+            builder: UnitId(builder),
+            building: BuildingId(building),
+        })
+    }
+
+    #[func]
+    fn enqueue_unit(&self, building_id: i32, kind: GString) -> bool {
+        let Some(kind) = parse_unit_kind(&kind) else {
+            return false;
+        };
+        let Ok(building) = u32::try_from(building_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::EnqueueUnit {
+            issuer: TeamId(1),
+            building: BuildingId(building),
+            kind,
+        })
+    }
+
+    #[func]
+    fn enqueue_age_up(&self, building_id: i32) -> bool {
+        let Ok(building) = u32::try_from(building_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::EnqueueAgeUp {
+            issuer: TeamId(1),
+            building: BuildingId(building),
+        })
+    }
+
+    #[func]
+    fn set_rally(&self, building_id: i32, target_x: i32, target_y: i32) -> bool {
+        let Ok(building) = u32::try_from(building_id) else {
+            return false;
+        };
+        queue_command(PlayerCommand::SetRally {
+            issuer: TeamId(1),
+            building: BuildingId(building),
+            target: GridPos::new(target_x, target_y),
+        })
+    }
+
+    #[func]
     fn benchmark_move_all(&self) -> bool {
         let fixture = MapFixture::battlefield();
         let player_queued = queue_command(PlayerCommand::Units(UnitCommand {
@@ -113,6 +205,39 @@ impl GrusBridgeNode {
         };
 
         reset_fixture_world(app.world_mut());
+        true
+    }
+
+    #[func]
+    fn reset_benchmark_fixture(&self) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+
+        reset_benchmark_world(app.world_mut());
+        true
+    }
+
+    /// Virtual-time multiplier for headless gate runs. Never touches `max_delta`.
+    #[func]
+    fn set_sim_speed(&self, relative_speed: f64) -> bool {
+        if !relative_speed.is_finite() || relative_speed <= 0.0 {
+            return false;
+        }
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        app.world_mut()
+            .resource_mut::<Time<Virtual>>()
+            .set_relative_speed_f64(relative_speed);
         true
     }
 
@@ -151,6 +276,194 @@ impl GrusBridgeNode {
         })
         .unwrap_or(0)
     }
+
+    /// Team 1 economy state: stockpile, age, population, idle villagers, and
+    /// the latest rejection code. `age` is 1 or 2; `last_reject_code` follows
+    /// `RejectReason` discriminant order (0 = none).
+    #[func]
+    fn economy_snapshot(&self) -> VarDictionary {
+        with_app(|app| {
+            let world = app.world();
+            let mut dict = VarDictionary::new();
+            let state = world
+                .get_resource::<TeamEconomy>()
+                .and_then(|economy| economy.0.get(&TeamId(1)));
+            let (food, wood, gold, age) = match state {
+                Some(state) => (
+                    i64::from(state.stockpile.food),
+                    i64::from(state.stockpile.wood),
+                    i64::from(state.stockpile.gold),
+                    match state.age {
+                        Age::Age1 => 1,
+                        Age::Age2 => 2,
+                    },
+                ),
+                None => (0, 0, 0, 1),
+            };
+            dict.set("food", food);
+            dict.set("wood", wood);
+            dict.set("gold", gold);
+            dict.set("age", age);
+            dict.set(
+                "population_used",
+                i64::from(population_used(world, TeamId(1))),
+            );
+            dict.set(
+                "population_cap",
+                i64::from(population_cap(world, TeamId(1))),
+            );
+            let idle = idle_worker_ids(world, TeamId(1));
+            dict.set("idle_workers", idle.len() as i64);
+            dict.set("idle_worker_ids", PackedInt32Array::from_iter(idle));
+            dict.set(
+                "last_reject_code",
+                world
+                    .get_resource::<CommandFeedback>()
+                    .and_then(|feedback| feedback.last_reject_code)
+                    .map(|reason| reason as i32)
+                    .unwrap_or(0),
+            );
+            dict
+        })
+        .unwrap_or_default()
+    }
+
+    /// One building's state by stable id: completion, construction and queue
+    /// progress (0..1), queue head label, blocked code (0 = none), and rally
+    /// cell (-1/-1 when unset). Empty dict when the building does not exist.
+    #[func]
+    fn building_snapshot(&self, building_id: i32) -> VarDictionary {
+        with_app(|app| {
+            let world = app.world();
+            let mut dict = VarDictionary::new();
+            let Ok(raw_id) = u32::try_from(building_id) else {
+                return dict;
+            };
+            let Some(entity) = world
+                .get_resource::<BuildingIndex>()
+                .and_then(|index| index.entity(BuildingId(raw_id)))
+            else {
+                return dict;
+            };
+            let Some(building) = world.get::<Building>(entity) else {
+                return dict;
+            };
+
+            dict.set("id", i64::from(building.id.0));
+            dict.set("kind", debug_variant(building.kind));
+            dict.set("team_id", i64::from(building.team.0));
+            dict.set("complete", building.construction.complete);
+            let spec = building_spec(building.kind);
+            let construction_progress = if building.construction.complete {
+                1.0
+            } else if spec.build_seconds == 0 {
+                0.0
+            } else {
+                building.construction.progress_seconds / spec.build_seconds as f32
+            };
+            dict.set(
+                "construction_progress",
+                f64::from(construction_progress.clamp(0.0, 1.0)),
+            );
+
+            let queue = world.get::<ProductionQueue>(entity);
+            match queue.and_then(|queue| queue.jobs.front()) {
+                Some(job) => {
+                    dict.set("queue_label", GString::from(queue_head_label(job).as_str()));
+                    let required = job_seconds(job);
+                    let progress = queue.map_or(0.0, |queue| queue.progress_seconds);
+                    dict.set(
+                        "queue_progress",
+                        f64::from(if required > 0.0 {
+                            (progress / required).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        }),
+                    );
+                }
+                None => {
+                    // Seeded producers have no queue component until the first
+                    // accepted enqueue heals it; report an empty queue.
+                    dict.set("queue_label", GString::from(""));
+                    dict.set("queue_progress", 0.0_f64);
+                }
+            }
+            dict.set(
+                "blocked_reason",
+                queue
+                    .and_then(|queue| queue.blocked)
+                    .map(|reason| reason as i32)
+                    .unwrap_or(0),
+            );
+            match world.get::<RallyPoint>(entity) {
+                Some(rally) => {
+                    dict.set("rally_x", i64::from(rally.0.x));
+                    dict.set("rally_y", i64::from(rally.0.y));
+                }
+                None => {
+                    dict.set("rally_x", -1_i64);
+                    dict.set("rally_y", -1_i64);
+                }
+            }
+            dict
+        })
+        .unwrap_or_default()
+    }
+
+    /// Read-only placement validation through the authoritative
+    /// `validate_placement`; mutates nothing. Reports the spec footprint plus
+    /// validity and reject code (0 = valid).
+    #[func]
+    fn placement_preview(
+        &self,
+        builder_id: i32,
+        kind: GString,
+        anchor_x: i32,
+        anchor_y: i32,
+    ) -> VarDictionary {
+        with_app(|app| {
+            let mut dict = VarDictionary::new();
+            let Some(kind) = parse_building_kind(&kind) else {
+                return dict;
+            };
+            let world = app.world();
+            let spec = building_spec(kind);
+            dict.set("anchor_x", i64::from(anchor_x));
+            dict.set("anchor_y", i64::from(anchor_y));
+            dict.set("width", i64::from(spec.width));
+            dict.set("height", i64::from(spec.height));
+
+            let outcome = u32::try_from(builder_id)
+                .map(UnitId)
+                .map_err(|_| RejectReason::UnknownUnit)
+                .and_then(|builder| {
+                    let map = world
+                        .get_resource::<GridMap>()
+                        .ok_or(RejectReason::UnknownUnit)?;
+                    validate_placement(
+                        world,
+                        map,
+                        TeamId(1),
+                        builder,
+                        kind,
+                        GridPos::new(anchor_x, anchor_y),
+                    )
+                    .map(|_| ())
+                });
+            match outcome {
+                Ok(()) => {
+                    dict.set("valid", true);
+                    dict.set("reject_code", 0_i32);
+                }
+                Err(reason) => {
+                    dict.set("valid", false);
+                    dict.set("reject_code", reason as i32);
+                }
+            }
+            dict
+        })
+        .unwrap_or_default()
+    }
 }
 
 #[bevy_app]
@@ -166,13 +479,20 @@ fn build_app(app: &mut App) {
             Update,
             (
                 attach_missing_gameplay_views,
-                initialize_unit_views,
+                initialize_view_metadata,
                 sync_interpolated_unit_transforms,
             ),
         )
         .add_systems(
             FixedUpdate,
-            (apply_pending_commands, advance_simulation).chain(),
+            (
+                apply_pending_commands,
+                advance_movement,
+                advance_economy,
+                advance_construction,
+                advance_production,
+            )
+                .chain(),
         );
 }
 
@@ -184,6 +504,33 @@ fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
         .filter(|id| *id != 0)
         .map(UnitId)
         .collect()
+}
+
+fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
+    match name.to_string().as_str() {
+        "Villager" => Some(UnitKind::Villager),
+        "Spearman" => Some(UnitKind::Spearman),
+        "Archer" => Some(UnitKind::Archer),
+        "Cavalry" => Some(UnitKind::Cavalry),
+        _ => None,
+    }
+}
+
+fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
+    match name.to_string().as_str() {
+        "House" => Some(BuildingKind::House),
+        "Storehouse" => Some(BuildingKind::Storehouse),
+        "Farm" => Some(BuildingKind::Farm),
+        "Barracks" => Some(BuildingKind::Barracks),
+        "ArcheryRange" => Some(BuildingKind::ArcheryRange),
+        "Stable" => Some(BuildingKind::Stable),
+        // Town Centers are seeded, never placed.
+        _ => None,
+    }
+}
+
+fn debug_variant(value: impl std::fmt::Debug) -> Variant {
+    GString::from(format!("{value:?}").as_str()).to_variant()
 }
 
 fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
@@ -217,11 +564,148 @@ fn with_app<T>(read: impl FnOnce(&App) -> T) -> Option<T> {
 }
 
 fn setup_fixture(world: &mut World) {
+    // A bridge reset (e.g. the benchmark fixture) can run before the first
+    // fixed tick; its fresh world must not be double-seeded.
+    if world.get_resource::<UnitIndex>().is_some() {
+        return;
+    }
     let fixture = MapFixture::battlefield();
-    let spawns = fixture.units_200();
-    world.insert_resource(fixture.map);
+    let mut map = fixture.map.clone();
+    seed_skirmish(world, &mut map, &fixture);
+    world.insert_resource(map);
+}
 
-    for spawn in spawns {
+#[allow(clippy::type_complexity)]
+fn attach_missing_gameplay_views(
+    mut commands: Commands,
+    units: Query<(Entity, &SimPosition), (With<Unit>, Without<GameplayViewRequested>)>,
+    farm_buildings: Query<
+        (Entity, &Footprint),
+        (
+            With<Building>,
+            With<ResourceSource>,
+            Without<GameplayViewRequested>,
+        ),
+    >,
+    plain_buildings: Query<
+        (Entity, &Footprint),
+        (
+            With<Building>,
+            Without<ResourceSource>,
+            Without<GameplayViewRequested>,
+        ),
+    >,
+    standalone_resources: Query<
+        (Entity, &Footprint),
+        (
+            With<ResourceSource>,
+            Without<Building>,
+            Without<GameplayViewRequested>,
+        ),
+    >,
+    map: Res<GridMap>,
+) {
+    for (entity, position) in &units {
+        attach_view(
+            &mut commands,
+            entity,
+            Vec2::new(position.current.x, position.current.y),
+            "res://scenes/unit_view.tscn",
+        );
+    }
+    for (entity, footprint) in &farm_buildings {
+        attach_view(
+            &mut commands,
+            entity,
+            map.cell_center(footprint.anchor),
+            "res://scenes/building_view.tscn",
+        );
+    }
+    for (entity, footprint) in &plain_buildings {
+        attach_view(
+            &mut commands,
+            entity,
+            map.cell_center(footprint.anchor),
+            "res://scenes/building_view.tscn",
+        );
+    }
+    for (entity, footprint) in &standalone_resources {
+        attach_view(
+            &mut commands,
+            entity,
+            map.cell_center(footprint.anchor),
+            "res://scenes/resource_view.tscn",
+        );
+    }
+}
+
+fn attach_view(commands: &mut Commands, entity: Entity, center: Vec2, path: &str) {
+    commands.entity(entity).insert((
+        Transform::from_xyz(center.x, 0.0, center.y),
+        TransformSyncMetadata::default(),
+        Node3DMarker,
+        GodotScene::from_path(path),
+        GameplayViewRequested,
+    ));
+}
+
+fn initialize_view_metadata(
+    mut commands: Commands,
+    units: Query<(Entity, &Unit, &GodotNodeHandle), Without<ViewMetaInitialized>>,
+    buildings: Query<
+        (Entity, &Building, Option<&ResourceSource>, &GodotNodeHandle),
+        Without<ViewMetaInitialized>,
+    >,
+    resources: Query<(Entity, &ResourceSource, &GodotNodeHandle), Without<ViewMetaInitialized>>,
+    mut godot: GodotAccess,
+) {
+    for (entity, unit, handle) in &units {
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        node.set_meta("unit_id", &i64::from(unit.id.0).to_variant());
+        node.set_meta("team_id", &i64::from(unit.team.0).to_variant());
+        node.set_meta("unit_kind", &debug_variant(unit.kind));
+        commands.entity(entity).insert(ViewMetaInitialized);
+    }
+    for (entity, building, source, handle) in &buildings {
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        node.set_meta("building_id", &i64::from(building.id.0).to_variant());
+        node.set_meta("building_kind", &debug_variant(building.kind));
+        node.set_meta("team_id", &i64::from(building.team.0).to_variant());
+        // A completed Farm carries both its building identity and its
+        // renewable Food source on the same entity.
+        if let Some(source) = source {
+            node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
+            node.set_meta("resource_kind", &debug_variant(source.kind));
+        }
+        commands.entity(entity).insert(ViewMetaInitialized);
+    }
+    for (entity, source, handle) in &resources {
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
+        node.set_meta("resource_kind", &debug_variant(source.kind));
+        commands.entity(entity).insert(ViewMetaInitialized);
+    }
+}
+
+fn reset_fixture_world(world: &mut World) {
+    clear_gameplay_world(world);
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    seed_skirmish(world, &mut map, &fixture);
+    world.insert_resource(map);
+}
+
+fn reset_benchmark_world(world: &mut World) {
+    clear_gameplay_world(world);
+    let fixture = MapFixture::battlefield();
+    world.insert_resource(fixture.map.clone());
+    for spawn in fixture.units_200() {
         spawn_unit(
             world,
             spawn.id,
@@ -233,60 +717,60 @@ fn setup_fixture(world: &mut World) {
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn attach_missing_gameplay_views(
-    mut commands: Commands,
-    units: Query<(Entity, &SimPosition), (With<Unit>, Without<GameplayViewRequested>)>,
-) {
-    for (entity, position) in &units {
-        commands.entity(entity).insert((
-            Transform::from_xyz(position.current.x, 0.0, position.current.y),
-            TransformSyncMetadata::default(),
-            Node3DMarker,
-            GodotScene::from_path("res://scenes/unit_view.tscn"),
-            GameplayViewRequested,
-        ));
-    }
-}
-
-fn reset_fixture_world(world: &mut World) {
-    let unit_entities = {
+fn clear_gameplay_world(world: &mut World) {
+    let mut entities = HashSet::new();
+    {
         let mut query = world.query_filtered::<Entity, With<Unit>>();
-        query.iter(world).collect::<Vec<_>>()
-    };
-    for entity in unit_entities {
+        entities.extend(query.iter(world));
+    }
+    {
+        let mut query = world.query_filtered::<Entity, With<Building>>();
+        entities.extend(query.iter(world));
+    }
+    {
+        let mut query = world.query_filtered::<Entity, With<ResourceSource>>();
+        entities.extend(query.iter(world));
+    }
+    for entity in entities {
         let _ = world.despawn(entity);
     }
 
     world.remove_resource::<UnitIndex>();
+    world.remove_resource::<BuildingIndex>();
+    world.remove_resource::<ResourceIndex>();
+    world.remove_resource::<TeamEconomy>();
+    world.remove_resource::<IdAllocator>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
     }
     if let Some(mut feedback) = world.get_resource_mut::<CommandFeedback>() {
         feedback.revision = feedback.revision.wrapping_add(1);
         feedback.text = "Ready".to_string();
+        feedback.last_reject_code = None;
     }
-
-    setup_fixture(world);
 }
 
-fn initialize_unit_views(
-    mut commands: Commands,
-    units: Query<(Entity, &Unit, &GodotNodeHandle), Without<UnitViewInitialized>>,
-    mut godot: GodotAccess,
-) {
-    for (entity, unit, handle) in &units {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
-            continue;
-        };
-        node.set_meta("unit_id", &i64::from(unit.id.0).to_variant());
-        node.set_meta("team_id", &i64::from(unit.team.0).to_variant());
-        node.set_meta(
-            "unit_kind",
-            &GString::from(format!("{:?}", unit.kind).as_str()).to_variant(),
-        );
-        commands.entity(entity).insert(UnitViewInitialized);
-    }
+fn idle_worker_ids(world: &World, team: TeamId) -> Vec<i32> {
+    let mut ids: Vec<i32> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    let unit = world.get::<Unit>(*entity)?;
+                    if unit.team != team || unit.kind != UnitKind::Villager {
+                        return None;
+                    }
+                    if world.get::<WorkerTask>(*entity) != Some(&WorkerTask::Idle) {
+                        return None;
+                    }
+                    i32::try_from(id.0).ok()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
 }
 
 fn apply_pending_commands(world: &mut World) {
@@ -353,10 +837,40 @@ fn format_command_result(result: &CommandResult) -> String {
     }
 }
 
-fn advance_simulation(world: &mut World) {
+fn advance_movement(world: &mut World) {
     world.resource_scope(|world, map: Mut<GridMap>| {
         step_movement(world, &map, SIM_STEP_SECONDS);
     });
+}
+
+fn advance_economy(world: &mut World) {
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_economy(world, &mut map, SIM_STEP_SECONDS);
+    });
+}
+
+fn advance_construction(world: &mut World) {
+    step_construction(world, SIM_STEP_SECONDS);
+}
+
+fn advance_production(world: &mut World) {
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_production(world, &mut map, SIM_STEP_SECONDS);
+    });
+}
+
+fn job_seconds(job: &ProductionJob) -> f32 {
+    match job.kind {
+        ProductionKind::Unit(kind) => unit_spec(kind).train_seconds as f32,
+        ProductionKind::Age2 => AGE_TWO_SECONDS as f32,
+    }
+}
+
+fn queue_head_label(job: &ProductionJob) -> String {
+    match job.kind {
+        ProductionKind::Unit(kind) => format!("{kind:?}"),
+        ProductionKind::Age2 => "Age2".to_string(),
+    }
 }
 
 fn sync_interpolated_unit_transforms(

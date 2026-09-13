@@ -1,0 +1,19 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/building_view.gd" id="1_script"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_body"]
+size = Vector3(3.6, 1.6, 3.6)
+
+[sub_resource type="StandardMaterial3D" id="Material_body"]
+resource_local_to_scene = true
+albedo_color = Color(0.72, 0.66, 0.55, 1)
+roughness = 0.85
+
+[node name="BuildingView" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.8, 0)
+mesh = SubResource("BoxMesh_body")
+material_override = SubResource("Material_body")
