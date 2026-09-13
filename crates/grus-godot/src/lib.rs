@@ -41,6 +41,9 @@ impl Default for CommandFeedback {
 struct ViewMetaInitialized;
 
 #[derive(Component)]
+struct ResourceMetaInitialized;
+
+#[derive(Component)]
 struct GameplayViewRequested;
 
 #[derive(GodotClass)]
@@ -480,6 +483,7 @@ fn build_app(app: &mut App) {
             (
                 attach_missing_gameplay_views,
                 initialize_view_metadata,
+                stamp_late_resource_metadata,
                 sync_interpolated_unit_transforms,
             ),
         )
@@ -680,6 +684,7 @@ fn initialize_view_metadata(
         if let Some(source) = source {
             node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
             node.set_meta("resource_kind", &debug_variant(source.kind));
+            commands.entity(entity).insert(ResourceMetaInitialized);
         }
         commands.entity(entity).insert(ViewMetaInitialized);
     }
@@ -689,7 +694,27 @@ fn initialize_view_metadata(
         };
         node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
         node.set_meta("resource_kind", &debug_variant(source.kind));
-        commands.entity(entity).insert(ViewMetaInitialized);
+        commands
+            .entity(entity)
+            .insert((ViewMetaInitialized, ResourceMetaInitialized));
+    }
+}
+
+/// A placed Farm only gains `ResourceSource` at construction completion,
+/// after its one-shot view metadata ran — so its view must be re-stamped
+/// with resource metadata when the source appears.
+fn stamp_late_resource_metadata(
+    mut commands: Commands,
+    sources: Query<(Entity, &ResourceSource, &GodotNodeHandle), Without<ResourceMetaInitialized>>,
+    mut godot: GodotAccess,
+) {
+    for (entity, source, handle) in &sources {
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
+        node.set_meta("resource_kind", &debug_variant(source.kind));
+        commands.entity(entity).insert(ResourceMetaInitialized);
     }
 }
 
