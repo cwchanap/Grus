@@ -10,7 +10,8 @@ extends Node
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 ## RejectReason discriminant values (declaration order in
-## crates/grus-sim/src/commands.rs).
+## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
+const REJECT_NONE := -1
 const REJECT_LOCKED := 7
 const REJECT_FARM_OCCUPIED := 12
 
@@ -314,6 +315,25 @@ func _run() -> void:
 	if int(boot.get("food", -1)) != 200 or int(boot.get("wood", -1)) != 300 or int(boot.get("gold", -1)) != 100:
 		_fail("starting stockpile is not 200/300/100: %s" % [boot])
 		return
+	# The catalogue snapshot is the only gameplay-data source for the UI:
+	# prove it carries real cost/producer/unlock entries from the Rust table.
+	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
+	var catalogue_units: Dictionary = catalogue.get("units", {})
+	var villager_entry: Dictionary = catalogue_units.get("Villager", {})
+	if int(villager_entry.get("food", -1)) != 50 or str(villager_entry.get("producer", "")) != "TownCenter":
+		_fail("catalogue snapshot is missing Villager cost/producer: %s" % [catalogue])
+		return
+	var stable_entry: Dictionary = catalogue_units.get("Cavalry", {})
+	if int(stable_entry.get("age", -1)) != 2 or str(stable_entry.get("producer", "")) != "Stable":
+		_fail("catalogue snapshot is missing the Cavalry age gate/producer: %s" % [catalogue])
+		return
+	var age_up_entry: Dictionary = catalogue.get("age_up", {})
+	if int(age_up_entry.get("food", -1)) != 300 or int(age_up_entry.get("gold", -1)) != 200:
+		_fail("catalogue snapshot is missing the Age-2 cost: %s" % [catalogue])
+		return
+	if absf(float(boot.get("gather_rate", 0.0)) - 2.0) > 0.0001:
+		_fail("starting gather rate is not 2.0: %s" % [boot])
+		return
 	if int(boot.get("population_used", -1)) != 4 or int(boot.get("population_cap", -1)) != 10:
 		_fail("starting population is not 4/10: %s" % [boot])
 		return
@@ -511,8 +531,13 @@ func _run() -> void:
 	if not await _wait_until(func(): return int(GrusBridge.economy_snapshot().get("age", 1)) == 2, 30.0,
 			"Age 2 never completed"):
 		return
+	# The Age-2 2.2/s gather rate, observed directly through the snapshot.
+	var age_two_rate := float(GrusBridge.economy_snapshot().get("gather_rate", 0.0))
+	if absf(age_two_rate - 2.2) > 0.0001:
+		_fail("Age 2 gather rate is not 2.2: %f" % age_two_rate)
+		return
 	var unlocked_preview: Dictionary = GrusBridge.placement_preview(4, "Stable", STABLE_ANCHOR.x, STABLE_ANCHOR.y)
-	if not bool(unlocked_preview.get("valid", false)) or int(unlocked_preview.get("reject_code", -1)) != 0:
+	if not bool(unlocked_preview.get("valid", false)) or int(unlocked_preview.get("reject_code", 0)) != REJECT_NONE:
 		_fail("Stable placement after Age 2 is not unlocked: %s" % [unlocked_preview])
 		return
 

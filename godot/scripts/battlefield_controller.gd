@@ -5,9 +5,6 @@ const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
 const MAX_CAMERA_SIZE := 120.0
 const ZOOM_STEP := 6.0
-## UI routing only: which selected-building kinds receive rally/Age input.
-## The simulation stays authoritative for every command.
-const PRODUCER_KINDS: Array[String] = ["TownCenter", "Barracks", "ArcheryRange", "Stable"]
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
@@ -27,8 +24,23 @@ var _left_press_position := Vector2.ZERO
 var _left_pressed := false
 var _placement_kind := ""
 var _idle_cursor := 0
+## Producer building kinds and the Age-up cost come from the Rust catalogue
+## via catalogue_snapshot — GDScript hardcodes no gameplay data.
+var _producer_kinds: Array[String] = []
 
 func _ready() -> void:
+	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
+	var producers := {}
+	var units: Dictionary = catalogue.get("units", {})
+	for kind in units:
+		producers[str(units[kind].get("producer", ""))] = true
+	_producer_kinds.assign(producers.keys())
+	_producer_kinds.sort()
+	var age_up: Dictionary = catalogue.get("age_up", {})
+	age_button.text = "Advance Age (%df %dg)" % [
+		int(age_up.get("food", 0)),
+		int(age_up.get("gold", 0)),
+	]
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
 	for button in _build_grid.get_children():
@@ -180,7 +192,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			selected_ids.append(id)
 		_apply_selection()
 		return
-	var building := _nearest_view("building_views", screen_position)
+	var building := _nearest_view("building_views", screen_position, true)
 	if building != null:
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
@@ -241,7 +253,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 				else:
 					command_status.text = "Construction resume rejected"
 				return
-	if PRODUCER_KINDS.has(_selected_producer_kind()):
+	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)
 		if target != null:
 			if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):

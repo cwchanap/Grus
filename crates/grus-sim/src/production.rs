@@ -12,7 +12,7 @@ use crate::catalog::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, BuildingKind, Cost, MAX_POPULATION, UnitKind,
     building_spec, unit_spec,
 };
-use crate::commands::{CommandResult, RejectReason, UnitIndex, spawn_unit};
+use crate::commands::{CommandResult, RejectReason, UnitIndex, assign_move_toward, spawn_unit};
 use crate::economy::{Carry, GatherProgress, TeamEconomy, WorkerTask};
 use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
@@ -453,23 +453,11 @@ fn spawn_trained_unit(
     world
         .entity_mut(spawned)
         .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
-    if let Some(rally) = world.get::<RallyPoint>(entity).copied()
-        && let Some(path) = map.find_path(slot, rally.0)
-    {
-        let waypoints = path
-            .into_iter()
-            .skip(1)
-            .map(|cell| map.cell_center(cell))
-            .collect::<Vec<_>>();
-        if !waypoints.is_empty() {
-            world.entity_mut(spawned).insert(MoveOrder {
-                waypoints,
-                next: 0,
-                goal: rally.0,
-                map_revision: map.revision(),
-                last_failed_replan: None,
-            });
-        }
+    // Rally uses the normal Move assignment path (destination generation plus
+    // reservation seeding), so a rallied unit cannot claim an already-reserved
+    // goal. A failed route leaves the unit spawned and idle.
+    if let Some(rally) = world.get::<RallyPoint>(entity).copied() {
+        assign_move_toward(world, map, spawned, slot, rally.0);
     }
 }
 
@@ -1140,6 +1128,78 @@ mod tests {
             Some(RejectReason::NoSpawnSpace)
         );
         assert!(world.resource::<UnitIndex>().entity(UnitId(100)).is_none());
+    }
+
+    #[test]
+    fn two_same_tick_rallied_spawns_never_share_a_goal() {
+        let (mut world, mut map) = open_world();
+        complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(100),
+            BuildingKind::TownCenter,
+            GridPos::new(8, 8),
+            TEAM,
+        );
+        let _first = complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(101),
+            BuildingKind::Barracks,
+            GridPos::new(20, 20),
+            TEAM,
+        );
+        let _second = complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(102),
+            BuildingKind::Barracks,
+            GridPos::new(40, 40),
+            TEAM,
+        );
+        // Both producers rally to the same target cell.
+        for building in [BuildingId(101), BuildingId(102)] {
+            let result = apply_player_command(
+                &mut world,
+                &mut map,
+                PlayerCommand::SetRally {
+                    issuer: TEAM,
+                    building,
+                    target: GridPos::new(14, 14),
+                },
+            );
+            assert_eq!(result.reject, None);
+        }
+        assert_eq!(
+            enqueue(&mut world, &mut map, BuildingId(101), UnitKind::Spearman).reject,
+            None
+        );
+        assert_eq!(
+            enqueue(&mut world, &mut map, BuildingId(102), UnitKind::Spearman).reject,
+            None
+        );
+
+        // Both jobs complete in the same step_production call.
+        for _ in 0..401 {
+            step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+        }
+
+        let index = world.resource::<UnitIndex>();
+        let first_unit = index.entity(UnitId(100)).expect("first spearman spawned");
+        let second_unit = index.entity(UnitId(101)).expect("second spearman spawned");
+        let first_goal = world
+            .get::<MoveOrder>(first_unit)
+            .expect("first rallied unit moves")
+            .goal;
+        let second_goal = world
+            .get::<MoveOrder>(second_unit)
+            .expect("second rallied unit moves")
+            .goal;
+        assert_eq!(first_goal, GridPos::new(14, 14));
+        assert_ne!(
+            first_goal, second_goal,
+            "rallied spawns claimed one reserved goal cell"
+        );
     }
 
     #[test]
