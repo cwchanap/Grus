@@ -24,7 +24,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Test simulation
-        run: cargo test -p grus-sim
+        run: cargo test --workspace
       - name: Build Godot extension
         run: cargo build -p grus-godot
       - name: Stage Godot extension
