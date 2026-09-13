@@ -695,7 +695,7 @@ fn attach_missing_gameplay_views(
         attach_view(
             &mut commands,
             entity,
-            Vec2::new(position.current.x, position.current.y),
+            Transform::from_xyz(position.current.x, 0.0, position.current.y),
             "res://scenes/unit_view.tscn",
         );
     }
@@ -703,7 +703,7 @@ fn attach_missing_gameplay_views(
         attach_view(
             &mut commands,
             entity,
-            map.cell_center(footprint.anchor),
+            building_view_transform(footprint),
             "res://scenes/building_view.tscn",
         );
     }
@@ -711,23 +711,41 @@ fn attach_missing_gameplay_views(
         attach_view(
             &mut commands,
             entity,
-            map.cell_center(footprint.anchor),
+            building_view_transform(footprint),
             "res://scenes/building_view.tscn",
         );
     }
     for (entity, footprint) in &standalone_resources {
+        let center = map.cell_center(footprint.anchor);
         attach_view(
             &mut commands,
             entity,
-            map.cell_center(footprint.anchor),
+            Transform::from_xyz(center.x, 0.0, center.y),
             "res://scenes/resource_view.tscn",
         );
     }
 }
 
-fn attach_view(commands: &mut Commands, entity: Entity, center: Vec2, path: &str) {
+/// The building view's unit box is scaled by the footprint so the rendered
+/// building matches the blocked cells and the placement preview exactly.
+/// `Footprint::anchor` is the top-left cell, so the transform centers on
+/// anchor + half the footprint in each axis.
+fn building_view_transform(footprint: &Footprint) -> Transform {
+    Transform::from_xyz(
+        footprint.anchor.x as f32 + f32::from(footprint.width) / 2.0,
+        0.0,
+        footprint.anchor.y as f32 + f32::from(footprint.height) / 2.0,
+    )
+    .with_scale(Vec3::new(
+        f32::from(footprint.width),
+        1.0,
+        f32::from(footprint.height),
+    ))
+}
+
+fn attach_view(commands: &mut Commands, entity: Entity, transform: Transform, path: &str) {
     commands.entity(entity).insert((
-        Transform::from_xyz(center.x, 0.0, center.y),
+        transform,
         TransformSyncMetadata::default(),
         Node3DMarker,
         GodotScene::from_path(path),
@@ -941,21 +959,43 @@ fn format_command_result(result: &CommandResult) -> String {
         .count();
 
     if result.rejected_units.is_empty() {
-        format!(
-            "Command accepted for {} unit(s)",
-            result.accepted_units.len()
-        )
-    } else if result.accepted_units.is_empty() && unreachable > 0 {
-        format!("Destination unreachable for {unreachable} unit(s)")
-    } else {
-        format!(
-            "Command: {} accepted, {} unreachable, {} not owned, {} missing",
-            result.accepted_units.len(),
-            unreachable,
-            not_owned,
-            unknown
-        )
+        // Single-object commands (PlaceBuilding, ResumeConstruction, enqueue,
+        // rally) accept nothing per-unit; a bare "accepted" must not read as
+        // "0 unit(s)" and clobber the controller's optimistic status.
+        return if result.accepted_units.is_empty() {
+            "Command accepted".to_string()
+        } else {
+            format!(
+                "Command accepted for {} unit(s)",
+                result.accepted_units.len()
+            )
+        };
     }
+
+    if result.accepted_units.is_empty() && unreachable == result.rejected_units.len() {
+        return format!("Destination unreachable for {unreachable} unit(s)");
+    }
+
+    // Per-unit rejects outside the three counted kinds (e.g. FarmOccupied,
+    // Crowded, NotVillager) still name the first uncounted typed code instead
+    // of collapsing into a zero-count summary.
+    let uncounted = result.rejected_units.len() - unreachable - not_owned - unknown;
+    let mut text = format!(
+        "Command: {} accepted, {} unreachable, {} not owned, {} missing",
+        result.accepted_units.len(),
+        unreachable,
+        not_owned,
+        unknown
+    );
+    if let Some((_, reason)) = result.rejected_units.iter().find(|(_, reason)| {
+        !matches!(
+            reason,
+            RejectReason::Unreachable | RejectReason::NotOwned | RejectReason::UnknownUnit
+        )
+    }) {
+        text += &format!(", {uncounted} rejected ({reason:?})");
+    }
+    text
 }
 
 fn advance_movement(world: &mut World) {
@@ -1090,5 +1130,63 @@ mod tests {
         );
 
         assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![1]);
+    }
+
+    #[test]
+    fn building_view_transform_centers_and_scales_to_the_footprint() {
+        // A 4×4 Town Center at (12, 46) renders around (14, 48) — not the
+        // anchor's cell center — and the unit box scales to the footprint.
+        let town_center = building_view_transform(&Footprint::new(GridPos::new(12, 46), 4, 4));
+        assert_eq!(town_center.translation, Vec3::new(14.0, 0.0, 48.0));
+        assert_eq!(town_center.scale, Vec3::new(4.0, 1.0, 4.0));
+
+        let house = building_view_transform(&Footprint::new(GridPos::new(13, 10), 2, 2));
+        assert_eq!(house.translation, Vec3::new(14.0, 0.0, 11.0));
+        assert_eq!(house.scale, Vec3::new(2.0, 1.0, 2.0));
+    }
+
+    #[test]
+    fn command_feedback_names_typed_rejects_and_bare_accepts() {
+        // Single-object commands accept nothing per-unit: a bare "accepted"
+        // rather than "0 unit(s)".
+        assert_eq!(
+            format_command_result(&CommandResult::default()),
+            "Command accepted"
+        );
+        assert_eq!(
+            format_command_result(&CommandResult {
+                reject: Some(RejectReason::Occupied),
+                ..CommandResult::default()
+            }),
+            "Command rejected (Occupied)"
+        );
+        assert_eq!(
+            format_command_result(&CommandResult {
+                accepted_units: vec![UnitId(1), UnitId(2)],
+                ..CommandResult::default()
+            }),
+            "Command accepted for 2 unit(s)"
+        );
+        assert_eq!(
+            format_command_result(&CommandResult {
+                rejected_units: vec![
+                    (UnitId(1), RejectReason::Unreachable),
+                    (UnitId(2), RejectReason::Unreachable),
+                ],
+                ..CommandResult::default()
+            }),
+            "Destination unreachable for 2 unit(s)"
+        );
+        // Rejects outside the counted kinds still surface their typed code.
+        assert_eq!(
+            format_command_result(&CommandResult {
+                rejected_units: vec![
+                    (UnitId(1), RejectReason::FarmOccupied),
+                    (UnitId(2), RejectReason::FarmOccupied),
+                ],
+                ..CommandResult::default()
+            }),
+            "Command: 0 accepted, 0 unreachable, 0 not owned, 0 missing, 2 rejected (FarmOccupied)"
+        );
     }
 }

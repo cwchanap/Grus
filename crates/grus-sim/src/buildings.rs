@@ -63,8 +63,9 @@ pub struct PlacementPlan {
 /// Authoritative placement validation. Checks, in order: owned villager →
 /// kind unlocked/buildable → footprint in bounds → footprint cells walkable
 /// and free of any live unit's current cell → affordability → reachable
-/// reserved immediate-perimeter builder slot. Mutates nothing; apply the
-/// returned plan only after every check passes.
+/// reserved immediate-perimeter builder slot, evaluated on the
+/// post-placement map (footprint cells already blocked). Mutates nothing;
+/// apply the returned plan only after every check passes.
 pub fn validate_placement(
     world: &World,
     map: &GridMap,
@@ -136,8 +137,15 @@ pub fn validate_placement(
         return Err(RejectReason::InsufficientResources);
     }
 
-    // 6. reachable immediate-perimeter builder slot.
-    let (slot, route) = reachable_builder_slot(world, map, entity, footprint)?;
+    // 6. reachable immediate-perimeter builder slot, checked against the
+    // post-placement map: acceptance blocks the footprint, so a route that
+    // only exists through those cells would charge for a site the builder
+    // then cannot reach — the first movement replan fails and it idles.
+    let mut occupied_map = map.clone();
+    for cell in footprint.cells() {
+        occupied_map.set_blocked(cell, true);
+    }
+    let (slot, route) = reachable_builder_slot(world, &occupied_map, entity, footprint)?;
     Ok(PlacementPlan {
         builder: entity,
         footprint,
@@ -1199,5 +1207,73 @@ mod tests {
         // With an unoccupied slot the builder actually reaches the site and
         // starts building instead of being separated off its slot forever.
         run_until_constructing(&mut world, &map, villager);
+    }
+
+    /// A footprint that plugs the only corridor between the builder and the
+    /// remaining free approach slots must reject instead of charging for a
+    /// site the builder can never reach. Regression: reachability used to be
+    /// checked on the pre-placement map, so a route through the soon-blocked
+    /// footprint was accepted; the first movement replan then failed and the
+    /// builder idled next to a paid, unbuildable site.
+    #[test]
+    fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
+        let (mut world, mut map, villager) = setup_build_test();
+        world
+            .entity_mut(villager)
+            .insert(SimPosition::new(Vec2::new(8.5, 6.5)));
+
+        // Solid wall at x = 10 with a two-cell gap at (10, 5)–(10, 6). The
+        // 2×2 House footprint covers the whole gap plus one column past it,
+        // so every free approach slot lies on the far side.
+        for y in 0..64 {
+            if y != 5 && y != 6 {
+                map.set_blocked(GridPos::new(10, y), true);
+            }
+        }
+
+        // Squatters occupy the builder-side perimeter cells so slot selection
+        // is forced onto the far side of the footprint.
+        for (id, cell) in [
+            (2, GridPos::new(9, 4)),
+            (3, GridPos::new(9, 5)),
+            (4, GridPos::new(9, 6)),
+            (5, GridPos::new(9, 7)),
+        ] {
+            spawn_unit(
+                &mut world,
+                UnitId(id),
+                TeamId(1),
+                map.cell_center(cell),
+                UnitKind::Villager,
+                unit_spec(UnitKind::Villager).speed,
+            );
+        }
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(10, 5),
+            },
+        );
+
+        assert_eq!(result.reject, Some(RejectReason::Unreachable));
+
+        // Nothing was charged, spawned, blocked, or routed.
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+            500
+        );
+        let mut buildings = world.query::<&Building>();
+        assert_eq!(buildings.iter(&world).count(), 0);
+        assert_eq!(world.resource::<IdAllocator>().next_building, 10);
+        for cell in Footprint::new(GridPos::new(10, 5), 2, 2).cells() {
+            assert!(map.is_walkable(cell), "footprint cell {cell:?} blocked");
+        }
+        assert!(world.get::<MoveOrder>(villager).is_none());
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
     }
 }
