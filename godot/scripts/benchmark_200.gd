@@ -32,14 +32,34 @@ func _run() -> void:
 		_fail("benchmark viewport did not resize to 1920x1080")
 		return
 
+	if not GrusBridge.has_method("reset_benchmark_fixture"):
+		_fail("benchmark reset bridge is missing")
+		return
+	if not GrusBridge.reset_benchmark_fixture():
+		_fail("benchmark reset bridge rejected the benchmark fixture")
+		return
+	_progress("benchmark_reset")
+
 	var units: Array[Node] = []
+	var unique_ids: Dictionary = {}
 	for _frame in range(180):
 		await get_tree().physics_frame
 		units = get_tree().get_nodes_in_group("unit_views")
-		if units.size() == 200:
+		unique_ids.clear()
+		for unit in units:
+			var id := int(unit.get_meta("unit_id", -1))
+			if id > 0:
+				unique_ids[id] = true
+		if units.size() == 200 and unique_ids.size() == 200:
 			break
-	if units.size() != 200:
-		_fail("expected 200 unit views, found %d" % units.size())
+	if units.size() != 200 or unique_ids.size() != 200:
+		_fail("expected 200 unique unit views, found %d nodes / %d ids" % [units.size(), unique_ids.size()])
+		return
+	if get_tree().get_nodes_in_group("building_views").size() != 0:
+		_fail("benchmark fixture must not create building views")
+		return
+	if get_tree().get_nodes_in_group("resource_views").size() != 0:
+		_fail("benchmark fixture must not create resource views")
 		return
 	_progress("unit_views")
 

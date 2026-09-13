@@ -1,0 +1,21 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/resource_view.gd" id="1_script"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_body"]
+top_radius = 0.35
+bottom_radius = 0.4
+height = 0.55
+
+[sub_resource type="StandardMaterial3D" id="Material_body"]
+resource_local_to_scene = true
+albedo_color = Color(0.5, 0.5, 0.5, 1)
+roughness = 0.9
+
+[node name="ResourceView" type="Node3D"]
+script = ExtResource("1_script")
+
+[node name="Body" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.28, 0)
+mesh = SubResource("CylinderMesh_body")
+material_override = SubResource("Material_body")
