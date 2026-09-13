@@ -304,11 +304,14 @@ func _nearest_view(group: String, screen_position: Vector2, friendly_only := fal
 		var view := node as Node3D
 		if view == null or camera.is_position_behind(view.global_position):
 			continue
-		var distance := camera.unproject_position(view.global_position).distance_to(screen_position)
+		var distance := _view_distance(view, screen_position)
 		if distance <= nearest_distance:
 			nearest = view
 			nearest_distance = distance
 	return nearest
+
+func _view_distance(view: Node3D, screen_position: Vector2) -> float:
+	return camera.unproject_position(view.global_position).distance_to(screen_position)
 
 func _friendly_units() -> Array[Node3D]:
 	var result: Array[Node3D] = []
@@ -337,12 +340,17 @@ func _lowest_selected_villager_id() -> int:
 
 func _gatherable_resource_id(screen_position: Vector2) -> int:
 	var resource := _nearest_view("resource_views", screen_position)
+	var building := _nearest_view("building_views", screen_position)
+	if building != null and (int(building.get_meta("team_id", -1)) != 1 \
+			or not building.has_meta("resource_id")):
+		building = null
+	# A Farm body under the cursor outranks a neighbouring source when it is
+	# the nearer view — the building's footprint centre is the click target.
+	if building != null and (resource == null \
+			or _view_distance(building, screen_position) < _view_distance(resource, screen_position)):
+		return int(building.get_meta("resource_id", -1))
 	if resource != null:
 		return int(resource.get_meta("resource_id", -1))
-	var building := _nearest_view("building_views", screen_position)
-	if building != null and int(building.get_meta("team_id", -1)) == 1 \
-			and building.has_meta("resource_id"):
-		return int(building.get_meta("resource_id", -1))
 	return -1
 
 func _building_complete(building_id: int) -> bool:
