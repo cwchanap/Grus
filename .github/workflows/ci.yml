@@ -45,6 +45,8 @@ jobs:
         run: timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn
       - name: Run fixture reset smoke
         run: timeout 45s godot --headless --path godot res://scenes/reset_test.tscn
+      - name: Run HPA-471 economy integration smoke
+        run: timeout 300s godot --headless --path godot res://scenes/economy_smoke_test.tscn
       - name: Export Linux x86_64 desktop build
         run: |
           mkdir -p build
