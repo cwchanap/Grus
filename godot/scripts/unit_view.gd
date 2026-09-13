@@ -25,5 +25,8 @@ func unit_id() -> int:
 func team_id() -> int:
 	return int(get_meta("team_id", -1))
 
+func unit_kind() -> String:
+	return str(get_meta("unit_kind", ""))
+
 func set_selected(selected: bool) -> void:
 	selection_ring.visible = selected
