@@ -2,6 +2,8 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, World};
 
 use crate::catalog::UnitKind;
+use crate::commands::RejectReason;
+use crate::economy::{WorkerTask, idle_worker_on_route_failure};
 use crate::ids::{TeamId, UnitId};
 use crate::map::{GridMap, GridPos};
 
@@ -52,6 +54,11 @@ struct MovementSnapshot {
     unit: Unit,
     position: SimPosition,
     order: Option<MoveOrder>,
+    /// True when the unit holds a worker task that depends on its route
+    /// (ToSource/ToDropoff/ToConstruction). Plain Move orders — even on
+    /// villagers whose task is `Idle` — keep the HPA-470 preserve-and-wait
+    /// policy instead.
+    active_worker_task: bool,
 }
 
 pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
@@ -64,6 +71,9 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                 unit: *unit,
                 position: *position,
                 order: order.cloned(),
+                active_worker_task: world
+                    .get::<WorkerTask>(entity)
+                    .is_some_and(|task| !matches!(task, WorkerTask::Idle)),
             })
             .collect::<Vec<_>>()
     };
@@ -72,6 +82,7 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         let mut position = snapshot.position;
         position.previous = snapshot.position.current;
         let mut order = snapshot.order.clone();
+        let mut worker_route_failed = false;
 
         if let Some(active_order) = snapshot.order.as_ref() {
             if let Some(mut candidate_order) =
@@ -103,39 +114,61 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     // to the next waypoint clips a blocked corner. Force a
                     // replan from the current cell; if a fresh route exists,
                     // adopt it and recover in one tick. If the goal is still
-                    // unreachable from here, preserve the existing order and
-                    // wait for a map revision change rather than cancelling a
-                    // still-valid order. Record the failed revision so we do
-                    // not re-run A* on every step while the map is unchanged.
+                    // unreachable from here, non-worker units preserve the
+                    // existing order and wait for a map revision change rather
+                    // than cancelling a still-valid order (workers idle through
+                    // the shared cleanup instead). The failed revision is
+                    // recorded so we do not re-run A* on every step while the
+                    // map is unchanged.
                     if active_order.last_failed_replan != Some(map.revision()) {
                         if let Some(forced_order) =
                             compute_route(active_order.goal, snapshot.position.current, map)
                         {
                             order = Some(forced_order);
+                        } else if snapshot.active_worker_task {
+                            // The worker's required route is impossible: idle
+                            // with typed feedback instead of waiting forever
+                            // on a map change that may never come.
+                            order = None;
+                            worker_route_failed = true;
                         } else if let Some(preserved) = order.as_mut() {
                             preserved.last_failed_replan = Some(map.revision());
                         }
                     }
+                } else if snapshot.active_worker_task {
+                    // The goal cell itself is blocked: the required route can
+                    // never complete.
+                    order = None;
+                    worker_route_failed = true;
                 }
             } else {
-                // A newer map revision triggered a replan that found no
-                // route to the goal. Preserve the order and record the
-                // failed revision so the unit waits for a later map change
-                // that may reopen a path instead of dropping an order that
-                // is still wanted — matching the blocked-step policy above.
-                if let Some(preserved) = order.as_mut() {
+                // A newer map revision triggered a replan that found no route
+                // to the goal. Workers idle through the shared cleanup with
+                // typed feedback; every other unit preserves the order and
+                // records the failed revision so it waits for a later map
+                // change that may reopen a path instead of dropping an order
+                // that is still wanted.
+                if snapshot.active_worker_task {
+                    order = None;
+                    worker_route_failed = true;
+                } else if let Some(preserved) = order.as_mut() {
                     preserved.map_revision = map.revision();
                     preserved.last_failed_replan = Some(map.revision());
                 }
             }
         }
 
-        let mut entity = world.entity_mut(snapshot.entity);
-        entity.insert(position);
-        if let Some(order) = order {
-            entity.insert(order);
-        } else {
-            entity.remove::<MoveOrder>();
+        {
+            let mut entity = world.entity_mut(snapshot.entity);
+            entity.insert(position);
+            if let Some(order) = order {
+                entity.insert(order);
+            } else {
+                entity.remove::<MoveOrder>();
+            }
+        }
+        if worker_route_failed {
+            idle_worker_on_route_failure(world, snapshot.entity, RejectReason::Unreachable);
         }
     }
 }
@@ -242,6 +275,7 @@ mod tests {
         PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
     };
     use crate::fixture::MapFixture;
+    use crate::map::Footprint;
 
     fn assert_vec2_near(actual: Vec2, expected: Vec2) {
         let error = actual.distance(expected);
@@ -535,6 +569,105 @@ mod tests {
         assert_vec2_near(
             world.get::<SimPosition>(entity).unwrap().current,
             map.cell_center(goal),
+        );
+    }
+
+    #[test]
+    fn failed_route_idles_an_active_worker_and_releases_its_farm() {
+        let mut world = World::new();
+        let mut map = GridMap::new(16, 16);
+        // A completed Farm whose assignment is held by the traveling worker.
+        let farm = world
+            .spawn((
+                crate::buildings::Building {
+                    id: crate::ids::BuildingId(1),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::Farm,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(8, 8), 2, 2),
+                crate::economy::ResourceSource {
+                    id: crate::ids::ResourceId(1),
+                    kind: crate::catalog::ResourceKind::Food,
+                    remaining: None,
+                    assigned_worker: Some(UnitId(1)),
+                },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(crate::buildings::BuildingIndex::default)
+            .insert(crate::ids::BuildingId(1), farm);
+        world
+            .get_resource_or_insert_with(crate::economy::ResourceIndex::default)
+            .insert(crate::ids::ResourceId(1), farm);
+
+        let worker = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        world.entity_mut(worker).insert((
+            crate::economy::WorkerTask::ToDropoff {
+                source: crate::ids::ResourceId(1),
+                dropoff: crate::ids::BuildingId(1),
+                slot: GridPos::new(7, 7),
+            },
+            crate::economy::Carry::Holding {
+                kind: crate::catalog::ResourceKind::Food,
+                amount: std::num::NonZeroU32::new(4).unwrap(),
+            },
+            test_order(&map, Vec2::new(7.5, 7.5)),
+        ));
+
+        // Wall the worker in: the revision bumps and the replan finds no
+        // route, so the retained-order path fires for an active worker.
+        for cell in [
+            GridPos::new(0, 0),
+            GridPos::new(1, 0),
+            GridPos::new(2, 0),
+            GridPos::new(0, 1),
+            GridPos::new(2, 1),
+            GridPos::new(0, 2),
+            GridPos::new(1, 2),
+            GridPos::new(2, 2),
+        ] {
+            map.set_blocked(cell, true);
+        }
+
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+
+        assert_eq!(
+            world.get::<crate::economy::WorkerTask>(worker),
+            Some(&crate::economy::WorkerTask::Idle)
+        );
+        assert!(world.get::<MoveOrder>(worker).is_none());
+        assert_eq!(
+            world
+                .get::<crate::economy::ResourceSource>(farm)
+                .unwrap()
+                .assigned_worker,
+            None,
+            "route failure releases the Farm assignment"
+        );
+        assert_eq!(
+            world
+                .get::<crate::economy::Carry>(worker)
+                .cloned()
+                .unwrap_or(crate::economy::Carry::Empty)
+                .amount_or_zero(),
+            4,
+            "cleanup never discards Carry"
+        );
+        assert_eq!(
+            world.resource::<crate::economy::LastRouteReject>().0,
+            Some(RejectReason::Unreachable)
         );
     }
 

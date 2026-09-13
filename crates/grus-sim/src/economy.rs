@@ -213,7 +213,26 @@ pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).remove::<MoveOrder>();
 }
 
-pub(crate) fn gather_rate_for_age(age: Age) -> f32 {
+/// Most recent route-failure reject, drained by the bridge into its feedback
+/// channel. Single slot — the latest failure in a tick wins. Lives in the sim
+/// so the cleanup helper stays Godot-free.
+#[derive(Debug, Default, Resource)]
+pub struct LastRouteReject(pub Option<RejectReason>);
+
+/// Terminal cleanup when a worker's required route becomes impossible: the
+/// full `cancel_worker_activity` semantics (Farm assignment released,
+/// active-builder cleared, progress reset, order dropped, `Idle`) plus the
+/// typed reject recorded for bridge feedback. `Carry` is never touched.
+pub(crate) fn idle_worker_on_route_failure(
+    world: &mut World,
+    entity: Entity,
+    reason: RejectReason,
+) {
+    cancel_worker_activity(world, entity);
+    world.insert_resource(LastRouteReject(Some(reason)));
+}
+
+pub fn gather_rate_for_age(age: Age) -> f32 {
     match age {
         Age::Age1 => BASE_GATHER_RATE,
         Age::Age2 => AGE_TWO_GATHER_RATE,
@@ -327,14 +346,8 @@ pub(crate) fn apply_gather(
             let keys: HashSet<GridPos> = used.keys().copied().collect();
             let candidates =
                 approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
-            match pick_reachable_slot(map, start, &candidates) {
-                Some((slot, route)) => Ok((WorkerTask::ToSource { source, slot }, slot, route)),
-                None => Err(if candidates.is_empty() {
-                    RejectReason::Crowded
-                } else {
-                    RejectReason::Unreachable
-                }),
-            }
+            pick_reachable_slot(map, start, &candidates)
+                .map(|(slot, route)| (WorkerTask::ToSource { source, slot }, slot, route))
         };
 
         let (task, slot, route) = match assignment {
@@ -373,23 +386,32 @@ pub(crate) fn apply_gather(
 }
 
 /// Picks the worker's slot: the first reachable walkable cell on the given
-/// candidates list, with its route waypoints.
+/// candidates list, with its route waypoints. `Err(Crowded)` when no candidate
+/// slots exist at all, `Err(Unreachable)` when none of them is pathable.
 fn pick_reachable_slot(
     map: &GridMap,
     start: GridPos,
     candidates: &[GridPos],
-) -> Option<(GridPos, Vec<Vec2>)> {
-    candidates.iter().copied().find_map(|slot| {
-        map.find_path(start, slot).map(|path| {
-            (
-                slot,
-                path.into_iter()
-                    .skip(1)
-                    .map(|cell| map.cell_center(cell))
-                    .collect(),
-            )
+) -> Result<(GridPos, Vec<Vec2>), RejectReason> {
+    candidates
+        .iter()
+        .copied()
+        .find_map(|slot| {
+            map.find_path(start, slot).map(|path| {
+                (
+                    slot,
+                    path.into_iter()
+                        .skip(1)
+                        .map(|cell| map.cell_center(cell))
+                        .collect(),
+                )
+            })
         })
-    })
+        .ok_or(if candidates.is_empty() {
+            RejectReason::Crowded
+        } else {
+            RejectReason::Unreachable
+        })
 }
 
 /// Picks the nearest same-team Dropoff by straight-line distance whose
@@ -505,10 +527,10 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
                     });
                 }
             }
-            Err(()) => {
-                // The requested source is gone or has no reachable free slot:
-                // idle once instead of retrying A* every tick.
-                world.entity_mut(entity).insert(WorkerTask::Idle);
+            Err(reason) => {
+                // The route back is impossible: full cleanup with typed
+                // feedback instead of idling raw and retrying every tick.
+                idle_worker_on_route_failure(world, entity, reason);
             }
         }
     }
@@ -634,8 +656,10 @@ fn leave_gathering(
                 });
             }
         }
-        Err(_) => {
-            world.entity_mut(worker).insert(WorkerTask::Idle);
+        Err(reason) => {
+            // Route impossible: full cleanup with typed feedback instead of
+            // idling raw and leaking the source/farm assignment.
+            idle_worker_on_route_failure(world, worker, reason);
         }
     }
 }
@@ -647,37 +671,37 @@ fn route_back_to_source(
     map: &GridMap,
     worker: Entity,
     source: ResourceId,
-) -> Result<(GridPos, Vec<Vec2>), ()> {
-    let Some(source_entity) = world
+) -> Result<(GridPos, Vec<Vec2>), RejectReason> {
+    let source_entity = world
         .get_resource::<ResourceIndex>()
         .and_then(|index| index.entity(source))
-    else {
-        return Err(());
-    };
-    let Some(footprint) = world.get::<Footprint>(source_entity).copied() else {
-        return Err(());
-    };
+        .ok_or(RejectReason::Unreachable)?;
+    let footprint = world
+        .get::<Footprint>(source_entity)
+        .copied()
+        .ok_or(RejectReason::Unreachable)?;
     // A Farm keeps serving its assigned worker only.
     if world.get::<Building>(source_entity).is_some() {
-        let Some(unit_id) = world.get::<Unit>(worker).map(|unit| unit.id) else {
-            return Err(());
-        };
+        let unit_id = world
+            .get::<Unit>(worker)
+            .map(|unit| unit.id)
+            .ok_or(RejectReason::Unreachable)?;
         let Some(mut state) = world.get_mut::<ResourceSource>(source_entity) else {
-            return Err(());
+            return Err(RejectReason::Unreachable);
         };
         match state.assigned_worker {
-            Some(holder) if holder != unit_id => return Err(()),
+            Some(holder) if holder != unit_id => return Err(RejectReason::Unreachable),
             _ => state.assigned_worker = Some(unit_id),
         }
     }
-    let Some(position) = world.get::<SimPosition>(worker) else {
-        return Err(());
-    };
+    let position = world
+        .get::<SimPosition>(worker)
+        .ok_or(RejectReason::Unreachable)?;
     let start = map.world_to_cell(position.current);
     let used = seed_used_excluding(world, map, worker);
     let keys: HashSet<GridPos> = used.keys().copied().collect();
     let candidates = approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
-    pick_reachable_slot(map, start, &candidates).ok_or(())
+    pick_reachable_slot(map, start, &candidates)
 }
 
 /// Seeds reference-counted reservations from every live unit's current cell
@@ -1257,6 +1281,110 @@ mod tests {
         assert_eq!(
             world.get::<ResourceSource>(farm).unwrap().assigned_worker,
             None
+        );
+    }
+
+    #[test]
+    fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 24);
+        test_economy(&mut world);
+
+        // A completed Farm serving villager 1, plus a Town Center drop-off.
+        let farm = world
+            .spawn((
+                Building {
+                    id: BuildingId(1),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::Farm,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(4, 16), 2, 2),
+                ResourceSource {
+                    id: ResourceId(1),
+                    kind: ResourceKind::Food,
+                    remaining: None,
+                    assigned_worker: Some(UnitId(1)),
+                },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(1), farm);
+        world
+            .get_resource_or_insert_with(ResourceIndex::default)
+            .insert(ResourceId(1), farm);
+        let town_center = world
+            .spawn((
+                Building {
+                    id: BuildingId(2),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::TownCenter,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(16, 16), 4, 4),
+                Dropoff { team: TeamId(1) },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(2), town_center);
+
+        // The assigned gatherer sits walled in with a full carry, so its
+        // drop-off route is impossible.
+        let worker = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(4, 4)));
+        for cell in [
+            GridPos::new(3, 3),
+            GridPos::new(4, 3),
+            GridPos::new(5, 3),
+            GridPos::new(3, 4),
+            GridPos::new(5, 4),
+            GridPos::new(3, 5),
+            GridPos::new(4, 5),
+            GridPos::new(5, 5),
+        ] {
+            map.set_blocked(cell, true);
+        }
+        world.entity_mut(worker).insert((
+            WorkerTask::Gathering {
+                source: ResourceId(1),
+            },
+            Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            },
+            GatherProgress::default(),
+        ));
+
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+        assert!(world.get::<MoveOrder>(worker).is_none());
+        assert_eq!(
+            world.get::<ResourceSource>(farm).unwrap().assigned_worker,
+            None,
+            "route failure must release the Farm assignment"
+        );
+        assert_eq!(
+            world.get::<Carry>(worker),
+            Some(&Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            }),
+            "cleanup never discards Carry"
+        );
+        assert_eq!(
+            world.resource::<LastRouteReject>().0,
+            Some(RejectReason::Unreachable),
+            "typed code recorded for bridge feedback"
         );
     }
 }

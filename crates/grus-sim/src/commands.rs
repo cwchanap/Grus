@@ -337,6 +337,65 @@ pub(crate) fn owned_unit_entity(
     Ok(entity)
 }
 
+/// Assigns one unit a normal Move toward `target` using the Move command's
+/// destination generation and reservation seeding, so the assignment cannot
+/// claim a cell another live unit stands on or already has a `MoveOrder`
+/// goal for. Returns the assigned goal cell, or `None` when no reachable
+/// free slot exists (the caller leaves the unit where it is). Used by rally
+/// routing; the batch Move command keeps its own per-unit restore logic.
+pub(crate) fn assign_move_toward(
+    world: &mut World,
+    map: &GridMap,
+    entity: Entity,
+    start: GridPos,
+    target: GridPos,
+) -> Option<GridPos> {
+    if !map.is_walkable(target) {
+        return None;
+    }
+    let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
+    let entities: Vec<Entity> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| index.iter().map(|(_, entity)| *entity).collect())
+        .unwrap_or_default();
+    for other in entities {
+        if other == entity {
+            continue;
+        }
+        if let Some(position) = world.get::<SimPosition>(other) {
+            reserve_slot(&mut used_slots, map.world_to_cell(position.current));
+        }
+        if let Some(order) = world.get::<MoveOrder>(other) {
+            reserve_slot(&mut used_slots, order.goal);
+        }
+    }
+    let reserved: HashSet<GridPos> = used_slots.keys().copied().collect();
+    destination_slots(map, target, 1, &reserved)
+        .into_iter()
+        .find_map(|slot| {
+            if used_slots.contains_key(&slot) {
+                return None;
+            }
+            map.find_path(start, slot).map(|path| {
+                let waypoints: Vec<Vec2> = path
+                    .into_iter()
+                    .skip(1)
+                    .map(|cell| map.cell_center(cell))
+                    .collect();
+                if !waypoints.is_empty() {
+                    world.entity_mut(entity).insert(MoveOrder {
+                        waypoints,
+                        next: 0,
+                        goal: slot,
+                        map_revision: map.revision(),
+                        last_failed_replan: None,
+                    });
+                }
+                slot
+            })
+        })
+}
+
 /// Immediate-perimeter candidate generator for gather/build/drop-off tasking.
 /// Returns at most `count` walkable, unreserved cells from the target
 /// footprint's immediate perimeter and never scans a wider ring. Move keeps

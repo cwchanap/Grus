@@ -8,12 +8,13 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
-    AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind, CommandResult,
-    Footprint, GridMap, GridPos, IdAllocator, MapFixture, PlayerCommand, ProductionJob,
-    ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId, ResourceIndex,
-    ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit, UnitCommand,
-    UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, apply_player_command, population_cap,
-    population_used, seed_skirmish, spawn_unit, step_construction, step_economy, step_movement,
+    AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
+    CommandResult, Footprint, GridMap, GridPos, IdAllocator, LastRouteReject, MapFixture,
+    MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint,
+    RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
+    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
+    WorkerTask, apply_player_command, gather_rate_for_age, population_cap, population_used,
+    produces, seed_skirmish, spawn_unit, step_construction, step_economy, step_movement,
     step_production, validate_placement,
 };
 
@@ -266,7 +267,7 @@ impl GrusBridgeNode {
         .unwrap_or_else(|| GString::from("Bridge unavailable"))
     }
 
-    /// Typed code of the latest rejection, `0` when nothing was rejected.
+    /// Typed code of the latest rejection, `-1` when nothing was rejected.
     /// Discriminant order follows `RejectReason` declaration order.
     #[func]
     fn last_reject_code(&self) -> i32 {
@@ -275,14 +276,15 @@ impl GrusBridgeNode {
                 .get_resource::<CommandFeedback>()
                 .and_then(|feedback| feedback.last_reject_code)
                 .map(|reason| reason as i32)
-                .unwrap_or(0)
+                .unwrap_or(-1)
         })
-        .unwrap_or(0)
+        .unwrap_or(-1)
     }
 
-    /// Team 1 economy state: stockpile, age, population, idle villagers, and
-    /// the latest rejection code. `age` is 1 or 2; `last_reject_code` follows
-    /// `RejectReason` discriminant order (0 = none).
+    /// Team 1 economy state: stockpile, age, population, idle villagers, the
+    /// current gather rate, and the latest rejection code. `age` is 1 or 2;
+    /// `last_reject_code` follows `RejectReason` discriminant order (-1 =
+    /// none); `gather_rate` is the team's current resources/second.
     #[func]
     fn economy_snapshot(&self) -> VarDictionary {
         with_app(|app| {
@@ -315,6 +317,12 @@ impl GrusBridgeNode {
                 "population_cap",
                 i64::from(population_cap(world, TeamId(1))),
             );
+            dict.set(
+                "gather_rate",
+                f64::from(gather_rate_for_age(
+                    state.map(|state| state.age).unwrap_or(Age::Age1),
+                )),
+            );
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
             dict.set("idle_worker_ids", PackedInt32Array::from_iter(idle));
@@ -324,7 +332,7 @@ impl GrusBridgeNode {
                     .get_resource::<CommandFeedback>()
                     .and_then(|feedback| feedback.last_reject_code)
                     .map(|reason| reason as i32)
-                    .unwrap_or(0),
+                    .unwrap_or(-1),
             );
             dict
         })
@@ -415,7 +423,7 @@ impl GrusBridgeNode {
 
     /// Read-only placement validation through the authoritative
     /// `validate_placement`; mutates nothing. Reports the spec footprint plus
-    /// validity and reject code (0 = valid).
+    /// validity and reject code (-1 = valid).
     #[func]
     fn placement_preview(
         &self,
@@ -456,7 +464,7 @@ impl GrusBridgeNode {
             match outcome {
                 Ok(()) => {
                     dict.set("valid", true);
-                    dict.set("reject_code", 0_i32);
+                    dict.set("reject_code", -1_i32);
                 }
                 Err(reason) => {
                     dict.set("valid", false);
@@ -466,6 +474,55 @@ impl GrusBridgeNode {
             dict
         })
         .unwrap_or_default()
+    }
+
+    /// Catalogue action data computed from the Rust catalogue, so GDScript
+    /// never hardcodes gameplay costs or unlocks. Keys:
+    /// - "units": {kind -> {food, wood, gold, seconds, producer, age}} —
+    ///   train cost, train seconds, the producing building kind name, and the
+    ///   required age (1|2).
+    /// - "buildings": {kind -> {food, wood, gold, seconds, width, height,
+    ///   age, population}} — build cost, build seconds, footprint, required
+    ///   age, and population capacity contribution.
+    /// - "age_up": {food, wood, gold, seconds} for the one-time Age 2 job.
+    #[func]
+    fn catalogue_snapshot(&self) -> VarDictionary {
+        let mut units = VarDictionary::new();
+        for kind in UnitKind::ALL {
+            let spec = unit_spec(kind);
+            let mut entry = VarDictionary::new();
+            entry.set("food", i64::from(spec.cost.food));
+            entry.set("wood", i64::from(spec.cost.wood));
+            entry.set("gold", i64::from(spec.cost.gold));
+            entry.set("seconds", i64::from(spec.train_seconds));
+            entry.set("producer", producer_kind_name(kind));
+            entry.set("age", age_number(spec.required_age));
+            units.set(kind_name(kind), entry.to_variant());
+        }
+        let mut buildings = VarDictionary::new();
+        for kind in BuildingKind::ALL {
+            let spec = building_spec(kind);
+            let mut entry = VarDictionary::new();
+            entry.set("food", i64::from(spec.cost.food));
+            entry.set("wood", i64::from(spec.cost.wood));
+            entry.set("gold", i64::from(spec.cost.gold));
+            entry.set("seconds", i64::from(spec.build_seconds));
+            entry.set("width", i64::from(spec.width));
+            entry.set("height", i64::from(spec.height));
+            entry.set("age", age_number(spec.required_age));
+            entry.set("population", i64::from(spec.population_capacity));
+            buildings.set(kind_name(kind), entry.to_variant());
+        }
+        let mut age_up = VarDictionary::new();
+        age_up.set("food", i64::from(AGE_TWO_COST.food));
+        age_up.set("wood", i64::from(AGE_TWO_COST.wood));
+        age_up.set("gold", i64::from(AGE_TWO_COST.gold));
+        age_up.set("seconds", i64::from(AGE_TWO_SECONDS));
+        let mut catalogue = VarDictionary::new();
+        catalogue.set("units", units.to_variant());
+        catalogue.set("buildings", buildings.to_variant());
+        catalogue.set("age_up", age_up.to_variant());
+        catalogue
     }
 }
 
@@ -477,6 +534,7 @@ fn build_app(app: &mut App) {
         .insert_resource(Time::<Fixed>::from_seconds(f64::from(SIM_STEP_SECONDS)))
         .init_resource::<PendingCommands>()
         .init_resource::<CommandFeedback>()
+        .init_resource::<LastRouteReject>()
         .add_systems(Startup, setup_fixture)
         .add_systems(
             Update,
@@ -495,6 +553,7 @@ fn build_app(app: &mut App) {
                 advance_economy,
                 advance_construction,
                 advance_production,
+                drain_route_reject_feedback,
             )
                 .chain(),
         );
@@ -535,6 +594,29 @@ fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
 
 fn debug_variant(value: impl std::fmt::Debug) -> Variant {
     GString::from(format!("{value:?}").as_str()).to_variant()
+}
+
+fn kind_name(value: impl std::fmt::Debug) -> GString {
+    GString::from(format!("{value:?}").as_str())
+}
+
+fn age_number(age: Age) -> i64 {
+    match age {
+        Age::Age1 => 1,
+        Age::Age2 => 2,
+    }
+}
+
+/// The building kind that trains the given unit, per the fixed producer
+/// compatibility table (Town Center trains villagers, Barracks spearmen,
+/// Archery Range archers, Stable cavalry).
+fn producer_kind_name(kind: UnitKind) -> GString {
+    for building in BuildingKind::ALL {
+        if produces(building, ProductionKind::Unit(kind)) {
+            return kind_name(building);
+        }
+    }
+    GString::from("")
 }
 
 fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
@@ -773,6 +855,9 @@ fn clear_gameplay_world(world: &mut World) {
         feedback.text = "Ready".to_string();
         feedback.last_reject_code = None;
     }
+    if let Some(mut route_reject) = world.get_resource_mut::<LastRouteReject>() {
+        route_reject.0 = None;
+    }
 }
 
 fn idle_worker_ids(world: &World, team: TeamId) -> Vec<i32> {
@@ -787,6 +872,11 @@ fn idle_worker_ids(world: &World, team: TeamId) -> Vec<i32> {
                         return None;
                     }
                     if world.get::<WorkerTask>(*entity) != Some(&WorkerTask::Idle) {
+                        return None;
+                    }
+                    // A villager with a route (e.g. just rallied or moved) is
+                    // traveling, not idle.
+                    if world.get::<MoveOrder>(*entity).is_some() {
                         return None;
                     }
                     i32::try_from(id.0).ok()
@@ -828,6 +918,12 @@ fn apply_pending_commands(world: &mut World) {
 }
 
 fn format_command_result(result: &CommandResult) -> String {
+    // Single-command rejections (Place/Enqueue/SetRally/Gather-global) name
+    // the typed reject code; without this they would read as accepted.
+    if let Some(reason) = result.reject {
+        return format!("Command rejected ({reason:?})");
+    }
+
     let unreachable = result
         .rejected_units
         .iter()
@@ -884,6 +980,22 @@ fn advance_production(world: &mut World) {
     });
 }
 
+/// Drains the sim's latest worker route-failure reject into the existing
+/// feedback channel, so mid-step idles surface as typed codes with a
+/// revision bump instead of disappearing silently.
+fn drain_route_reject_feedback(world: &mut World) {
+    let reason = world
+        .get_resource_mut::<LastRouteReject>()
+        .and_then(|mut slot| slot.0.take());
+    let Some(reason) = reason else {
+        return;
+    };
+    let mut feedback = world.resource_mut::<CommandFeedback>();
+    feedback.revision = feedback.revision.wrapping_add(1);
+    feedback.text = format!("Worker route impossible ({reason:?})");
+    feedback.last_reject_code = Some(reason);
+}
+
 fn job_seconds(job: &ProductionJob) -> f32 {
     match job.kind {
         ProductionKind::Unit(kind) => unit_spec(kind).train_seconds as f32,
@@ -909,5 +1021,74 @@ fn sync_interpolated_unit_transforms(
             transform.translation.x = rendered.x;
             transform.translation.z = rendered.y;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::prelude::World;
+    use grus_sim::GatherProgress;
+    use grus_sim::map::{GridMap, GridPos};
+
+    use super::*;
+
+    #[test]
+    fn idle_workers_exclude_units_with_move_orders() {
+        let mut world = World::new();
+        let map = GridMap::new(16, 16);
+        let idle = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        world
+            .entity_mut(idle)
+            .insert((WorkerTask::Idle, GatherProgress::default()));
+        let moving = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(2.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        world.entity_mut(moving).insert((
+            WorkerTask::Idle,
+            GatherProgress::default(),
+            MoveOrder {
+                waypoints: vec![map.cell_center(GridPos::new(8, 8))],
+                next: 0,
+                goal: GridPos::new(8, 8),
+                map_revision: map.revision(),
+                last_failed_replan: None,
+            },
+        ));
+        let gathering = spawn_unit(
+            &mut world,
+            UnitId(3),
+            TeamId(1),
+            Vec2::new(3.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        world.entity_mut(gathering).insert((
+            WorkerTask::Gathering {
+                source: ResourceId(1),
+            },
+            GatherProgress::default(),
+        ));
+        spawn_unit(
+            &mut world,
+            UnitId(4),
+            TeamId(1),
+            Vec2::new(4.5, 1.5),
+            UnitKind::Spearman,
+            6.0,
+        );
+
+        assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![1]);
     }
 }
