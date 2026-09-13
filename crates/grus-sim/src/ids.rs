@@ -47,7 +47,7 @@ impl IdAllocator {
 /// Skips a zero counter, returns the current value, and advances past it.
 fn next_non_zero(counter: &mut u32) -> u32 {
     let id = if *counter == 0 { 1 } else { *counter };
-    *counter = id + 1;
+    *counter = id.checked_add(1).expect("ID space exhausted");
     id
 }
 
@@ -66,5 +66,21 @@ mod tests {
         assert_eq!(allocator.next_building, 4);
         assert_eq!(allocator.allocate_resource(), ResourceId(1));
         assert_eq!(allocator.next_resource, 2);
+    }
+
+    #[test]
+    fn allocator_hands_out_last_id_before_exhaustion() {
+        let mut allocator = IdAllocator::new(u32::MAX - 1, u32::MAX - 1, u32::MAX - 1);
+
+        assert_eq!(allocator.allocate_unit(), UnitId(u32::MAX - 1));
+        assert_eq!(allocator.next_unit, u32::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "ID space exhausted")]
+    fn allocator_fails_at_u32_max_instead_of_wrapping() {
+        let mut allocator = IdAllocator::new(u32::MAX, u32::MAX, u32::MAX);
+
+        allocator.allocate_unit();
     }
 }

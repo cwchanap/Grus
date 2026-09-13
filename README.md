@@ -47,7 +47,7 @@ On a clean clone the GDExtension is not registered until the editor has scanned 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p grus-sim
+cargo test --workspace
 
 godot --headless --path godot --editor --quit-after 120
 godot --headless --path godot res://scenes/smoke_test.tscn

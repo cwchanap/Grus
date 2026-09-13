@@ -289,7 +289,11 @@ pub(crate) fn apply_set_rally(
         }
     };
     match world.get::<Building>(building_entity) {
-        Some(state) if state.team == issuer => {}
+        Some(state) if state.team == issuer && is_producer(state.kind) => {}
+        Some(state) if state.team == issuer => {
+            result.reject = Some(RejectReason::WrongProducer);
+            return result;
+        }
         _ => {
             result.reject = Some(RejectReason::NotOwned);
             return result;
@@ -1299,6 +1303,14 @@ mod tests {
             GridPos::new(50, 50),
             ENEMY,
         );
+        let house = complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(102),
+            BuildingKind::House,
+            GridPos::new(10, 50),
+            TEAM,
+        );
 
         let result = apply_player_command(
             &mut world,
@@ -1322,6 +1334,19 @@ mod tests {
         );
         assert_eq!(result.reject, Some(RejectReason::NotOwned));
         assert_eq!(world.get::<RallyPoint>(enemy), None);
+
+        // An owned non-producer rejects without storing a rally point.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::SetRally {
+                issuer: TEAM,
+                building: BuildingId(102),
+                target: GridPos::new(10, 10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::WrongProducer));
+        assert_eq!(world.get::<RallyPoint>(house), None);
     }
 
     #[test]

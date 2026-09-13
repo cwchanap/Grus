@@ -173,6 +173,7 @@ func _handle_key(event: InputEventKey) -> void:
 	selected_ids.clear()
 	for id in _control_groups[group]:
 		selected_ids.append(int(id))
+	selected_building_id = -1
 	_apply_selection()
 
 func _pan_camera(relative: Vector2) -> void:
