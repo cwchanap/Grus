@@ -12,6 +12,21 @@ Occupancy changes use one shared `GridMap::set_blocked` seam. The map revision c
 
 The first recorded desktop target is **Linux x86_64** with **Godot 4.6.2** and the repository-pinned **Rust 1.89.0** toolchain.
 
+## HPA-471 economy skirmish
+
+The runtime fixture is now the authored skirmish seed: 8 villagers (4 per team), 2 completed Town Centers, 18 finite resource sources (berries/trees/gold, plus southwest/northeast expansion nodes), and starting stockpiles of 200 Food / 300 Wood / 100 Gold at Age 1.
+
+### Economy architecture
+
+Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-sim/src/catalog.rs`) is the single source of costs, build/train seconds, footprints, unlocks, population values, speeds, and gather rates. Gameplay lives in four modules:
+
+- **commands** — player command application, ownership validation, `RejectReason` codes, unit spawning
+- **economy** — worker tasks, gather/carry/deposit, resource sources, drop-off routing
+- **buildings** — placement validation, construction, completion grants (Dropoff, queues, Farm sources)
+- **production** — FIFO queues, population caps, spawn clearance, rally points, one-time Age 2
+
+Systems tick in a fixed order (movement → economy → construction → production) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+
 ### Build and launch
 
 Install Godot 4.6.2 with export templates, then from the repository root:
@@ -19,9 +34,13 @@ Install Godot 4.6.2 with export templates, then from the repository root:
 ```bash
 cargo build -p grus-godot
 mkdir -p godot/bin
+# Linux/CI loads the .so, macOS loads the dylib — copy the one for your platform:
 cp target/debug/libgrus_godot.so godot/bin/libgrus_godot.so
+cp target/debug/libgrus_godot.dylib godot/bin/libgrus_godot.dylib  # macOS
 godot --path godot
 ```
+
+On a clean clone the GDExtension is not registered until the editor has scanned the project once (`godot --headless --path godot --editor --quit-after 120`), which writes `godot/.godot/extension_list.cfg`. The library in `godot/bin/` must be re-copied after every rebuild — a stale binary fails at startup (for example a false duplicate-`UnitId` panic) rather than silently.
 
 ### Verification
 
@@ -33,27 +52,33 @@ cargo test -p grus-sim
 godot --headless --path godot --editor --quit-after 120
 godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
+godot --headless --path godot res://scenes/economy_smoke_test.tscn
 ```
 
-On a clean clone the GDExtension is not registered until the editor has scanned the project once, so the `--editor` step above must run before the headless scene smokes — otherwise `BevyApp`/`GrusBridgeNode` resolve to placeholders and the smokes fail with `expected 200 ECS-backed unit views, found 0`. The scan writes `godot/.godot/extension_list.cfg`, after which the scene runs load the Rust bridge correctly.
-
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the 200-unit ECS fixture. The reset smoke despawns/reseeds the retained fixture and requires it to settle back to exactly **200 scene nodes with 200 unique stable UnitIds**.
-
-Rust tests cover ownership/live-entity checks, successful and unreachable routes, replacement orders, stop, obstacle avoidance, 100-unit traversal, occupancy mutation semantics, and active-route replanning after a new obstacle intersects the path.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout.
 
 ### Controls
 
-- Left click: select a friendly unit
+- Left click: select a friendly unit or building (units take priority within the click radius)
 - Shift + left click: add to selection
 - Left drag: box select
-- Right click: move selected units
+- Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, set a rally point when a producer is selected, otherwise move
 - `S`: stop selected units
 - `Ctrl+1` through `Ctrl+9`: assign a control group
 - `1` through `9`: recall a control group
 - Mouse wheel: zoom
 - Middle drag: pan the camera
+- Build buttons (bottom panel): arm placement for House/Storehouse/Farm/Barracks/Archery Range/Stable; the ground preview renders green when valid and red when blocked; left-click places, right-click or `Esc` cancels
+- Train buttons: queue Villager/Spearman (Barracks), Archer (Archery Range), Cavalry (Stable) on the selected building
+- Advance Age: research Age 2 on the selected Town Center (300 Food, 200 Gold); gather rates rise to 2.2/s and the Stable unlocks
+- Idle button (top right): selects and navigates to the next idle worker
 
 HUD controls consume their mouse events so UI interaction does not leak into world commands.
+
+### Reset modes
+
+- **Fixture reset** (`reset_fixture`, used by `reset_test.tscn`): despawns gameplay and reseeds the 8-unit/2-building/18-resource skirmish with starting stockpiles.
+- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the benchmark-only 200-villager fixture for the 1080p performance baseline; it is never used by the runtime skirmish or its smokes.
 
 ### Linux x86_64 export
 
@@ -66,6 +91,8 @@ godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
 CI also boots the exported executable headlessly and verifies that the Rust GDExtension initializes successfully.
 
 ## 200-unit 1080p baseline
+
+The 200-unit fixture exists only for this benchmark (`benchmark_200.tscn` after an explicit benchmark reset); the runtime game and its smokes run the skirmish fixture above.
 
 CI run **95** records the post-20-Hz/interpolation 1920x1080 baseline while **all 200 units are moving** through the retained command/path/movement systems.
 
