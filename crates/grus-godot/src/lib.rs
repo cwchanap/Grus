@@ -33,6 +33,9 @@ impl Default for CommandFeedback {
 #[derive(Component)]
 struct UnitViewInitialized;
 
+#[derive(Component)]
+struct GameplayViewRequested;
+
 #[derive(GodotClass)]
 #[class(base=Node)]
 struct GrusBridgeNode {
@@ -161,7 +164,11 @@ fn build_app(app: &mut App) {
         .add_systems(Startup, setup_fixture)
         .add_systems(
             Update,
-            (initialize_unit_views, sync_interpolated_unit_transforms),
+            (
+                attach_missing_gameplay_views,
+                initialize_unit_views,
+                sync_interpolated_unit_transforms,
+            ),
         )
         .add_systems(
             FixedUpdate,
@@ -215,7 +222,7 @@ fn setup_fixture(world: &mut World) {
     world.insert_resource(fixture.map);
 
     for spawn in spawns {
-        let entity = spawn_unit(
+        spawn_unit(
             world,
             spawn.id,
             spawn.team,
@@ -223,11 +230,21 @@ fn setup_fixture(world: &mut World) {
             UnitKind::Villager,
             12.0,
         );
-        world.entity_mut(entity).insert((
-            Transform::from_xyz(spawn.position.x, 0.0, spawn.position.y),
+    }
+}
+
+#[allow(clippy::type_complexity)]
+fn attach_missing_gameplay_views(
+    mut commands: Commands,
+    units: Query<(Entity, &SimPosition), (With<Unit>, Without<GameplayViewRequested>)>,
+) {
+    for (entity, position) in &units {
+        commands.entity(entity).insert((
+            Transform::from_xyz(position.current.x, 0.0, position.current.y),
             TransformSyncMetadata::default(),
             Node3DMarker,
             GodotScene::from_path("res://scenes/unit_view.tscn"),
+            GameplayViewRequested,
         ));
     }
 }
@@ -264,6 +281,10 @@ fn initialize_unit_views(
         };
         node.set_meta("unit_id", &i64::from(unit.id.0).to_variant());
         node.set_meta("team_id", &i64::from(unit.team.0).to_variant());
+        node.set_meta(
+            "unit_kind",
+            &GString::from(format!("{:?}", unit.kind).as_str()).to_variant(),
+        );
         commands.entity(entity).insert(UnitViewInitialized);
     }
 }
