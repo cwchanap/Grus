@@ -8,8 +8,24 @@ license.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+e2e = ["dep:bevy_e2e"]
+
 [dependencies]
 bevy.workspace = true
 godot.workspace = true
 godot-bevy.workspace = true
 grus-sim = { path = "../grus-sim" }
+bevy_e2e = {
+  git = "https://github.com/cwchanap/bevy-e2e",
+  rev = "13f5d331ade246d1248d6ce6ffdb80e65e5765d7",
+  optional = true,
+  default-features = false,
+  features = ["runtime"],
+}
+
+[dev-dependencies]
+bevy_e2e = {
+  git = "https://github.com/cwchanap/bevy-e2e",
+  rev = "13f5d331ade246d1248d6ce6ffdb80e65e5765d7",
+}
