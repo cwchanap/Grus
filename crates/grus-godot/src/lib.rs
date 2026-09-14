@@ -18,6 +18,9 @@ use grus_sim::{
     step_production, validate_placement,
 };
 
+#[cfg(feature = "e2e")]
+mod e2e;
+
 #[derive(Default, Resource)]
 struct PendingCommands(Vec<PlayerCommand>);
 
@@ -562,6 +565,8 @@ fn build_app(app: &mut App) {
         );
     #[cfg(feature = "e2e")]
     app.add_plugins(bevy_e2e::BevyE2EPlugin);
+    #[cfg(feature = "e2e")]
+    app.add_plugins(e2e::GrusE2ePlugin);
 }
 
 fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
