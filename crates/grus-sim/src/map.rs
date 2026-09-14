@@ -331,6 +331,9 @@ mod tests {
             None,
             "a blocked goal cell has no path"
         );
-        assert!(map.find_path(GridPos::new(0, 0), GridPos::new(6, 6)).is_some());
+        assert!(
+            map.find_path(GridPos::new(0, 0), GridPos::new(6, 6))
+                .is_some()
+        );
     }
 }

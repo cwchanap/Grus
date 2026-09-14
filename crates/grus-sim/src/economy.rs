@@ -1615,7 +1615,10 @@ mod tests {
         match world.get::<WorkerTask>(villager).unwrap() {
             WorkerTask::ToSource { source, slot } => {
                 assert_eq!(*source, ResourceId(1));
-                assert_ne!(*slot, old_goal, "the stale move goal is not reused as the gather slot");
+                assert_ne!(
+                    *slot, old_goal,
+                    "the stale move goal is not reused as the gather slot"
+                );
             }
             other => panic!("expected ToSource, got {other:?}"),
         }
@@ -1844,7 +1847,11 @@ mod tests {
         );
         match world.get::<WorkerTask>(full).unwrap() {
             WorkerTask::ToDropoff { source, .. } => {
-                assert_eq!(*source, ResourceId(1), "the full worker delivers what he holds")
+                assert_eq!(
+                    *source,
+                    ResourceId(1),
+                    "the full worker delivers what he holds"
+                )
             }
             other => panic!("expected ToDropoff, got {other:?}"),
         }

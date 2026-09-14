@@ -1489,7 +1489,11 @@ mod tests {
         );
         assert_eq!(stop.accepted_units, vec![UnitId(1)]);
         assert_eq!(
-            world.get::<Building>(building).unwrap().construction.active_builder,
+            world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .active_builder,
             None,
             "Stop must release the construction claim"
         );
@@ -1632,7 +1636,11 @@ mod tests {
             step_construction(&mut world, SIM_STEP_SECONDS);
         }
         assert!(
-            world.get::<Building>(building).unwrap().construction.complete,
+            world
+                .get::<Building>(building)
+                .unwrap()
+                .construction
+                .complete,
             "the actively built House should finish within 20 simulated seconds"
         );
         let result = apply_player_command(

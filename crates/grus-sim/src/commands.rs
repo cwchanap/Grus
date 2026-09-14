@@ -1044,16 +1044,15 @@ mod tests {
         let outcome = apply_player_command(
             &mut world,
             &mut map,
-            move_command(
-                TeamId(1),
-                vec![UnitId(1), UnitId(2)],
-                Vec2::new(12.5, 10.5),
-            ),
+            move_command(TeamId(1), vec![UnitId(1), UnitId(2)], Vec2::new(12.5, 10.5)),
         );
 
         assert_eq!(outcome.accepted_units, vec![UnitId(1), UnitId(2)]);
         assert!(outcome.rejected_units.is_empty());
-        let goal_a = world.get::<MoveOrder>(a).expect("the displaced unit moves").goal;
+        let goal_a = world
+            .get::<MoveOrder>(a)
+            .expect("the displaced unit moves")
+            .goal;
         assert_ne!(
             goal_a, b_cell,
             "the mover is never sent onto a cell a commanded sibling still holds"
