@@ -33,19 +33,17 @@ The workspace contains:
 - `grus-sim`: authoritative gameplay simulation/domain logic
 - `grus-godot`: Godot/GDExtension adapter plus the embedded `godot-bevy` app
 
-The Rust workspace is currently pinned to Rust 1.89.0 and Bevy 0.18.1 through `godot-bevy 0.11.0`.
+The Rust workspace is currently pinned to Rust 1.89.0, Bevy 0.18.1 through `godot-bevy 0.11.0`, and `godot` (gdext) 0.4.5.
 
-`bevy-e2e` PR #1 currently targets Bevy 0.19.1 and Rust 1.95+, with a client/runtime feature split, out-of-process process management, BRP selectors, waits, inspection, input, failure artifacts, and serialized rendered CI.
+`bevy-e2e` main targets Bevy 0.19.1 and Rust 1.95, with a client/runtime feature split, out-of-process process management, BRP selectors, waits, inspection, input, failure artifacts, and serialized rendered CI.
 
-## Key decision: do not upgrade Grus to Bevy 0.19 for this task
+## Key decision (amended 2026-09-13): upgrade Grus to Bevy 0.19 via godot-bevy 0.12
 
-Grus cannot directly add the current `bevy_e2e::BevyE2EPlugin` because the game uses Bevy 0.18.1 while `bevy-e2e` PR #1 is built against Bevy 0.19.1. Bevy plugin/component traits from two minor versions are different Rust types, so this is a compile-time boundary rather than a Cargo-version preference.
+The original draft kept Grus on Bevy 0.18 and stopped at the dependency gate because `bevy-e2e` only existed against Bevy 0.19.1. The owner has since directed the upgrade, which resolves the gate directly: `godot-bevy 0.12.0` supports the Bevy 0.19 line (gdext 0.5.5) with feature parity for `api-4-5`, `godot_bevy_log`, and `experimental-threads`, so Grus can meet `bevy-e2e` on the same Bevy minor instead of maintaining a parallel backport.
 
-Do **not** turn this CI task into a `godot-bevy`/Bevy engine migration.
+The migration (Task 0) is a pure dependency/API migration: bump `bevy`/`godot-bevy`/`godot`, fix what the Bevy 0.18 -> 0.19 migration guide requires, keep feature parity and all existing tests green. It must not smuggle in gameplay changes, refactors, or presentation rewrites.
 
-Before implementing the Grus E2E integration, prepare an exact `bevy-e2e` revision that supports the Bevy 0.18 line used by Grus while keeping the same v0.1 public model. Grus should pin that exact commit SHA rather than follow a moving branch.
-
-This is a dependency-readiness gate, not permission to broaden the Grus PR. If no compatible `bevy-e2e` revision exists, stop at the dependency gate rather than adding a duplicate Grus-specific E2E framework.
+With Grus on Bevy 0.19.1, pin `bevy-e2e` to the exact main-HEAD commit SHA `13f5d331ade246d1248d6ce6ffdb80e65e5765d7` rather than following a moving branch. This remains the dependency gate: if that pin cannot build against the upgraded workspace, stop rather than adding a duplicate Grus-specific E2E framework.
 
 ## CI target shape
 
@@ -60,6 +58,34 @@ Keep a single `.github/workflows/ci.yml`, but split it into three jobs:
 Add workflow concurrency cancellation so stale PR pushes do not continue consuming runners.
 
 The expensive Godot/Xvfb work should only start after the fast Rust gates pass.
+
+---
+
+## Task 0 — Migrate Grus to Bevy 0.19 (prerequisite, added by amendment)
+
+In the root `Cargo.toml` workspace dependencies:
+
+- `bevy` `=0.18.1` -> `=0.19.1`
+- `godot-bevy` `=0.11.0` -> `=0.12.0` (keep `api-4-5`, `godot_bevy_log`, `experimental-threads`)
+- `godot` `=0.4.5` -> `=0.5.5`
+
+Update `Cargo.lock` accordingly (commit it; CI builds with `--locked`).
+
+Fix all Bevy 0.18 -> 0.19 and gdext 0.4 -> 0.5 API breakage in `grus-sim` and `grus-godot`, consulting the upstream Bevy 0.19 migration guide. Rules:
+
+- behavior-preserving changes only; no gameplay logic, structure, or naming rewrites
+- keep `default-features = false` and the existing minimal feature set; do not enable new Bevy features unless required to compile
+- if a system schedule/registration API changed, choose the direct equivalent, not a redesigned schedule
+
+Verification:
+
+```bash
+cargo check --workspace --locked
+cargo test --workspace
+cargo build -p grus-godot --locked
+```
+
+Expected: the untouched test suite passes on Bevy 0.19 before any E2E wiring is added.
 
 ---
 
@@ -90,11 +116,11 @@ Expected: all existing Grus crates compile with Rust 1.95 before any E2E wiring 
 In `crates/grus-godot/Cargo.toml`:
 
 - add an `e2e` feature
-- add the Bevy-0.18-compatible `bevy_e2e` revision as an optional dependency
+- add `bevy_e2e` as an optional dependency pinned to `rev = "13f5d331ade246d1248d6ce6ffdb80e65e5765d7"`
 - disable default features for the game/runtime dependency
 - enable only the framework `runtime` feature in the game
 - expose the client side only to the Rust integration test
-- pin the dependency to an exact Git commit SHA
+- pin the dependency to the exact Git commit SHA
 
 Target shape:
 
@@ -105,7 +131,7 @@ e2e = ["dep:bevy_e2e"]
 [dependencies]
 bevy_e2e = {
   git = "https://github.com/cwchanap/bevy-e2e",
-  rev = "<bevy-0.18-compatible-sha>",
+  rev = "13f5d331ade246d1248d6ce6ffdb80e65e5765d7",
   optional = true,
   default-features = false,
   features = ["runtime"],
@@ -114,7 +140,7 @@ bevy_e2e = {
 [dev-dependencies]
 bevy_e2e = {
   git = "https://github.com/cwchanap/bevy-e2e",
-  rev = "<same-sha>",
+  rev = "13f5d331ade246d1248d6ce6ffdb80e65e5765d7",
 }
 ```
 
@@ -475,8 +501,7 @@ The exact YAML should reuse the current setup/cache/Godot actions rather than in
 
 Do not include the following in this PR:
 
-- Bevy 0.18 -> 0.19 Grus migration
-- `godot-bevy` upgrade
+- gameplay/behavior changes riding on the Bevy 0.19 migration (API-equivalent fixes only)
 - multi-platform E2E matrix
 - Godot input automation
 - visual regression testing
@@ -507,12 +532,13 @@ The implementation PR is complete when all of the following are true:
 
 ## Implementation order / hard gates
 
-1. **Dependency gate:** obtain a Bevy-0.18-compatible `bevy-e2e` commit. Stop if unavailable.
-2. Upgrade Rust toolchain to 1.95 and verify the untouched workspace compiles.
-3. Split CI into `rust-build-lint` and `unit-tests`; establish the coverage baseline.
-4. Raise `grus-sim` tests above 90% line coverage.
-5. Add the feature-gated E2E runtime and selectors.
-6. Add the exported-game boot/fixture E2E test.
-7. Move the existing Godot/export/benchmark path into the dependent `e2e` job.
-8. Add failure artifact upload, concurrency cancellation, and README commands.
-9. Run all three CI jobs from a clean checkout before marking the PR ready.
+1. **Toolchain gate:** Rust 1.95 baseline (Task 1) — required by Bevy 0.19/godot-bevy 0.12 and `bevy-e2e` alike.
+2. **Migration gate:** Task 0 Bevy 0.19 migration lands with the untouched test suite green.
+3. **Dependency gate:** `bevy-e2e` @ `13f5d331ade246d1248d6ce6ffdb80e65e5765d7` builds against the upgraded workspace. Stop if it cannot, rather than duplicating the framework.
+4. Split CI into `rust-build-lint` and `unit-tests`; establish the coverage baseline.
+5. Raise `grus-sim` tests above 90% line coverage.
+6. Add the feature-gated E2E runtime and selectors.
+7. Add the exported-game boot/fixture E2E test.
+8. Move the existing Godot/export/benchmark path into the dependent `e2e` job.
+9. Add failure artifact upload, concurrency cancellation, and README commands.
+10. Run all three CI jobs from a clean checkout before marking the PR ready.
