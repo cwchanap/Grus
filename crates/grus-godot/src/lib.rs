@@ -229,7 +229,9 @@ impl GrusBridgeNode {
         true
     }
 
-    /// Virtual-time multiplier for headless gate runs. Never touches `max_delta`.
+    /// Sim-speed multiplier for headless gate runs. Scales Godot's
+    /// `Engine.time_scale` (the 0.12 fixed-loop tick-rate authority) and
+    /// `Time<Virtual>`; never touches `max_delta`.
     #[func]
     fn set_sim_speed(&self, relative_speed: f64) -> bool {
         if !relative_speed.is_finite() || relative_speed <= 0.0 {
@@ -242,6 +244,12 @@ impl GrusBridgeNode {
         let Some(app) = app_node.get_app_mut() else {
             return false;
         };
+        // godot-bevy 0.12's `godot_fixed_driver` takes its tick delta from
+        // `_physics_process`, scaled by `Engine.time_scale`, and ignores
+        // `Time<Virtual>`'s relative speed — so the engine-wide knob is the
+        // tick-rate authority. The virtual-speed write stays to keep
+        // Bevy-side render clocks consistent.
+        Engine::singleton().set_time_scale(relative_speed);
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .set_relative_speed_f64(relative_speed);
@@ -1023,24 +1031,28 @@ fn format_command_result(result: &CommandResult) -> String {
 }
 
 fn advance_movement(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, map: Mut<GridMap>| {
-        step_movement(world, &map, SIM_STEP_SECONDS);
+        step_movement(world, &map, seconds);
     });
 }
 
 fn advance_economy(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_economy(world, &mut map, SIM_STEP_SECONDS);
+        step_economy(world, &mut map, seconds);
     });
 }
 
 fn advance_construction(world: &mut World) {
-    step_construction(world, SIM_STEP_SECONDS);
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    step_construction(world, seconds);
 }
 
 fn advance_production(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_production(world, &mut map, SIM_STEP_SECONDS);
+        step_production(world, &mut map, seconds);
     });
 }
 
