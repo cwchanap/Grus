@@ -1457,4 +1457,193 @@ mod tests {
         assert!(world.get::<MoveOrder>(villager).is_none());
         assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
     }
+
+    #[test]
+    fn abandoned_site_never_progresses_without_a_builder() {
+        let (mut world, mut map, _villager) = setup_build_test();
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert!(result.reject.is_none(), "placement rejected: {result:?}");
+        let building = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("allocated building registered");
+
+        // Stop cancels the builder's task before he ever reaches the site.
+        let stop = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(1)],
+                kind: UnitCommandKind::Stop,
+            }),
+        );
+        assert_eq!(stop.accepted_units, vec![UnitId(1)]);
+        assert_eq!(
+            world.get::<Building>(building).unwrap().construction.active_builder,
+            None,
+            "Stop must release the construction claim"
+        );
+        let progress_before = world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .progress_seconds;
+
+        for _ in 0..400 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+
+        let state = &world.get::<Building>(building).unwrap().construction;
+        assert!(!state.complete, "an abandoned site must never complete");
+        assert_eq!(
+            state.progress_seconds, progress_before,
+            "a site with no active builder must not advance"
+        );
+    }
+
+    #[test]
+    fn placement_ignores_the_builders_own_move_goal() {
+        let (mut world, mut map, villager) = setup_build_test();
+        let anchor = GridPos::new(13, 10);
+        // The villager is en route to a cell the new House will cover; his own
+        // goal is exempt from the occupancy check because acceptance cancels it.
+        world.entity_mut(villager).insert(MoveOrder {
+            waypoints: vec![map.cell_center(anchor)],
+            next: 0,
+            goal: anchor,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor,
+            },
+        );
+
+        assert!(
+            result.reject.is_none(),
+            "the builder's own goal must not reject his placement: {result:?}"
+        );
+        assert!(
+            matches!(
+                world.get::<WorkerTask>(villager),
+                Some(WorkerTask::ToConstruction { .. })
+            ),
+            "an accepted placement retasks the builder to the site"
+        );
+        let order = world.get::<MoveOrder>(villager).expect("route to the site");
+        assert_ne!(
+            order.goal, anchor,
+            "the cancelled route is replaced by the approach route"
+        );
+    }
+
+    #[test]
+    fn resume_construction_reject_codes_are_deterministic() {
+        let (mut world, mut map, villager, building) = setup_active_builder();
+
+        // A non-villager worker cannot resume.
+        spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(8.5, 8.5),
+            UnitKind::Spearman,
+            6.0,
+        );
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(2),
+                building: BuildingId(10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::NotVillager));
+
+        // A building owned by another team cannot be resumed.
+        let enemy_site = world
+            .spawn((
+                Building {
+                    id: BuildingId(11),
+                    team: TeamId(2),
+                    kind: BuildingKind::House,
+                    construction: ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: false,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(20, 20), 2, 2),
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(11), enemy_site);
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                building: BuildingId(11),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::NotOwned));
+
+        // An unknown building id rejects without touching the builder.
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                building: BuildingId(999),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::BuildingMissing));
+        assert!(
+            matches!(
+                world.get::<WorkerTask>(villager),
+                Some(WorkerTask::Constructing { .. })
+            ),
+            "every rejection leaves the active builder untouched"
+        );
+
+        // Once the site completes, resuming it is locked.
+        for _ in 0..400 {
+            step_construction(&mut world, SIM_STEP_SECONDS);
+        }
+        assert!(
+            world.get::<Building>(building).unwrap().construction.complete,
+            "the actively built House should finish within 20 simulated seconds"
+        );
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                building: BuildingId(10),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::Locked));
+    }
 }

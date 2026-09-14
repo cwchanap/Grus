@@ -940,4 +940,127 @@ mod tests {
         );
         assert!(slots.iter().all(|slot| !footprint.cells().contains(slot)));
     }
+
+    #[test]
+    fn stop_rejects_foreign_units_and_preserves_their_orders() {
+        let mut world = World::new();
+        let mut map = open_map();
+        let enemy = spawn_unit(
+            &mut world,
+            UnitId(9),
+            TeamId(2),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        world
+            .entity_mut(enemy)
+            .insert(test_order(&map, Vec2::new(3.5, 2.5)));
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            stop_command(TeamId(1), vec![UnitId(9)]),
+        );
+
+        assert_eq!(outcome.accepted_units, Vec::<UnitId>::new());
+        assert_eq!(
+            outcome.rejected_units,
+            vec![(UnitId(9), RejectReason::NotOwned)]
+        );
+        assert!(
+            world.get::<MoveOrder>(enemy).is_some(),
+            "a rejected Stop must not cancel the unit's activity"
+        );
+    }
+
+    #[test]
+    fn move_never_assigns_a_non_commanded_units_existing_goal() {
+        let mut world = World::new();
+        let mut map = open_map();
+        let mover = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(1.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        let other = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(4.5, 1.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        let claimed = GridPos::new(12, 12);
+        world
+            .entity_mut(other)
+            .insert(test_order(&map, map.cell_center(claimed)));
+        let claimed_center = map.cell_center(claimed);
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            move_command(TeamId(1), vec![UnitId(1)], claimed_center),
+        );
+
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+        let order = world.get::<MoveOrder>(mover).expect("replacement order");
+        assert_ne!(
+            order.goal, claimed,
+            "the mover must not be sent onto a goal a non-commanded unit already claims"
+        );
+        assert_eq!(
+            world.get::<MoveOrder>(other).unwrap().goal,
+            claimed,
+            "the uncommanded unit keeps its own route"
+        );
+    }
+
+    #[test]
+    fn group_move_never_targets_a_cell_another_commanded_unit_stands_on() {
+        let mut world = World::new();
+        let mut map = open_map();
+        let a = spawn_unit(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(10.5, 10.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        let b = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(12.5, 10.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        let b_cell = GridPos::new(12, 10);
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            move_command(
+                TeamId(1),
+                vec![UnitId(1), UnitId(2)],
+                Vec2::new(12.5, 10.5),
+            ),
+        );
+
+        assert_eq!(outcome.accepted_units, vec![UnitId(1), UnitId(2)]);
+        assert!(outcome.rejected_units.is_empty());
+        let goal_a = world.get::<MoveOrder>(a).expect("the displaced unit moves").goal;
+        assert_ne!(
+            goal_a, b_cell,
+            "the mover is never sent onto a cell a commanded sibling still holds"
+        );
+        assert!(
+            world.get::<MoveOrder>(b).is_none(),
+            "the unit already standing on the target keeps its place"
+        );
+    }
 }
