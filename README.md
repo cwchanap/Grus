@@ -90,6 +90,40 @@ godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
 
 CI also boots the exported executable headlessly and verifies that the Rust GDExtension initializes successfully.
 
+## Testing / CI
+
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import/smoke/export validations, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+
+Rust build/lint:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo build --workspace --locked
+```
+
+Unit coverage:
+
+```bash
+cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90
+cargo test -p grus-godot --lib
+```
+
+E2E:
+
+```bash
+cargo build -p grus-godot --features e2e
+# stage extension and export Godot build as CI does
+GRUS_E2E_BINARY=<path-to-exported-grus> \
+  xvfb-run -a cargo test \
+  -p grus-godot \
+  --features e2e \
+  --test e2e_boot \
+  -- --test-threads=1
+```
+
+`GRUS_E2E_BINARY` must point at the exported Grus executable (stage the extension, then `godot --headless --path godot --export-debug "Linux x86_64"` as in the export section above); without it the e2e test skips loudly instead of running.
+
 ## 200-unit 1080p baseline
 
 The 200-unit fixture exists only for this benchmark (`benchmark_200.tscn` after an explicit benchmark reset); the runtime game and its smokes run the skirmish fixture above.
