@@ -452,7 +452,9 @@ fn nearest_reachable_dropoff(
                 .collect()
         })
         .unwrap_or_default();
-    dropoffs.sort_by(|a, b| a.2.total_cmp(&b.2));
+    // BuildingIndex iterates in arbitrary HashMap order; distance ties must
+    // still resolve deterministically, so the lower BuildingId wins them.
+    dropoffs.sort_by(|a, b| a.2.total_cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
 
     let keys: HashSet<GridPos> = used.keys().copied().collect();
     let mut any_free_slot = false;
@@ -1463,6 +1465,63 @@ mod tests {
         assert!(
             Footprint::new(GridPos::new(13, 44), 2, 2).is_immediately_adjacent(slot),
             "assigned slot {slot:?} is on the Storehouse perimeter"
+        );
+    }
+
+    /// Exact distance ties break on `BuildingId`, never on `BuildingIndex`'s
+    /// arbitrary `HashMap` iteration order. Worker at (10.5, 10.5): the left
+    /// Storehouse's geometric center (9, 10) and the right one's (12, 10) are
+    /// both exactly 2.5 units² away, so the lower id must win every run. The
+    /// higher id is inserted first so insertion order alone cannot explain
+    /// the outcome.
+    #[test]
+    fn nearest_dropoff_breaks_distance_ties_on_building_id() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 64);
+        test_economy(&mut world);
+
+        for (id, anchor) in [
+            (BuildingId(2), GridPos::new(8, 9)),
+            (BuildingId(1), GridPos::new(11, 9)),
+        ] {
+            let storehouse = world
+                .spawn((
+                    Building {
+                        id,
+                        team: TeamId(1),
+                        kind: crate::catalog::BuildingKind::Storehouse,
+                        construction: crate::buildings::ConstructionState {
+                            progress_seconds: 0.0,
+                            complete: true,
+                            active_builder: None,
+                        },
+                    },
+                    Footprint::new(anchor, 2, 2),
+                    Dropoff { team: TeamId(1) },
+                ))
+                .id();
+            world
+                .get_resource_or_insert_with(BuildingIndex::default)
+                .insert(id, storehouse);
+            for cell in Footprint::new(anchor, 2, 2).cells() {
+                map.set_blocked(cell, true);
+            }
+        }
+
+        let worker = spawn_villager(&mut world, UnitId(1), Vec2::new(10.5, 10.5));
+        let used = seed_used_excluding(&world, &map, worker);
+
+        let (dropoff, slot, _) = nearest_reachable_dropoff(&world, &map, worker, &used)
+            .expect("a reachable drop-off exists");
+
+        assert_eq!(
+            dropoff,
+            BuildingId(1),
+            "the lower BuildingId must win an exact distance tie"
+        );
+        assert!(
+            Footprint::new(GridPos::new(11, 9), 2, 2).is_immediately_adjacent(slot),
+            "assigned slot {slot:?} is on the winning Storehouse perimeter"
         );
     }
 }
