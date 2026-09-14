@@ -702,11 +702,10 @@ fn attach_missing_gameplay_views(
     map: Res<GridMap>,
 ) {
     for (entity, position) in &units {
-        attach_view(
+        attach_unit_view(
             &mut commands,
             entity,
             Transform::from_xyz(position.current.x, 0.0, position.current.y),
-            "res://scenes/unit_view.tscn",
         );
     }
     for (entity, footprint) in &farm_buildings {
@@ -759,6 +758,21 @@ fn attach_view(commands: &mut Commands, entity: Entity, transform: Transform, pa
         TransformSyncMetadata::default(),
         Node3DMarker,
         GodotScene::from_path(path),
+        GameplayViewRequested,
+    ));
+}
+
+/// Unit views opt out of godot-bevy's stock transform sync (no
+/// `TransformSyncMetadata`/`Node3DMarker`): under 0.12 the stock path copies
+/// Bevy→Godot only once per physics tick in FixedLast, which would fight the
+/// per-render-frame interpolated writes in `sync_interpolated_unit_transforms`.
+/// Grus is the single writer for unit view transforms. `Transform` stays —
+/// `GodotScene` instantiation reads it for initial placement. Buildings and
+/// resources are static and keep the stock sync path via `attach_view`.
+fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transform) {
+    commands.entity(entity).insert((
+        transform,
+        GodotScene::from_path("res://scenes/unit_view.tscn"),
         GameplayViewRequested,
     ));
 }
@@ -1060,17 +1074,30 @@ fn queue_head_label(job: &ProductionJob) -> String {
     }
 }
 
+/// godot-bevy 0.12 pins `Time<Fixed>::overstep_fraction()` to 0 (Godot owns the
+/// fixed-step accumulator) and copies Bevy→Godot transforms only once per tick,
+/// so the stock path renders unit views one tick stale and unsmoothed. Restore
+/// the 0.11 contract: every Update, write the interpolated transform directly
+/// to each unit view's Node3D, using Godot's own between-ticks fraction.
 fn sync_interpolated_unit_transforms(
-    fixed_time: Res<Time<Fixed>>,
-    mut units: Query<(&SimPosition, &mut Transform), With<Unit>>,
+    mut units: Query<(&SimPosition, &mut Transform, &GodotNodeHandle), With<Unit>>,
+    mut godot: GodotAccess,
 ) {
-    let alpha = fixed_time.overstep_fraction();
-    for (position, mut transform) in &mut units {
+    let alpha = Engine::singleton().get_physics_interpolation_fraction() as f32;
+    for (position, mut transform, handle) in &mut units {
         let rendered = position.previous.lerp(position.current, alpha);
         if transform.translation.x != rendered.x || transform.translation.z != rendered.y {
             transform.translation.x = rendered.x;
             transform.translation.z = rendered.y;
         }
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        let mut node_transform = node.get_transform();
+        node_transform.origin.x = rendered.x;
+        node_transform.origin.y = 0.0;
+        node_transform.origin.z = rendered.y;
+        node.set_transform(node_transform);
     }
 }
 
