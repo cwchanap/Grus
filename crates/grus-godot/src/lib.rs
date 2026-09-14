@@ -560,6 +560,8 @@ fn build_app(app: &mut App) {
             )
                 .chain(),
         );
+    #[cfg(feature = "e2e")]
+    app.add_plugins(bevy_e2e::BevyE2EPlugin);
 }
 
 fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
