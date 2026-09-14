@@ -301,4 +301,36 @@ mod tests {
         assert!(!footprint.is_immediately_adjacent(GridPos::new(1, 1)));
         assert!(!footprint.is_immediately_adjacent(GridPos::new(3, 3)));
     }
+
+    #[test]
+    fn set_blocked_out_of_bounds_returns_false_and_keeps_the_revision() {
+        let mut map = GridMap::new(8, 8);
+        let revision = map.revision();
+
+        assert!(!map.set_blocked(GridPos::new(-1, 4), true));
+        assert!(!map.set_blocked(GridPos::new(8, 4), false));
+        assert_eq!(
+            map.revision(),
+            revision,
+            "a rejected write must not bump the revision"
+        );
+    }
+
+    #[test]
+    fn find_path_rejects_unwalkable_endpoints() {
+        let mut map = GridMap::new(8, 8);
+        map.set_blocked(GridPos::new(2, 2), true);
+
+        assert_eq!(
+            map.find_path(GridPos::new(2, 2), GridPos::new(6, 6)),
+            None,
+            "a blocked start cell has no path"
+        );
+        assert_eq!(
+            map.find_path(GridPos::new(0, 0), GridPos::new(2, 2)),
+            None,
+            "a blocked goal cell has no path"
+        );
+        assert!(map.find_path(GridPos::new(0, 0), GridPos::new(6, 6)).is_some());
+    }
 }

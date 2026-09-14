@@ -1524,4 +1524,339 @@ mod tests {
             "assigned slot {slot:?} is on the winning Storehouse perimeter"
         );
     }
+
+    #[test]
+    fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 24);
+        test_economy(&mut world);
+        world.insert_resource(IdAllocator::new(10, 1, 2));
+        let villager = spawn_villager(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
+        spawn_unit(
+            &mut world,
+            UnitId(8),
+            TeamId(1),
+            Vec2::new(10.5, 8.5),
+            UnitKind::Spearman,
+            6.0,
+        );
+        spawn_unit(
+            &mut world,
+            UnitId(9),
+            TeamId(2),
+            Vec2::new(2.5, 2.5),
+            UnitKind::Villager,
+            6.0,
+        );
+        spawn_resource_source(
+            &mut world,
+            &mut map,
+            ResourceId(1),
+            ResourceKind::Wood,
+            GridPos::new(12, 12),
+            400,
+        );
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            gather_command(
+                TeamId(1),
+                vec![UnitId(9), UnitId(8), UnitId(1)],
+                ResourceId(1),
+            ),
+        );
+
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+        assert_eq!(
+            outcome.rejected_units,
+            vec![
+                (UnitId(8), RejectReason::NotVillager),
+                (UnitId(9), RejectReason::NotOwned),
+            ]
+        );
+        match world.get::<WorkerTask>(villager).unwrap() {
+            WorkerTask::ToSource { source, .. } => assert_eq!(*source, ResourceId(1)),
+            other => panic!("expected ToSource, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gather_replaces_an_active_move_order_and_frees_its_goal() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 24);
+        test_economy(&mut world);
+        world.insert_resource(IdAllocator::new(10, 1, 2));
+        let villager = spawn_villager(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
+        let old_goal = GridPos::new(18, 6);
+        world.entity_mut(villager).insert(MoveOrder {
+            waypoints: vec![map.cell_center(old_goal)],
+            next: 0,
+            goal: old_goal,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+        spawn_resource_source(
+            &mut world,
+            &mut map,
+            ResourceId(1),
+            ResourceKind::Wood,
+            GridPos::new(12, 12),
+            400,
+        );
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            gather_command(TeamId(1), vec![UnitId(1)], ResourceId(1)),
+        );
+
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+        match world.get::<WorkerTask>(villager).unwrap() {
+            WorkerTask::ToSource { source, slot } => {
+                assert_eq!(*source, ResourceId(1));
+                assert_ne!(*slot, old_goal, "the stale move goal is not reused as the gather slot");
+            }
+            other => panic!("expected ToSource, got {other:?}"),
+        }
+        let order = world.get::<MoveOrder>(villager).expect("fresh order");
+        assert_ne!(
+            order.goal, old_goal,
+            "the gather route replaces, not keeps, the old one"
+        );
+
+        // The released goal is claimable again by the next move command.
+        let late = spawn_villager(&mut world, UnitId(2), Vec2::new(8.5, 10.5));
+        let old_goal_center = map.cell_center(old_goal);
+        let late_outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(2)],
+                kind: UnitCommandKind::Move {
+                    target: old_goal_center,
+                },
+            }),
+        );
+        assert_eq!(late_outcome.accepted_units, vec![UnitId(2)]);
+        assert_eq!(
+            world.get::<MoveOrder>(late).unwrap().goal,
+            old_goal,
+            "the released goal is claimable again"
+        );
+    }
+
+    #[test]
+    fn deposits_bank_into_the_matching_stockpile_arm() {
+        let (mut world, mut map) = skirmish_world();
+
+        let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        world
+            .entity_mut(villager)
+            .insert(SimPosition::new(Vec2::new(20.5, 42.5)));
+        world.entity_mut(villager).insert(Carry::Holding {
+            kind: ResourceKind::Gold,
+            amount: NonZeroU32::new(7).unwrap(),
+        });
+
+        let outcome = apply_player_command(
+            &mut world,
+            &mut map,
+            gather_command(TeamId(1), vec![UnitId(1)], ResourceId(1)),
+        );
+        assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+
+        // The carried gold banks at the drop-off, then a full food gather
+        // cycle banks food: each kind lands in its own stockpile arm.
+        for _ in 0..4000 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+            let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
+            if state.stockpile.gold == 107 && state.stockpile.food == 210 {
+                break;
+            }
+        }
+        let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
+        assert_eq!(state.stockpile.gold, 107, "carried gold banks in full");
+        assert_eq!(state.stockpile.food, 210, "a gather cycle banks ten food");
+        assert_eq!(state.stockpile.wood, 300, "wood stays untouched");
+        assert_eq!(world.get::<Carry>(villager), Some(&Carry::Empty));
+    }
+
+    #[test]
+    fn farm_cycle_reclaims_the_farm_for_its_holder_and_idles_everyone_else() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 24);
+        test_economy(&mut world);
+
+        // A completed Farm assigned to villager 1, plus a Town Center drop-off.
+        let farm = world
+            .spawn((
+                Building {
+                    id: BuildingId(1),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::Farm,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(4, 16), 2, 2),
+                ResourceSource {
+                    id: ResourceId(1),
+                    kind: ResourceKind::Food,
+                    remaining: None,
+                    assigned_worker: Some(UnitId(1)),
+                },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(1), farm);
+        world
+            .get_resource_or_insert_with(ResourceIndex::default)
+            .insert(ResourceId(1), farm);
+        let town_center = world
+            .spawn((
+                Building {
+                    id: BuildingId(2),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::TownCenter,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(16, 16), 4, 4),
+                Dropoff { team: TeamId(1) },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(2), town_center);
+
+        // The holder deposits at the Town Center and routes back to his farm.
+        let holder = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(6, 17)));
+        world.entity_mut(holder).insert((
+            WorkerTask::ToDropoff {
+                source: ResourceId(1),
+                dropoff: BuildingId(2),
+                slot: GridPos::new(6, 17),
+            },
+            Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            },
+            GatherProgress::default(),
+        ));
+
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        match world.get::<WorkerTask>(holder).unwrap() {
+            WorkerTask::ToSource { source, .. } => {
+                assert_eq!(*source, ResourceId(1), "the holder routes back to his farm")
+            }
+            other => panic!("expected ToSource, got {other:?}"),
+        }
+        assert_eq!(world.get::<Carry>(holder), Some(&Carry::Empty));
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.food,
+            210,
+            "the deposit banks the carried food"
+        );
+
+        // A second worker delivering to the same farm cannot reclaim it.
+        let late = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(6, 17)));
+        world.entity_mut(late).insert((
+            WorkerTask::ToDropoff {
+                source: ResourceId(1),
+                dropoff: BuildingId(2),
+                slot: GridPos::new(6, 17),
+            },
+            Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            },
+            GatherProgress::default(),
+        ));
+
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(world.get::<WorkerTask>(late), Some(&WorkerTask::Idle));
+        assert!(world.get::<MoveOrder>(late).is_none());
+        assert_eq!(
+            world.get::<ResourceSource>(farm).unwrap().assigned_worker,
+            Some(UnitId(1)),
+            "the farm keeps serving only its assigned holder"
+        );
+    }
+
+    #[test]
+    fn vanished_source_idles_empty_workers_and_routes_full_ones_to_the_dropoff() {
+        let (mut world, mut map) = skirmish_world();
+
+        let source_entity = world
+            .resource::<ResourceIndex>()
+            .entity(ResourceId(1))
+            .expect("the fixture's berry bush");
+        let empty = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        let full = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
+        world
+            .entity_mut(empty)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
+        world.entity_mut(empty).insert((
+            WorkerTask::Gathering {
+                source: ResourceId(1),
+            },
+            Carry::Empty,
+            GatherProgress::default(),
+        ));
+        world
+            .entity_mut(full)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(21, 41))));
+        world.entity_mut(full).insert((
+            WorkerTask::Gathering {
+                source: ResourceId(1),
+            },
+            Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            },
+            GatherProgress::default(),
+        ));
+
+        // The source depletes away under both gatherers.
+        world.resource_mut::<ResourceIndex>().remove(ResourceId(1));
+        for cell in Footprint::new(GridPos::new(22, 42), 1, 1).cells() {
+            map.set_blocked(cell, false);
+        }
+        world.despawn(source_entity);
+
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(
+            world.get::<WorkerTask>(empty),
+            Some(&WorkerTask::Idle),
+            "an empty-handed worker whose source vanished simply idles"
+        );
+        match world.get::<WorkerTask>(full).unwrap() {
+            WorkerTask::ToDropoff { source, .. } => {
+                assert_eq!(*source, ResourceId(1), "the full worker delivers what he holds")
+            }
+            other => panic!("expected ToDropoff, got {other:?}"),
+        }
+        assert_eq!(
+            world.get::<Carry>(full),
+            Some(&Carry::Holding {
+                kind: ResourceKind::Food,
+                amount: NonZeroU32::new(10).unwrap(),
+            }),
+            "partial progress is not banked but the carry is kept"
+        );
+        let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
+        assert_eq!(state.stockpile.food, 200, "nothing deposits before arrival");
+    }
 }

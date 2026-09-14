@@ -471,7 +471,7 @@ mod tests {
 
     use super::*;
     use crate::buildings::ConstructionState;
-    use crate::catalog::{Age, ResourceKind, building_spec};
+    use crate::catalog::{Age, ResourceKind, building_spec, unit_spec};
     use crate::commands::{PlayerCommand, apply_player_command};
     use crate::economy::{ResourceStockpile, gather_rate_for_age, spawn_resource_source};
     use crate::ids::{IdAllocator, ResourceId, UnitId};
@@ -1459,5 +1459,86 @@ mod tests {
         assert_eq!(population_used(&world, ENEMY), 1);
         assert_eq!(population_used(&world, TEAM), 0);
         assert_eq!(population_cap(&world, ENEMY), 10);
+    }
+
+    #[test]
+    fn archery_range_only_produces_archers() {
+        let (mut world, mut map) = open_world();
+        let range = complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(100),
+            BuildingKind::ArcheryRange,
+            GridPos::new(8, 8),
+            TEAM,
+        );
+
+        let accepted = enqueue(&mut world, &mut map, BuildingId(100), UnitKind::Archer);
+        assert!(
+            accepted.reject.is_none(),
+            "an archery range produces archers: {accepted:?}"
+        );
+        assert_eq!(
+            queue_of(&world, range)
+                .jobs
+                .front()
+                .copied()
+                .map(|job| job.kind),
+            Some(ProductionKind::Unit(UnitKind::Archer))
+        );
+        assert_eq!(
+            stockpile(&world, TEAM).food,
+            1000 - unit_spec(UnitKind::Archer).cost.food,
+            "acceptance pays the archer's food cost"
+        );
+
+        let rejected = enqueue(&mut world, &mut map, BuildingId(100), UnitKind::Villager);
+        assert_eq!(rejected.reject, Some(RejectReason::WrongProducer));
+        assert_eq!(
+            queue_of(&world, range).jobs.len(),
+            1,
+            "a rejected enqueue never joins the queue"
+        );
+        assert_eq!(
+            stockpile(&world, TEAM).food,
+            1000 - unit_spec(UnitKind::Archer).cost.food,
+            "a rejected enqueue pays nothing"
+        );
+    }
+
+    #[test]
+    fn unaffordable_enqueue_rejects_and_banks_nothing() {
+        let (mut world, mut map) = open_world();
+        complete_building(
+            &mut world,
+            &mut map,
+            BuildingId(100),
+            BuildingKind::Barracks,
+            GridPos::new(8, 8),
+            TEAM,
+        );
+        world
+            .resource_mut::<TeamEconomy>()
+            .0
+            .get_mut(&TEAM)
+            .unwrap()
+            .stockpile = ResourceStockpile {
+            food: 0,
+            wood: 0,
+            gold: 0,
+        };
+
+        let result = enqueue(&mut world, &mut map, BuildingId(100), UnitKind::Spearman);
+
+        assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+        assert_eq!(
+            stockpile(&world, TEAM),
+            ResourceStockpile {
+                food: 0,
+                wood: 0,
+                gold: 0
+            },
+            "a rejected enqueue must not touch the stockpile"
+        );
     }
 }
