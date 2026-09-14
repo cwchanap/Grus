@@ -528,7 +528,7 @@ The implementation PR is complete when all of the following are true:
 - E2E failure diagnostics are uploaded.
 - the existing 200-unit benchmark remains part of the expensive integration job.
 - default/release Grus builds do not activate E2E runtime behavior.
-- no Bevy/godot-bevy engine migration is bundled into this task.
+- the Bevy/godot-bevy migration is limited to Task 0's behavior-preserving dependency/API changes, with no gameplay changes riding on it.
 
 ## Implementation order / hard gates
 
