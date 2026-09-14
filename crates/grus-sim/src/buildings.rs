@@ -148,7 +148,7 @@ pub fn validate_placement(
     for cell in footprint.cells() {
         occupied_map.set_blocked(cell, true);
     }
-    let (slot, route) = reachable_builder_slot(world, &occupied_map, entity, footprint)?;
+    let (slot, route) = reachable_builder_slot(world, &occupied_map, entity, footprint, None)?;
     Ok(PlacementPlan {
         builder: entity,
         footprint,
@@ -257,25 +257,32 @@ pub(crate) fn apply_resume_construction(
         .get::<Footprint>(building_entity)
         .copied()
         .expect("building footprint");
-    let (slot, route) = match reachable_builder_slot(world, map, builder_entity, footprint) {
-        Ok(slot) => slot,
-        Err(reason) => {
-            result.reject = Some(reason);
-            return result;
-        }
-    };
+    // Look up the site's current builder before route validation: an accepted
+    // takeover cancels its order below, so its soon-released goal must not
+    // reserve a slot the replacement needs, while its current cell is still
+    // occupied and stays reserved. Validation remains side-effect free — a
+    // rejection here never reached the cancellation.
+    let previous_entity = world
+        .get::<Building>(building_entity)
+        .and_then(|state| state.construction.active_builder)
+        .filter(|previous| *previous != builder)
+        .and_then(|previous| {
+            world
+                .get_resource::<UnitIndex>()
+                .and_then(|index| index.entity(previous))
+        });
+    let (slot, route) =
+        match reachable_builder_slot(world, map, builder_entity, footprint, previous_entity) {
+            Ok(slot) => slot,
+            Err(reason) => {
+                result.reject = Some(reason);
+                return result;
+            }
+        };
 
     // The site's previous builder is paused before the new one takes over:
     // one active builder per building, never two.
-    let previous_builder = world
-        .get::<Building>(building_entity)
-        .and_then(|state| state.construction.active_builder);
-    if let Some(previous) = previous_builder
-        && previous != builder
-        && let Some(previous_entity) = world
-            .get_resource::<UnitIndex>()
-            .and_then(|index| index.entity(previous))
-    {
+    if let Some(previous_entity) = previous_entity {
         cancel_worker_activity(world, previous_entity);
     }
 
@@ -332,12 +339,16 @@ fn validate_resume(
 
 /// Picks the builder's approach slot: the first reachable walkable cell on the
 /// footprint's immediate perimeter that no live unit stands on or moves to.
+/// `goal_released` names a unit whose `MoveOrder` an accepted command cancels
+/// (a construction site's previous builder on takeover): its goal is not
+/// seeded because acceptance frees it, while its current cell still reserves.
 /// Returns the slot and its route waypoints.
 fn reachable_builder_slot(
     world: &World,
     map: &GridMap,
     builder: Entity,
     footprint: Footprint,
+    goal_released: Option<Entity>,
 ) -> Result<(GridPos, Vec<Vec2>), RejectReason> {
     let position = world
         .get::<SimPosition>(builder)
@@ -347,9 +358,12 @@ fn reachable_builder_slot(
     // Same reservation seam as Move: seed every live unit's current cell and
     // existing MoveOrder goal, excluding the builder's own current cell and
     // old goal exactly as Move releases a commanded unit's reservations before
-    // reassignment. When the placement order replaces the old one,
-    // `cancel_worker_activity` drops the old route (releasing its goal) and
-    // the new order claims the slot; on rejection nothing here mutated.
+    // reassignment. `goal_released` frees one more goal ahead of acceptance:
+    // the order carrying it is cancelled once the command applies, so only
+    // that unit's current cell still reserves. When the new order replaces
+    // the old one, `cancel_worker_activity` drops the old route (releasing
+    // its goal) and the new order claims the slot; on rejection nothing here
+    // mutated.
     let mut used = HashSet::new();
     let entities: Vec<Entity> = world
         .get_resource::<UnitIndex>()
@@ -362,7 +376,9 @@ fn reachable_builder_slot(
         if let Some(position) = world.get::<SimPosition>(entity) {
             used.insert(map.world_to_cell(position.current));
         }
-        if let Some(order) = world.get::<MoveOrder>(entity) {
+        if Some(entity) != goal_released
+            && let Some(order) = world.get::<MoveOrder>(entity)
+        {
             used.insert(order.goal);
         }
     }
@@ -865,6 +881,84 @@ mod tests {
             "progress advanced {start} → {end}, expected a single builder's {expected}"
         );
         assert_eq!(world.get::<WorkerTask>(first), Some(&WorkerTask::Idle));
+    }
+
+    /// A takeover frees the previous builder's en-route goal before the
+    /// replacement's slot search runs: on a site with one free perimeter
+    /// slot, the dead reservation must not force a spurious Unreachable.
+    /// Regression: slot validation used to run before `active_builder` was
+    /// looked up, so the about-to-be-cancelled order still reserved its goal.
+    #[test]
+    fn resume_releases_the_previous_builders_goal_for_the_replacement() {
+        let (mut world, mut map, villager) = setup_build_test();
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None);
+        let building = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("building registered");
+        let building_id = world.get::<Building>(building).unwrap().id;
+        let footprint = Footprint::new(GridPos::new(13, 10), 2, 2);
+
+        // Builder 1 is still en route; its order claims the site's only free
+        // approach slot once every other perimeter cell is blocked.
+        let claimed = world
+            .get::<MoveOrder>(villager)
+            .expect("route installed")
+            .goal;
+        assert!(footprint.is_immediately_adjacent(claimed));
+        for cell in footprint.perimeter_cells() {
+            if cell != claimed {
+                map.set_blocked(cell, true);
+            }
+        }
+
+        let second = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            Vec2::new(9.5, 9.5),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+        world.entity_mut(second).insert((
+            Carry::Empty,
+            GatherProgress::default(),
+            WorkerTask::Idle,
+        ));
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(2),
+                building: building_id,
+            },
+        );
+
+        assert_eq!(result.reject, None);
+        assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+        assert!(world.get::<MoveOrder>(villager).is_none());
+        let task = world.get::<WorkerTask>(second).unwrap().clone();
+        let WorkerTask::ToConstruction { building, slot } = task else {
+            panic!("expected ToConstruction, got {task:?}");
+        };
+        assert_eq!(building, building_id);
+        assert_eq!(slot, claimed);
+        assert_eq!(
+            world.get::<MoveOrder>(second).map(|order| order.goal),
+            Some(claimed)
+        );
     }
 
     #[test]
