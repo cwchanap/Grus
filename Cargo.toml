@@ -9,7 +9,7 @@ rust-version = "1.95.0"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-bevy = { version = "=0.18.1", default-features = false }
-godot = "=0.4.5"
-godot-bevy = { version = "=0.11.0", default-features = false, features = ["api-4-5", "godot_bevy_log", "experimental-threads"] }
+bevy = { version = "=0.19.1", default-features = false }
+godot = "=0.5.5"
+godot-bevy = { version = "=0.12.0", default-features = false, features = ["api-4-5", "godot_bevy_log", "experimental-threads"] }
 pathfinding = "=4.16.0"
