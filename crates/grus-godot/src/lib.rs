@@ -325,7 +325,7 @@ impl GrusBridgeNode {
             );
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
-            dict.set("idle_worker_ids", PackedInt32Array::from_iter(idle));
+            dict.set("idle_worker_ids", &PackedInt32Array::from_iter(idle));
             dict.set(
                 "last_reject_code",
                 world
@@ -361,7 +361,7 @@ impl GrusBridgeNode {
             };
 
             dict.set("id", i64::from(building.id.0));
-            dict.set("kind", debug_variant(building.kind));
+            dict.set("kind", &debug_variant(building.kind));
             dict.set("team_id", i64::from(building.team.0));
             dict.set("complete", building.construction.complete);
             let spec = building_spec(building.kind);
@@ -380,7 +380,10 @@ impl GrusBridgeNode {
             let queue = world.get::<ProductionQueue>(entity);
             match queue.and_then(|queue| queue.jobs.front()) {
                 Some(job) => {
-                    dict.set("queue_label", GString::from(queue_head_label(job).as_str()));
+                    dict.set(
+                        "queue_label",
+                        &GString::from(queue_head_label(job).as_str()),
+                    );
                     let required = job_seconds(job);
                     let progress = queue.map_or(0.0, |queue| queue.progress_seconds);
                     dict.set(
@@ -395,7 +398,7 @@ impl GrusBridgeNode {
                 None => {
                     // Seeded producers have no queue component until the first
                     // accepted enqueue heals it; report an empty queue.
-                    dict.set("queue_label", GString::from(""));
+                    dict.set("queue_label", &GString::from(""));
                     dict.set("queue_progress", 0.0_f64);
                 }
             }
@@ -495,9 +498,9 @@ impl GrusBridgeNode {
             entry.set("wood", i64::from(spec.cost.wood));
             entry.set("gold", i64::from(spec.cost.gold));
             entry.set("seconds", i64::from(spec.train_seconds));
-            entry.set("producer", producer_kind_name(kind));
+            entry.set("producer", &producer_kind_name(kind));
             entry.set("age", age_number(spec.required_age));
-            units.set(kind_name(kind), entry.to_variant());
+            units.set(&kind_name(kind), &entry.to_variant());
         }
         let mut buildings = VarDictionary::new();
         for kind in BuildingKind::ALL {
@@ -511,7 +514,7 @@ impl GrusBridgeNode {
             entry.set("height", i64::from(spec.height));
             entry.set("age", age_number(spec.required_age));
             entry.set("population", i64::from(spec.population_capacity));
-            buildings.set(kind_name(kind), entry.to_variant());
+            buildings.set(&kind_name(kind), &entry.to_variant());
         }
         let mut age_up = VarDictionary::new();
         age_up.set("food", i64::from(AGE_TWO_COST.food));
@@ -519,9 +522,9 @@ impl GrusBridgeNode {
         age_up.set("gold", i64::from(AGE_TWO_COST.gold));
         age_up.set("seconds", i64::from(AGE_TWO_SECONDS));
         let mut catalogue = VarDictionary::new();
-        catalogue.set("units", units.to_variant());
-        catalogue.set("buildings", buildings.to_variant());
-        catalogue.set("age_up", age_up.to_variant());
+        catalogue.set("units", &units.to_variant());
+        catalogue.set("buildings", &buildings.to_variant());
+        catalogue.set("age_up", &age_up.to_variant());
         catalogue
     }
 }
