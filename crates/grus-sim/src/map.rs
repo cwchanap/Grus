@@ -45,6 +45,15 @@ impl Footprint {
         cells
     }
 
+    /// Geometric center in world coordinates: `anchor + half the footprint`
+    /// in each axis. For 1×1 footprints this equals the anchor's cell center.
+    pub fn center(&self) -> Vec2 {
+        Vec2::new(
+            self.anchor.x as f32 + f32::from(self.width) / 2.0,
+            self.anchor.y as f32 + f32::from(self.height) / 2.0,
+        )
+    }
+
     /// The ring of cells immediately surrounding the footprint, row-major.
     /// Never contains a footprint cell and never scans a wider ring.
     pub fn perimeter_cells(&self) -> Vec<GridPos> {

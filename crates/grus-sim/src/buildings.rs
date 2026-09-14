@@ -62,10 +62,10 @@ pub struct PlacementPlan {
 
 /// Authoritative placement validation. Checks, in order: owned villager →
 /// kind unlocked/buildable → footprint in bounds → footprint cells walkable
-/// and free of any live unit's current cell → affordability → reachable
-/// reserved immediate-perimeter builder slot, evaluated on the
-/// post-placement map (footprint cells already blocked). Mutates nothing;
-/// apply the returned plan only after every check passes.
+/// and free of any live unit's current cell or claimed `MoveOrder` goal →
+/// affordability → reachable reserved immediate-perimeter builder slot,
+/// evaluated on the post-placement map (footprint cells already blocked).
+/// Mutates nothing; apply the returned plan only after every check passes.
 pub fn validate_placement(
     world: &World,
     map: &GridMap,
@@ -100,22 +100,25 @@ pub fn validate_placement(
         return Err(RejectReason::OutOfBounds);
     }
 
-    // 4. footprint cells walkable and free of any live unit's current cell:
-    // placement would block the cells and permanently entomb a unit standing
-    // inside the footprint (find_path needs a walkable start).
-    let unit_cells: HashSet<GridPos> = world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter_map(|(_, entity)| {
-                    world
-                        .get::<SimPosition>(*entity)
-                        .map(|position| map.world_to_cell(position.current))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // 4. footprint cells walkable and free of any live unit's current cell or
+    // claimed MoveOrder goal: placement would block the cells and permanently
+    // entomb a unit standing inside the footprint (find_path needs a walkable
+    // start), or strand a unit whose goal lies inside on a preserved order
+    // that can never replan onto blocked cells. The builder's own goal is
+    // exempt because acceptance cancels that order.
+    let mut unit_cells: HashSet<GridPos> = HashSet::new();
+    if let Some(index) = world.get_resource::<UnitIndex>() {
+        for (_, unit_entity) in index.iter() {
+            if let Some(position) = world.get::<SimPosition>(*unit_entity) {
+                unit_cells.insert(map.world_to_cell(position.current));
+            }
+            if *unit_entity != entity
+                && let Some(order) = world.get::<MoveOrder>(*unit_entity)
+            {
+                unit_cells.insert(order.goal);
+            }
+        }
+    }
     if !footprint
         .cells()
         .iter()
@@ -1160,6 +1163,90 @@ mod tests {
                 .map(|index| index.iter().count())
                 .unwrap_or(0),
             0
+        );
+    }
+
+    /// A sibling already moving to a cell inside the footprint has that goal
+    /// reserved: accepting the placement would block the goal and strand the
+    /// unit on a preserved order that can never replan onto blocked cells.
+    #[test]
+    fn placement_rejects_a_footprint_over_a_reserved_goal() {
+        let (mut world, mut map, _villager) = setup_build_test();
+        let anchor = GridPos::new(13, 10);
+        let sibling = spawn_unit(
+            &mut world,
+            UnitId(2),
+            TeamId(1),
+            map.cell_center(GridPos::new(8, 8)),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+        world.entity_mut(sibling).insert(MoveOrder {
+            waypoints: vec![map.cell_center(GridPos::new(13, 10))],
+            next: 0,
+            goal: GridPos::new(13, 10),
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor,
+            },
+        );
+
+        assert_eq!(result.reject, Some(RejectReason::Occupied));
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+            500
+        );
+        for cell in Footprint::new(anchor, 2, 2).cells() {
+            assert!(map.is_walkable(cell), "footprint cell {cell:?} blocked");
+        }
+        assert_eq!(
+            world.get::<MoveOrder>(sibling).map(|order| order.goal),
+            Some(GridPos::new(13, 10)),
+            "rejection must leave the sibling's order untouched"
+        );
+    }
+
+    /// The builder's own old goal is exempt: acceptance cancels that order, so
+    /// a footprint over it still validates and the builder is retasked to the
+    /// assigned perimeter slot.
+    #[test]
+    fn placement_ignores_the_builders_own_old_goal() {
+        let (mut world, mut map, villager) = setup_build_test();
+        let anchor = GridPos::new(13, 10);
+        world.entity_mut(villager).insert(MoveOrder {
+            waypoints: vec![map.cell_center(GridPos::new(13, 10))],
+            next: 0,
+            goal: GridPos::new(13, 10),
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind: BuildingKind::House,
+                anchor,
+            },
+        );
+
+        assert_eq!(result.reject, None);
+        let order = world.get::<MoveOrder>(villager).expect("route installed");
+        assert!(
+            Footprint::new(anchor, 2, 2).is_immediately_adjacent(order.goal),
+            "builder goal {goal:?} is the assigned slot, not the cancelled one",
+            goal = order.goal
         );
     }
 

@@ -414,10 +414,10 @@ fn pick_reachable_slot(
         })
 }
 
-/// Picks the nearest same-team Dropoff by straight-line distance whose
-/// immediate perimeter still has a free, reachable slot. Runs once per
-/// decision point (command acceptance, full carry, depletion) — never per
-/// simulation tick.
+/// Picks the nearest same-team Dropoff by straight-line distance to the
+/// footprint's geometric center whose immediate perimeter still has a free,
+/// reachable slot. Runs once per decision point (command acceptance, full
+/// carry, depletion) — never per simulation tick.
 fn nearest_reachable_dropoff(
     world: &World,
     map: &GridMap,
@@ -443,8 +443,11 @@ fn nearest_reachable_dropoff(
                         return None;
                     }
                     let footprint = *world.get::<Footprint>(*entity)?;
-                    let center = map.cell_center(footprint.anchor);
-                    Some((*id, footprint, position.current.distance_squared(center)))
+                    Some((
+                        *id,
+                        footprint,
+                        position.current.distance_squared(footprint.center()),
+                    ))
                 })
                 .collect()
         })
@@ -1385,6 +1388,81 @@ mod tests {
             world.resource::<LastRouteReject>().0,
             Some(RejectReason::Unreachable),
             "typed code recorded for bridge feedback"
+        );
+    }
+
+    /// Ordering must measure each drop-off's geometric center, not its anchor
+    /// cell. Worker at (10.5, 44.5): the 4×4 Town Center's anchor cell center
+    /// (12.5, 46.5) is 8 units² away while the 2×2 Storehouse's anchor cell
+    /// center (13.5, 44.5) is 9 — anchor-based sorting picks the Town Center.
+    /// Geometric centers are (14, 48) at 24.5 vs (14, 45) at 12.5: the
+    /// Storehouse is truly nearer and must win.
+    #[test]
+    fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
+        let mut world = World::new();
+        let mut map = GridMap::new(24, 64);
+        test_economy(&mut world);
+
+        let town_center = world
+            .spawn((
+                Building {
+                    id: BuildingId(1),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::TownCenter,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(12, 46), 4, 4),
+                Dropoff { team: TeamId(1) },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(1), town_center);
+        let storehouse = world
+            .spawn((
+                Building {
+                    id: BuildingId(2),
+                    team: TeamId(1),
+                    kind: crate::catalog::BuildingKind::Storehouse,
+                    construction: crate::buildings::ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(GridPos::new(13, 44), 2, 2),
+                Dropoff { team: TeamId(1) },
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(BuildingId(2), storehouse);
+        for cell in Footprint::new(GridPos::new(12, 46), 4, 4)
+            .cells()
+            .into_iter()
+            .chain(Footprint::new(GridPos::new(13, 44), 2, 2).cells())
+        {
+            map.set_blocked(cell, true);
+        }
+
+        let worker = spawn_villager(&mut world, UnitId(1), Vec2::new(10.5, 44.5));
+        let used = seed_used_excluding(&world, &map, worker);
+
+        let (dropoff, slot, _) = nearest_reachable_dropoff(&world, &map, worker, &used)
+            .expect("a reachable drop-off exists");
+
+        assert_eq!(
+            dropoff,
+            BuildingId(2),
+            "the truly nearer Storehouse must win over the anchor-nearer Town Center"
+        );
+        assert!(
+            Footprint::new(GridPos::new(13, 44), 2, 2).is_immediately_adjacent(slot),
+            "assigned slot {slot:?} is on the Storehouse perimeter"
         );
     }
 }
