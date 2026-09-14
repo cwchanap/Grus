@@ -5,3 +5,4 @@ godot/bin/*
 !godot/bin/.gitkeep
 .DS_Store
 .worktrees/
+test_output/
