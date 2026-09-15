@@ -856,6 +856,10 @@ fn reset_fixture_world(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
+    // The clear despawns the selector-bearing gameplay entities; reattach the
+    // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
+    #[cfg(feature = "e2e")]
+    e2e::attach_selectors(world);
 }
 
 fn reset_benchmark_world(world: &mut World) {

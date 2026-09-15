@@ -1532,7 +1532,7 @@ mod tests {
         test_economy(&mut world);
         world.insert_resource(IdAllocator::new(10, 1, 2));
         let villager = spawn_villager(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
-        spawn_unit(
+        let spearman = spawn_unit(
             &mut world,
             UnitId(8),
             TeamId(1),
@@ -1540,7 +1540,7 @@ mod tests {
             UnitKind::Spearman,
             6.0,
         );
-        spawn_unit(
+        let foreign = spawn_unit(
             &mut world,
             UnitId(9),
             TeamId(2),
@@ -1556,6 +1556,34 @@ mod tests {
             GridPos::new(12, 12),
             400,
         );
+        // Observable state on the rejected workers: "without touching them"
+        // means both task and move order must survive the command verbatim.
+        world.entity_mut(spearman).insert((
+            WorkerTask::Gathering {
+                source: ResourceId(1),
+            },
+            MoveOrder {
+                waypoints: vec![map.cell_center(GridPos::new(18, 6))],
+                next: 0,
+                goal: GridPos::new(18, 6),
+                map_revision: map.revision(),
+                last_failed_replan: None,
+            },
+        ));
+        world.entity_mut(foreign).insert((
+            WorkerTask::ToDropoff {
+                source: ResourceId(1),
+                dropoff: BuildingId(1),
+                slot: GridPos::new(3, 3),
+            },
+            MoveOrder {
+                waypoints: vec![map.cell_center(GridPos::new(3, 3))],
+                next: 0,
+                goal: GridPos::new(3, 3),
+                map_revision: map.revision(),
+                last_failed_replan: None,
+            },
+        ));
 
         let outcome = apply_player_command(
             &mut world,
@@ -1574,6 +1602,32 @@ mod tests {
                 (UnitId(8), RejectReason::NotVillager),
                 (UnitId(9), RejectReason::NotOwned),
             ]
+        );
+        assert_eq!(
+            world.get::<WorkerTask>(spearman),
+            Some(&WorkerTask::Gathering {
+                source: ResourceId(1)
+            }),
+            "the rejected non-villager keeps its old task"
+        );
+        assert_eq!(
+            world.get::<MoveOrder>(spearman).map(|order| order.goal),
+            Some(GridPos::new(18, 6)),
+            "the rejected non-villager keeps its old move order"
+        );
+        assert_eq!(
+            world.get::<WorkerTask>(foreign),
+            Some(&WorkerTask::ToDropoff {
+                source: ResourceId(1),
+                dropoff: BuildingId(1),
+                slot: GridPos::new(3, 3),
+            }),
+            "the rejected foreign worker keeps its old task"
+        );
+        assert_eq!(
+            world.get::<MoveOrder>(foreign).map(|order| order.goal),
+            Some(GridPos::new(3, 3)),
+            "the rejected foreign worker keeps its old move order"
         );
         match world.get::<WorkerTask>(villager).unwrap() {
             WorkerTask::ToSource { source, .. } => assert_eq!(*source, ResourceId(1)),
