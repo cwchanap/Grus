@@ -1030,6 +1030,9 @@ fn format_command_result(result: &CommandResult) -> String {
     text
 }
 
+// ponytail: each advance_* system takes one coarse Time<Fixed>::delta() per
+// tick (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy
+// inside the tick if a high-speed scenario ever shows tunneling or overshoot.
 fn advance_movement(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, map: Mut<GridMap>| {
@@ -1098,10 +1101,13 @@ fn sync_interpolated_unit_transforms(
     let alpha = Engine::singleton().get_physics_interpolation_fraction() as f32;
     for (position, mut transform, handle) in &mut units {
         let rendered = position.previous.lerp(position.current, alpha);
-        if transform.translation.x != rendered.x || transform.translation.z != rendered.y {
-            transform.translation.x = rendered.x;
-            transform.translation.z = rendered.y;
+        // Value gate: idle units re-render the mirrored transform, so skip
+        // both the mirror update and the node write until the value moves.
+        if transform.translation.x == rendered.x && transform.translation.z == rendered.y {
+            continue;
         }
+        transform.translation.x = rendered.x;
+        transform.translation.z = rendered.y;
         let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
             continue;
         };

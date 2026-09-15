@@ -4,7 +4,7 @@
 //! deterministic authored skirmish entities after `setup_fixture` seeds the
 //! world, and spawns the `grus.ready` readiness marker. The out-of-process
 //! harness addresses these over BRP; raw `Entity` ids never cross the wire.
-//! Registration happens in `build_app`; the system only acts when the parent
+//! Registration happens in `build_app` and only takes effect when the parent
 //! harness sets `BEVY_E2E=1`, matching `BevyE2EPlugin`'s activation contract.
 
 use bevy::input::keyboard::KeyboardInput;
@@ -20,7 +20,8 @@ const PLAYER_TEAM: TeamId = TeamId(1);
 const ENEMY_TEAM: TeamId = TeamId(2);
 
 /// In-game wiring for the `e2e` feature: prepares the app for
-/// `BevyE2EPlugin`'s BRP stack and attaches the selector surface.
+/// `BevyE2EPlugin`'s BRP stack and attaches the selector surface. Like
+/// [`bevy_e2e::BevyE2EPlugin`], it registers nothing unless `BEVY_E2E=1`.
 ///
 /// `bevy_brp_extras` (pulled in by `BevyE2EPlugin`) assumes the host game
 /// runs bevy's input stack: its keyboard/mouse systems write input messages
@@ -30,6 +31,9 @@ pub struct GrusE2ePlugin;
 
 impl Plugin for GrusE2ePlugin {
     fn build(&self, app: &mut App) {
+        if std::env::var("BEVY_E2E").as_deref() != Ok("1") {
+            return;
+        }
         app.add_message::<CursorMoved>()
             .add_message::<WindowEvent>()
             .add_message::<KeyboardInput>()

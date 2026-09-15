@@ -1670,8 +1670,9 @@ mod tests {
         );
         assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
 
-        // The carried gold banks at the drop-off, then a full food gather
-        // cycle banks food: each kind lands in its own stockpile arm.
+        // Deposit order: the carried gold banks on arrival at the town-center
+        // drop-off, then one food gather cycle banks food. The loop polls
+        // movement + economy until both have landed in their stockpile arms.
         for _ in 0..4000 {
             step_movement(&mut world, &map, SIM_STEP_SECONDS);
             step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
