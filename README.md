@@ -105,8 +105,9 @@ cargo build --workspace --locked
 Unit coverage:
 
 ```bash
-cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked
+cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$'
 cargo test -p grus-godot --lib
+cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 ```
 
 E2E:
