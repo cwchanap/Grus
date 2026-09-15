@@ -18,6 +18,9 @@ use grus_sim::{
     step_production, validate_placement,
 };
 
+#[cfg(feature = "e2e")]
+mod e2e;
+
 #[derive(Default, Resource)]
 struct PendingCommands(Vec<PlayerCommand>);
 
@@ -226,7 +229,9 @@ impl GrusBridgeNode {
         true
     }
 
-    /// Virtual-time multiplier for headless gate runs. Never touches `max_delta`.
+    /// Sim-speed multiplier for headless gate runs. Scales Godot's
+    /// `Engine.time_scale` (the 0.12 fixed-loop tick-rate authority) and
+    /// `Time<Virtual>`; never touches `max_delta`.
     #[func]
     fn set_sim_speed(&self, relative_speed: f64) -> bool {
         if !relative_speed.is_finite() || relative_speed <= 0.0 {
@@ -239,6 +244,12 @@ impl GrusBridgeNode {
         let Some(app) = app_node.get_app_mut() else {
             return false;
         };
+        // godot-bevy 0.12's `godot_fixed_driver` takes its tick delta from
+        // `_physics_process`, scaled by `Engine.time_scale`, and ignores
+        // `Time<Virtual>`'s relative speed — so the engine-wide knob is the
+        // tick-rate authority. The virtual-speed write stays to keep
+        // Bevy-side render clocks consistent.
+        Engine::singleton().set_time_scale(relative_speed);
         app.world_mut()
             .resource_mut::<Time<Virtual>>()
             .set_relative_speed_f64(relative_speed);
@@ -325,7 +336,7 @@ impl GrusBridgeNode {
             );
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
-            dict.set("idle_worker_ids", PackedInt32Array::from_iter(idle));
+            dict.set("idle_worker_ids", &PackedInt32Array::from_iter(idle));
             dict.set(
                 "last_reject_code",
                 world
@@ -361,7 +372,7 @@ impl GrusBridgeNode {
             };
 
             dict.set("id", i64::from(building.id.0));
-            dict.set("kind", debug_variant(building.kind));
+            dict.set("kind", &debug_variant(building.kind));
             dict.set("team_id", i64::from(building.team.0));
             dict.set("complete", building.construction.complete);
             let spec = building_spec(building.kind);
@@ -380,7 +391,10 @@ impl GrusBridgeNode {
             let queue = world.get::<ProductionQueue>(entity);
             match queue.and_then(|queue| queue.jobs.front()) {
                 Some(job) => {
-                    dict.set("queue_label", GString::from(queue_head_label(job).as_str()));
+                    dict.set(
+                        "queue_label",
+                        &GString::from(queue_head_label(job).as_str()),
+                    );
                     let required = job_seconds(job);
                     let progress = queue.map_or(0.0, |queue| queue.progress_seconds);
                     dict.set(
@@ -395,7 +409,7 @@ impl GrusBridgeNode {
                 None => {
                     // Seeded producers have no queue component until the first
                     // accepted enqueue heals it; report an empty queue.
-                    dict.set("queue_label", GString::from(""));
+                    dict.set("queue_label", &GString::from(""));
                     dict.set("queue_progress", 0.0_f64);
                 }
             }
@@ -495,9 +509,9 @@ impl GrusBridgeNode {
             entry.set("wood", i64::from(spec.cost.wood));
             entry.set("gold", i64::from(spec.cost.gold));
             entry.set("seconds", i64::from(spec.train_seconds));
-            entry.set("producer", producer_kind_name(kind));
+            entry.set("producer", &producer_kind_name(kind));
             entry.set("age", age_number(spec.required_age));
-            units.set(kind_name(kind), entry.to_variant());
+            units.set(&kind_name(kind), &entry.to_variant());
         }
         let mut buildings = VarDictionary::new();
         for kind in BuildingKind::ALL {
@@ -511,7 +525,7 @@ impl GrusBridgeNode {
             entry.set("height", i64::from(spec.height));
             entry.set("age", age_number(spec.required_age));
             entry.set("population", i64::from(spec.population_capacity));
-            buildings.set(kind_name(kind), entry.to_variant());
+            buildings.set(&kind_name(kind), &entry.to_variant());
         }
         let mut age_up = VarDictionary::new();
         age_up.set("food", i64::from(AGE_TWO_COST.food));
@@ -519,9 +533,9 @@ impl GrusBridgeNode {
         age_up.set("gold", i64::from(AGE_TWO_COST.gold));
         age_up.set("seconds", i64::from(AGE_TWO_SECONDS));
         let mut catalogue = VarDictionary::new();
-        catalogue.set("units", units.to_variant());
-        catalogue.set("buildings", buildings.to_variant());
-        catalogue.set("age_up", age_up.to_variant());
+        catalogue.set("units", &units.to_variant());
+        catalogue.set("buildings", &buildings.to_variant());
+        catalogue.set("age_up", &age_up.to_variant());
         catalogue
     }
 }
@@ -557,6 +571,10 @@ fn build_app(app: &mut App) {
             )
                 .chain(),
         );
+    #[cfg(feature = "e2e")]
+    app.add_plugins(bevy_e2e::BevyE2EPlugin);
+    #[cfg(feature = "e2e")]
+    app.add_plugins(e2e::GrusE2ePlugin);
 }
 
 fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
@@ -692,11 +710,10 @@ fn attach_missing_gameplay_views(
     map: Res<GridMap>,
 ) {
     for (entity, position) in &units {
-        attach_view(
+        attach_unit_view(
             &mut commands,
             entity,
             Transform::from_xyz(position.current.x, 0.0, position.current.y),
-            "res://scenes/unit_view.tscn",
         );
     }
     for (entity, footprint) in &farm_buildings {
@@ -749,6 +766,21 @@ fn attach_view(commands: &mut Commands, entity: Entity, transform: Transform, pa
         TransformSyncMetadata::default(),
         Node3DMarker,
         GodotScene::from_path(path),
+        GameplayViewRequested,
+    ));
+}
+
+/// Unit views opt out of godot-bevy's stock transform sync (no
+/// `TransformSyncMetadata`/`Node3DMarker`): under 0.12 the stock path copies
+/// Bevy→Godot only once per physics tick in FixedLast, which would fight the
+/// per-render-frame interpolated writes in `sync_interpolated_unit_transforms`.
+/// Grus is the single writer for unit view transforms. `Transform` stays —
+/// `GodotScene` instantiation reads it for initial placement. Buildings and
+/// resources are static and keep the stock sync path via `attach_view`.
+fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transform) {
+    commands.entity(entity).insert((
+        transform,
+        GodotScene::from_path("res://scenes/unit_view.tscn"),
         GameplayViewRequested,
     ));
 }
@@ -824,6 +856,10 @@ fn reset_fixture_world(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
+    // The clear despawns the selector-bearing gameplay entities; reattach the
+    // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
+    #[cfg(feature = "e2e")]
+    e2e::attach_selectors(world);
 }
 
 fn reset_benchmark_world(world: &mut World) {
@@ -998,25 +1034,32 @@ fn format_command_result(result: &CommandResult) -> String {
     text
 }
 
+// ponytail: each advance_* system takes one coarse Time<Fixed>::delta() per
+// tick (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy
+// inside the tick if a high-speed scenario ever shows tunneling or overshoot.
 fn advance_movement(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, map: Mut<GridMap>| {
-        step_movement(world, &map, SIM_STEP_SECONDS);
+        step_movement(world, &map, seconds);
     });
 }
 
 fn advance_economy(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_economy(world, &mut map, SIM_STEP_SECONDS);
+        step_economy(world, &mut map, seconds);
     });
 }
 
 fn advance_construction(world: &mut World) {
-    step_construction(world, SIM_STEP_SECONDS);
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    step_construction(world, seconds);
 }
 
 fn advance_production(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_production(world, &mut map, SIM_STEP_SECONDS);
+        step_production(world, &mut map, seconds);
     });
 }
 
@@ -1050,17 +1093,33 @@ fn queue_head_label(job: &ProductionJob) -> String {
     }
 }
 
+/// godot-bevy 0.12 pins `Time<Fixed>::overstep_fraction()` to 0 (Godot owns the
+/// fixed-step accumulator) and copies Bevy→Godot transforms only once per tick,
+/// so the stock path renders unit views one tick stale and unsmoothed. Restore
+/// the 0.11 contract: every Update, write the interpolated transform directly
+/// to each unit view's Node3D, using Godot's own between-ticks fraction.
 fn sync_interpolated_unit_transforms(
-    fixed_time: Res<Time<Fixed>>,
-    mut units: Query<(&SimPosition, &mut Transform), With<Unit>>,
+    mut units: Query<(&SimPosition, &mut Transform, &GodotNodeHandle), With<Unit>>,
+    mut godot: GodotAccess,
 ) {
-    let alpha = fixed_time.overstep_fraction();
-    for (position, mut transform) in &mut units {
+    let alpha = Engine::singleton().get_physics_interpolation_fraction() as f32;
+    for (position, mut transform, handle) in &mut units {
         let rendered = position.previous.lerp(position.current, alpha);
-        if transform.translation.x != rendered.x || transform.translation.z != rendered.y {
-            transform.translation.x = rendered.x;
-            transform.translation.z = rendered.y;
+        // Value gate: idle units re-render the mirrored transform, so skip
+        // both the mirror update and the node write until the value moves.
+        if transform.translation.x == rendered.x && transform.translation.z == rendered.y {
+            continue;
         }
+        transform.translation.x = rendered.x;
+        transform.translation.z = rendered.y;
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        let mut node_transform = node.get_transform();
+        node_transform.origin.x = rendered.x;
+        node_transform.origin.y = 0.0;
+        node_transform.origin.z = rendered.y;
+        node.set_transform(node_transform);
     }
 }
 

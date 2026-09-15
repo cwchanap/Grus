@@ -8,12 +8,16 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  rust:
+  rust-build-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: dtolnay/rust-toolchain@1.95.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -23,10 +27,54 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      - name: Test simulation
-        run: cargo test --workspace
+      - name: Build workspace
+        run: cargo build --workspace --locked
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Install llvm-tools-preview
+        run: rustup component add llvm-tools-preview
+      - name: Test simulation with coverage gate
+        # --ignore-filename-regex keeps `#[cfg(test)]` module bodies (the
+        # `src/*/tests.rs` files) out of the report, so the 90% gate measures
+        # gameplay code only.
+        run: cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\.rs$'
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: grus-sim-coverage-lcov
+          path: lcov.info
+          if-no-files-found: warn
+      - name: Test grus-godot library
+        run: cargo test -p grus-godot --lib --locked
+      - name: Test grus-godot e2e selector surface
+        # Serialized: these tests mutate process-global env vars (BEVY_E2E,
+        # BRP_EXTRAS_PORT).
+        run: cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
+
+  e2e:
+    needs: [rust-build-lint, unit-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Build Godot extension
-        run: cargo build -p grus-godot
+        run: cargo build -p grus-godot --features e2e --locked
+      - name: Clippy with e2e feature
+        run: cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings
       - name: Stage Godot extension
         run: |
           mkdir -p godot/bin
@@ -59,6 +107,17 @@ jobs:
           timeout 20s ./build/Grus.x86_64 --headless --quit-after 30 2>&1 | tee export-smoke.log
           grep -q "Initialize godot-rust" export-smoke.log
           ! grep -Eq "Failed to load.*GDExtension|Can't open dynamic library|Cannot open dynamic library" export-smoke.log
+      - name: Run bevy-e2e exported-game test
+        env:
+          GRUS_E2E_BINARY: ${{ github.workspace }}/build/Grus.x86_64
+        run: |
+          LIBGL_ALWAYS_SOFTWARE=1 \
+          xvfb-run -a cargo test \
+            -p grus-godot \
+            --features e2e \
+            --test e2e_boot \
+            --locked \
+            -- --test-threads=1
       - name: Benchmark 200 moving units at 1080p
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
@@ -70,3 +129,12 @@ jobs:
           set -o pipefail
           timeout 90s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log
           grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-failure-diagnostics
+          path: |
+            test_output/**
+            export-smoke.log
+            benchmark.log
