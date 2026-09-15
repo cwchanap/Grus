@@ -1487,9 +1487,13 @@ mod tests {
             Some(ProductionKind::Unit(UnitKind::Archer))
         );
         assert_eq!(
-            stockpile(&world, TEAM).food,
-            1000 - unit_spec(UnitKind::Archer).cost.food,
-            "acceptance pays the archer's food cost"
+            stockpile(&world, TEAM),
+            ResourceStockpile {
+                food: 1000 - unit_spec(UnitKind::Archer).cost.food,
+                wood: 1000 - unit_spec(UnitKind::Archer).cost.wood,
+                gold: 1000 - unit_spec(UnitKind::Archer).cost.gold,
+            },
+            "acceptance pays the archer's full cost"
         );
 
         let rejected = enqueue(&mut world, &mut map, BuildingId(100), UnitKind::Villager);
@@ -1500,8 +1504,12 @@ mod tests {
             "a rejected enqueue never joins the queue"
         );
         assert_eq!(
-            stockpile(&world, TEAM).food,
-            1000 - unit_spec(UnitKind::Archer).cost.food,
+            stockpile(&world, TEAM),
+            ResourceStockpile {
+                food: 1000 - unit_spec(UnitKind::Archer).cost.food,
+                wood: 1000 - unit_spec(UnitKind::Archer).cost.wood,
+                gold: 1000 - unit_spec(UnitKind::Archer).cost.gold,
+            },
             "a rejected enqueue pays nothing"
         );
     }

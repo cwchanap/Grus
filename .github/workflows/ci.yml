@@ -45,7 +45,7 @@ jobs:
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
       - name: Test simulation with coverage gate
-        run: cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info
+        run: cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:

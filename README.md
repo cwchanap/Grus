@@ -105,7 +105,7 @@ cargo build --workspace --locked
 Unit coverage:
 
 ```bash
-cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90
+cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked
 cargo test -p grus-godot --lib
 ```
 

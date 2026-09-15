@@ -2,7 +2,9 @@
 //!
 //! Behind the `e2e` feature, attaches stable [`E2eId`] names to the
 //! deterministic authored skirmish entities after `setup_fixture` seeds the
-//! world, and spawns the `grus.ready` readiness marker. The out-of-process
+//! world, and spawns the `grus.ready` readiness marker. `reset_fixture`
+//! reseeds the same authored entities, so it re-runs the attachment; the
+//! marker survives the clear and is spawned only once. The out-of-process
 //! harness addresses these over BRP; raw `Entity` ids never cross the wire.
 //! Registration happens in `build_app` and only takes effect when the parent
 //! harness sets `BEVY_E2E=1`, matching `BevyE2EPlugin`'s activation contract.
@@ -45,7 +47,10 @@ impl Plugin for GrusE2ePlugin {
 
 /// Attaches `E2eId` selectors to the deterministic authored fixture entities
 /// after `setup_fixture` seeds the world, then spawns the `grus.ready`
-/// marker. Inert unless the harness sets `BEVY_E2E=1`.
+/// marker. `reset_fixture_world` calls this again after reseeding: the
+/// selector-bearing entities are despawned and replaced, while the bare
+/// readiness marker survives, so it is spawned only when absent. Inert
+/// unless the harness sets `BEVY_E2E=1`.
 pub fn attach_selectors(world: &mut World) {
     if std::env::var("BEVY_E2E").as_deref() != Ok("1") {
         return;
@@ -82,7 +87,13 @@ pub fn attach_selectors(world: &mut World) {
             .insert(E2eId::new("player.starting-villager"));
     }
 
-    world.spawn(E2eId::new("grus.ready"));
+    let mut ready = world.query::<&E2eId>();
+    if !ready
+        .iter(world)
+        .any(|id| id.value.as_str() == "grus.ready")
+    {
+        world.spawn(E2eId::new("grus.ready"));
+    }
 }
 
 #[cfg(all(test, feature = "e2e"))]
@@ -197,6 +208,65 @@ mod tests {
             .unwrap();
         assert_eq!(villager.team, PLAYER_TEAM);
         assert_eq!(villager.kind, UnitKind::Villager);
+        assert_eq!(villager.id, UnitId(1), "first authored player villager");
+    }
+
+    /// `reset_fixture` despawns every gameplay entity — the selector-bearing
+    /// ones included — and reseeds. The reseeded fixture must resolve the
+    /// same selector contract without duplicating the surviving marker.
+    #[test]
+    fn reattaches_selectors_after_fixture_reset() {
+        let _guard = env_lock();
+        // SAFETY: serialized by env_lock; no other test touches these vars.
+        unsafe {
+            std::env::set_var("BEVY_E2E", "1");
+            std::env::set_var("BRP_EXTRAS_PORT", "0");
+        }
+
+        let mut app = test_app();
+        run_first_frame(&mut app);
+
+        crate::reset_fixture_world(app.world_mut());
+
+        let world = app.world_mut();
+        let mut query = world.query::<(Entity, &E2eId)>();
+        let mut by_id: HashMap<&str, Vec<Entity>> = HashMap::new();
+        for (entity, id) in query.iter(world) {
+            by_id.entry(id.value.as_str()).or_default().push(entity);
+        }
+
+        for selector in [
+            "grus.ready",
+            "player.town-center",
+            "enemy.town-center",
+            "player.starting-villager",
+        ] {
+            assert_eq!(
+                by_id.get(selector).map(Vec::len),
+                Some(1),
+                "{selector} must resolve to exactly one entity after reset"
+            );
+        }
+        assert_eq!(
+            by_id.len(),
+            4,
+            "reset may neither drop nor duplicate the selector contract"
+        );
+
+        let player = world
+            .entity(by_id["player.town-center"][0])
+            .get::<Building>()
+            .unwrap();
+        assert_eq!(player.team, PLAYER_TEAM);
+        let enemy = world
+            .entity(by_id["enemy.town-center"][0])
+            .get::<Building>()
+            .unwrap();
+        assert_eq!(enemy.team, ENEMY_TEAM);
+        let villager = world
+            .entity(by_id["player.starting-villager"][0])
+            .get::<Unit>()
+            .unwrap();
         assert_eq!(villager.id, UnitId(1), "first authored player villager");
     }
 }
