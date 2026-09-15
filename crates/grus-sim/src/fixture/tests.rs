@@ -13,13 +13,23 @@ use crate::movement::{SimPosition, Unit};
 #[test]
 fn retained_battlefield_has_multiple_routes_between_base_zones() {
     let fixture = MapFixture::battlefield();
-    let map = &fixture.map;
+    let mut map = fixture.map;
     let start = map.world_to_cell(fixture.left_spawn);
     let goal = map.world_to_cell(fixture.right_spawn);
     let direct_manhattan = start.x.abs_diff(goal.x) + start.y.abs_diff(goal.y);
     let route = map.find_path(start, goal).expect("base zones must connect");
 
     assert!(route.len() as u32 > direct_manhattan + 1);
+
+    // Blocking an interior route cell must leave an alternate route: the
+    // base zones stay connected through more than one corridor.
+    let interior = route[route.len() / 2];
+    assert!(interior != start && interior != goal);
+    assert!(map.set_blocked(interior, true));
+    let alternate = map
+        .find_path(start, goal)
+        .expect("an alternate route must exist");
+    assert!(!alternate.contains(&interior));
 }
 
 #[test]

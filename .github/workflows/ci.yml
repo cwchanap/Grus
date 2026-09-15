@@ -56,7 +56,7 @@ jobs:
           path: lcov.info
           if-no-files-found: warn
       - name: Test grus-godot library
-        run: cargo test -p grus-godot --lib
+        run: cargo test -p grus-godot --lib --locked
       - name: Test grus-godot e2e selector surface
         # Serialized: these tests mutate process-global env vars (BEVY_E2E,
         # BRP_EXTRAS_PORT).
@@ -116,6 +116,7 @@ jobs:
             -p grus-godot \
             --features e2e \
             --test e2e_boot \
+            --locked \
             -- --test-threads=1
       - name: Benchmark 200 moving units at 1080p
         env:
