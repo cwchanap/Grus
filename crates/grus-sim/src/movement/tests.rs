@@ -491,6 +491,15 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
             .map
             .is_walkable(fixture.map.world_to_cell(*position))
     }));
+    // Units must actually arrive near the commanded destination, not just
+    // shed their MoveOrders: assigned slots cluster within ~7 units of
+    // right_spawn, while the spawn block sits ~95 units away.
+    assert!(
+        final_positions
+            .iter()
+            .all(|position| position.distance(fixture.right_spawn) < 12.0),
+        "100-unit group did not arrive near the commanded destination"
+    );
     let final_cells = final_positions
         .into_iter()
         .map(|position| fixture.map.world_to_cell(position))
