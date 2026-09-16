@@ -1,8 +1,8 @@
 # HPA-472 Combat and Match Lifecycle Implementation Plan
 
-**Goal:** Extend the current Grus economy/production loop into a complete combat match with authoritative damage/destruction, attack/attack-move controls, start/pause/result/restart lifecycle, and runtime verification.
+**Goal:** Extend the current Grus economy/production loop into a complete combat match with authoritative damage/destruction, attack/attack-move controls, Start/pause/result/restart lifecycle, and runtime verification.
 
-**Architecture:** Bevy ECS stays authoritative. Add only `combat.rs` and `session.rs`; extend the existing catalogue, command dispatcher, stable indexes, reset seam and Godot bridge. Godot remains presentation/input/UI only. The planning draft is the implementation PR for HPA-472.
+**Architecture:** Bevy ECS stays authoritative. Add only `combat.rs` and `session.rs`; extend the existing catalogue, command dispatcher, activity-cancellation seam, stable indexes, reset seam and Godot bridge. Godot remains presentation/input/UI only. This draft PR is the implementation PR for HPA-472.
 
 **Tech Stack:** Rust 1.95.0, Bevy 0.19.1, godot-bevy 0.12.0, godot-rust 0.5.5, Godot 4.6.2, GDScript, existing GitHub Actions CI.
 
@@ -10,118 +10,125 @@
 
 ## Global constraints
 
-- Exactly one Linear ticket and one GitHub PR. Continue implementation on this draft branch.
-- Preserve the current Bevy-authoritative / Godot-presentation boundary.
+- Exactly one Linear ticket and one GitHub PR; continue implementation on this branch.
+- Preserve the Bevy-authoritative / Godot-presentation boundary.
 - Preserve the >90% `grus-sim` production-code line coverage gate.
-- Every implementation commit keeps formatting, Clippy and focused Rust tests green; keep runtime gates green at each logical integration point.
-- Canonical final fixed-step order: commands -> combat -> movement -> economy -> construction -> production -> route feedback.
-- Missing `MatchSession` means Playing for pure simulation/tests. Only the normal Godot skirmish setup/reset inserts Start; benchmark reset remains immediately Playing.
-- Use one combat target-eligibility function. HPA-473 must be able to add visibility there instead of rewriting combat.
-- Reuse `MoveOrder`, A*, stable IDs, `GridMap::set_blocked`, current indexes and the authored fixture. Unit pursuit may reuse `assign_move_toward()` directly; building pursuit must first select a walkable immediate-perimeter goal with `approach_slots()`.
-- Do not pathfind every frame. Unit pursuit refreshes only when a target changes grid cell or its route ends; static building pursuit refreshes only when its route ends.
-- Keep combat tuning in `catalog.rs`, including `ATTACK_MOVE_RADIUS`.
-- Append new `RejectReason` variants only; the bridge exposes existing discriminants as numeric codes.
-- No projectile entities/physics, armour/damage-type framework, abilities, formations, garrisons, extra victory modes, save/load, multiplayer, AI, fog, new art pipeline or generic service/event architecture.
-- No image-generation ticket is needed: use primitive unit markers/health bars and presentation-only tracer/hit effects.
+- Every implementation commit keeps formatting, Clippy and focused Rust tests green; keep runtime gates green at each integration point.
+- Canonical final order: commands -> combat -> movement -> economy -> construction -> production -> route feedback.
+- HPA-472 explicitly requires `Start / Playing / Paused / Result`; keep Start. Missing `MatchSession` still means Playing for pure-sim fixtures.
+- Use one combat `target_eligible()` seam so HPA-473 can add visibility without rewriting combat.
+- Reuse `MoveOrder`, A*, stable IDs, `GridMap::set_blocked`, indexes and authored fixture. Unit pursuit may use `assign_move_toward()`; building pursuit uses existing `approach_slots()` but sorts candidates by attacker distance at the combat call site.
+- Keep all tuning in `catalog.rs`, including `ATTACK_MOVE_RADIUS`.
+- One `cancel_unit_activity()` path owns retask cleanup. Do not add per-command `CombatOrder` removal.
+- `CombatEvents` is current-tick-only: clear it at the start of `step_combat()` so headless journeys cannot accumulate events.
+- Append `RejectReason` variants only; never reorder existing discriminants or reuse `Locked`.
+- No projectile physics/entities, armour/damage-type framework, abilities, formations, garrisons, extra victory modes, persistence, multiplayer, AI/fog, new art pipeline or generic service/event architecture.
+- No image-generation task: primitive role markers, health bars and presentation-only tracer/hit effects are enough.
 
 ---
 
-## Task 1: Add combat/session contracts and catalogue health
+## Task 1: Add combat/session contracts, catalogue tuning, and one cancellation seam
 
 **Files:**
 - Create: `crates/grus-sim/src/combat.rs`
 - Create: `crates/grus-sim/src/session.rs`
 - Modify: `crates/grus-sim/src/catalog.rs`
+- Modify: `crates/grus-sim/src/economy.rs`
 - Modify: `crates/grus-sim/src/commands.rs`
 - Modify: `crates/grus-sim/src/buildings.rs`
 - Modify: `crates/grus-sim/src/fixture.rs`
 - Modify: `crates/grus-sim/src/lib.rs`
 
-- [ ] Add failing catalogue tests for military combat specs, the three counter relationships, villager noncombatant status, building health and the attack-move acquisition radius.
-- [ ] Extend `UnitSpec` with `max_health` + `Option<CombatSpec>` and `BuildingSpec` with `max_health` using the design values.
-- [ ] Add `pub const ATTACK_MOVE_RADIUS: f32 = 8.0` beside the existing gameplay constants; no combat tuning literal should live in `combat.rs` or GDScript.
-- [ ] Add `Health`, `CombatTarget`, `CombatOrder`, `AttackCooldown`, `CombatEvent`, `CombatEvents` and the `MatchPhase` / `MatchResult` / `MatchSession` contracts.
-- [ ] Keep the last pursued target cell on `CombatOrder`; do not add a separate `PursuitState` component.
+- [ ] Add catalogue tests for military combat specs, counter relationships, villager noncombatant status, building health and `ATTACK_MOVE_RADIUS`.
+- [ ] Extend `UnitSpec` with `max_health` + `Option<CombatSpec>` and `BuildingSpec` with `max_health`.
+- [ ] Use initial tuning from the spec, including Archer **+12 vs Spearman** so the counter leg is not dependent on an opening-shot timing edge.
+- [ ] Add `ATTACK_MOVE_RADIUS: f32 = 8.0` beside existing gameplay constants; no radius literal in `combat.rs`/GDScript.
+- [ ] Add `Health`, `CombatTarget`, `CombatOrder`, `AttackCooldown`, `CombatEvent`, `CombatEvents`, `MatchPhase`, `MatchResult`, and `MatchSession` contracts.
+- [ ] Keep `last_target_cell` on `CombatOrder`; no `PursuitState` component.
 - [ ] Extend `UnitCommandKind` with `AttackMove` and `PlayerCommand` with direct `Attack`.
-- [ ] Append typed rejects: `NotCombatant`, `TargetMissing`, `InvalidTarget`, `SessionLocked`. Do not reorder existing variants or reuse `Locked`.
-- [ ] Make `spawn_unit()` attach catalogue health/cooldown. Seeded and placed buildings attach catalogue health.
-- [ ] Export only the contracts later tasks need through `lib.rs`; do not add placeholder systems.
+- [ ] Append `NotCombatant`, `TargetMissing`, `InvalidTarget`, `SessionLocked` to `RejectReason`.
+- [ ] Rename `cancel_worker_activity()` to `cancel_unit_activity()` and make it also remove `CombatOrder` while preserving its existing worker/Farm/build cleanup, GatherProgress reset, Carry preservation and MoveOrder removal. Update existing Move/Stop/Gather/Place/Resume call sites atomically.
+- [ ] Make `spawn_unit()` attach catalogue Health/AttackCooldown. Seeded/placed buildings attach Health.
+- [ ] Export only contracts later tasks need; no placeholder framework/systems.
 
 **Focused verification:**
 
 ```bash
 cargo test -p grus-sim catalog
-cargo test -p grus-sim combat
+cargo test -p grus-sim commands
+cargo test -p grus-sim economy
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ---
 
-## Task 2: Implement direct attack, attack-move, unit destruction and pursuit
+## Task 2: Implement attack, attack-move, unit destruction, pursuit, and combat ordering
 
 **Files:**
 - Modify: `crates/grus-sim/src/combat.rs`
 - Modify: `crates/grus-sim/src/commands.rs`
 - Modify: `crates/grus-sim/src/map.rs`
-- Modify: `crates/grus-sim/src/movement.rs` only if a narrow helper is needed
 - Modify: `crates/grus-sim/tests/system_order.rs`
-- Modify: `crates/grus-godot/src/lib.rs` for the production FixedUpdate chain only
+- Modify: `crates/grus-godot/src/lib.rs` for the production FixedUpdate chain
 - Add/modify: `crates/grus-sim/src/combat/tests.rs`
 - Add/modify: `crates/grus-sim/src/commands/tests.rs`
 
-- [ ] Write failing tests for direct target validation, villager rejection, enemy-only targeting, melee/ranged range, cooldown, all three counter bonuses and building base damage.
-- [ ] Add `Footprint::closest_point(Vec2) -> Vec2` with tests proving a melee unit beside a 4x4 Town Center measures to the perimeter, not its center.
-- [ ] Implement the single `target_eligible(world, attacker_team, target)` seam. Do not duplicate eligibility checks in attack-move acquisition.
-- [ ] Implement deterministic target distance: point-to-point for units; `Footprint::closest_point()` for buildings/sites.
-- [ ] Implement direct Attack acceptance. Validate first, then cancel old worker/movement/combat activity for accepted units.
-- [ ] Implement AttackMove acceptance and `ATTACK_MOVE_RADIUS` acquisition; nearest target wins with stable-ID tie breaking.
-- [ ] Implement `step_combat()` cooldown, target refresh, hit application and pursuit assignment.
-- [ ] If already in range, do not path. Unit pursuit may call `assign_move_toward()` with the target unit's walkable cell.
-- [ ] For building/site pursuit, seed the existing reservation view, choose a walkable immediate-perimeter goal with `approach_slots()`, then pass that walkable goal through the existing move assignment seam. Never pass a blocked footprint cell or `Footprint::center()` to A*.
-- [ ] Track the last pursued target cell on `CombatOrder` so unit pursuit does not rerun A* every tick.
-- [ ] Add `UnitIndex::remove()` and an atomic `destroy_unit()` hit-path helper: worker cleanup, index removal, despawn. Do not defer unit death to Task 3.
-- [ ] Direct Attack ends on missing/dead target. AttackMove clears a dead unit target and resumes toward its stored destination through the same `step_combat()` implementation.
-- [ ] Update Move and Stop so accepted commands clear combat intent; Stop still performs existing worker cleanup.
-- [ ] Record hit/death data in `CombatEvents`; do not add Godot effects yet.
-- [ ] Insert `step_combat()` before movement in both the Godot `FixedUpdate` chain and `crates/grus-sim/tests/system_order.rs` in this task. With no combat order it is a no-op, so the existing 900-tick Age 2 ordering assertion stays meaningful and green.
+- [ ] Write failing tests for target validation, villager rejection, enemy-only targeting, melee/ranged range, cooldown and building base damage.
+- [ ] Add three **behavioral counter-duel tests** using symmetric AttackMove: Spearman survives vs Cavalry, Archer survives vs Spearman, Cavalry survives vs Archer. Assert gameplay outcome, not just catalogue `counter_target` values.
+- [ ] Add `Footprint::closest_point(Vec2) -> Vec2` with a Town Center melee-range regression.
+- [ ] Implement the single `target_eligible(world, attacker_team, target)` seam.
+- [ ] Direct Attack validates first, then calls `cancel_unit_activity()` and installs combat intent. AttackMove does the same per accepted military unit.
+- [ ] AttackMove acquisition uses `ATTACK_MOVE_RADIUS`, nearest target, stable-ID tie-break.
+- [ ] At the top of every `step_combat()`, clear `CombatEvents`.
+- [ ] Snapshot attacker stable IDs in ascending order. Before each acts, re-resolve it via `UnitIndex`; if an earlier hit destroyed it, skip it. Never keep an Entity handle and blindly mutate after another attacker may despawn it.
+- [ ] Add a low-health cross-target regression: lower UnitId kills the later attacker first; the dead later attacker is skipped and cannot act/panic.
+- [ ] If already in range, do not path.
+- [ ] Unit pursuit may use `assign_move_toward()` against the target's walkable cell.
+- [ ] Building/site pursuit calls `approach_slots()`, sorts candidates by distance to the attacker **only at the combat call site**, then uses a walkable candidate with the existing move assignment seam. Do not change economy/building approach ordering.
+- [ ] Refresh unit pursuit only when target cell changes or route ends; static building pursuit only when route ends.
+- [ ] Add `UnitIndex::remove()` and atomic `destroy_unit()`: `cancel_unit_activity`, index removal, despawn. Carry dies with worker.
+- [ ] Direct Attack ends on missing/dead target; AttackMove clears dead target and resumes destination.
+- [ ] Move/Stop/worker commands inherit combat cancellation through the shared helper; no command-site duplication.
+- [ ] Record current-tick hit/death data in `CombatEvents`.
+- [ ] Insert `step_combat()` before movement in both Godot `FixedUpdate` and the existing `system_order.rs` long-form test.
 
-**Required tests:**
+**Required tests / verification:**
 
-- melee does not hit outside range and hits once inside range;
-- Archer hits at range and respects cooldown;
-- Spearman > Cavalry, Archer > Spearman, Cavalry > Archer bonuses;
-- unit pursuit creates/reuses movement and refreshes after target cell change;
-- building pursuit ends on an immediate-perimeter cell and never targets a blocked footprint;
-- Town Center melee range uses `closest_point`, not `center`;
-- AttackMove acquires, atomically destroys a unit target, then continues toward its destination;
-- Stop cancels pursuit/attack;
-- normal Move replaces combat intent;
-- buildings/construction sites accept base damage without yet requiring their destruction cleanup.
+```bash
+cargo test -p grus-sim combat
+cargo test -p grus-sim commands
+cargo test -p grus-sim --test system_order
+cargo build -p grus-godot --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Required behavior includes closest-point building range, nearest-perimeter pursuit, counter-duel winners, pursuit reuse/replan, AttackMove continuation after atomic unit death, and liveness-safe same-step iteration.
 
 ---
 
-## Task 3: Make building destruction atomic and preserve economy/production invariants
+## Task 3: Make building destruction atomic and prove combat-before-economy
 
 **Files:**
 - Modify: `crates/grus-sim/src/combat.rs`
 - Modify: `crates/grus-sim/src/buildings.rs`
 - Modify: `crates/grus-sim/src/economy.rs`
-- Modify: `crates/grus-sim/src/production.rs` only where tests expose a real invariant gap
+- Modify: `crates/grus-sim/src/production.rs` only if tests expose a real invariant gap
+- Modify: `crates/grus-sim/tests/system_order.rs`
 - Add/modify: focused module tests
 
-- [ ] Add `BuildingIndex::remove()` following the existing `ResourceIndex::remove()` / new `UnitIndex::remove()` pattern.
-- [ ] Write destruction tests before implementation for Farm worker idle, destroyed drop-off reroute, no-valid-dropoff idle, every builder task that references a destroyed site, freed footprint, discarded production queue and House capacity reduction.
-- [ ] Implement one building-destruction helper. Capture footprint/Farm resource identity, free footprint cells with `GridMap::set_blocked`, remove `BuildingIndex`/Farm `ResourceIndex` entries, retask every affected worker, then despawn.
-- [ ] Scan all live `WorkerTask` values that hold the destroyed `BuildingId`; do not clean only `Building.construction.active_builder` or `ResourceSource.assigned_worker`.
-- [ ] `ToConstruction` and `Constructing` workers for the destroyed site go through existing worker cancellation and become Idle.
-- [ ] Every `ToDropoff { dropoff: destroyed_id, ... }` worker immediately reroutes its preserved carry to another reachable same-team drop-off using a narrow economy helper around the existing `nearest_reachable_dropoff`; if none is reachable, use existing route-failure/cleanup behavior to become visibly Idle while preserving carry.
-- [ ] When a Farm dies, its assigned worker becomes Idle immediately and preserves carry even if it was moving to the Farm, gathering, or returning a Farm-sourced load. Do not use standalone `deplete_source()` for a Farm's 2x2 building footprint.
-- [ ] Verify the combat-before-economy order prevents a destroyed drop-off worker from reaching the stale slot and calling `deposit_carry`, and prevents a destroyed site's worker from transitioning `ToConstruction -> Constructing` in that tick.
-- [ ] A destroyed producer drops its queue with no refund.
-- [ ] Rely on derived `population_cap()` after House/TC removal; do not delete units above the new cap.
-- [ ] Keep existing sequential spawn completion as the simultaneous-cap safety mechanism and add one regression test at the reduced cap.
-- [ ] Ensure stale combat targets clear through the stable-index/eligibility seam rather than scanning every combat order during destruction.
+- [ ] Add `BuildingIndex::remove()` following the existing ResourceIndex/new UnitIndex pattern.
+- [ ] Write tests for Farm worker idle, destroyed drop-off reroute, no-valid-dropoff idle, every construction task referencing a destroyed site, freed footprint, discarded queue and House capacity reduction.
+- [ ] Implement one building-destruction transaction: capture footprint/Farm resource identity, free cells, remove BuildingIndex/Farm ResourceIndex entries, retask affected workers, despawn.
+- [ ] Scan all live `WorkerTask` values that hold the destroyed `BuildingId`; do not clean only `active_builder` or `assigned_worker`.
+- [ ] `ToConstruction` / `Constructing` workers use existing cancellation and become Idle.
+- [ ] `ToDropoff { dropoff: destroyed_id }` workers reroute preserved Carry immediately through a narrow helper over the existing nearest-reachable-dropoff logic; if no route, become visibly Idle while preserving Carry.
+- [ ] A destroyed Farm idles its assigned worker with Carry preserved whether moving to it, gathering, or returning a Farm-sourced load. Never call standalone `deplete_source()` for a Farm.
+- [ ] A destroyed producer loses queue with no refund.
+- [ ] Derived `population_cap()` falls naturally; do not delete living units above cap. Retain sequential production completion and add reduced-cap regression.
+- [ ] Stale combat targets disappear through stable indexes + `target_eligible`, not a global order scan.
+- [ ] Add a **second `system_order.rs` test**: in the same tick, a carrying worker reaches a drop-off slot while combat destroys that drop-off. Run combat -> movement -> economy and assert stockpile does not receive the stale deposit. Structure it so moving combat after economy makes the test fail.
 
 **Focused verification:**
 
@@ -135,34 +142,33 @@ cargo test -p grus-sim --test system_order
 
 ---
 
-## Task 4: Add authoritative result, Start/Pause/Resume/Restart gating, and atomically adapt existing runtime gates
+## Task 4: Add Start/Pause/Resume/Result/Restart gating and freeze interpolation correctly
 
 **Files:**
 - Modify: `crates/grus-sim/src/session.rs`
 - Modify: `crates/grus-sim/src/combat.rs`
+- Modify: `crates/grus-sim/src/movement.rs`
 - Modify: `crates/grus-godot/src/lib.rs`
-- Modify: `godot/scripts/smoke_test.gd` where normal skirmish Start affects it
-- Modify: `godot/scripts/reset_test.gd`
-- Modify: `godot/scripts/economy_smoke_test.gd`
-- Add/modify: Rust session tests and bridge library tests
+- Modify: normal-skirmish Godot smokes affected by Start
+- Add/modify: Rust session tests and bridge tests
 
-- [ ] Write failing session tests for missing-session-as-Playing, explicit Start freeze, Playing advancement, Paused freeze, Resume without catch-up, Result freeze and command rejection outside Playing.
-- [ ] Keep `seed_skirmish()` session-free. A missing `MatchSession` is treated as Playing by gameplay command/system gates so current pure-sim tests do not need lifecycle boilerplate.
-- [ ] Normal Godot `setup_fixture` and `reset_fixture_world` insert `MatchSession::Start` after seeding.
-- [ ] `reset_benchmark_world` explicitly inserts `MatchSession::Playing` (or removes the resource after clear) so the 200-unit benchmark remains immediately active.
-- [ ] In this same commit, update every existing normal-skirmish smoke affected by Start to call `start_match()` before issuing gameplay commands. Do not defer these adaptations to Task 7 and leave intermediate CI red.
-- [ ] Resolve `MatchPhase::Result` immediately when a Town Center is destroyed, recording winner/loser teams.
-- [ ] When Result is set during `step_combat()`, return immediately from the whole combat step. The first Town Center destruction in stable attacker order decides; there is no same-tick draw/overwrite.
-- [ ] Gate `apply_pending_commands` with `SessionLocked` only when an explicit session is Start/Paused/Result; absent session remains Playing.
-- [ ] Gate combat/movement/economy/construction/production advance functions with the same optional-session rule; route feedback may still drain already-recorded feedback but must not mutate gameplay.
-- [ ] Add bridge methods: `session_snapshot()`, `start_match()`, `set_paused(bool)` and `restart_match()`.
-- [ ] Keep user pause independent from `Engine.time_scale`; the existing sim-speed control remains only for headless acceleration.
-- [ ] `restart_match()` calls the existing clear + reseed path and returns the normal skirmish to Start.
-- [ ] Expand reset cleanup for combat/session resources without introducing a second reset implementation.
-- [ ] Add a bridge regression that repeats reset/start cycles and asserts initial resources/entity counts/indexes have no stale/duplicate entries.
-- [ ] Add a same-tick regression with attackers able to threaten both Town Centers and assert the first resolved destruction cannot be overwritten.
+- [ ] Keep all four ticket-required phases: `Start`, `Playing`, `Paused`, `Result`.
+- [ ] Missing `MatchSession` means Playing; keep `seed_skirmish()` session-free so old pure-sim tests need no lifecycle boilerplate.
+- [ ] Normal Godot setup/reset inserts Start; benchmark reset inserts Playing or removes stale session.
+- [ ] In the same commit, update affected normal-skirmish smokes to call `start_match()` before gameplay commands; do not defer and leave CI frozen.
+- [ ] Resolve Result immediately on Town Center destruction. `step_combat()` returns immediately once Result is set, so first destruction wins.
+- [ ] Gameplay command application rejects with `SessionLocked` for explicit Start/Paused/Result; absent session remains Playing.
+- [ ] Combat/economy/construction/production perform no gameplay mutation outside Playing.
+- [ ] **Movement special case:** when session is Start/Paused/Result, `step_movement()` must still set every live `SimPosition.previous = current` before returning without advancing movement. This prevents Godot interpolation from cycling forever between stale previous/current positions while `Engine.time_scale` remains active.
+- [ ] Add a regression asserting `previous == current` after one paused fixed tick for an in-flight unit; keep the MoveOrder so Resume can continue normally.
+- [ ] Add `session_snapshot()`, `start_match()`, `set_paused(bool)`, `restart_match()`.
+- [ ] User pause never changes `Engine.time_scale`; existing sim-speed control stays for headless acceleration only.
+- [ ] Restart uses existing clear + reseed and returns normal skirmish to Start.
+- [ ] Reset cleanup removes combat/session transients without creating a second reset implementation.
+- [ ] Repeat reset/start cycles in a bridge regression: initial resources/entities/indexes are restored once with no stale IDs/nodes.
+- [ ] Add same-step dual-Town-Center threat regression: stable first result cannot be overwritten by a later attacker.
 
-**Runtime verification in this task:**
+**Runtime verification:**
 
 ```bash
 cargo test -p grus-sim
@@ -171,29 +177,42 @@ cargo test -p grus-godot --lib --locked
 godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
-# run the existing benchmark scene/path and confirm units still move without a Start click
+# run benchmark path and prove units still move without Start interaction
 ```
 
 ---
 
-## Task 5: Add passive-opponent victory/defeat journeys in Rust
+## Task 5: Add bounded passive-opponent victory/defeat journeys
 
 **Files:**
 - Add/modify: `crates/grus-sim/src/combat/tests.rs`
 - Add/modify: `crates/grus-sim/src/session/tests.rs`
-- Reuse: `fixture`, `economy`, `buildings`, `production`, `commands`
+- Reuse: fixture/economy/buildings/production/commands
 
-- [ ] Build a test helper around the normal authored skirmish seed; do not add a runtime game mode or AI framework.
-- [ ] Add an economy -> production -> army -> enemy Town Center destruction -> victory test using real command/system calls. The opponent remains passive.
-- [ ] Add a separate defeat fixture where team 2 destroys team 1's Town Center through the same combat systems.
-- [ ] Assert result freezes stockpiles, positions, construction, production progress, attack cooldowns and age-up progress across many subsequent ticks.
-- [ ] Assert gameplay commands submitted after Result return/reveal `SessionLocked` and do not mutate state.
+- [ ] Build a helper around the normal authored skirmish; no runtime AI/game mode/debug grant API.
+- [ ] Add economy -> production -> army -> enemy Town Center -> victory journey using real commands/systems.
+- [ ] Add separate defeat journey where team 2 destroys team 1 through the same combat systems.
+- [ ] Implement journeys as **bounded event loops**, not hardcoded tick arithmetic:
 
-The test helper may accelerate fixed-step calls directly; it must not add resource cheats/debug-grant APIs to runtime code.
+```rust
+let mut resolved_at = None;
+for tick in 0..BUDGET {
+    step_match(...);
+    if is_result(&world) {
+        resolved_at = Some(tick);
+        break;
+    }
+}
+assert!(resolved_at.is_some(), "match did not resolve inside budget");
+```
+
+- [ ] Assert Result freezes stockpiles, positions, construction, production, cooldowns and age-up progress across subsequent ticks.
+- [ ] Assert commands after Result return/reveal `SessionLocked` and do not mutate.
+- [ ] The helper may accelerate direct fixed-step calls but must assert outcomes/invariants rather than exact completion ticks.
 
 ---
 
-## Task 6: Wire Godot combat input, health/effects and lifecycle UI
+## Task 6: Wire Godot combat/lifecycle incrementally with a growing smoke
 
 **Files:**
 - Modify: `crates/grus-godot/src/lib.rs`
@@ -203,38 +222,52 @@ The test helper may accelerate fixed-step calls directly; it must not add resour
 - Modify: `godot/scenes/unit_view.tscn`
 - Modify: `godot/scenes/building_view.tscn`
 - Modify: `godot/scenes/main.tscn`
-- Create only if useful: one small presentation helper script/scene for transient combat effects
+- Create first: `godot/scripts/combat_lifecycle_smoke_test.gd`
+- Create first: `godot/scenes/combat_lifecycle_smoke_test.tscn`
+- Create only if useful: one tiny transient combat-effect helper
 
-- [ ] Add bridge call `attack_units(ids, target_kind: i32, target_id)` with the closed codes `0 = unit`, `1 = building`; Rust maps the code to `CombatTarget`. Do not use a string `target_kind` wire.
-- [ ] Add `attack_move_units(ids, target)` using the existing ground target shape.
-- [ ] Right-click enemy unit/building issues contextual Attack for selected military units. Ground right-click remains Move.
-- [ ] Add `A` then ground-click AttackMove. Keep `S` Stop and existing selection/control groups.
-- [ ] `Esc` cancels active placement first; otherwise toggles pause only between Playing/Paused.
-- [ ] Disable gameplay-order emission in Start/Paused/Result even though the sim also rejects it authoritatively.
-- [ ] Add primitive health bars to unit/building views. Update them from `Changed<Health>` through existing Godot node handles, not a per-frame GDScript scan of all entities.
-- [ ] Style unit kinds with primitive scale/role-marker differences so villager/spearman/archer/cavalry are readable without art assets.
-- [ ] Drain `CombatEvents` into short tracer/hit/death effects. Archer tracer is presentation-only and never controls hit timing.
+- [ ] **Start Task 6 by creating the combat lifecycle smoke scene/script.** Keep it running as each integration slice lands; Task 7 only promotes/finishes the already-working smoke.
+- [ ] Add bridge call `attack_units(ids, target_kind: GString, target_id)`. Add `parse_target_kind()` beside the existing parse helpers; accept only `"unit"` / `"building"`. This matches existing input-kind convention rather than introducing magic integer inputs.
+- [ ] Add `attack_move_units(ids, target)`.
+- [ ] Reuse `_nearest_view` for enemy picking with an enemy-only filter and the existing closest-view tie-break shape; do not create a second picking subsystem.
+- [ ] Right-click enemy unit/building -> Attack; ground right-click -> Move; `A` then ground -> AttackMove; `S` -> Stop.
+- [ ] `Esc` cancels placement first, otherwise toggles Playing/Paused. Do not emit gameplay orders in Start/Paused/Result.
+- [ ] Add health bars to unit/building views from `Changed<Health>` through existing node handles, not per-frame GDScript world polling.
+- [ ] Add primitive role-marker/scale differences for the four unit kinds; no art assets.
+- [ ] Drain current-tick `CombatEvents` into short tracer/hit/death effects; cosmetics never drive combat.
 - [ ] Add one tiny attack/hit sound cue without an audio framework.
-- [ ] Add `SessionOverlay` + Pause button: Start; Paused/Resume; Victory or Defeat + Restart/Quit.
-- [ ] On restart, clear transient effect nodes and local selection/control-group state before/while the bridge reseeds; do not retain dead stable IDs in Godot state.
+- [ ] Add session overlay + Pause button: Start, Paused/Resume, Victory/Defeat + Restart/Quit.
+- [ ] Restart clears transient effects plus local selection/control-group state while bridge reseeds; no dead stable IDs remain in Godot state.
+- [ ] Grow the smoke to exercise each landed slice: Start -> Attack bridge -> HP decreases -> death/view removal -> result overlay -> input rejection -> Restart -> fresh state, plus role readability assertions that do not depend on final art.
+
+**Focused verification while Task 6 is in progress:**
+
+```bash
+cargo build -p grus-godot --locked
+cargo test -p grus-godot --lib --locked
+# stage extension and import
+godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
+# keep prior smoke/reset/economy gates green as relevant
+```
+
+Do not wait until Task 7 to discover bridge/view/session integration failures.
 
 ---
 
-## Task 7: Add the HPA-472 lifecycle smoke, preserve older gates and finish the PR
+## Task 7: Promote the lifecycle smoke to CI, document, and finish the PR
 
 **Files:**
-- Create: `godot/scripts/combat_lifecycle_smoke_test.gd`
-- Create: `godot/scenes/combat_lifecycle_smoke_test.tscn`
+- Modify: `godot/scripts/combat_lifecycle_smoke_test.gd`
+- Modify: `godot/scenes/combat_lifecycle_smoke_test.tscn`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `README.md`
 
-- [ ] Add a headless combat/lifecycle smoke through real bridge/controller-facing APIs: Start -> issue attack -> observe HP decrease -> observe death/view removal -> destroy Town Center -> Result -> reject gameplay input -> Restart -> initial state restored.
-- [ ] Ensure the smoke distinguishes the three military role presentations without requiring final art.
-- [ ] Re-run the earlier smoke/reset/economy gates already adapted atomically in Task 4; do not weaken their prior assertions.
-- [ ] Add one HPA-472 smoke step to the existing `e2e` CI job with an evidence-based timeout. Do not create another workflow/job unless the current job becomes materially unmaintainable.
-- [ ] Keep the Bevy E2E exported-game test as the small boot/selector contract; do not grow it into redundant full-match UI automation.
-- [ ] Update README controls/lifecycle/verification commands and note that fog/economic AI remain HPA-473.
-- [ ] Run the full local-equivalent gate set:
+- [ ] Finish any remaining full-journey assertions in the smoke; do not create a second redundant runtime test.
+- [ ] Add one HPA-472 smoke step to the existing `e2e` CI job with evidence-based timeout.
+- [ ] Re-run existing smoke/reset/economy gates; do not weaken prior assertions.
+- [ ] Keep Bevy E2E exported-game test as the small boot/selector contract; no redundant full UI automation.
+- [ ] Update README controls/lifecycle/verification and note HPA-473 still owns fog/economic AI.
+- [ ] Run full local-equivalent gates:
 
 ```bash
 cargo fmt --all -- --check
@@ -244,23 +277,25 @@ cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore
 cargo test -p grus-godot --lib --locked
 cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 cargo build -p grus-godot --features e2e --locked
-# stage the extension, import Godot, then run existing smoke/reset/economy + new combat lifecycle smoke
+# stage extension, import Godot, run existing smoke/reset/economy + combat lifecycle smoke
 ```
 
-- [ ] Confirm Linux export/boot, Bevy E2E boot and the 200-unit benchmark still pass in CI.
-- [ ] Keep the PR draft while implementation is incomplete; move to review only after every HPA-472 acceptance item is backed by tests/runtime evidence.
+- [ ] Confirm Linux export/boot, Bevy E2E boot and 200-unit benchmark pass in CI.
+- [ ] Keep PR draft until every HPA-472 acceptance item has test/runtime evidence.
 
 ## Definition of done
 
-- Military roles fight with the intended counter triangle and readable feedback.
-- Contextual attack, attack-move and stop behave through the real input/bridge path.
-- Building pursuit reaches walkable perimeter cells; melee range uses the footprint's closest point.
-- Workers/buildings/sites die with all required economy, occupancy and queue cleanup semantics, including workers already traveling to a destroyed drop-off/site.
-- Destroying the sole enemy/player Town Center yields victory/defeat, aborts the remainder of that combat step, and freezes later gameplay mutation.
-- Start, pause/resume, result, restart and quit are usable without editor intervention.
-- Missing session remains Playing for pure-sim tests; normal Godot skirmish starts at Start; benchmark remains immediately Playing.
+- Military roles fight with the intended counter triangle; behavioral duel tests prove each counter survives its paired matchup.
+- Contextual Attack, AttackMove and Stop work through the real input/bridge path.
+- Building pursuit uses nearest walkable perimeter candidates; melee range uses `Footprint::closest_point`.
+- `cancel_unit_activity()` is the single retask cleanup seam for worker, movement and combat intent.
+- Combat iteration is liveness-safe under mid-step despawns and its event buffer is bounded to one tick.
+- Workers/buildings/sites die with required economy, occupancy and queue cleanup, including workers already traveling to destroyed drop-offs/sites.
+- `system_order.rs` proves combat-before-economy with the same-tick destroyed-drop-off case.
+- Start, pause/resume, result, restart and quit work without editor intervention; missing session remains Playing for pure-sim fixtures.
+- Frozen movement collapses `previous = current`, so pause/result/start do not visually oscillate while Godot interpolation keeps running.
+- Destroying the sole enemy/player Town Center yields a stable first result and freezes later gameplay mutation.
+- Victory/defeat journeys are bounded by outcome budgets, not brittle exact tick schedules.
 - Restart produces one fresh match with no duplicate nodes/stale IDs.
-- The production FixedUpdate chain and `system_order.rs` encode the same commands -> combat -> movement -> economy -> construction -> production order.
-- Existing economy/CI/export/benchmark behavior remains green.
-- `grus-sim` remains above the 90% production-line coverage gate.
-- No HPA-473 visibility/AI work, new art, or unrelated framework work is pulled into this PR.
+- Existing CI/export/benchmark behavior remains green and `grus-sim` stays above 90% production-line coverage.
+- No HPA-473 visibility/AI, new art, or unrelated framework work enters this PR.
