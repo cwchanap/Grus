@@ -5,12 +5,15 @@
 
 use std::cell::RefCell;
 
+use bevy::math::Vec2;
 use bevy::prelude::{Entity, World};
+use grus_sim::catalog::unit_spec;
 use grus_sim::{
-    Age, Building, BuildingId, BuildingIndex, BuildingKind, GatherProgress, GridMap, GridPos,
-    MapFixture, PlayerCommand, ResourceId, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    UnitId, UnitIndex, WorkerTask, apply_player_command, seed_skirmish, step_combat,
-    step_construction, step_economy, step_movement, step_production,
+    Age, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget,
+    Dropoff, GatherProgress, GridMap, GridPos, Health, MapFixture, PlayerCommand, ResourceId,
+    ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind,
+    WorkerTask, apply_player_command, seed_skirmish, spawn_unit, step_combat, step_construction,
+    step_economy, step_movement, step_production,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -88,7 +91,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
             _ => {}
         }
         apply_queued_test_commands(&mut world, &mut map);
-        step_combat(&mut world, &map, SIM_STEP_SECONDS);
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
@@ -136,7 +139,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
 
     // The next economy tick gathers at the Age 2 rate.
     apply_queued_test_commands(&mut world, &mut map);
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     step_movement(&mut world, &map, SIM_STEP_SECONDS);
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     step_construction(&mut world, SIM_STEP_SECONDS);
@@ -145,5 +148,106 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
     assert!(
         age_two_delta > 0.105 && (age_two_delta - 0.11).abs() < 1e-4,
         "the next economy tick must gather at 2.2/s, got {age_two_delta}"
+    );
+}
+
+/// Combat-before-economy is a correctness contract: in one tick a carrying
+/// worker stands at its drop-off slot while combat destroys that drop-off.
+/// The deposit at the dead slot must never land — the destruction retasks the
+/// worker before the economy step reads its arrival. Moving combat after
+/// economy makes this test fail: the stale deposit banks first.
+#[test]
+fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+
+    // A second team-1 drop-off south-west of the Town Center so the
+    // destroyed drop-off's worker has a same-team reroute target. Placed
+    // through the public command path and completed instantly; the first
+    // runtime building id after the two Town Centers is 3.
+    let placed = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TEAM,
+            builder: UnitId(2),
+            kind: BuildingKind::Storehouse,
+            anchor: GridPos::new(8, 40),
+        },
+    );
+    assert_eq!(placed.reject, None, "storehouse placement rejected");
+    let storehouse_id = BuildingId(3);
+    let storehouse = world
+        .resource::<BuildingIndex>()
+        .entity(storehouse_id)
+        .unwrap();
+    world
+        .get_mut::<Building>(storehouse)
+        .unwrap()
+        .construction
+        .complete = true;
+    world.entity_mut(storehouse).insert(Dropoff { team: TEAM });
+
+    // Carrying worker parked exactly at its Town Center drop-off slot.
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world.entity_mut(worker).insert((
+        SimPosition::new(map.cell_center(GridPos::new(11, 46))),
+        Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: std::num::NonZeroU32::new(6).unwrap(),
+        },
+        GatherProgress::default(),
+        WorkerTask::ToDropoff {
+            source: ResourceId(1),
+            dropoff: TOWN_CENTER,
+            slot: GridPos::new(11, 46),
+        },
+    ));
+
+    // A raider in range of the Town Center with a direct attack order; the
+    // killing blow lands in this tick's combat step.
+    let raider = spawn_unit(
+        &mut world,
+        UnitId(100),
+        TeamId(2),
+        Vec2::new(11.5, 49.5),
+        UnitKind::Spearman,
+        unit_spec(UnitKind::Spearman).speed,
+    );
+    world.entity_mut(raider).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(TOWN_CENTER),
+        last_target_cell: None,
+    });
+    let town_center = world
+        .resource::<BuildingIndex>()
+        .entity(TOWN_CENTER)
+        .unwrap();
+    world.get_mut::<Health>(town_center).unwrap().current = 10;
+
+    // The canonical order under test: combat -> movement -> economy.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(TOWN_CENTER)
+            .is_none(),
+        "combat destroyed the drop-off inside this tick"
+    );
+    match world.get::<WorkerTask>(worker) {
+        Some(WorkerTask::ToDropoff { dropoff, .. }) => assert_eq!(
+            *dropoff, storehouse_id,
+            "the worker was retasked to the surviving drop-off"
+        ),
+        other => panic!("expected a rerouted ToDropoff, got {other:?}"),
+    }
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TEAM].stockpile.wood,
+        300 - 75,
+        "the stale deposit at the just-destroyed drop-off must never land"
     );
 }

@@ -1,15 +1,22 @@
+use std::num::NonZeroU32;
+
 use bevy::math::Vec2;
 use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
+use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
 use crate::commands::{
-    CommandResult, PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
+    CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, apply_player_command,
+    spawn_unit,
 };
-use crate::economy::{Carry, ResourceSource, WorkerTask};
+use crate::economy::{
+    Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
+    ResourceStockpile, TeamEconomy, WorkerTask,
+};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
+use crate::production::ProductionQueue;
 
 fn open_map() -> GridMap {
     GridMap::new(32, 64)
@@ -113,7 +120,7 @@ fn melee_attacker_in_range_hits_without_pathing() {
     );
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
 
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     assert_eq!(world.get::<Health>(defender).unwrap().current, 90);
     assert_eq!(
@@ -164,7 +171,7 @@ fn melee_attacker_out_of_range_pursues_without_striking() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     assert!(events(&world).is_empty(), "out of range means no hit");
     assert_eq!(world.get::<Health>(defender).unwrap().current, 100);
@@ -196,7 +203,7 @@ fn archer_strikes_at_ranged_range_without_moving() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // Cavalry takes the archer's base damage: its counter bonus names Spearman.
     assert_eq!(world.get::<Health>(defender).unwrap().current, 132);
@@ -231,7 +238,7 @@ fn counter_bonus_applies_only_to_the_named_kind() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // Spearman base 10 + counter bonus 10 vs Cavalry.
     assert_eq!(world.get::<Health>(cavalry).unwrap().current, 120);
@@ -262,18 +269,18 @@ fn cooldown_gates_repeat_strikes_until_elapsed() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(world.get::<Health>(defender).unwrap().current, 90);
 
     // Events are current-tick-only: the next step is empty and the target is
     // still on cooldown.
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world).is_empty());
     assert_eq!(world.get::<Health>(defender).unwrap().current, 90);
 
     let mut restrike_at = None;
     for tick in 1..=40 {
-        step_combat(&mut world, &map, SIM_STEP_SECONDS);
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         if !events(&world).is_empty() {
             restrike_at = Some(tick);
             break;
@@ -288,7 +295,7 @@ fn cooldown_gates_repeat_strikes_until_elapsed() {
 }
 
 #[test]
-fn buildings_take_base_damage_and_stand_at_zero() {
+fn killing_blow_atomically_destroys_a_building() {
     let mut world = World::new();
     let mut map = open_map();
     spawn_combatant(
@@ -316,7 +323,7 @@ fn buildings_take_base_damage_and_stand_at_zero() {
             CombatTarget::Building(BuildingId(1)),
         ),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // Base damage only: buildings never take a counter bonus.
     assert_eq!(world.get::<Health>(town_center).unwrap().current, 790);
@@ -327,21 +334,548 @@ fn buildings_take_base_damage_and_stand_at_zero() {
     assert_eq!(recorded[0].position, Vec2::new(12.0, 48.5));
     assert!(!recorded[0].killed);
 
-    // The killing blow depletes Health but the building keeps standing until
-    // the destruction transaction (a later task) claims it. The attacker's
-    // cooldown from the first strike is cleared so the blow lands now.
+    // The killing blow runs the atomic destruction transaction. The
+    // attacker's cooldown from the first strike is cleared so the blow
+    // lands now.
     let attacker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world.get_mut::<AttackCooldown>(attacker).unwrap().0 = 0.0;
     world.get_mut::<Health>(town_center).unwrap().current = 10;
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
-    assert_eq!(world.get::<Health>(town_center).unwrap().current, 0);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
+    assert!(world.get::<Health>(town_center).is_none(), "despawned");
     assert!(
         world
             .resource::<BuildingIndex>()
             .entity(BuildingId(1))
-            .is_some(),
-        "a building at 0 HP is not despawned by combat"
+            .is_none(),
+        "the stable index entry is removed"
+    );
+    for cell in Footprint::new(GridPos::new(12, 46), 4, 4).cells() {
+        assert!(map.is_walkable(cell), "footprint cell {cell:?} freed");
+    }
+    assert!(
+        !target_eligible(&world, TeamId(1), CombatTarget::Building(BuildingId(1))),
+        "the destroyed building leaves through the eligibility seam"
+    );
+
+    // The attacker's direct order ends on the vanished target through
+    // target_eligible — no global CombatOrder scan.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<CombatOrder>(attacker).is_none());
+}
+
+#[test]
+fn destroying_a_dropoff_reroutes_the_carrying_worker() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let storehouse = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::Storehouse,
+        GridPos::new(8, 10),
+    );
+    world
+        .entity_mut(storehouse)
+        .insert(Dropoff { team: TeamId(1) });
+    let backup = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        TeamId(1),
+        BuildingKind::Storehouse,
+        GridPos::new(16, 10),
+    );
+    world.entity_mut(backup).insert(Dropoff { team: TeamId(1) });
+
+    let worker = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(7.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(worker).insert((
+        Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(5).unwrap(),
+        },
+        GatherProgress::default(),
+        WorkerTask::ToDropoff {
+            source: ResourceId(1),
+            dropoff: BuildingId(1),
+            slot: GridPos::new(7, 10),
+        },
+    ));
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(7.5, 9.5),
+        UnitKind::Spearman,
+    );
+    world.get_mut::<Health>(storehouse).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(2),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .is_none()
+    );
+    let task = world.get::<WorkerTask>(worker).cloned().unwrap();
+    match task {
+        WorkerTask::ToDropoff {
+            source,
+            dropoff,
+            slot,
+        } => {
+            assert_eq!(source, ResourceId(1), "the task's source is preserved");
+            assert_eq!(
+                dropoff,
+                BuildingId(2),
+                "rerouted immediately to the surviving same-team drop-off"
+            );
+            assert!(
+                world
+                    .get::<Footprint>(backup)
+                    .unwrap()
+                    .is_immediately_adjacent(slot),
+                "new slot {slot:?} sits on the backup's perimeter"
+            );
+            let order = world
+                .get::<MoveOrder>(worker)
+                .expect("a route to the new drop-off");
+            assert_eq!(order.goal, slot);
+        }
+        other => panic!("expected a rerouted ToDropoff, got {other:?}"),
+    }
+    assert_eq!(
+        world.get::<Carry>(worker),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(5).unwrap(),
+        }),
+        "the reroute preserves Carry"
+    );
+}
+
+#[test]
+fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let town_center = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::TownCenter,
+        GridPos::new(12, 10),
+    );
+    world
+        .entity_mut(town_center)
+        .insert(Dropoff { team: TeamId(1) });
+    let storehouse = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        TeamId(1),
+        BuildingKind::Storehouse,
+        GridPos::new(24, 10),
+    );
+    world
+        .entity_mut(storehouse)
+        .insert(Dropoff { team: TeamId(1) });
+
+    let worker = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(4.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(worker).insert((
+        Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(10).unwrap(),
+        },
+        GatherProgress::default(),
+        WorkerTask::ToDropoff {
+            source: ResourceId(1),
+            dropoff: BuildingId(1),
+            slot: GridPos::new(4, 10),
+        },
+    ));
+    // Box the worker in so neither the destroyed drop-off's freed footprint
+    // nor the surviving storehouse is pathable.
+    for cell in [
+        GridPos::new(3, 9),
+        GridPos::new(4, 9),
+        GridPos::new(5, 9),
+        GridPos::new(3, 10),
+        GridPos::new(5, 10),
+        GridPos::new(3, 11),
+        GridPos::new(4, 11),
+        GridPos::new(5, 11),
+    ] {
+        map.set_blocked(cell, true);
+    }
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(11.5, 13.5),
+        UnitKind::Spearman,
+    );
+    world.get_mut::<Health>(town_center).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(2),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+    assert!(world.get::<MoveOrder>(worker).is_none());
+    assert_eq!(
+        world.get::<Carry>(worker),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(10).unwrap(),
+        }),
+        "the idle never discards Carry"
+    );
+    assert_eq!(
+        world.resource::<LastRouteReject>().0,
+        Some(RejectReason::Unreachable),
+        "typed route failure recorded for bridge feedback"
+    );
+}
+
+#[test]
+fn destroying_a_construction_site_cancels_every_tasking_worker() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let site = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::Barracks,
+        GridPos::new(12, 10),
+    );
+    world
+        .get_mut::<Building>(site)
+        .unwrap()
+        .construction
+        .complete = false;
+
+    let walker = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(11.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(walker).insert((
+        GatherProgress::default(),
+        WorkerTask::ToConstruction {
+            building: BuildingId(1),
+            slot: GridPos::new(11, 10),
+        },
+        MoveOrder {
+            waypoints: vec![map.cell_center(GridPos::new(11, 10))],
+            next: 0,
+            goal: GridPos::new(11, 10),
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        },
+    ));
+    let builder = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(11.5, 14.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(builder).insert((
+        GatherProgress::default(),
+        WorkerTask::Constructing {
+            building: BuildingId(1),
+        },
+    ));
+    world
+        .get_mut::<Building>(site)
+        .unwrap()
+        .construction
+        .active_builder = Some(UnitId(3));
+
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(11.5, 9.5),
+        UnitKind::Spearman,
+    );
+    world.get_mut::<Health>(site).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(2),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(world.get::<WorkerTask>(walker), Some(&WorkerTask::Idle));
+    assert!(world.get::<MoveOrder>(walker).is_none());
+    assert_eq!(world.get::<WorkerTask>(builder), Some(&WorkerTask::Idle));
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .is_none()
+    );
+    for cell in Footprint::new(GridPos::new(12, 10), 3, 3).cells() {
+        assert!(map.is_walkable(cell), "site cell {cell:?} freed");
+    }
+}
+
+#[test]
+fn destroying_a_farm_idles_its_workers_in_every_phase_preserving_carry() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let farm = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::Farm,
+        GridPos::new(8, 10),
+    );
+    let farm_source = ResourceId(1);
+    world.entity_mut(farm).insert(ResourceSource {
+        id: farm_source,
+        kind: ResourceKind::Food,
+        remaining: None,
+        assigned_worker: Some(UnitId(3)),
+    });
+    world
+        .get_resource_or_insert_with(ResourceIndex::default)
+        .insert(farm_source, farm);
+    let town_center = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        TeamId(1),
+        BuildingKind::TownCenter,
+        GridPos::new(16, 10),
+    );
+    world
+        .entity_mut(town_center)
+        .insert(Dropoff { team: TeamId(1) });
+
+    // Moving to the farm, gathering from it, and returning a Farm-sourced
+    // load to the (surviving) Town Center.
+    let to_farm = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(7.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(to_farm).insert((
+        Carry::Empty,
+        GatherProgress::default(),
+        WorkerTask::ToSource {
+            source: farm_source,
+            slot: GridPos::new(7, 10),
+        },
+    ));
+    let gatherer = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(6.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(gatherer).insert((
+        Carry::Holding {
+            kind: ResourceKind::Food,
+            amount: NonZeroU32::new(5).unwrap(),
+        },
+        GatherProgress(0.5),
+        WorkerTask::Gathering {
+            source: farm_source,
+        },
+    ));
+    let returning = spawn_combatant(
+        &mut world,
+        UnitId(4),
+        TeamId(1),
+        Vec2::new(15.5, 10.5),
+        UnitKind::Villager,
+    );
+    world.entity_mut(returning).insert((
+        Carry::Holding {
+            kind: ResourceKind::Food,
+            amount: NonZeroU32::new(10).unwrap(),
+        },
+        GatherProgress::default(),
+        WorkerTask::ToDropoff {
+            source: farm_source,
+            dropoff: BuildingId(2),
+            slot: GridPos::new(15, 10),
+        },
+    ));
+
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(7.5, 9.5),
+        UnitKind::Spearman,
+    );
+    world.get_mut::<Health>(farm).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(2),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    for worker in [to_farm, gatherer, returning] {
+        assert_eq!(
+            world.get::<WorkerTask>(worker),
+            Some(&WorkerTask::Idle),
+            "the destroyed Farm idles its worker in every phase"
+        );
+        assert!(world.get::<MoveOrder>(worker).is_none());
+    }
+    assert_eq!(
+        world.get::<Carry>(gatherer),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Food,
+            amount: NonZeroU32::new(5).unwrap(),
+        })
+    );
+    assert_eq!(
+        world.get::<Carry>(returning),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Food,
+            amount: NonZeroU32::new(10).unwrap(),
+        }),
+        "Carry is preserved through the idle"
+    );
+    assert!(
+        world
+            .resource::<ResourceIndex>()
+            .entity(farm_source)
+            .is_none(),
+        "the Farm's resource identity leaves the ResourceIndex"
+    );
+    assert!(world.get::<Building>(farm).is_none(), "the Farm despawned");
+    for cell in Footprint::new(GridPos::new(8, 10), 2, 2).cells() {
+        assert!(map.is_walkable(cell), "farm cell {cell:?} freed");
+    }
+}
+
+#[test]
+fn destroying_a_producer_drops_its_queue_without_refund() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let barracks = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::Barracks,
+        GridPos::new(12, 10),
+    );
+    let mut economy = TeamEconomy::default();
+    economy.insert_team(
+        TeamId(1),
+        ResourceStockpile {
+            food: 1000,
+            wood: 1000,
+            gold: 1000,
+        },
+        Age::Age1,
+    );
+    world.insert_resource(economy);
+    let result = issue(
+        &mut world,
+        &mut map,
+        PlayerCommand::EnqueueUnit {
+            issuer: TeamId(1),
+            building: BuildingId(1),
+            kind: UnitKind::Spearman,
+        },
+    );
+    assert_eq!(result.reject, None, "enqueue accepted");
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.food,
+        940,
+        "the charge happened at acceptance"
+    );
+
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(11.5, 9.5),
+        UnitKind::Spearman,
+    );
+    world.get_mut::<Health>(barracks).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(2),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert!(
+        world.get::<ProductionQueue>(barracks).is_none(),
+        "the queue disappears with the building"
+    );
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .is_none()
+    );
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.food,
+        940,
+        "destruction refunds nothing"
     );
 }
 
@@ -470,7 +1004,7 @@ fn attack_move_targets_the_nearest_enemy_within_radius() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     assert_eq!(
         world.get::<CombatOrder>(attacker).cloned(),
@@ -514,7 +1048,7 @@ fn attack_move_tie_breaks_by_lower_stable_id() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     match world.get::<CombatOrder>(attacker) {
         Some(CombatOrder::AttackMove {
@@ -553,7 +1087,7 @@ fn attack_move_ignores_enemies_beyond_the_radius() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     assert!(events(&world).is_empty());
     assert_eq!(
@@ -596,7 +1130,7 @@ fn attack_move_acquires_buildings() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 52.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // Already inside attack range of the footprint: strike immediately, on
     // the footprint's closest point — never its center.
@@ -630,7 +1164,7 @@ fn attack_move_diverts_to_an_acquired_stationary_unit() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // The destination route is replaced by pursuit the moment the target is
     // acquired — even though the target never moves. The occupied target
@@ -670,7 +1204,7 @@ fn attack_move_diverts_to_an_acquired_building() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 52.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     let order = world
         .get::<MoveOrder>(attacker)
@@ -684,7 +1218,7 @@ fn attack_move_diverts_to_an_acquired_building() {
     // The diverted pursuit leg is kept while it is active: a static building
     // never triggers a replan mid-route.
     let paths = map.path_call_count();
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(
         map.path_call_count(),
         paths,
@@ -723,7 +1257,7 @@ fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
     );
 
     for _ in 0..2_000 {
-        step_combat(&mut world, &map, SIM_STEP_SECONDS);
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         let left_alive = world.resource::<UnitIndex>().entity(UnitId(1)).is_some();
         let right_alive = world.resource::<UnitIndex>().entity(UnitId(2)).is_some();
@@ -799,7 +1333,7 @@ fn dead_later_attacker_is_skipped_in_the_same_combat_step() {
             == vec![UnitId(2)]
     );
 
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // The lower stable id acts first and atomically destroys the later
     // attacker, which is then skipped instead of acting on a stale entity.
@@ -816,7 +1350,7 @@ fn dead_later_attacker_is_skipped_in_the_same_combat_step() {
     );
 
     // Next step the survivor's direct order ends on its dead target.
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(world.get::<CombatOrder>(left).is_none());
 }
 
@@ -845,10 +1379,10 @@ fn direct_attack_ends_when_the_target_dies() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
 
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         world.get::<CombatOrder>(attacker).is_none(),
         "a direct attack ends on its dead target"
@@ -880,10 +1414,10 @@ fn attack_move_clears_the_dead_target_and_resumes_destination() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
 
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(
         world.get::<CombatOrder>(attacker).cloned(),
         Some(CombatOrder::AttackMove {
@@ -926,11 +1460,11 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
     );
     // Acquire the villager; its move then triggers a pursuit replan, so a
     // real pursuit leg (beside the villager, not the destination) is active.
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     world
         .entity_mut(target)
         .insert(SimPosition::new(Vec2::new(7.5, 13.5)));
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(
         world.get::<MoveOrder>(attacker).unwrap().goal,
         GridPos::new(6, 12),
@@ -941,7 +1475,7 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
     world
         .entity_mut(attacker)
         .insert(SimPosition::new(Vec2::new(6.5, 13.5)));
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
     assert!(
         world.get::<MoveOrder>(attacker).is_some(),
@@ -950,7 +1484,7 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
 
     // The dead target frees the unit immediately — the stale pursuit leg is
     // replaced instead of being waited out.
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     let order = world
         .get::<MoveOrder>(attacker)
         .expect("resumes the destination");
@@ -1003,7 +1537,7 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     assert!(events(&world)[0].killed);
     assert!(
@@ -1045,13 +1579,13 @@ fn unit_pursuit_refreshes_only_when_the_target_moves_or_the_route_ends() {
         &mut map,
         attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     let initial_paths = map.path_call_count();
     assert!(initial_paths > 0, "the first pursuit paths once");
     let goal = world.get::<MoveOrder>(attacker).unwrap().goal;
 
     // Same target cell and an active route: pursuit is reused, no new A*.
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(map.path_call_count(), initial_paths);
     assert_eq!(world.get::<MoveOrder>(attacker).unwrap().goal, goal);
 
@@ -1059,7 +1593,7 @@ fn unit_pursuit_refreshes_only_when_the_target_moves_or_the_route_ends() {
     world
         .entity_mut(target)
         .insert(SimPosition::new(Vec2::new(8.5, 9.5)));
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         map.path_call_count() > initial_paths,
         "a moved target replans pursuit"
@@ -1068,7 +1602,7 @@ fn unit_pursuit_refreshes_only_when_the_target_moves_or_the_route_ends() {
     // A route that ended is reassigned even against a stationary target.
     let paths_before_end = map.path_call_count();
     world.entity_mut(attacker).remove::<MoveOrder>();
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         map.path_call_count() > paths_before_end,
         "an ended pursuit route is reassigned"
@@ -1104,7 +1638,7 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
             CombatTarget::Building(BuildingId(1)),
         ),
     );
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     let goal = world
         .get::<MoveOrder>(attacker)
@@ -1116,7 +1650,7 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
         "the nearest walkable immediate-perimeter cell wins at the combat call site"
     );
     let paths = map.path_call_count();
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(
         map.path_call_count(),
         paths,
@@ -1124,7 +1658,7 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
     );
 
     world.entity_mut(attacker).remove::<MoveOrder>();
-    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(map.path_call_count() > paths, "a ended route is reassigned");
     assert_eq!(world.get::<MoveOrder>(attacker).unwrap().goal, goal);
 }

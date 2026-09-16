@@ -235,6 +235,46 @@ pub(crate) fn idle_worker_on_route_failure(
     world.insert_resource(LastRouteReject(Some(reason)));
 }
 
+/// Narrow combat-destruction seam over the existing drop-off routing: a
+/// worker whose drop-off was destroyed immediately tries another reachable
+/// same-team drop-off, preserving `Carry` and the task's source; with no
+/// route it takes the full idle cleanup (also preserving `Carry`) with typed
+/// feedback. Returns whether a reroute was found.
+pub(crate) fn reroute_dropoff_worker(
+    world: &mut World,
+    map: &GridMap,
+    worker: Entity,
+    source: ResourceId,
+) -> bool {
+    let used = seed_used_excluding(world, map, worker);
+    match nearest_reachable_dropoff(world, map, worker, &used) {
+        Ok((dropoff, slot, route)) => {
+            // Same as every other ToDropoff installation: partial gather
+            // progress never survives a task change.
+            world.entity_mut(worker).insert(GatherProgress::default());
+            world.entity_mut(worker).insert(WorkerTask::ToDropoff {
+                source,
+                dropoff,
+                slot,
+            });
+            if !route.is_empty() {
+                world.entity_mut(worker).insert(MoveOrder {
+                    waypoints: route,
+                    next: 0,
+                    goal: slot,
+                    map_revision: map.revision(),
+                    last_failed_replan: None,
+                });
+            }
+            true
+        }
+        Err(reason) => {
+            idle_worker_on_route_failure(world, worker, reason);
+            false
+        }
+    }
+}
+
 pub fn gather_rate_for_age(age: Age) -> f32 {
     match age {
         Age::Age1 => BASE_GATHER_RATE,
@@ -646,30 +686,7 @@ fn leave_gathering(
         world.entity_mut(worker).insert(WorkerTask::Idle);
         return;
     }
-    let used = seed_used_excluding(world, map, worker);
-    match nearest_reachable_dropoff(world, map, worker, &used) {
-        Ok((dropoff, slot, route)) => {
-            world.entity_mut(worker).insert(WorkerTask::ToDropoff {
-                source,
-                dropoff,
-                slot,
-            });
-            if !route.is_empty() {
-                world.entity_mut(worker).insert(MoveOrder {
-                    waypoints: route,
-                    next: 0,
-                    goal: slot,
-                    map_revision: map.revision(),
-                    last_failed_replan: None,
-                });
-            }
-        }
-        Err(reason) => {
-            // Route impossible: full cleanup with typed feedback instead of
-            // idling raw and leaking the source/farm assignment.
-            idle_worker_on_route_failure(world, worker, reason);
-        }
-    }
+    reroute_dropoff_worker(world, map, worker, source);
 }
 
 /// Routes a worker that just deposited back to its requested source, if the
