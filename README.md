@@ -106,20 +106,21 @@ Unit coverage:
 
 ```bash
 cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$'
-cargo test -p grus-godot --lib
+cargo test -p grus-godot --lib --locked
 cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 ```
 
 E2E:
 
 ```bash
-cargo build -p grus-godot --features e2e
+cargo build -p grus-godot --features e2e --locked
 # stage extension and export Godot build as CI does
 GRUS_E2E_BINARY=<path-to-exported-grus> \
   xvfb-run -a cargo test \
   -p grus-godot \
   --features e2e \
   --test e2e_boot \
+  --locked \
   -- --test-threads=1
 ```
 
