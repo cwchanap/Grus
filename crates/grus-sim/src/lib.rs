@@ -39,4 +39,7 @@ pub use production::{
     ProductionJob, ProductionKind, ProductionQueue, RallyPoint, population_cap, population_used,
     produces, step_production,
 };
-pub use session::{MatchPhase, MatchResult, MatchSession};
+pub use session::{
+    MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,
+    set_paused, start_match,
+};

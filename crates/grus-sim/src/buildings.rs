@@ -17,6 +17,7 @@ use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
+use crate::session::gameplay_active;
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -414,6 +415,9 @@ fn reachable_builder_slot(
 /// Storehouse its `Dropoff` marker, and grants a Farm its renewable
 /// `ResourceSource` under a fresh runtime `ResourceId` — each exactly once.
 pub fn step_construction(world: &mut World, seconds: f32) {
+    if !gameplay_active(world) {
+        return;
+    }
     // Arrival transitions happen before advancement so movement completion is
     // visible to construction in the same fixed tick.
     let mut arrivals = Vec::new();

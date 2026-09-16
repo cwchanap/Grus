@@ -9,13 +9,14 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CommandResult, Footprint, GridMap, GridPos, IdAllocator, LastRouteReject, MapFixture,
-    MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint,
-    RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
-    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
-    WorkerTask, apply_player_command, gather_rate_for_age, population_cap, population_used,
-    produces, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
-    step_movement, step_production, validate_placement,
+    CombatEvents, CommandResult, Footprint, GridMap, GridPos, IdAllocator, LastRouteReject,
+    MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind,
+    ProductionQueue, RallyPoint, RejectReason, ResourceId, ResourceIndex, ResourceSource,
+    SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId,
+    UnitIndex, UnitKind, WorkerTask, active_phase, apply_player_command, gather_rate_for_age,
+    population_cap, population_used, produces, seed_skirmish, set_paused, spawn_unit, start_match,
+    step_combat, step_construction, step_economy, step_movement, step_production,
+    validate_placement,
 };
 
 #[cfg(feature = "e2e")]
@@ -213,6 +214,72 @@ impl GrusBridgeNode {
 
         reset_fixture_world(app.world_mut());
         true
+    }
+
+    /// Session phase for the overlay: `phase` is one of
+    /// "Start"/"Playing"/"Paused"/"Result"; `winner_team` is the winning
+    /// TeamId once Result, else -1.
+    #[func]
+    fn session_snapshot(&self) -> VarDictionary {
+        with_app(|app| {
+            let phase = active_phase(app.world());
+            let mut dict = VarDictionary::new();
+            dict.set(
+                "phase",
+                &GString::from(match phase {
+                    MatchPhase::Start => "Start",
+                    MatchPhase::Playing => "Playing",
+                    MatchPhase::Paused => "Paused",
+                    MatchPhase::Result(_) => "Result",
+                }),
+            );
+            dict.set(
+                "winner_team",
+                match phase {
+                    MatchPhase::Result(result) => i64::from((result.0).0),
+                    _ => -1,
+                },
+            );
+            dict
+        })
+        .unwrap_or_default()
+    }
+
+    /// Explicit Start -> Playing. Gameplay commands and the fixed steps stay
+    /// session-locked until this is called.
+    #[func]
+    fn start_match(&self) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        start_match(app.world_mut());
+        true
+    }
+
+    /// Pause/Resume. Changes the session phase only — never
+    /// `Engine.time_scale`, which stays the headless sim-speed control.
+    #[func]
+    fn set_paused(&self, paused: bool) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        set_paused(app.world_mut(), paused);
+        true
+    }
+
+    /// Restart = the existing clear + reseed reset seam, returning the
+    /// normal skirmish to Start.
+    #[func]
+    fn restart_match(&self) -> bool {
+        self.reset_fixture()
     }
 
     #[func]
@@ -678,6 +745,10 @@ fn setup_fixture(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
+    // Normal Godot setup boots into Start; start_match opens gameplay.
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Start,
+    });
 }
 
 #[allow(clippy::type_complexity)]
@@ -857,6 +928,10 @@ fn reset_fixture_world(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
+    // A normal-skirmish restart returns the session to Start.
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Start,
+    });
     // The clear despawns the selector-bearing gameplay entities; reattach the
     // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
     #[cfg(feature = "e2e")]
@@ -902,6 +977,11 @@ fn clear_gameplay_world(world: &mut World) {
     world.remove_resource::<ResourceIndex>();
     world.remove_resource::<TeamEconomy>();
     world.remove_resource::<IdAllocator>();
+    // Combat/session transients die with the match: the benchmark restarts
+    // session-free (missing session = Playing), the normal reset re-inserts
+    // Start.
+    world.remove_resource::<CombatEvents>();
+    world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
     }
@@ -1136,6 +1216,7 @@ mod tests {
     use bevy::prelude::World;
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
+    use grus_sim::{CombatEvent, CombatTarget, MatchResult};
 
     use super::*;
 
@@ -1255,5 +1336,123 @@ mod tests {
             }),
             "Command: 0 accepted, 0 unreachable, 0 not owned, 0 missing, 2 rejected (FarmOccupied)"
         );
+    }
+
+    /// The full initial-skirmish contract after setup/reset: seeded ids,
+    /// indexes, stockpiles, a Start session, and no combat transients.
+    fn assert_fixture_restored(world: &World) {
+        let mut unit_ids: Vec<u32> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .map(|(id, _)| id.0)
+            .collect();
+        unit_ids.sort_unstable();
+        assert_eq!(unit_ids, (1..=8).collect::<Vec<u32>>());
+
+        let mut building_ids: Vec<u32> = world
+            .resource::<BuildingIndex>()
+            .iter()
+            .map(|(id, _)| id.0)
+            .collect();
+        building_ids.sort_unstable();
+        assert_eq!(building_ids, vec![1, 2]);
+
+        assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
+        for team in [TeamId(1), TeamId(2)] {
+            let stockpile = &world.resource::<TeamEconomy>().0[&team].stockpile;
+            assert_eq!(
+                (stockpile.food, stockpile.wood, stockpile.gold),
+                (200, 300, 100)
+            );
+        }
+        assert!(matches!(
+            world.resource::<MatchSession>().phase,
+            MatchPhase::Start
+        ));
+        assert!(world.get_resource::<CombatEvents>().is_none());
+    }
+
+    #[test]
+    fn reset_and_restart_cycles_restore_the_fixture_once() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        assert_fixture_restored(&world);
+
+        // Churn the running match: start, displace a unit, drain the
+        // stockpile, settle a Result, and leave combat transients behind.
+        start_match(&mut world);
+        assert_eq!(world.resource::<MatchSession>().phase, MatchPhase::Playing);
+        let unit = world.resource::<UnitIndex>().entity(UnitId(3)).unwrap();
+        world
+            .entity_mut(unit)
+            .insert(SimPosition::new(Vec2::new(60.0, 60.0)));
+        if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
+            && let Some(state) = economy.0.get_mut(&TeamId(1))
+        {
+            state.stockpile.food = 9999;
+        }
+        if let Some(mut session) = world.get_resource_mut::<MatchSession>() {
+            session.phase = MatchPhase::Result(MatchResult(TeamId(2)));
+        }
+        world.insert_resource(CombatEvents(vec![CombatEvent {
+            attacker: UnitId(1),
+            target: CombatTarget::Unit(UnitId(2)),
+            damage: 1,
+            position: Vec2::ZERO,
+            ranged: false,
+            killed: false,
+        }]));
+
+        // Restart rides the reset seam; repeated cycles restore the initial
+        // resources/entities/indexes exactly once, with no stale state.
+        reset_fixture_world(&mut world);
+        assert_fixture_restored(&world);
+        reset_fixture_world(&mut world);
+        assert_fixture_restored(&world);
+    }
+
+    #[test]
+    fn benchmark_world_moves_units_without_a_session() {
+        let mut world = World::new();
+        // A stale normal-skirmish session must not leak into the benchmark:
+        // reset removes it, and the missing session reads as Playing.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Result(MatchResult(TeamId(1))),
+        });
+        reset_benchmark_world(&mut world);
+        assert!(world.get_resource::<MatchSession>().is_none());
+        assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
+
+        let command = PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: (1_u32..=100).map(UnitId).collect(),
+            kind: UnitCommandKind::Move {
+                target: MapFixture::battlefield().right_spawn,
+            },
+        });
+        world.resource_scope(|world, mut map: Mut<GridMap>| {
+            let result = apply_player_command(world, &mut map, command);
+            assert_eq!(result.reject, None);
+            assert!(result.rejected_units.is_empty());
+        });
+
+        let positions_before: Vec<Vec2> = (1_u32..=100)
+            .map(|id| {
+                let entity = world.resource::<UnitIndex>().entity(UnitId(id)).unwrap();
+                world.get::<SimPosition>(entity).unwrap().current
+            })
+            .collect();
+        let map = world.resource::<GridMap>().clone();
+        for _ in 0..20 {
+            step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        }
+        for (index, id) in (1_u32..=100).enumerate() {
+            let entity = world.resource::<UnitIndex>().entity(UnitId(id)).unwrap();
+            let position = world.get::<SimPosition>(entity).unwrap().current;
+            assert!(
+                position.distance(positions_before[index]) > 0.5,
+                "benchmark unit {id} never moved without Start interaction"
+            );
+        }
     }
 }

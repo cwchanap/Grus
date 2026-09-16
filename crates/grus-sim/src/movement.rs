@@ -6,6 +6,7 @@ use crate::commands::RejectReason;
 use crate::economy::{WorkerTask, idle_worker_on_route_failure};
 use crate::ids::{TeamId, UnitId};
 use crate::map::{GridMap, GridPos};
+use crate::session::gameplay_active;
 
 pub const SIM_STEP_SECONDS: f32 = 0.05;
 const WAYPOINT_EPSILON: f32 = 0.0001;
@@ -62,6 +63,17 @@ struct MovementSnapshot {
 }
 
 pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
+    if !gameplay_active(world) {
+        // Godot's interpolation lerps previous -> current on a continuously
+        // cycling fraction, so a frozen unit must collapse the pair onto its
+        // current position or its view cycles forever. MoveOrders survive so
+        // Resume continues normally.
+        let mut query = world.query::<&mut SimPosition>();
+        for mut position in query.iter_mut(world) {
+            position.previous = position.current;
+        }
+        return;
+    }
     let snapshots = {
         let mut query = world.query::<(Entity, &Unit, &SimPosition, Option<&MoveOrder>)>();
         query

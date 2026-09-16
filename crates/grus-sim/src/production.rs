@@ -17,6 +17,7 @@ use crate::economy::{Carry, GatherProgress, TeamEconomy, WorkerTask};
 use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::session::gameplay_active;
 
 /// What one production job trains: a catalogue unit or the one-time Age 2
 /// research. The Town Center produces both; other producers make one unit kind.
@@ -326,6 +327,9 @@ const PROGRESS_EPSILON: f32 = 0.01;
 /// recomputing population after each successful spawn so same-tick completions
 /// cannot both consume the final slot. Runs LAST in the fixed-step chain.
 pub fn step_production(world: &mut World, map: &mut GridMap, seconds: f32) {
+    if !gameplay_active(world) {
+        return;
+    }
     let mut producers: Vec<(Entity, BuildingId, TeamId)> = world
         .get_resource::<BuildingIndex>()
         .map(|index| {
