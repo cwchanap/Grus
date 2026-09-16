@@ -4,33 +4,33 @@
 
 Reviewed planning baseline for HPA-472. This design and its implementation plan live on the same branch and draft PR that will carry the implementation; there is no follow-up implementation PR for this ticket.
 
-The design extends the merged HPA-470/HPA-471 seams and the current CI foundation. It deliberately avoids a second gameplay state model, projectile physics, an ability/armour framework, a generic event bus, or a separate lifecycle framework.
+The design extends the merged HPA-470/HPA-471 seams and current CI foundation. It deliberately avoids a second gameplay state model, projectile physics, armour/damage frameworks, a generic event bus, or a separate lifecycle framework.
 
-The review pass locks four integration details before implementation: building pursuit must target walkable perimeter cells rather than blocked footprints; session absence means Playing for existing pure-sim tests while only the normal Godot skirmish starts at Start; destruction retasks every worker that references a destroyed building; and the canonical system-order test/production chain are updated together with combat.
+Two review passes are incorporated. The second review's proposal to remove `MatchPhase::Start` is intentionally **not** adopted because HPA-472 explicitly requires a `Start / Playing / Paused / Result` session flow. The remaining valid findings are folded in below: pause interpolation bookkeeping, stronger counter-contract tests/tuning, centralized activity cancellation, liveness-safe combat iteration, nearest building pursuit, executable tick-order coverage, bridge-kind consistency, bounded combat events, bounded journey tests, and earlier runtime smoke coverage.
 
 ## Outcome
 
-Turn the existing gather/build/train loop into a complete combat match. Military units can attack, pursue and attack-move; workers can be raided; buildings and construction sites can be destroyed; destroying the opposing starting Town Center resolves the match. The runtime gains start, pause/resume, result, restart and quit without editor intervention.
+Turn the existing gather/build/train loop into a complete combat match. Military units attack, pursue and attack-move; workers can be raided; buildings and construction sites can be destroyed; destroying the opposing starting Town Center resolves the match. The runtime supports Start, pause/resume, result, restart and quit without editor intervention.
 
-Fog/visibility and the real economic opponent remain HPA-473 work. HPA-472 may use a passive/scripted opponent fixture and full information only for verification.
+Fog/visibility and the real economic opponent remain HPA-473 work. HPA-472 may use a passive opponent fixture and full information only for verification.
 
 ## Existing seams we keep
 
-- Bevy ECS remains the only mutable gameplay model; Godot owns input, rendering, HUD and effects.
-- The simulation remains fixed-step at 20 Hz.
-- `PlayerCommand` / `CommandResult` / `RejectReason` remain the command contract.
-- `UnitIndex`, `BuildingIndex`, `ResourceIndex`, stable IDs and the authored skirmish fixture remain the identity seams.
-- `GridMap::set_blocked` remains the only live walkability mutation seam.
-- `MoveOrder`, A*, reservation-aware destination assignment and `assign_move_toward()` remain the movement primitives. Unit pursuit may target an enemy unit cell directly; building pursuit first chooses a walkable immediate-perimeter cell.
+- Bevy ECS is the only mutable gameplay model; Godot owns input, rendering, HUD and effects.
+- Simulation remains fixed-step at 20 Hz.
+- `PlayerCommand` / `CommandResult` / append-only `RejectReason` remain the command contract.
+- `UnitIndex`, `BuildingIndex`, `ResourceIndex`, stable IDs and the authored skirmish fixture remain identity seams.
+- `GridMap::set_blocked` remains the live walkability mutation seam.
+- `MoveOrder`, A*, reservation-aware destination assignment, `assign_move_toward()` and `approach_slots()` remain movement primitives.
 - Population remains derived from live units and completed Town Center/House capacity.
-- The bridge reset path remains the runtime restart seam.
-- Existing CI keeps the >90% `grus-sim` line-coverage gate, Godot smokes, export validation, Bevy E2E boot test and 200-unit benchmark.
+- The existing clear + reseed bridge path remains the restart seam.
+- Existing CI keeps the >90% `grus-sim` production-line coverage gate, Godot smokes, export validation, Bevy E2E boot and 200-unit benchmark.
 
-HPA-472 adds two focused simulation modules only: `combat.rs` and `session.rs`.
+HPA-472 adds only two focused simulation modules: `combat.rs` and `session.rs`.
 
 ## Combat catalogue
 
-Extend the compile-time catalogue instead of creating combat tuning elsewhere.
+Extend the compile-time catalogue instead of scattering combat tuning.
 
 ```rust
 pub struct UnitSpec {
@@ -56,20 +56,22 @@ pub struct BuildingSpec {
 pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
 ```
 
-Initial HPA-472 tuning is intentionally simple and remains balanceable later in HPA-474:
+Initial HPA-472 tuning is deliberately small and remains balanceable in HPA-474:
 
 | Unit | HP | Base damage | Range | Cooldown | Counter |
 | --- | ---: | ---: | ---: | ---: | --- |
 | Villager | 50 | — | — | — | noncombatant |
 | Spearman | 100 | 10 | 1.5 | 1.0 s | +10 vs Cavalry |
-| Archer | 70 | 8 | 6.0 | 1.25 s | +8 vs Spearman |
+| Archer | 70 | 8 | 6.0 | 1.25 s | **+12 vs Spearman** |
 | Cavalry | 140 | 12 | 1.5 | 1.0 s | +12 vs Archer |
 
-Building HP starts at: Town Center 800, House 250, Storehouse 300, Farm 200, Barracks 400, Archery Range 400, Stable 400.
+The Archer bonus is intentionally +12 rather than +8 so the Archer > Spearman leg is carried by counter damage, not a fragile opening-shot timing window. The contract is verified by real symmetric attack-move duels for all three pairs, not only by asserting catalogue relationships.
 
-Counter bonuses apply only to the named unit kind. Buildings receive base damage only. Construction sites use the owning building's full HP from placement; construction progress does not heal or scale HP in this slice.
+Building HP: Town Center 800, House 250, Storehouse 300, Farm 200, Barracks 400, Archery Range 400, Stable 400.
 
-## Authoritative combat components
+Counter bonuses apply only to the named unit kind. Buildings receive base damage only. Construction sites use full owning-building HP from placement; construction progress does not scale or heal HP.
+
+## Authoritative combat state
 
 ```rust
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
@@ -101,13 +103,30 @@ pub enum CombatOrder {
 pub struct AttackCooldown(pub f32);
 ```
 
-The last pursued target cell lives on the combat order; do not add a separate `PursuitState` component for one cached value. No weapon inventory, armour classes, damage types, abilities, formation state or projectile entities are added.
+The cached pursued cell lives on `CombatOrder`; there is no separate pursuit component. `spawn_unit()` inserts catalogue health/cooldown state. Seeded and placed buildings insert catalogue health.
 
-`spawn_unit()` inserts catalogue health/cooldown state. Seeded and placed buildings insert catalogue health. Production therefore automatically creates combat-ready units without another spawn path.
+## One activity-cancellation seam
 
-## Commands and cancellation
+The existing `cancel_worker_activity()` is already the one route/task cancellation path and is called by Move, Stop, Gather and placement. HPA-472 promotes it to the general unit-retask seam:
 
-Add only the commands HPA-472 owns:
+```rust
+cancel_unit_activity(world, entity)
+```
+
+It preserves Carry and performs the existing worker cleanup, resets gather progress, removes `MoveOrder`, and also removes `CombatOrder`.
+
+Rules:
+
+- accepted Move/Stop/Gather/Place/Resume automatically cancel combat intent through this one helper;
+- Direct Attack and AttackMove validate first, then call the same helper before installing their combat order;
+- rejected commands leave the old worker/movement/combat state untouched;
+- no command site gets its own ad-hoc `CombatOrder` removal.
+
+This keeps future retasking behavior symmetric without introducing another service/helper layer.
+
+## Commands and eligibility
+
+Add only HPA-472-owned commands:
 
 ```rust
 pub enum UnitCommandKind {
@@ -126,117 +145,110 @@ pub enum PlayerCommand {
 }
 ```
 
-Append `RejectReason::NotCombatant`, `TargetMissing`, `InvalidTarget`, and `SessionLocked` to the existing enum. The bridge exposes reject discriminants as integer codes, so existing variants are never reordered and `Locked` is not reused for session/combat failures.
+Append `NotCombatant`, `TargetMissing`, `InvalidTarget`, and `SessionLocked` to `RejectReason`; never reorder existing discriminants and do not reuse `Locked`.
 
-Rules:
-
-- Direct Attack validates target existence/enemy ownership through one combat-owned eligibility function, then accepts military units only.
-- Attack-move accepts military units only and stores the destination cell.
-- Move, Stop and accepted worker-task commands cancel existing combat orders.
-- Direct Attack and AttackMove cancel accepted workers' prior worker activity only after combat validation succeeds.
-- Stop clears `MoveOrder`, worker activity and `CombatOrder`.
-- Mixed selections report per-unit rejects; a villager is never silently converted into a combat unit.
-
-## One target-eligibility seam
-
-All direct attacks and attack-move acquisition call one function in `combat.rs`:
+All direct attacks and attack-move acquisition call one combat-owned function:
 
 ```rust
 fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarget) -> bool
 ```
 
-For HPA-472 it checks: target exists, target has live `Health`, and target belongs to another team. HPA-473 extends this one seam with current-visibility rules; combat code and commands must not perform independent hidden-state checks elsewhere.
+For HPA-472 it checks: target exists, has live Health, and belongs to another team. HPA-473 adds current-visibility there rather than rewriting combat.
 
-Attack-move acquisition uses `ATTACK_MOVE_RADIUS`. Choose the nearest eligible target; ties break by stable target identity. Units and buildings are eligible. There is no threat table or aggro framework.
+Attack-move searches within `ATTACK_MOVE_RADIUS`, chooses the nearest eligible target, and breaks ties by stable target identity. Units and buildings are eligible. There is no threat table or aggro framework.
 
-## Range, pursuit and attacks
+## Range and pursuit
 
 Range is measured from attacker position to the nearest point on the target:
 
-- unit targets use their `SimPosition`;
-- building/site targets use `Footprint::closest_point(attacker_position)`, not `Footprint::center()`.
+- unit target: its `SimPosition`;
+- building/site target: `Footprint::closest_point(attacker_position)`.
 
-Add `Footprint::closest_point(Vec2) -> Vec2` beside the existing `center()` / perimeter helpers. This lets melee units attack from the building perimeter without entering blocked cells; a 4x4 Town Center center is deliberately not the melee distance reference.
+Add:
 
-`step_combat()` runs before movement. Each tick it:
+```rust
+Footprint::closest_point(Vec2) -> Vec2
+```
+
+beside the existing center/perimeter helpers. `Footprint::center()` is never the melee building range metric.
+
+Pursuit reuses movement but never paths to a blocked footprint:
+
+- if already in attack range, do not assign movement;
+- unit pursuit may call `assign_move_toward()` with the target unit's walkable cell;
+- building/site pursuit calls `approach_slots()`, then **sorts those candidates by distance from the attacker at the combat call site** before selecting a pathable goal;
+- do not change `approach_slots()` ordering globally because economy/construction already rely on it;
+- refresh unit pursuit only when the target changes grid cell or the current route ends; static building pursuit refreshes only when its route ends.
+
+## `step_combat()` iteration and liveness
+
+`step_combat()` runs before movement. At entry it clears `CombatEvents`, making the buffer current-tick-only and bounded even in headless tests.
+
+Each tick it:
 
 1. decrements cooldowns;
-2. validates/refreshes current targets;
-3. acquires a target for attack-move when one is in `ATTACK_MOVE_RADIUS`;
-4. if in range and cooldown is ready, applies one deterministic hit;
-5. otherwise assigns/refreshes pursuit;
-6. after a target dies, direct Attack ends while AttackMove resumes toward its stored destination.
+2. snapshots attacker stable IDs in sorted `UnitId` order;
+3. before each attacker acts, re-resolves that ID through `UnitIndex` and skips it if the entity was destroyed earlier in the same step;
+4. validates/refreshes the current target;
+5. acquires an attack-move target when needed;
+6. attacks immediately when in range and cooldown-ready, otherwise refreshes pursuit;
+7. atomically destroys a dead unit through `destroy_unit()`;
+8. after target death, Direct Attack ends while AttackMove resumes toward its destination.
 
-Pursuit rules reuse existing movement machinery without ever pathing to a blocked building footprint:
+This snapshot + liveness re-check prevents a later attacker from touching an entity despawned by an earlier attacker. A regression uses two lethal low-health opponents: the lower stable-ID attacker kills first and the dead later attacker is skipped rather than acting or panicking.
 
-- if the attacker is already in attack range, do not assign a movement route;
-- unit-vs-unit pursuit may call `assign_move_toward()` with the target unit's walkable cell;
-- building/site pursuit derives currently reserved cells through the existing reservation seam, picks a walkable immediate-perimeter goal with `approach_slots()`, then calls `assign_move_toward()` using that walkable goal;
-- pursuit refreshes only when a moving unit target changes grid cell or the existing pursuit route ends; static buildings do not trigger per-tick A*.
+Archers apply validated damage immediately; projectile visuals never control hit timing. No friendly fire.
 
-Attackers are processed in stable `UnitId` order. No friendly fire. Archers apply damage immediately after validation; their projectile is presentation-only.
-
-Unit death is part of the hit path, not deferred to a later half-despawn stage. `destroy_unit()` removes the stable index entry and despawns atomically so AttackMove can observe target death and resume in the same combat implementation slice.
-
-When a Town Center kill resolves `MatchPhase::Result`, `step_combat()` returns immediately. No later attacker in that combat step may destroy the other Town Center and overwrite the first result; the MVP has no draw state.
+When a Town Center kill resolves Result, `step_combat()` returns immediately. No later attacker in the same step may overwrite the first result; there is no draw state.
 
 ## Combat feedback
 
-Use one small sim-owned queue, not a generic event subsystem:
+Use one tiny sim-owned drain buffer:
 
 ```rust
 #[derive(Resource, Default)]
 pub struct CombatEvents(pub Vec<CombatEvent>);
 ```
 
-Events contain attacker/target identity, damage, hit position, ranged/melee and killed flags. The Godot bridge drains them during presentation update.
+`step_combat()` clears it at the start of each fixed tick, then records only that tick's hit/death events. At normal runtime cadence Godot drains current-tick events during presentation Update. Headless/accelerated tests cannot accumulate thousands of stale events; accelerated presentation may intentionally drop intermediate cosmetic events.
 
-Godot uses these events for:
+Events carry attacker/target identity, damage, hit position, ranged/melee and killed flags. Godot uses them for a short archer tracer, hit/death flash and one small attack/hit sound cue. No projectile or audio framework.
 
-- a short archer shot tracer plus hit flash; no projectile physics;
-- melee/ranged hit feedback;
-- death feedback before the entity view disappears;
-- one basic attack/hit sound cue. Keep this to a tiny project-local cue; no audio pipeline.
+## Destruction
 
-## Destruction is one cleanup path
-
-`combat.rs` owns terminal destruction helpers so every kill performs the same cleanup. Narrow economy helpers may be exposed where destruction needs existing drop-off routing; do not duplicate routing logic inside combat.
+`combat.rs` owns terminal destruction helpers. Narrow economy helpers may expose existing drop-off routing; do not duplicate routing logic in combat.
 
 ### Unit destruction
 
-Before despawn:
-
-- if the unit is a worker, call the existing worker-cancellation seam to release active-builder and Farm reservations;
-- carried resources are simply lost with the dead worker;
-- remove the stable `UnitId` from `UnitIndex`;
-- despawn the entity, which removes movement/combat state and its presentation;
-- stale selections disappear when Godot next reconciles live view IDs;
-- stale combat targets resolve missing through the same target-eligibility path.
+- call `cancel_unit_activity()` first so worker/Farm/build assignments are released;
+- carried resources disappear with the dead worker;
+- remove the `UnitId` from `UnitIndex`;
+- despawn the entity;
+- stale selections disappear when Godot reconciles live views;
+- stale combat targets resolve missing through `target_eligible`.
 
 ### Building/site destruction
 
-Capture the building footprint/resource identity first, then perform one destruction transaction:
+Capture footprint/resource identity, then perform one transaction:
 
 - free every footprint cell through `GridMap::set_blocked(cell, false)`;
-- remove the building from `BuildingIndex`;
-- if it is a Farm/resource entity, remove its `ResourceId` from `ResourceIndex`;
-- scan every live worker whose `WorkerTask` references the destroyed `BuildingId` rather than cleaning only `active_builder`;
-- `ToConstruction` / `Constructing` workers are canceled to Idle;
-- every `ToDropoff { dropoff: destroyed_id, ... }` worker immediately reroutes its preserved carry to another reachable same-team drop-off through the existing economy routing seam; if none is reachable, it becomes visibly Idle and keeps the carry;
-- a destroyed Farm's assigned worker becomes Idle immediately and keeps any current carry, regardless of whether it was moving to the Farm, gathering, or returning a Farm-sourced load;
-- the production queue disappears with the building, with no refund;
-- House/Town Center population capacity falls automatically because capacity is derived from live completed buildings; living units are never deleted;
-- finally despawn the building entity.
+- remove from `BuildingIndex`;
+- if a Farm/resource entity, remove its `ResourceId` from `ResourceIndex`;
+- scan **every** live `WorkerTask` that references the destroyed `BuildingId`;
+- `ToConstruction` / `Constructing` workers cancel to Idle;
+- `ToDropoff { dropoff: destroyed_id, ... }` carrying workers immediately try another reachable same-team drop-off using the existing routing seam; otherwise Idle while preserving Carry;
+- a destroyed Farm's assigned worker becomes Idle and keeps Carry whether moving to it, gathering, or returning a Farm-sourced load;
+- production queue disappears with no refund;
+- derived population capacity falls naturally; living units are never deleted;
+- despawn the building.
 
-Do not call the standalone-resource `deplete_source()` path for a Farm: Farms are 2x2 `Building + ResourceSource + Footprint` entities and use building destruction.
+Do not call standalone-resource `deplete_source()` for a Farm; a Farm is a 2x2 `Building + ResourceSource + Footprint` entity.
 
-Because combat/destruction runs before economy/construction, no worker may remain with a stale `ToDropoff` and deposit at an empty slot, and no worker may transition `ToConstruction -> Constructing` for a site already destroyed in that tick.
-
-The existing sequential population recheck in `step_production()` remains the simultaneous-spawn safety mechanism.
+Combat-before-economy/construction is a correctness contract: a worker may not deposit at a just-destroyed drop-off slot or transition to Constructing for a destroyed site in the same tick. `system_order.rs` gets a dedicated same-tick destroyed-drop-off test that fails if combat is moved after economy.
 
 ## Match session
 
-`session.rs` owns one optional resource:
+HPA-472 explicitly requires Start/Playing/Paused/Result, so keep all four phases:
 
 ```rust
 pub enum MatchPhase {
@@ -245,43 +257,36 @@ pub enum MatchPhase {
     Paused,
     Result(MatchResult),
 }
-
-pub struct MatchResult {
-    pub winner: TeamId,
-    pub loser: TeamId,
-}
-
-#[derive(Resource)]
-pub struct MatchSession {
-    pub phase: MatchPhase,
-}
 ```
 
-Session presence is a runtime lifecycle concern, not a requirement of every pure simulation fixture. The gate contract is:
+`MatchSession` remains optional so old pure-sim fixtures and the benchmark stay simple:
 
-- missing `MatchSession` means Playing. Existing Rust tests/fixtures that call `seed_skirmish()` and `step_*()` remain valid without lifecycle setup;
-- `seed_skirmish()` itself does not insert `MatchSession`;
-- normal Godot `setup_fixture` / `reset_fixture_world` insert `MatchSession::Start` after seeding;
-- `reset_benchmark_world` explicitly inserts Playing (or otherwise ensures no Start resource remains) so the 200-unit benchmark keeps moving without a Start click;
-- Start transitions to Playing;
-- Pause/Resume changes only `MatchSession`; do not use `Engine.time_scale` for user pause because camera/UI and CI speed controls must remain responsive/independent;
-- every gameplay fixed-step system treats absent session as Playing and exits when a present session is Start/Paused/Result;
-- `apply_pending_commands` uses the same rule and rejects gameplay orders as `SessionLocked` only when a present session is outside Playing;
-- destroying a Town Center resolves Result immediately; `step_combat()` aborts the rest of that combat step and later fixed-step systems do not mutate;
-- Restart uses the existing clear + reseed seam and returns the normal skirmish to Start;
+- missing session means Playing;
+- `seed_skirmish()` does not insert a session;
+- normal Godot setup/reset inserts Start;
+- benchmark reset inserts Playing (or removes any stale session);
+- Start -> Playing is explicit through `start_match()`;
+- Pause/Resume changes only session state; never user-pause via `Engine.time_scale`;
+- gameplay commands reject with `SessionLocked` when an explicit session is Start/Paused/Result;
+- combat/economy/construction/production do no gameplay mutation outside Playing;
+- Restart uses clear + reseed and returns the normal skirmish to Start;
 - Quit remains a Godot scene-tree action.
 
-Resume does not catch up paused wall-clock time because fixed ticks continue to occur while gameplay advancement is gated.
+### Pause/result interpolation bookkeeping
 
-No draw state or alternate victory condition is introduced. The MVP has one Town Center per team; the first resolved starting Town Center destruction decides the result.
+Godot renders unit transforms by lerping `SimPosition.previous -> current` using the continuously cycling physics interpolation fraction. Therefore a frozen unit must not retain `previous != current` indefinitely.
+
+`step_movement()` owns the fix: when the optional-session gate says gameplay is frozen, it still snapshots each live unit's position and sets `previous = current` before returning without movement. This applies to Start, Paused and Result. A session regression asserts `previous == current` after one gated movement tick.
+
+Resume does not catch up paused wall-clock time because fixed ticks continue while gameplay mutation is gated.
 
 ## Fixed-step order
 
-The canonical HPA-472 order becomes:
+Canonical order:
 
 ```text
 pending gameplay commands
--> combat (targeting / attacks / destruction / result)
+-> combat
 -> movement
 -> economy
 -> construction
@@ -289,92 +294,61 @@ pending gameplay commands
 -> route feedback
 ```
 
-The production `FixedUpdate` chain and `crates/grus-sim/tests/system_order.rs` are changed in the same combat integration task. The order test explicitly calls `step_combat()` before movement so the test remains an executable statement of production order.
+The production FixedUpdate chain and `crates/grus-sim/tests/system_order.rs` change together. `system_order.rs` contains both:
 
-Every stage after combat uses the same optional-session gate. This makes a Town Center kill terminal in the same tick and prevents killed workers/buildings from gathering, constructing or producing afterward.
+1. the existing long-form economy/age ordering test with `step_combat()` inserted; and
+2. a targeted same-tick destruction test where a carrying worker reaches a drop-off as combat destroys it, proving combat must run before economy because stockpile must not receive a deposit at the dead slot.
 
-## Godot bridge and UI
+## Godot bridge and input
 
-Add thin bridge methods only:
+Follow the bridge's existing input-kind convention (`place_building(kind: GString)`, `enqueue_unit(kind: GString)`):
 
-- `attack_units(ids, target_kind: i32, target_id)` where `target_kind` is the closed wire code `0 = unit`, `1 = building`;
+- `attack_units(ids, target_kind: GString, target_id)`;
 - `attack_move_units(ids, target)`;
 - `session_snapshot()`;
 - `start_match()`;
 - `set_paused(bool)`;
 - `restart_match()`.
 
-The integer target kind mirrors the existing integer reject-code boundary and avoids string parsing in controller/smoke code. Rust converts the closed code to `CombatTarget`; Godot still does not compute eligibility.
+Add `parse_target_kind()` beside `parse_unit_kind()` / `parse_building_kind()` and accept the closed strings `"unit"` / `"building"`. Rust maps them to `CombatTarget`; invalid strings reject at the bridge. Numeric reject codes remain outputs only.
 
-Extend building snapshots with health fields and add a small unit health query only where HUD tests need it. Dynamic world health bars are updated from `Changed<Health>` through the existing Godot-node handles instead of polling every unit from GDScript.
+Right-click target picking reuses the existing `_nearest_view` path with an enemy-only filter and the existing distance tie-break shape rather than inventing a new picker. Ground right-click remains Move; `A` then ground issues AttackMove; `S` remains Stop; `Esc` cancels placement first then toggles pause while Playing/Paused. No gameplay orders leave Godot in Start/Paused/Result.
 
-`battlefield_controller.gd` changes:
+Health bars are driven from `Changed<Health>` through existing node handles, not a per-frame GDScript world scan. Primitive role markers/scales distinguish villager/spearman/archer/cavalry; no image-generation task.
 
-- right-click enemy unit/building -> contextual Attack for selected military units;
-- ground right-click remains Move;
-- `A` then ground click issues AttackMove;
-- `S` remains Stop;
-- `Esc` cancels placement first, otherwise toggles pause while Playing/Paused;
-- gameplay orders are not issued in Start/Paused/Result.
-
-`main.tscn` gains one small session overlay and a Pause button. Start shows Start; Paused shows Resume; Result shows Victory/Defeat + Restart/Quit.
-
-Primitive presentation distinguishes combat roles without image assets: reuse the current low-poly unit scene and vary body scale/role marker by `unit_kind`; add simple health bars. No image-generation task is required for HPA-472.
+`main.tscn` gains one small session overlay and Pause button: Start, Paused/Resume, Result with Victory/Defeat + Restart/Quit.
 
 ## Verification strategy
 
-### Rust simulation
-
-Cover production behavior, not duplicated test algorithms:
+### Rust
 
 - melee/ranged range and cooldown;
-- all three counter bonuses;
-- unit pursuit and target-cell replan;
-- building pursuit reaches an immediate-perimeter cell and never paths to a blocked footprint;
-- `Footprint::closest_point` drives building range, including Town Center melee range;
-- deterministic attack-move acquisition and continuation after unit target destruction;
-- Stop / Move cancellation;
-- target death and building/site damage;
+- three real symmetric attack-move counter duels: Spearman survives vs Cavalry, Archer survives vs Spearman, Cavalry survives vs Archer;
+- unit pursuit/replan;
+- building pursuit picks the nearest walkable immediate-perimeter goal;
+- `Footprint::closest_point` controls building range;
+- deterministic acquisition and AttackMove continuation after atomic target death;
+- dead later attacker is skipped safely in the same combat step;
+- Stop/Move/worker retasks all clear combat via `cancel_unit_activity()`;
 - worker carry loss on death;
-- site builder cleanup;
-- destroyed Farm worker idle;
-- destroyed drop-off reroute/idle behavior, including a worker already traveling to that drop-off;
-- footprint freeing;
-- discarded queues/no refund;
-- House capacity reduction without deleting living units;
-- simultaneous production still respects capacity;
-- missing session behaves as Playing for existing pure-sim tests;
-- Start/Paused freeze movement/economy/construction/production/combat/age-up state across many ticks;
-- benchmark reset remains Playing;
-- resume advances once per fixed tick without catch-up;
-- first Town Center destruction wins and aborts remaining attackers in that combat step;
-- Result rejects gameplay commands and freezes later systems;
-- passive-opponent economy -> army -> Town Center destruction -> victory journey;
-- separate defeat fixture.
+- Farm/site/drop-off destruction cleanup;
+- footprint freeing, queue discard/no refund, derived cap reduction and simultaneous-spawn safety;
+- system-order same-tick destroyed-drop-off regression;
+- missing session = Playing;
+- Start/Paused/Result freeze gameplay and collapse interpolation state;
+- benchmark remains Playing;
+- first Town Center destruction wins and aborts remaining combat actors;
+- post-Result commands reject/freeze;
+- victory and defeat journeys use bounded event loops, not fixed tick arithmetic.
 
 ### Godot/runtime
 
-Add one `combat_lifecycle_smoke_test.gd` that uses real controller/bridge paths to exercise Start, attack input, health reduction/death view cleanup, result overlay and restart.
+Create `combat_lifecycle_smoke_test.gd/.tscn` at the **start of the Godot integration task** and grow it as bridge input, target picking, health bars/effects, session overlay and restart behavior land. Task 6 keeps this smoke green after each integration slice; Task 7 promotes the finished smoke into CI and performs final regression/export verification.
 
-When normal skirmish setup begins inserting Start, update the existing reset/economy/controller smokes to call `start_match()` in the same commit. Do not leave existing gates frozen until the final CI task. The 200-unit benchmark remains immediately Playing.
+When normal setup begins inserting Start, existing normal-skirmish smokes call `start_match()` in that same commit. Benchmark remains immediately Playing.
 
-The existing Bevy E2E boot selector test remains a boot contract; do not expand it into full UI automation in this ticket unless the new smoke cannot cover a required seam.
-
-### CI
-
-Preserve:
-
-- `cargo fmt --all -- --check`;
-- `cargo clippy --workspace --all-targets -- -D warnings`;
-- >90% `grus-sim` gameplay line coverage;
-- `grus-godot` tests with and without the E2E feature;
-- current Godot smoke/reset/economy gates;
-- Linux export/boot;
-- Bevy E2E exported-game boot;
-- 200-unit benchmark.
-
-Add only the HPA-472 combat/lifecycle Godot smoke to the existing `e2e` job.
+The Bevy E2E selector test stays a small boot contract; do not duplicate full UI automation there.
 
 ## Explicit non-goals
 
-No fog/visibility implementation, economic AI, additional units/buildings, siege, armour system, projectile physics, formations, abilities, garrisons, Town Center weapon, save/load, multiplayer, replay, animation pipeline, custom asset pipeline, new image art, generic event framework, service/repository architecture, or final balance/performance tuning.
+No HPA-473 fog/AI, extra units/buildings, siege, armour/damage framework, projectile physics, formations, abilities, garrisons, Town Center weapon, save/load, multiplayer, replay, custom animation/art pipeline, generic event/service architecture, or final balance/performance tuning.
