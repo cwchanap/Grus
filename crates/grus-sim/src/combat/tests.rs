@@ -17,6 +17,7 @@ use crate::economy::{
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
+use crate::session::tests as journeys;
 
 fn open_map() -> GridMap {
     GridMap::new(32, 64)
@@ -1661,4 +1662,29 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(map.path_call_count() > paths, "a ended route is reassigned");
     assert_eq!(world.get::<MoveOrder>(attacker).unwrap().goal, goal);
+}
+
+#[test]
+fn bounded_victory_journey_destroys_the_enemy_town_center_through_real_systems() {
+    let (mut world, mut map) = journeys::live_match();
+
+    journeys::run_army_journey(&mut world, &mut map, TeamId(1));
+
+    // Combat-level journey facts: the winning blow is a recorded combat
+    // event against team 2's authored Town Center, and the passive opponent
+    // never scratched the army.
+    let events = &world.resource::<CombatEvents>().0;
+    assert!(
+        events
+            .iter()
+            .any(|event| event.target == CombatTarget::Building(BuildingId(2)) && event.killed),
+        "the Town Center's killing blow is a recorded combat event"
+    );
+    assert_eq!(
+        journeys::units_of_kind(&world, TeamId(1), UnitKind::Spearman).len(),
+        4,
+        "the passive opponent never damages the army"
+    );
+
+    journeys::assert_result_freezes_and_locks(&mut world, &mut map, TeamId(1));
 }

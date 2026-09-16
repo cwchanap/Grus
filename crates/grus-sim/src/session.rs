@@ -76,5 +76,7 @@ pub fn resolve_result(world: &mut World, winner: TeamId) {
     }
 }
 
+// `pub(crate)`: the bounded passive-opponent journey helpers in tests.rs
+// are shared with combat/tests.rs (the victory journey lives next to combat).
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
