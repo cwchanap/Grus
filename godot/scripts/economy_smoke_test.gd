@@ -351,6 +351,15 @@ func _run() -> void:
 		_fail("builder villager 4 is missing")
 		return
 
+	# Normal skirmish boots into Start; this scenario starts the match before
+	# its first gameplay command.
+	if not GrusBridge.start_match():
+		_fail("start_match rejected the Start -> Playing transition")
+		return
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("start_match did not reach Playing")
+		return
+
 	# Step 1: villagers onto trees/berries/gold via right-click; stockpiles
 	# move only after a deposit, never on the command itself.
 	for job in [[1, TREE_ID], [2, BERRY_ID], [3, GOLD_ID]]:

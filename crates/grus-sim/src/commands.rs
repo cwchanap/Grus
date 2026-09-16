@@ -13,6 +13,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
+use crate::session::gameplay_active;
 
 #[derive(Clone, Debug)]
 pub enum UnitCommandKind {
@@ -158,6 +159,14 @@ pub fn apply_player_command(
     map: &mut GridMap,
     command: PlayerCommand,
 ) -> CommandResult {
+    // One gate for every gameplay command kind: an explicit session outside
+    // Playing locks orders; an absent session (pure sim, benchmark) stays open.
+    if !gameplay_active(world) {
+        return CommandResult {
+            reject: Some(RejectReason::SessionLocked),
+            ..CommandResult::default()
+        };
+    }
     match command {
         PlayerCommand::Units(units) => apply_unit_command(world, map, units),
         PlayerCommand::PlaceBuilding {

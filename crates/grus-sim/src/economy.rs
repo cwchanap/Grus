@@ -20,6 +20,7 @@ use crate::commands::{
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::session::gameplay_active;
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
@@ -528,6 +529,9 @@ fn nearest_reachable_dropoff(
 /// same-team Dropoff. Stockpiles change only on deposit at the stored drop-off
 /// slot.
 pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
+    if !gameplay_active(world) {
+        return;
+    }
     let mut source_arrivals: Vec<(Entity, ResourceId)> = Vec::new();
     let mut dropoff_arrivals: Vec<(Entity, ResourceId)> = Vec::new();
     {

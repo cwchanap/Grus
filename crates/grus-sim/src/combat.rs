@@ -8,7 +8,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
-use crate::catalog::{ATTACK_MOVE_RADIUS, CombatSpec, unit_spec};
+use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, unit_spec};
 use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
 use crate::economy::{
     ResourceIndex, ResourceSource, WorkerTask, cancel_unit_activity, reroute_dropoff_worker,
@@ -16,6 +16,7 @@ use crate::economy::{
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::session::{gameplay_active, resolve_result};
 
 /// Live and maximum hit points. Spawned units and seeded/placed buildings
 /// start at full health from their catalogue spec.
@@ -106,6 +107,9 @@ pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarge
 /// `UnitIndex` re-resolution; dead units and buildings are destroyed
 /// atomically.
 pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
+    if !gameplay_active(world) {
+        return;
+    }
     if world.get_resource::<CombatEvents>().is_none() {
         world.init_resource::<CombatEvents>();
     }
@@ -123,6 +127,11 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     attacker_ids.sort_unstable();
 
     for id in attacker_ids {
+        // A Town Center death mid-step settles the Result and freezes combat
+        // for every later attacker in this same tick — first destruction wins.
+        if !gameplay_active(world) {
+            break;
+        }
         // Re-resolve before acting: an earlier attacker may have destroyed
         // this one's entity. Never keep a stale handle and blindly mutate.
         let Some(entity) = world
@@ -497,7 +506,16 @@ fn strike(
     if killed {
         match target {
             CombatTarget::Unit(_) => destroy_unit(world, target_entity),
-            CombatTarget::Building(_) => destroy_building(world, map, target_entity),
+            CombatTarget::Building(_) => {
+                // Result resolves immediately on Town Center destruction.
+                let town_center = world
+                    .get::<Building>(target_entity)
+                    .is_some_and(|building| building.kind == BuildingKind::TownCenter);
+                destroy_building(world, map, target_entity);
+                if town_center {
+                    resolve_result(world, unit.team);
+                }
+            }
         }
     }
 }

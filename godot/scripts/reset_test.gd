@@ -84,6 +84,15 @@ func _run() -> void:
 			_fail("building view %d is not a Town Center" % int(building.get_meta("building_id", -1)))
 			return
 
+	# A normal-skirmish reset returns the session to Start.
+	if not GrusBridge.has_method("session_snapshot"):
+		_fail("session snapshot bridge is missing")
+		return
+	var session: Dictionary = GrusBridge.session_snapshot()
+	if str(session.get("phase", "")) != "Start":
+		_fail("reset did not return the session to Start: %s" % [session])
+		return
+
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	if int(economy.get("food", -1)) != 200 or int(economy.get("wood", -1)) != 300 or int(economy.get("gold", -1)) != 100:
 		_fail("Team 1 stockpile after reset is not 200/300/100: %s" % [economy])

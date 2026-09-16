@@ -122,6 +122,21 @@ func _run() -> void:
 		_fail("Team 2 villager does not start at UnitId 5")
 		return
 
+	# Normal skirmish boots into Start; gameplay opens only via start_match.
+	if not GrusBridge.has_method("start_match") or not GrusBridge.has_method("session_snapshot"):
+		_fail("session bridge methods are missing")
+		return
+	var boot_session: Dictionary = GrusBridge.session_snapshot()
+	if str(boot_session.get("phase", "")) != "Start":
+		_fail("skirmish boot session is not Start: %s" % [boot_session])
+		return
+	if not GrusBridge.start_match():
+		_fail("start_match rejected the Start -> Playing transition")
+		return
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("start_match did not reach Playing")
+		return
+
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
