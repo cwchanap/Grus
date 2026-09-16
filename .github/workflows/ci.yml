@@ -32,6 +32,9 @@ jobs:
 
   unit-tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.95.0
@@ -49,6 +52,13 @@ jobs:
         # `src/*/tests.rs` files) out of the report, so the 90% gate measures
         # gameplay code only.
         run: cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\.rs$'
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          disable_search: true
+          fail_ci_if_error: true
+          use_oidc: true
       - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
