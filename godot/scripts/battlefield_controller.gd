@@ -15,6 +15,7 @@ const ZOOM_STEP := 6.0
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
+@onready var _fx: Node3D = $CombatFx
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -24,6 +25,7 @@ var _left_press_position := Vector2.ZERO
 var _left_pressed := false
 var _placement_kind := ""
 var _idle_cursor := 0
+var _session_phase := ""
 ## Producer building kinds and the Age-up cost come from the Rust catalogue
 ## via catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
@@ -57,7 +59,31 @@ func _process(_delta: float) -> void:
 	if revision != _feedback_revision:
 		_feedback_revision = revision
 		command_status.text = str(GrusBridge.command_feedback())
+	_drain_combat_fx()
 	_refresh_hud()
+
+## Drains current-tick combat events only while the session is Playing —
+## the bridge keeps the last Playing tick's events readable across a
+## pause/Result, and those stale events must never replay as fresh effects.
+func _drain_combat_fx() -> void:
+	_session_phase = str(GrusBridge.session_snapshot().get("phase", ""))
+	if _session_phase != "Playing":
+		return
+	var events: Array = GrusBridge.drain_combat_events()
+	for event in events:
+		_dispatch_combat_event(event)
+
+## Cosmetics only: reads the event payload, never touches combat state.
+func _dispatch_combat_event(event: Dictionary) -> void:
+	var hit := Vector3(float(event.get("x", 0.0)), 1.0, float(event.get("y", 0.0)))
+	if bool(event.get("ranged", false)):
+		var attacker := _unit_view(int(event.get("attacker", -1)))
+		if attacker != null:
+			_fx.spawn_tracer(attacker.global_position + Vector3(0.0, 0.8, 0.0), hit)
+	_fx.spawn_hit(hit)
+	if bool(event.get("killed", false)):
+		_fx.spawn_death(hit)
+	_fx.play_hit_cue()
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
@@ -325,6 +351,12 @@ func _unit_kind(unit_id: int) -> String:
 		if int(node.get_meta("unit_id", -1)) == unit_id:
 			return str(node.get_meta("unit_kind", ""))
 	return ""
+
+func _unit_view(unit_id: int) -> Node3D:
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if int(node.get_meta("unit_id", -1)) == unit_id:
+			return node as Node3D
+	return null
 
 func _selected_villager_ids() -> Array[int]:
 	var villagers: Array[int] = []
