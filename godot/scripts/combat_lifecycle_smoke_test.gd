@@ -113,6 +113,37 @@ func _run() -> void:
 		_fail("attack_move_units refused to queue")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=attack-bridge start_reject=session_locked invalid_target_kinds=3")
+	# Health bars and role markers ride the views: fresh units report a full
+	# health ratio, and every kind has a distinct primitive presentation
+	# (body scale + marker) that does not depend on final art.
+	for id in range(1, 9):
+		var unit := _unit_view(id)
+		if unit == null:
+			_fail("unit view %d missing for role/health assertions" % id)
+			return
+		if absf(float(unit.call("health_ratio")) - 1.0) > 0.0001:
+			_fail("fresh unit %d health ratio is not 1.0" % id)
+			return
+	var unit_view_script := preload("res://scripts/unit_view.gd")
+	var role_specs: Dictionary = unit_view_script.ROLE_SPECS
+	var presentations := {}
+	for kind in ["Villager", "Spearman", "Archer", "Cavalry"]:
+		if not role_specs.has(kind):
+			_fail("role spec missing for %s" % kind)
+			return
+		var spec: Dictionary = role_specs[kind]
+		var presentation := "%.1f/%s" % [float(spec.get("body_scale", 0.0)), str(spec.get("marker", "?"))]
+		if presentations.has(presentation):
+			_fail("role presentation duplicated between kinds: %s" % presentation)
+			return
+		presentations[presentation] = kind
+	var villager := _unit_view(1)
+	var villager_body := villager.get_node("Body") as MeshInstance3D
+	if absf(villager_body.scale.x - 0.8) > 0.0001 \
+			or (villager.get_node("RoleMarker") as Node3D).get_child_count() != 0:
+		_fail("villager role presentation is not the small unmarked body")
+		return
+
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=roles-health start_reject=session_locked invalid_target_kinds=3 role_kinds=4")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
