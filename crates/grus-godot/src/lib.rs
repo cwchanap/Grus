@@ -14,8 +14,8 @@ use grus_sim::{
     RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
     TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
     WorkerTask, apply_player_command, gather_rate_for_age, population_cap, population_used,
-    produces, seed_skirmish, spawn_unit, step_construction, step_economy, step_movement,
-    step_production, validate_placement,
+    produces, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
+    step_movement, step_production, validate_placement,
 };
 
 #[cfg(feature = "e2e")]
@@ -563,6 +563,7 @@ fn build_app(app: &mut App) {
             FixedUpdate,
             (
                 apply_pending_commands,
+                advance_combat,
                 advance_movement,
                 advance_economy,
                 advance_construction,
@@ -1037,6 +1038,13 @@ fn format_command_result(result: &CommandResult) -> String {
 // ponytail: each advance_* system takes one coarse Time<Fixed>::delta() per
 // tick (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy
 // inside the tick if a high-speed scenario ever shows tunneling or overshoot.
+fn advance_combat(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    world.resource_scope(|world, map: Mut<GridMap>| {
+        step_combat(world, &map, seconds);
+    });
+}
+
 fn advance_movement(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, map: Mut<GridMap>| {

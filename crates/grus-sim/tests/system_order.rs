@@ -9,8 +9,8 @@ use bevy::prelude::{Entity, World};
 use grus_sim::{
     Age, Building, BuildingId, BuildingIndex, BuildingKind, GatherProgress, GridMap, GridPos,
     MapFixture, PlayerCommand, ResourceId, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    UnitId, UnitIndex, WorkerTask, apply_player_command, seed_skirmish, step_construction,
-    step_economy, step_movement, step_production,
+    UnitId, UnitIndex, WorkerTask, apply_player_command, seed_skirmish, step_combat,
+    step_construction, step_economy, step_movement, step_production,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -88,6 +88,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
             _ => {}
         }
         apply_queued_test_commands(&mut world, &mut map);
+        step_combat(&mut world, &map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
@@ -135,6 +136,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
 
     // The next economy tick gathers at the Age 2 rate.
     apply_queued_test_commands(&mut world, &mut map);
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
     step_movement(&mut world, &map, SIM_STEP_SECONDS);
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     step_construction(&mut world, SIM_STEP_SECONDS);

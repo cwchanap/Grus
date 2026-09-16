@@ -648,10 +648,177 @@ fn reject_reason_variants_stay_append_ordered() {
 }
 
 #[test]
-fn attack_commands_reject_without_touching_unit_state() {
-    // Combat intent installation lands with the combat step; until then
-    // Attack/AttackMove are typed rejections that preserve the unit's whole
-    // worker/movement/combat state.
+fn rejected_attack_commands_leave_unit_state_untouched() {
+    // Validation precedes any mutation: a rejected Attack/AttackMove keeps
+    // the unit's whole worker/movement/combat state.
+    let mut world = World::new();
+    let mut map = open_map();
+    let spearman = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(2.5, 2.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+    let teammate = spawn_unit(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(3.5, 2.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+    let villager = spawn_unit(
+        &mut world,
+        UnitId(4),
+        TeamId(1),
+        Vec2::new(4.5, 2.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    world.entity_mut(spearman).insert((
+        WorkerTask::Idle,
+        CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(2)),
+            last_target_cell: None,
+        },
+        test_order(&map, Vec2::new(3.5, 2.5)),
+    ));
+
+    let missing = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            target: CombatTarget::Unit(UnitId(9)),
+        },
+    );
+    let friendly_fire = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            target: CombatTarget::Unit(UnitId(3)),
+        },
+    );
+    let villager_attack = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units: vec![UnitId(4)],
+            target: CombatTarget::Unit(UnitId(9)),
+        },
+    );
+    let villager_attack_move = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: vec![UnitId(4)],
+            kind: UnitCommandKind::AttackMove {
+                target: Vec2::new(12.5, 12.5),
+            },
+        }),
+    );
+
+    assert_eq!(missing.accepted_units, Vec::<UnitId>::new());
+    assert_eq!(
+        missing.rejected_units,
+        vec![(UnitId(1), RejectReason::TargetMissing)]
+    );
+    assert_eq!(
+        friendly_fire.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)]
+    );
+    assert_eq!(
+        villager_attack.rejected_units,
+        vec![(UnitId(4), RejectReason::NotCombatant)]
+    );
+    assert_eq!(
+        villager_attack_move.rejected_units,
+        vec![(UnitId(4), RejectReason::NotCombatant)]
+    );
+    assert!(
+        world.get::<WorkerTask>(spearman).is_some(),
+        "a rejected attack must not clear the task"
+    );
+    assert!(
+        world.get::<MoveOrder>(spearman).is_some(),
+        "a rejected attack must not clear the route"
+    );
+    assert_eq!(
+        world.get::<CombatOrder>(spearman),
+        Some(&CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(2)),
+            last_target_cell: None,
+        }),
+        "a rejected attack must not touch combat intent"
+    );
+    assert!(world.get::<CombatOrder>(villager).is_none());
+    assert!(world.get::<CombatOrder>(teammate).is_none());
+}
+
+#[test]
+fn villagers_reject_attack_commands_as_noncombatants() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let villager = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(2.5, 2.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(10.5, 10.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+
+    let attack = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            target: CombatTarget::Unit(UnitId(2)),
+        },
+    );
+    let attack_move = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            kind: UnitCommandKind::AttackMove {
+                target: Vec2::new(12.5, 12.5),
+            },
+        }),
+    );
+
+    assert_eq!(
+        attack.rejected_units,
+        vec![(UnitId(1), RejectReason::NotCombatant)]
+    );
+    assert_eq!(
+        attack_move.rejected_units,
+        vec![(UnitId(1), RejectReason::NotCombatant)]
+    );
+    assert!(world.get::<CombatOrder>(villager).is_none());
+    assert!(world.get::<MoveOrder>(villager).is_none());
+    assert!(world.get::<Health>(enemy).is_some());
+}
+
+#[test]
+fn accepted_attack_cancels_prior_activity_and_installs_combat_order() {
     let mut world = World::new();
     let mut map = open_map();
     let spearman = spawn_unit(
@@ -670,27 +837,11 @@ fn attack_commands_reject_without_touching_unit_state() {
         UnitKind::Spearman,
         6.0,
     );
-    world.entity_mut(spearman).insert((
-        WorkerTask::Idle,
-        CombatOrder::Attack {
-            target: CombatTarget::Unit(UnitId(2)),
-            last_target_cell: None,
-        },
-        test_order(&map, Vec2::new(3.5, 2.5)),
-    ));
+    world
+        .entity_mut(spearman)
+        .insert(test_order(&map, Vec2::new(3.5, 2.5)));
 
-    let attack_move = apply_player_command(
-        &mut world,
-        &mut map,
-        PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units: vec![UnitId(1)],
-            kind: UnitCommandKind::AttackMove {
-                target: Vec2::new(12.5, 12.5),
-            },
-        }),
-    );
-    let attack = apply_player_command(
+    let outcome = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::Attack {
@@ -700,27 +851,58 @@ fn attack_commands_reject_without_touching_unit_state() {
         },
     );
 
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    assert!(outcome.rejected_units.is_empty());
     assert_eq!(
-        attack_move.rejected_units,
-        vec![(UnitId(1), RejectReason::InvalidTarget)]
-    );
-    assert_eq!(attack_move.accepted_units, Vec::<UnitId>::new());
-    assert_eq!(
-        attack.rejected_units,
-        vec![(UnitId(1), RejectReason::InvalidTarget)]
-    );
-    assert_eq!(attack.accepted_units, Vec::<UnitId>::new());
-    assert!(
-        world.get::<WorkerTask>(spearman).is_some(),
-        "a rejected attack must not clear the task"
+        world.get::<CombatOrder>(spearman),
+        Some(&CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(2)),
+            last_target_cell: None,
+        })
     );
     assert!(
-        world.get::<MoveOrder>(spearman).is_some(),
-        "a rejected attack must not clear the route"
-    );
-    assert!(
-        world.get::<CombatOrder>(spearman).is_some(),
-        "a rejected attack must not clear combat intent"
+        world.get::<MoveOrder>(spearman).is_none(),
+        "acceptance cancels the unit's prior route"
     );
     assert!(world.get::<MoveOrder>(enemy).is_none());
+}
+
+#[test]
+fn accepted_attack_move_installs_destination_and_combat_order() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let spearman = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(2.5, 2.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            kind: UnitCommandKind::AttackMove {
+                target: Vec2::new(18.5, 18.5),
+            },
+        }),
+    );
+
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    assert_eq!(
+        world.get::<CombatOrder>(spearman),
+        Some(&CombatOrder::AttackMove {
+            destination: GridPos::new(18, 18),
+            target: None,
+            last_target_cell: None,
+        })
+    );
+    let order = world
+        .get::<MoveOrder>(spearman)
+        .expect("an accepted attack-move routes toward its destination");
+    assert_eq!(order.goal, GridPos::new(18, 18));
 }
