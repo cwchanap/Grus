@@ -16,6 +16,13 @@ const ZOOM_STEP := 6.0
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
 @onready var _fx: Node3D = $CombatFx
+@onready var session_panel: Panel = $HUD/SessionPanel
+@onready var session_label: Label = $HUD/SessionPanel/SessionLabel
+@onready var start_button: Button = $HUD/SessionPanel/StartButton
+@onready var resume_button: Button = $HUD/SessionPanel/ResumeButton
+@onready var restart_button: Button = $HUD/SessionPanel/RestartButton
+@onready var quit_button: Button = $HUD/SessionPanel/QuitButton
+@onready var pause_button: Button = $HUD/PauseButton
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -26,6 +33,7 @@ var _left_pressed := false
 var _placement_kind := ""
 var _idle_cursor := 0
 var _session_phase := ""
+var _attack_move_armed := false
 ## Producer building kinds and the Age-up cost come from the Rust catalogue
 ## via catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
@@ -53,25 +61,61 @@ func _ready() -> void:
 		else:
 			button.pressed.connect(_on_age_pressed)
 	idle_button.pressed.connect(_on_idle_pressed)
+	start_button.pressed.connect(_on_start_pressed)
+	resume_button.pressed.connect(_on_resume_pressed)
+	pause_button.pressed.connect(_on_pause_pressed)
+	restart_button.pressed.connect(_on_restart_pressed)
+	quit_button.pressed.connect(_on_quit_pressed)
 
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.command_feedback_revision())
 	if revision != _feedback_revision:
 		_feedback_revision = revision
 		command_status.text = str(GrusBridge.command_feedback())
-	_drain_combat_fx()
+	_refresh_session()
 	_refresh_hud()
 
-## Drains current-tick combat events only while the session is Playing —
-## the bridge keeps the last Playing tick's events readable across a
-## pause/Result, and those stale events must never replay as fresh effects.
-func _drain_combat_fx() -> void:
-	_session_phase = str(GrusBridge.session_snapshot().get("phase", ""))
+## Reads the session once per frame: drives the overlay and drains
+## current-tick combat events only while Playing — the bridge keeps the last
+## Playing tick's events readable across a pause/Result, and those stale
+## events must never replay as fresh effects.
+func _refresh_session() -> void:
+	var snap: Dictionary = GrusBridge.session_snapshot()
+	_session_phase = str(snap.get("phase", ""))
+	_refresh_session_overlay(snap)
 	if _session_phase != "Playing":
 		return
 	var events: Array = GrusBridge.drain_combat_events()
 	for event in events:
 		_dispatch_combat_event(event)
+
+func _refresh_session_overlay(snap: Dictionary) -> void:
+	var playing := _session_phase == "Playing"
+	session_panel.visible = not playing
+	pause_button.visible = playing
+	match _session_phase:
+		"Start":
+			session_label.text = "Skirmish ready"
+			start_button.visible = true
+			resume_button.visible = false
+			restart_button.visible = false
+		"Paused":
+			session_label.text = "Paused"
+			start_button.visible = false
+			resume_button.visible = true
+			restart_button.visible = false
+		"Result":
+			session_label.text = "Victory!" if int(snap.get("winner_team", -1)) == 1 else "Defeat"
+			start_button.visible = false
+			resume_button.visible = false
+			restart_button.visible = true
+		_:
+			# Playing: panel hidden.
+			pass
+
+## Gameplay orders only ever leave Godot while the session is Playing.
+func _playing() -> bool:
+	return _session_phase == "Playing"
 
 ## Cosmetics only: reads the event payload, never touches combat state.
 func _dispatch_combat_event(event: Dictionary) -> void:
@@ -181,10 +225,20 @@ func _handle_key(event: InputEventKey) -> void:
 	if not event.pressed or event.echo:
 		return
 	if event.keycode == KEY_ESCAPE:
-		_cancel_placement()
+		if _placement_kind != "":
+			_cancel_placement()
+		elif _session_phase == "Playing":
+			GrusBridge.set_paused(true)
+		elif _session_phase == "Paused":
+			GrusBridge.set_paused(false)
 		return
 	if event.keycode == KEY_S:
 		_issue_stop()
+		return
+	if event.keycode == KEY_A:
+		if _playing() and not selected_ids.is_empty():
+			_attack_move_armed = true
+			command_status.text = "Attack-move: right-click a ground target"
 		return
 	if event.keycode < KEY_1 or event.keycode > KEY_9:
 		return
@@ -209,7 +263,7 @@ func _pan_camera(relative: Vector2) -> void:
 	camera.position.z -= relative.y * world_per_pixel
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
-	var nearest := _nearest_view("unit_views", screen_position, true)
+	var nearest := _nearest_view("unit_views", screen_position, 1)
 	if nearest != null:
 		if not additive:
 			selected_ids.clear()
@@ -219,7 +273,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			selected_ids.append(id)
 		_apply_selection()
 		return
-	var building := _nearest_view("building_views", screen_position, true)
+	var building := _nearest_view("building_views", screen_position, 1)
 	if building != null:
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
@@ -257,11 +311,18 @@ func _apply_selection() -> void:
 		if selected:
 			live_selected.append(id)
 	selected_ids = live_selected
+	if selected_ids.is_empty():
+		_attack_move_armed = false
 
 func _issue_context_command(screen_position: Vector2) -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	if _placement_kind != "":
 		_cancel_placement()
 		return
+	var armed := _attack_move_armed
+	_attack_move_armed = false
 	var villagers := _selected_villager_ids()
 	if not villagers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
@@ -280,6 +341,24 @@ func _issue_context_command(screen_position: Vector2) -> void:
 				else:
 					command_status.text = "Construction resume rejected"
 				return
+	# A right-click on an enemy unit/building attacks it with the whole
+	# selection; the sim rejects noncombatants per unit.
+	var enemy := _nearest_enemy_view(screen_position)
+	if enemy != null and not selected_ids.is_empty():
+		var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
+		var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
+		if GrusBridge.attack_units(PackedInt32Array(selected_ids), target_kind, target_id):
+			command_status.text = "Attack command queued"
+		else:
+			command_status.text = "Attack command rejected"
+		return
+	if armed and not selected_ids.is_empty():
+		var target = _ground_target(screen_position)
+		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
+			command_status.text = "Attack-move queued"
+		else:
+			command_status.text = "Attack-move rejected"
+		return
 	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)
 		if target != null:
@@ -291,6 +370,9 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	_issue_move(screen_position)
 
 func _issue_move(screen_position: Vector2) -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	if selected_ids.is_empty():
 		return
 	var target = _ground_target(screen_position)
@@ -303,6 +385,9 @@ func _issue_move(screen_position: Vector2) -> void:
 		command_status.text = "Move command rejected"
 
 func _issue_stop() -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	if selected_ids.is_empty():
 		return
 	if GrusBridge.stop_units(PackedInt32Array(selected_ids)):
@@ -321,11 +406,11 @@ func _ground_target(screen_position: Vector2):
 	var hit := origin + direction * distance
 	return Vector2(hit.x, hit.z)
 
-func _nearest_view(group: String, screen_position: Vector2, friendly_only := false) -> Node3D:
+func _nearest_view(group: String, screen_position: Vector2, team_filter := 0) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_distance := CLICK_RADIUS
 	for node in get_tree().get_nodes_in_group(group):
-		if friendly_only and int(node.get_meta("team_id", -1)) != 1:
+		if team_filter != 0 and int(node.get_meta("team_id", -1)) != team_filter:
 			continue
 		var view := node as Node3D
 		if view == null or camera.is_position_behind(view.global_position):
@@ -335,6 +420,17 @@ func _nearest_view(group: String, screen_position: Vector2, friendly_only := fal
 			nearest = view
 			nearest_distance = distance
 	return nearest
+
+## Enemy picking reuses the existing _nearest_view filter and distance
+## tie-break across both view groups.
+func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
+	var unit := _nearest_view("unit_views", screen_position, 2)
+	var building := _nearest_view("building_views", screen_position, 2)
+	if unit == null:
+		return building
+	if building == null:
+		return unit
+	return unit if _view_distance(unit, screen_position) <= _view_distance(building, screen_position) else building
 
 func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 	return camera.unproject_position(view.global_position).distance_to(screen_position)
@@ -357,6 +453,24 @@ func _unit_view(unit_id: int) -> Node3D:
 		if int(node.get_meta("unit_id", -1)) == unit_id:
 			return node as Node3D
 	return null
+
+func _on_start_pressed() -> void:
+	GrusBridge.start_match()
+
+func _on_pause_pressed() -> void:
+	GrusBridge.set_paused(true)
+
+func _on_resume_pressed() -> void:
+	GrusBridge.set_paused(false)
+
+func _on_restart_pressed() -> void:
+	_restart_match()
+
+func _on_quit_pressed() -> void:
+	get_tree().quit(0)
+
+func _restart_match() -> void:
+	GrusBridge.restart_match()
 
 func _selected_villager_ids() -> Array[int]:
 	var villagers: Array[int] = []
@@ -399,6 +513,9 @@ func _selected_producer_kind() -> String:
 	return str(GrusBridge.building_snapshot(selected_building_id).get("kind", ""))
 
 func _on_build_pressed(kind: String) -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	_placement_kind = kind
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
 
@@ -430,6 +547,9 @@ func _update_placement_preview(screen_position: Vector2) -> void:
 		material.albedo_color = Color(0.9, 0.25, 0.2, 0.4)
 
 func _try_placement(screen_position: Vector2) -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	var target = _ground_target(screen_position)
 	if target == null:
 		return
@@ -450,6 +570,9 @@ func _try_placement(screen_position: Vector2) -> void:
 	_cancel_placement()
 
 func _on_train_pressed(kind: String) -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	if selected_building_id <= 0:
 		command_status.text = "Select a production building first"
 		return
@@ -459,6 +582,9 @@ func _on_train_pressed(kind: String) -> void:
 		command_status.text = "Training rejected"
 
 func _on_age_pressed() -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
 	if selected_building_id <= 0:
 		command_status.text = "Select the Town Center to advance"
 		return

@@ -15,7 +15,9 @@ const REJECT_SESSION_LOCKED := 18
 ## Proven-open Barracks anchor for the Team 1 base
 ## (crates/grus-sim/src/fixture.rs layout).
 const BARRACKS_ANCHOR := Vector2i(17, 41)
-const ENEMY_TOWN_CENTER_CELL := Vector2(114.0, 48.0)
+## Walkable ground beside the enemy Town Center footprint (112..115, 46..49);
+## attack-move here must acquire the Town Center within the 8-unit radius.
+const ENEMY_TOWN_CENTER_CELL := Vector2(118.5, 44.5)
 
 var _main: Node3D
 var _fx: Node3D
@@ -56,6 +58,15 @@ func _first_kind_view(group: String, meta: String, value: String, box: Dictionar
 			return true
 	return false
 
+func _session_panel() -> Panel:
+	return _main.get_node("HUD/SessionPanel") as Panel
+
+func _session_label() -> Label:
+	return _main.get_node("HUD/SessionPanel/SessionLabel") as Label
+
+func _button(path: String) -> Button:
+	return _main.get_node(path) as Button
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -89,6 +100,9 @@ func _run() -> void:
 	if str(session.get("phase", "")) != "Start":
 		_fail("skirmish boot session is not Start: %s" % [session])
 		return
+	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible):
+		_fail("Start overlay is not up during the Start phase")
+		return
 	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
 		_fail("bridge refused to queue the Start-phase probe command")
 		return
@@ -102,6 +116,10 @@ func _run() -> void:
 		return
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
+		return
+	if not await _wait_until(
+			func(): return not _session_panel().visible and _button("HUD/PauseButton").visible, 5.0,
+			"Playing phase did not hide the overlay and show the Pause button"):
 		return
 
 	# Attack bridge: the target kind is a closed string; anything else is
@@ -205,6 +223,72 @@ func _run() -> void:
 			"dead unit 5 view was never removed"):
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=combat-journey start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned")
+	# Attack-move onto the enemy Town Center: acquisition must pick it up
+	# and drop its health through the building health bar.
+	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), ENEMY_TOWN_CENTER_CELL):
+		_fail("attack_move_units refused the Town Center push")
+		return
+	var enemy_tc := _building_view(2)
+	if enemy_tc == null:
+		_fail("enemy Town Center view 2 is missing")
+		return
+	if not await _wait_until(func(): return float(enemy_tc.call("health_ratio")) < 1.0, 30.0,
+			"attack-move never damaged the enemy Town Center"):
+		return
+
+	# Pause freezes the world and the cosmetics: the last Playing tick's
+	# combat events stay in the bridge and must not replay during Paused.
+	if not GrusBridge.set_paused(true):
+		_fail("set_paused(true) was refused")
+		return
+	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused", 5.0,
+			"session never reached Paused"):
+		return
+	if not await _wait_until(
+			func(): return _session_panel().visible and _button("HUD/SessionPanel/ResumeButton").visible \
+					and not _button("HUD/PauseButton").visible and _session_label().text == "Paused", 5.0,
+			"Paused overlay is not showing Resume with the Pause button hidden"):
+		return
+	var fx_before := int(_fx.call("effect_count"))
+	var hp_before := float(enemy_tc.call("health_ratio"))
+	for _frame in 40:
+		await get_tree().physics_frame
+	if int(_fx.call("effect_count")) > fx_before \
+			or float(enemy_tc.call("health_ratio")) != hp_before:
+		_fail("paused session kept simulating or replayed stale combat effects")
+		return
+	if not GrusBridge.set_paused(false):
+		_fail("set_paused(false) was refused")
+		return
+	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,
+			"session never resumed to Playing"):
+		return
+
+	# First Town Center destruction settles the Result: overlay shows
+	# Victory with Restart/Quit for the local team.
+	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 60.0,
+			"enemy Town Center destruction never reached Result"):
+		return
+	var result: Dictionary = GrusBridge.session_snapshot()
+	if int(result.get("winner_team", -1)) != 1:
+		_fail("Result winner is not team 1: %s" % [result])
+		return
+	if not await _wait_until(
+			func(): return _session_panel().visible and _session_label().text == "Victory!" \
+					and _button("HUD/SessionPanel/RestartButton").visible \
+					and _button("HUD/SessionPanel/QuitButton").visible, 5.0,
+			"Result overlay is not showing Victory with Restart/Quit"):
+		return
+
+	# Result locks gameplay orders just like Start did.
+	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
+		_fail("bridge refused to queue the Result-phase probe command")
+		return
+	if not await _wait_until(
+			func(): return int(GrusBridge.last_reject_code()) == REJECT_SESSION_LOCKED, 5.0,
+			"Result-phase gameplay order was not rejected with SessionLocked"):
+		return
+
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=result start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
