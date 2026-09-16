@@ -10,7 +10,9 @@ use bevy::prelude::{Component, Entity, Resource, World};
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{ATTACK_MOVE_RADIUS, CombatSpec, unit_spec};
 use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
-use crate::economy::cancel_unit_activity;
+use crate::economy::{
+    ResourceIndex, ResourceSource, WorkerTask, cancel_unit_activity, reroute_dropoff_worker,
+};
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -101,8 +103,9 @@ pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarge
 /// ascending stable-ID order: refresh/validate its target, acquire one for
 /// AttackMove, strike when in range and cooldown-ready, or refresh pursuit.
 /// An attacker destroyed earlier in the same step is skipped via its
-/// `UnitIndex` re-resolution; dead units are destroyed atomically.
-pub fn step_combat(world: &mut World, map: &GridMap, seconds: f32) {
+/// `UnitIndex` re-resolution; dead units and buildings are destroyed
+/// atomically.
+pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     if world.get_resource::<CombatEvents>().is_none() {
         world.init_resource::<CombatEvents>();
     }
@@ -170,7 +173,7 @@ pub fn step_combat(world: &mut World, map: &GridMap, seconds: f32) {
         if position.current.distance(point) <= spec.attack_range {
             // Already in range: never path.
             if cooldown_ready {
-                strike(world, entity, &unit, spec, target, point);
+                strike(world, map, entity, &unit, spec, target, point);
             }
         } else {
             pursue(world, map, entity, &position, &order, target);
@@ -453,10 +456,10 @@ fn resume_destination(
 /// Lands one validated hit: counter bonus only against the named unit kind,
 /// base damage only against buildings, instant application, cooldown
 /// installed on strike, event recorded, and atomic destruction of a dead
-/// unit. A building reaching 0 HP keeps standing — its destruction
-/// transaction belongs to the building-destruction task.
+/// unit or building.
 fn strike(
     world: &mut World,
+    map: &mut GridMap,
     attacker: Entity,
     unit: &Unit,
     spec: CombatSpec,
@@ -491,8 +494,11 @@ fn strike(
             killed,
         });
     }
-    if killed && let CombatTarget::Unit(_) = target {
-        destroy_unit(world, target_entity);
+    if killed {
+        match target {
+            CombatTarget::Unit(_) => destroy_unit(world, target_entity),
+            CombatTarget::Building(_) => destroy_building(world, map, target_entity),
+        }
     }
 }
 
@@ -506,6 +512,85 @@ pub(crate) fn destroy_unit(world: &mut World, entity: Entity) {
     {
         index.remove(id);
     }
+    world.despawn(entity);
+}
+
+/// Atomic building/site destruction (completed buildings and construction
+/// sites share one transaction; sites simply lack production/farm extras):
+/// capture footprint and Farm resource identity, free the footprint cells,
+/// remove the `BuildingIndex` and Farm `ResourceIndex` entries, retask every
+/// live worker whose task references the destroyed identity, then despawn —
+/// the production queue and derived population capacity fall out with the
+/// entity, and living units above a reduced cap are never deleted.
+///
+/// Worker retasking: `ToConstruction`/`Constructing` cancel to Idle through
+/// the existing cancellation; a destroyed Farm idles its workers with Carry
+/// preserved in every phase (never standalone `deplete_source()`); a
+/// destroyed drop-off reroutes carrying workers immediately through the
+/// economy's narrow routing seam, else idles them preserving Carry.
+pub(crate) fn destroy_building(world: &mut World, map: &mut GridMap, entity: Entity) {
+    let Some(footprint) = world.get::<Footprint>(entity).copied() else {
+        return;
+    };
+    let building_id = world.get::<Building>(entity).map(|building| building.id);
+    let farm_source = world.get::<ResourceSource>(entity).map(|source| source.id);
+
+    for cell in footprint.cells() {
+        map.set_blocked(cell, false);
+    }
+    if let Some(id) = building_id
+        && let Some(mut index) = world.get_resource_mut::<BuildingIndex>()
+    {
+        index.remove(id);
+    }
+    if let Some(source) = farm_source
+        && let Some(mut index) = world.get_resource_mut::<ResourceIndex>()
+    {
+        index.remove(source);
+    }
+
+    // Scan every live WorkerTask referencing the destroyed identity — not
+    // just active-builder or assigned-worker bookkeeping. Collect first so
+    // the retasking mutations never fight the query borrow.
+    let mut affected: Vec<(Entity, WorkerTask)> = Vec::new();
+    {
+        let mut query = world.query::<(Entity, &WorkerTask)>();
+        for (worker, task) in query.iter(world) {
+            let references_destroyed = match *task {
+                WorkerTask::ToConstruction { building, .. }
+                | WorkerTask::Constructing { building } => Some(building) == building_id,
+                WorkerTask::ToDropoff {
+                    source, dropoff, ..
+                } => Some(dropoff) == building_id || Some(source) == farm_source,
+                WorkerTask::ToSource { source, .. } | WorkerTask::Gathering { source } => {
+                    Some(source) == farm_source
+                }
+                WorkerTask::Idle => false,
+            };
+            if references_destroyed {
+                affected.push((worker, task.clone()));
+            }
+        }
+    }
+    for (worker, task) in affected {
+        match task {
+            WorkerTask::ToConstruction { .. } | WorkerTask::Constructing { .. } => {
+                cancel_unit_activity(world, worker);
+            }
+            WorkerTask::ToDropoff { source, .. } if Some(source) == farm_source => {
+                // Returning a destroyed Farm's load: idle, Carry preserved.
+                cancel_unit_activity(world, worker);
+            }
+            WorkerTask::ToDropoff { source, .. } => {
+                reroute_dropoff_worker(world, map, worker, source);
+            }
+            WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } => {
+                cancel_unit_activity(world, worker);
+            }
+            WorkerTask::Idle => {}
+        }
+    }
+
     world.despawn(entity);
 }
 

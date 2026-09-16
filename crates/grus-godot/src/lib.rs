@@ -1040,8 +1040,8 @@ fn format_command_result(result: &CommandResult) -> String {
 // inside the tick if a high-speed scenario ever shows tunneling or overshoot.
 fn advance_combat(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, map: Mut<GridMap>| {
-        step_combat(world, &map, seconds);
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_combat(world, &mut map, seconds);
     });
 }
 

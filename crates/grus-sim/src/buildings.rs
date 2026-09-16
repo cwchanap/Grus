@@ -49,6 +49,10 @@ impl BuildingIndex {
     pub(crate) fn insert(&mut self, id: BuildingId, entity: Entity) {
         self.0.insert(id, entity);
     }
+
+    pub(crate) fn remove(&mut self, id: BuildingId) {
+        self.0.remove(&id);
+    }
 }
 
 /// Everything an accepted placement needs to apply: the builder entity, the

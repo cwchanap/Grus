@@ -3,6 +3,7 @@ use bevy::prelude::World;
 use super::*;
 use crate::buildings::ConstructionState;
 use crate::catalog::{Age, ResourceKind, building_spec, unit_spec};
+use crate::combat::{Health, destroy_building, destroy_unit};
 use crate::commands::{PlayerCommand, apply_player_command};
 use crate::economy::{ResourceStockpile, gather_rate_for_age, spawn_resource_source};
 use crate::ids::{IdAllocator, ResourceId, UnitId};
@@ -1077,4 +1078,138 @@ fn unaffordable_enqueue_rejects_and_banks_nothing() {
         },
         "a rejected enqueue must not touch the stockpile"
     );
+}
+
+/// Destroying a House lowers the derived cap and never deletes living units
+/// above it: `population_cap()` falls out of the BuildingIndex naturally.
+#[test]
+fn destroying_a_house_lowers_the_cap_and_never_deletes_living_units() {
+    let (mut world, mut map) = open_world();
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(100),
+        BuildingKind::TownCenter,
+        GridPos::new(8, 8),
+        TEAM,
+    );
+    let house = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(101),
+        BuildingKind::House,
+        GridPos::new(20, 20),
+        TEAM,
+    );
+    for index in 1..=12u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(index),
+            TEAM,
+            map.cell_center(GridPos::new(2 + index as i32, 2)),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+    }
+    assert_eq!(population_cap(&world, TEAM), 20);
+    assert_eq!(population_used(&world, TEAM), 12);
+
+    destroy_building(&mut world, &mut map, house);
+
+    assert_eq!(
+        population_cap(&world, TEAM),
+        10,
+        "the derived cap falls with the House"
+    );
+    assert_eq!(
+        population_used(&world, TEAM),
+        12,
+        "a reduced cap never deletes living units"
+    );
+    for index in 1..=12u32 {
+        assert!(
+            world
+                .resource::<UnitIndex>()
+                .entity(UnitId(index))
+                .is_some()
+        );
+    }
+}
+
+/// Reduced-cap regression: production respects the reduced derived cap — a
+/// ready head blocks with PopulationFull at or above it, then completes
+/// sequentially once the team falls under it.
+#[test]
+fn production_respects_a_reduced_cap_and_completes_sequentially() {
+    let (mut world, mut map) = open_world();
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(100),
+        BuildingKind::TownCenter,
+        GridPos::new(8, 8),
+        TEAM,
+    );
+    let house = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(101),
+        BuildingKind::House,
+        GridPos::new(20, 20),
+        TEAM,
+    );
+    let barracks = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(102),
+        BuildingKind::Barracks,
+        GridPos::new(32, 32),
+        TEAM,
+    );
+    for index in 1..=12u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(index),
+            TEAM,
+            map.cell_center(GridPos::new(2 + index as i32, 2)),
+            UnitKind::Villager,
+            unit_spec(UnitKind::Villager).speed,
+        );
+    }
+
+    // The House falls before training: the derived cap is reduced to 10.
+    destroy_building(&mut world, &mut map, house);
+    assert_eq!(population_cap(&world, TEAM), 10);
+    assert_eq!(population_used(&world, TEAM), 12);
+
+    let accepted = enqueue(&mut world, &mut map, BuildingId(102), UnitKind::Spearman);
+    assert_eq!(accepted.reject, None, "enqueue accepts regardless of cap");
+
+    // Ready but 12 >= 10: the head sits at 100%, blocked, nothing spawns.
+    for _ in 0..401 {
+        step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    assert_eq!(queue_of(&world, barracks).progress_seconds, 20.0);
+    assert_eq!(population_used(&world, TEAM), 12);
+    assert_eq!(
+        queue_of(&world, barracks).blocked,
+        Some(RejectReason::PopulationFull)
+    );
+    assert!(world.resource::<UnitIndex>().entity(UnitId(100)).is_none());
+
+    // Combat deaths drop the team under the reduced cap.
+    for id in [UnitId(1), UnitId(2), UnitId(3)] {
+        let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+        world.get_mut::<Health>(entity).unwrap().current = 0;
+        destroy_unit(&mut world, entity);
+    }
+    assert_eq!(population_used(&world, TEAM), 9);
+
+    // The retained job completes sequentially, exactly once, uncharged again.
+    step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(population_used(&world, TEAM), 10);
+    assert!(world.resource::<UnitIndex>().entity(UnitId(100)).is_some());
+    assert_eq!(queue_of(&world, barracks).jobs.len(), 0);
+    assert_eq!(queue_of(&world, barracks).blocked, None);
+    assert_eq!(stockpile(&world, TEAM).food, 1000 - 60);
 }
