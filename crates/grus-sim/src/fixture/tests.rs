@@ -159,16 +159,24 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
     }
 
     // Two completed Town Center Buildings, each owning a 4×4 Footprint,
-    // a Dropoff marker, and blocked map cells.
-    let mut town_centers = world.query::<(&Building, &Footprint, &Dropoff)>();
+    // a Dropoff marker, full catalogue Health, and blocked map cells.
+    let mut town_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
     let town_centers: Vec<_> = town_centers.iter(&world).collect();
     assert_eq!(town_centers.len(), 2);
-    for (building, footprint, dropoff) in &town_centers {
+    for (building, footprint, dropoff, health) in &town_centers {
         assert_eq!(building.kind, BuildingKind::TownCenter);
         assert!(building.construction.complete);
         assert_eq!(building.construction.active_builder, None);
         assert_eq!((footprint.width, footprint.height), (4, 4));
         assert_eq!(dropoff.team, building.team);
+        let max_health = building_spec(building.kind).max_health;
+        assert_eq!(
+            **health,
+            Health {
+                current: max_health,
+                max: max_health
+            }
+        );
         for cell in footprint.cells() {
             assert!(!map.is_walkable(cell), "TC cell {cell:?} unblocked");
         }

@@ -4,8 +4,9 @@ use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
 use crate::buildings::{apply_place_building, apply_resume_construction};
-use crate::catalog::{BuildingKind, UnitKind};
-use crate::economy::{apply_gather, cancel_worker_activity};
+use crate::catalog::{BuildingKind, UnitKind, unit_spec};
+use crate::combat::{AttackCooldown, CombatTarget, Health};
+use crate::economy::{apply_gather, cancel_unit_activity};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -14,6 +15,7 @@ use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rall
 #[derive(Clone, Debug)]
 pub enum UnitCommandKind {
     Move { target: Vec2 },
+    AttackMove { target: Vec2 },
     Stop,
 }
 
@@ -58,6 +60,11 @@ pub enum PlayerCommand {
         building: BuildingId,
         target: GridPos,
     },
+    Attack {
+        issuer: TeamId,
+        units: Vec<UnitId>,
+        target: CombatTarget,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -77,6 +84,10 @@ pub enum RejectReason {
     FarmOccupied,
     PopulationFull,
     NoSpawnSpace,
+    NotCombatant,
+    TargetMissing,
+    InvalidTarget,
+    SessionLocked,
 }
 
 /// Typed result of one player command. Batch unit commands report per-unit
@@ -101,6 +112,8 @@ impl UnitIndex {
     }
 }
 
+/// Spawns one unit registered in `UnitIndex`, carrying its catalogue
+/// `Health` at full value and a ready `AttackCooldown`.
 pub fn spawn_unit(
     world: &mut World,
     id: UnitId,
@@ -109,6 +122,7 @@ pub fn spawn_unit(
     kind: UnitKind,
     speed: f32,
 ) -> Entity {
+    let spec = unit_spec(kind);
     let entity = world
         .spawn((
             Unit {
@@ -118,6 +132,11 @@ pub fn spawn_unit(
                 speed,
             },
             SimPosition::new(position),
+            Health {
+                current: spec.max_health,
+                max: spec.max_health,
+            },
+            AttackCooldown::default(),
         ))
         .id();
     let mut index = world.get_resource_or_insert_with(UnitIndex::default);
@@ -164,6 +183,21 @@ pub fn apply_player_command(
             building,
             target,
         } => apply_set_rally(world, issuer, building, target),
+        PlayerCommand::Attack { issuer, units, .. } => {
+            let mut outcome = CommandResult::default();
+            // Direct-attack application lands with the combat step; until
+            // then the command accepts nobody. A typed rejection leaves every
+            // unit's worker/movement/combat state untouched.
+            for id in units {
+                match owned_unit_entity(world, id, issuer) {
+                    Ok(_) => outcome
+                        .rejected_units
+                        .push((id, RejectReason::InvalidTarget)),
+                    Err(reason) => outcome.rejected_units.push((id, reason)),
+                }
+            }
+            outcome
+        }
     }
 }
 
@@ -179,12 +213,25 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
     let mut outcome = CommandResult::default();
 
     match kind {
+        UnitCommandKind::AttackMove { .. } => {
+            // Attack-move application lands with the combat step; until then
+            // the command accepts nobody. A typed rejection leaves every
+            // unit's worker/movement/combat state untouched.
+            for id in units {
+                match owned_unit_entity(world, id, issuer) {
+                    Ok(_) => outcome
+                        .rejected_units
+                        .push((id, RejectReason::InvalidTarget)),
+                    Err(reason) => outcome.rejected_units.push((id, reason)),
+                }
+            }
+        }
         UnitCommandKind::Stop => {
             for id in units {
                 match owned_unit_entity(world, id, issuer) {
                     Ok(entity) => {
                         // Stop is unconditional activity cancellation.
-                        cancel_worker_activity(world, entity);
+                        cancel_unit_activity(world, entity);
                         outcome.accepted_units.push(id);
                     }
                     Err(reason) => outcome.rejected_units.push((id, reason)),
@@ -298,10 +345,10 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     .map(|cell| map.cell_center(cell))
                     .collect::<Vec<_>>();
 
-                // Accepted replacement: cancel the worker's previous task
+                // Accepted replacement: cancel the unit's previous activity
                 // (which also drops its old order) before installing the new
                 // route. Rejected units above never reach this.
-                cancel_worker_activity(world, entity);
+                cancel_unit_activity(world, entity);
                 if !waypoints.is_empty() {
                     world.entity_mut(entity).insert(MoveOrder {
                         waypoints,

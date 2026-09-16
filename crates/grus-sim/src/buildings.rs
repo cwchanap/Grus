@@ -8,9 +8,10 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec};
+use crate::combat::Health;
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
 use crate::economy::{
-    Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_worker_activity,
+    Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_unit_activity,
 };
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
@@ -178,7 +179,7 @@ pub(crate) fn apply_place_building(
         }
     };
 
-    cancel_worker_activity(world, plan.builder);
+    cancel_unit_activity(world, plan.builder);
 
     let spec = building_spec(kind);
     {
@@ -210,6 +211,12 @@ pub(crate) fn apply_place_building(
                 },
             },
             plan.footprint,
+            // Sites use full owning-building health from placement;
+            // construction progress does not scale it.
+            Health {
+                current: spec.max_health,
+                max: spec.max_health,
+            },
         ))
         .id();
     let mut index = world.get_resource_or_insert_with(BuildingIndex::default);
@@ -283,10 +290,10 @@ pub(crate) fn apply_resume_construction(
     // The site's previous builder is paused before the new one takes over:
     // one active builder per building, never two.
     if let Some(previous_entity) = previous_entity {
-        cancel_worker_activity(world, previous_entity);
+        cancel_unit_activity(world, previous_entity);
     }
 
-    cancel_worker_activity(world, builder_entity);
+    cancel_unit_activity(world, builder_entity);
     world
         .entity_mut(builder_entity)
         .insert(WorkerTask::ToConstruction { building, slot });
@@ -361,7 +368,7 @@ fn reachable_builder_slot(
     // reassignment. `goal_released` frees one more goal ahead of acceptance:
     // the order carrying it is cancelled once the command applies, so only
     // that unit's current cell still reserves. When the new order replaces
-    // the old one, `cancel_worker_activity` drops the old route (releasing
+    // the old one, `cancel_unit_activity` drops the old route (releasing
     // its goal) and the new order claims the slot; on rejection nothing here
     // mutated.
     let mut used = HashSet::new();

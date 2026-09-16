@@ -1139,3 +1139,57 @@ fn vanished_source_idles_empty_workers_and_routes_full_ones_to_the_dropoff() {
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
     assert_eq!(state.stockpile.food, 200, "nothing deposits before arrival");
 }
+
+#[test]
+fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
+    let mut world = World::new();
+    let map = GridMap::new(24, 24);
+    let worker = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 4.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    world.entity_mut(worker).insert((
+        Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(5).unwrap(),
+        },
+        GatherProgress(0.5),
+        WorkerTask::Gathering {
+            source: ResourceId(1),
+        },
+        CombatOrder::AttackMove {
+            destination: GridPos::new(9, 9),
+            target: None,
+            last_target_cell: None,
+        },
+        MoveOrder {
+            waypoints: vec![map.cell_center(GridPos::new(5, 4))],
+            next: 0,
+            goal: GridPos::new(5, 4),
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        },
+    ));
+
+    cancel_unit_activity(&mut world, worker);
+
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+    assert_eq!(
+        world.get::<GatherProgress>(worker),
+        Some(&GatherProgress(0.0))
+    );
+    assert!(world.get::<MoveOrder>(worker).is_none());
+    assert!(world.get::<CombatOrder>(worker).is_none());
+    // Carry is never touched.
+    assert_eq!(
+        world.get::<Carry>(worker),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Wood,
+            amount: NonZeroU32::new(5).unwrap(),
+        })
+    );
+}

@@ -1,6 +1,8 @@
 use bevy::prelude::World;
 
 use super::*;
+use crate::combat::CombatOrder;
+use crate::economy::WorkerTask;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
 
 fn open_map() -> GridMap {
@@ -583,4 +585,142 @@ fn group_move_never_targets_a_cell_another_commanded_unit_stands_on() {
         world.get::<MoveOrder>(b).is_none(),
         "the unit already standing on the target keeps its place"
     );
+}
+
+#[test]
+fn spawn_unit_attaches_catalogue_health_and_ready_cooldown() {
+    let mut world = World::new();
+    let villager = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(1.5, 1.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    let spearman = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(2.5, 1.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+
+    let villager_health = world.get::<Health>(villager).expect("villager health");
+    assert_eq!(
+        villager_health,
+        &Health {
+            current: 50,
+            max: 50
+        }
+    );
+    let spearman_health = world.get::<Health>(spearman).expect("spearman health");
+    assert_eq!(
+        spearman_health,
+        &Health {
+            current: 100,
+            max: 100
+        }
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(villager),
+        Some(&AttackCooldown::default())
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(spearman),
+        Some(&AttackCooldown::default())
+    );
+}
+
+#[test]
+fn reject_reason_variants_stay_append_ordered() {
+    // `RejectReason` is append-only and its discriminants leak to Godot as
+    // numeric reject codes (`reason as i32`). `SessionLocked` (the newest
+    // variant) must keep a higher discriminant than every pre-existing
+    // variant and must not reuse `Locked`.
+    assert!(RejectReason::SessionLocked as i32 > RejectReason::NoSpawnSpace as i32);
+    assert!(RejectReason::SessionLocked as i32 > RejectReason::UnknownUnit as i32);
+    assert!(RejectReason::SessionLocked as i32 > RejectReason::NotCombatant as i32);
+    assert!(RejectReason::SessionLocked as i32 > RejectReason::TargetMissing as i32);
+    assert!(RejectReason::SessionLocked as i32 > RejectReason::InvalidTarget as i32);
+    assert_ne!(RejectReason::SessionLocked, RejectReason::Locked);
+}
+
+#[test]
+fn attack_commands_reject_without_touching_unit_state() {
+    // Combat intent installation lands with the combat step; until then
+    // Attack/AttackMove are typed rejections that preserve the unit's whole
+    // worker/movement/combat state.
+    let mut world = World::new();
+    let mut map = open_map();
+    let spearman = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(2.5, 2.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(10.5, 10.5),
+        UnitKind::Spearman,
+        6.0,
+    );
+    world.entity_mut(spearman).insert((
+        WorkerTask::Idle,
+        CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(2)),
+            last_target_cell: None,
+        },
+        test_order(&map, Vec2::new(3.5, 2.5)),
+    ));
+
+    let attack_move = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            kind: UnitCommandKind::AttackMove {
+                target: Vec2::new(12.5, 12.5),
+            },
+        }),
+    );
+    let attack = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units: vec![UnitId(1)],
+            target: CombatTarget::Unit(UnitId(2)),
+        },
+    );
+
+    assert_eq!(
+        attack_move.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)]
+    );
+    assert_eq!(attack_move.accepted_units, Vec::<UnitId>::new());
+    assert_eq!(
+        attack.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)]
+    );
+    assert_eq!(attack.accepted_units, Vec::<UnitId>::new());
+    assert!(
+        world.get::<WorkerTask>(spearman).is_some(),
+        "a rejected attack must not clear the task"
+    );
+    assert!(
+        world.get::<MoveOrder>(spearman).is_some(),
+        "a rejected attack must not clear the route"
+    );
+    assert!(
+        world.get::<CombatOrder>(spearman).is_some(),
+        "a rejected attack must not clear combat intent"
+    );
+    assert!(world.get::<MoveOrder>(enemy).is_none());
 }

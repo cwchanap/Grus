@@ -1137,3 +1137,35 @@ fn resume_construction_reject_codes_are_deterministic() {
     );
     assert_eq!(result.reject, Some(RejectReason::Locked));
 }
+
+#[test]
+fn placed_buildings_start_at_full_catalogue_health() {
+    let (mut world, mut map, _) = setup_build_test();
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert!(result.reject.is_none(), "placement rejected: {result:?}");
+    let building = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(10))
+        .expect("allocated building registered");
+
+    // Sites use full owning-building health from placement; construction
+    // progress does not scale it.
+    let health = world.get::<Health>(building).expect("building health");
+    assert_eq!(
+        health,
+        &Health {
+            current: 250,
+            max: 250
+        }
+    );
+}

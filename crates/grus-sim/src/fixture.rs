@@ -2,7 +2,10 @@ use bevy::math::Vec2;
 use bevy::prelude::World;
 
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, resource_amount, unit_spec};
+use crate::catalog::{
+    Age, BuildingKind, ResourceKind, UnitKind, building_spec, resource_amount, unit_spec,
+};
+use crate::combat::Health;
 use crate::commands::spawn_unit;
 use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
@@ -185,6 +188,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     world.insert_resource(economy);
 
     let mut unit_counter: u32 = 0;
+    let town_center_health = building_spec(BuildingKind::TownCenter).max_health;
     for (index, start) in MapFixture::team_starts().into_iter().enumerate() {
         let building_id = BuildingId(index as u32 + 1);
         let footprint = Footprint::new(start.town_center_anchor, 4, 4);
@@ -205,6 +209,10 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
                 },
                 footprint,
                 Dropoff { team: start.team },
+                Health {
+                    current: town_center_health,
+                    max: town_center_health,
+                },
             ))
             .id();
         let mut buildings = world.get_resource_or_insert_with(BuildingIndex::default);
