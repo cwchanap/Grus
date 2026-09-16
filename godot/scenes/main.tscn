@@ -187,3 +187,59 @@ metadata/kind = "Cavalry"
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
 text = "Advance Age (300f 200g)"
+
+[node name="PauseButton" type="Button" parent="HUD"]
+offset_left = 930.0
+offset_top = 8.0
+offset_right = 990.0
+offset_bottom = 40.0
+text = "Pause"
+
+[node name="SessionPanel" type="Panel" parent="HUD"]
+offset_left = 440.0
+offset_top = 250.0
+offset_right = 840.0
+offset_bottom = 470.0
+mouse_filter = 0
+
+[node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = 392.0
+offset_bottom = 56.0
+theme_override_font_sizes/font_size = 20
+text = "Skirmish ready"
+
+[node name="StartButton" type="Button" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 70.0
+offset_right = 392.0
+offset_bottom = 110.0
+text = "Start"
+
+[node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
+visible = false
+layout_mode = 0
+offset_left = 8.0
+offset_top = 70.0
+offset_right = 392.0
+offset_bottom = 110.0
+text = "Resume"
+
+[node name="RestartButton" type="Button" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 120.0
+offset_right = 392.0
+offset_bottom = 160.0
+text = "Restart"
+
+[node name="QuitButton" type="Button" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 170.0
+offset_right = 392.0
+offset_bottom = 210.0
+text = "Quit"
