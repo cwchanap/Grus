@@ -9,14 +9,14 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CombatEvents, CommandResult, Footprint, GridMap, GridPos, IdAllocator, LastRouteReject,
-    MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind,
-    ProductionQueue, RallyPoint, RejectReason, ResourceId, ResourceIndex, ResourceSource,
-    SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId,
-    UnitIndex, UnitKind, WorkerTask, active_phase, apply_player_command, gather_rate_for_age,
-    population_cap, population_used, produces, seed_skirmish, set_paused, spawn_unit, start_match,
-    step_combat, step_construction, step_economy, step_movement, step_production,
-    validate_placement,
+    CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
+    IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
+    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
+    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
+    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, active_phase,
+    apply_player_command, gather_rate_for_age, population_cap, population_used, produces,
+    seed_skirmish, set_paused, spawn_unit, start_match, step_combat, step_construction,
+    step_economy, step_movement, step_production, validate_placement,
 };
 
 #[cfg(feature = "e2e")]
@@ -77,6 +77,42 @@ impl GrusBridgeNode {
             issuer: TeamId(1),
             units,
             kind: UnitCommandKind::Move {
+                target: Vec2::new(target.x, target.y),
+            },
+        }))
+    }
+
+    #[func]
+    fn attack_units(
+        &self,
+        packed_ids: PackedInt32Array,
+        target_kind: GString,
+        target_id: i32,
+    ) -> bool {
+        let units = decode_unit_ids(&packed_ids);
+        let Some(target) = parse_target_kind(&target_kind, target_id) else {
+            return false;
+        };
+        if units.is_empty() {
+            return false;
+        }
+        queue_command(PlayerCommand::Attack {
+            issuer: TeamId(1),
+            units,
+            target,
+        })
+    }
+
+    #[func]
+    fn attack_move_units(&self, packed_ids: PackedInt32Array, target: Vector2) -> bool {
+        let units = decode_unit_ids(&packed_ids);
+        if units.is_empty() {
+            return false;
+        }
+        queue_command(PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units,
+            kind: UnitCommandKind::AttackMove {
                 target: Vec2::new(target.x, target.y),
             },
         }))
@@ -321,6 +357,26 @@ impl GrusBridgeNode {
             .resource_mut::<Time<Virtual>>()
             .set_relative_speed_f64(relative_speed);
         true
+    }
+
+    /// Current-tick combat events for cosmetics: drains and returns them while
+    /// the session is Playing, returns an empty array otherwise. The guard is
+    /// deliberate: `step_combat` only clears `CombatEvents` once gameplay is
+    /// active, so the last Playing tick's events stay readable across a
+    /// pause/Result and must never replay as fresh effects.
+    #[func]
+    fn drain_combat_events(&self) -> Array<VarDictionary> {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return Array::new();
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return Array::new();
+        };
+        take_playing_events(app.world_mut())
+            .into_iter()
+            .map(combat_event_dict)
+            .collect()
     }
 
     #[func]
@@ -665,6 +721,28 @@ fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
     }
 }
 
+/// Closed-string target kind beside the other parse helpers: only
+/// `"unit"` / `"building"` map to a `CombatTarget`; anything else rejects at
+/// the bridge.
+fn parse_target_kind(kind: &GString, target_id: i32) -> Option<CombatTarget> {
+    parse_target_kind_str(kind.to_string().as_str(), target_id)
+}
+
+fn parse_target_kind_str(kind: &str, target_id: i32) -> Option<CombatTarget> {
+    let Ok(raw_id) = u32::try_from(target_id) else {
+        return None;
+    };
+    // Stable ids are 1-based; 0 matches decode_unit_ids' reject convention.
+    if raw_id == 0 {
+        return None;
+    }
+    match kind {
+        "unit" => Some(CombatTarget::Unit(UnitId(raw_id))),
+        "building" => Some(CombatTarget::Building(BuildingId(raw_id))),
+        _ => None,
+    }
+}
+
 fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
     match name.to_string().as_str() {
         "House" => Some(BuildingKind::House),
@@ -727,6 +805,44 @@ fn queue_command(command: PlayerCommand) -> bool {
     };
     pending.0.push(command);
     true
+}
+
+/// Drains the current-tick combat events only while the session is Playing;
+/// frozen sessions keep their last Playing tick's events untouched so they
+/// cannot replay as fresh cosmetics across a pause/Result.
+fn take_playing_events(world: &mut World) -> Vec<CombatEvent> {
+    if !matches!(active_phase(world), MatchPhase::Playing) {
+        return Vec::new();
+    }
+    world
+        .get_resource_mut::<CombatEvents>()
+        .map(|mut events| std::mem::take(&mut events.0))
+        .unwrap_or_default()
+}
+
+fn combat_event_dict(event: CombatEvent) -> VarDictionary {
+    let mut dict = VarDictionary::new();
+    dict.set("attacker", i64::from(event.attacker.0));
+    dict.set(
+        "target_kind",
+        &GString::from(match event.target {
+            CombatTarget::Unit(_) => "unit",
+            CombatTarget::Building(_) => "building",
+        }),
+    );
+    dict.set(
+        "target_id",
+        i64::from(match event.target {
+            CombatTarget::Unit(id) => id.0,
+            CombatTarget::Building(id) => id.0,
+        }),
+    );
+    dict.set("damage", i64::from(event.damage));
+    dict.set("x", f64::from(event.position.x));
+    dict.set("y", f64::from(event.position.y));
+    dict.set("ranged", event.ranged);
+    dict.set("killed", event.killed);
+    dict
 }
 
 fn with_app<T>(read: impl FnOnce(&App) -> T) -> Option<T> {
@@ -1219,6 +1335,71 @@ mod tests {
     use grus_sim::{CombatEvent, CombatTarget, MatchResult};
 
     use super::*;
+
+    #[test]
+    fn parse_target_kind_accepts_only_the_closed_strings() {
+        assert_eq!(
+            parse_target_kind_str("unit", 5),
+            Some(CombatTarget::Unit(UnitId(5)))
+        );
+        assert_eq!(
+            parse_target_kind_str("building", 2),
+            Some(CombatTarget::Building(BuildingId(2)))
+        );
+        // Everything else rejects at the bridge, including case drift,
+        // unknown words, and out-of-range ids.
+        assert_eq!(parse_target_kind_str("Unit", 5), None);
+        assert_eq!(parse_target_kind_str("cactus", 5), None);
+        assert_eq!(parse_target_kind_str("", 5), None);
+        assert_eq!(parse_target_kind_str("unit", 0), None);
+        assert_eq!(parse_target_kind_str("unit", -5), None);
+        assert_eq!(
+            parse_target_kind_str("unit", i32::MAX),
+            Some(CombatTarget::Unit(UnitId(i32::MAX as u32)))
+        );
+    }
+
+    #[test]
+    fn combat_event_drain_only_while_playing() {
+        let event = CombatEvent {
+            attacker: UnitId(1),
+            target: CombatTarget::Unit(UnitId(2)),
+            damage: 3,
+            position: Vec2::new(4.0, 5.0),
+            ranged: true,
+            killed: false,
+        };
+        let mut world = World::new();
+
+        // A frozen session keeps the last Playing tick's events readable;
+        // the drain must not take or replay them.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Paused,
+        });
+        world.insert_resource(CombatEvents(vec![event]));
+        assert!(take_playing_events(&mut world).is_empty());
+        assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
+
+        for phase in [
+            MatchPhase::Start,
+            MatchPhase::Result(grus_sim::MatchResult(TeamId(2))),
+        ] {
+            world.insert_resource(MatchSession { phase });
+            assert!(take_playing_events(&mut world).is_empty());
+            assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
+        }
+
+        // Playing takes the events and leaves the buffer empty.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        assert_eq!(take_playing_events(&mut world), vec![event]);
+        assert!(world.resource::<CombatEvents>().0.is_empty());
+        // A missing session reads as Playing (benchmark contract).
+        world.remove_resource::<MatchSession>();
+        world.insert_resource(CombatEvents(vec![event]));
+        assert_eq!(take_playing_events(&mut world), vec![event]);
+    }
 
     #[test]
     fn idle_workers_exclude_units_with_move_orders() {
