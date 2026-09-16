@@ -10,13 +10,13 @@ use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
     CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
-    IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
-    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
-    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, active_phase,
-    apply_player_command, gather_rate_for_age, population_cap, population_used, produces,
-    seed_skirmish, set_paused, spawn_unit, start_match, step_combat, step_construction,
-    step_economy, step_movement, step_production, validate_placement,
+    Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder,
+    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy,
+    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask,
+    active_phase, apply_player_command, gather_rate_for_age, population_cap, population_used,
+    produces, seed_skirmish, set_paused, spawn_unit, start_match, step_combat,
+    step_construction, step_economy, step_movement, step_production, validate_placement,
 };
 
 #[cfg(feature = "e2e")]
@@ -680,6 +680,7 @@ fn build_app(app: &mut App) {
                 initialize_view_metadata,
                 stamp_late_resource_metadata,
                 sync_interpolated_unit_transforms,
+                update_health_bars,
             ),
         )
         .add_systems(
@@ -1035,6 +1036,26 @@ fn stamp_late_resource_metadata(
         node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
         node.set_meta("resource_kind", &debug_variant(source.kind));
         commands.entity(entity).insert(ResourceMetaInitialized);
+    }
+}
+
+/// Health bars ride the existing per-entity Godot node handles: every
+/// `Changed<Health>` tick forwards the ratio to the view script, which owns
+/// the bar's primitive geometry. No per-frame GDScript world polling.
+fn update_health_bars(
+    changed: Query<(&Health, &GodotNodeHandle), Changed<Health>>,
+    mut godot: GodotAccess,
+) {
+    for (health, handle) in &changed {
+        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+            continue;
+        };
+        let ratio = if health.max == 0 {
+            1.0
+        } else {
+            health.current as f32 / health.max as f32
+        };
+        node.call("set_health_ratio", &[ratio.to_variant()]);
     }
 }
 

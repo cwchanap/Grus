@@ -1,4 +1,4 @@
-[gd_scene load_steps=3 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/building_view.gd" id="1_script"]
 
@@ -10,6 +10,13 @@ resource_local_to_scene = true
 albedo_color = Color(0.72, 0.66, 0.55, 1)
 roughness = 0.85
 
+[sub_resource type="BoxMesh" id="BoxMesh_health"]
+size = Vector3(1, 0.12, 0.16)
+
+[sub_resource type="StandardMaterial3D" id="Material_health"]
+albedo_color = Color(0.3, 0.85, 0.3, 1)
+shading_mode = 0
+
 [node name="BuildingView" type="Node3D"]
 script = ExtResource("1_script")
 
@@ -17,3 +24,9 @@ script = ExtResource("1_script")
 position = Vector3(0, 0.8, 0)
 mesh = SubResource("BoxMesh_body")
 material_override = SubResource("Material_body")
+
+[node name="HealthBar" type="MeshInstance3D" parent="."]
+position = Vector3(0, 2.0, 0)
+visible = false
+mesh = SubResource("BoxMesh_health")
+material_override = SubResource("Material_health")
