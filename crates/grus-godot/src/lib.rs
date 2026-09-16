@@ -9,14 +9,14 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
-    Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder,
-    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
-    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy,
-    TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask,
-    active_phase, apply_player_command, gather_rate_for_age, population_cap, population_used,
-    produces, seed_skirmish, set_paused, spawn_unit, start_match, step_combat,
-    step_construction, step_economy, step_movement, step_production, validate_placement,
+    CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos, Health,
+    IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
+    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
+    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
+    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, active_phase,
+    apply_player_command, gather_rate_for_age, population_cap, population_used, produces,
+    seed_skirmish, set_paused, spawn_unit, start_match, step_combat, step_construction,
+    step_economy, step_movement, step_production, validate_placement,
 };
 
 #[cfg(feature = "e2e")]
