@@ -5,7 +5,9 @@ use bevy::prelude::{Entity, Resource, World};
 
 use crate::buildings::{apply_place_building, apply_resume_construction};
 use crate::catalog::{BuildingKind, UnitKind, unit_spec};
-use crate::combat::{AttackCooldown, CombatTarget, Health};
+use crate::combat::{
+    AttackCooldown, CombatOrder, CombatTarget, Health, resolve_target, target_eligible,
+};
 use crate::economy::{apply_gather, cancel_unit_activity};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
@@ -110,6 +112,10 @@ impl UnitIndex {
     pub fn iter(&self) -> impl Iterator<Item = (&UnitId, &Entity)> {
         self.0.iter()
     }
+
+    pub(crate) fn remove(&mut self, id: UnitId) {
+        self.0.remove(&id);
+    }
 }
 
 /// Spawns one unit registered in `UnitIndex`, carrying its catalogue
@@ -183,22 +189,68 @@ pub fn apply_player_command(
             building,
             target,
         } => apply_set_rally(world, issuer, building, target),
-        PlayerCommand::Attack { issuer, units, .. } => {
-            let mut outcome = CommandResult::default();
-            // Direct-attack application lands with the combat step; until
-            // then the command accepts nobody. A typed rejection leaves every
-            // unit's worker/movement/combat state untouched.
-            for id in units {
-                match owned_unit_entity(world, id, issuer) {
-                    Ok(_) => outcome
-                        .rejected_units
-                        .push((id, RejectReason::InvalidTarget)),
-                    Err(reason) => outcome.rejected_units.push((id, reason)),
-                }
-            }
-            outcome
-        }
+        PlayerCommand::Attack {
+            issuer,
+            units,
+            target,
+        } => apply_attack(world, issuer, units, target),
     }
+}
+
+/// Direct Attack: validates per unit (owned → combatant → target exists →
+/// target eligible through the one `target_eligible` seam) before touching
+/// any state; an accepted unit then cancels its prior activity through the
+/// shared helper and receives a fresh `CombatOrder::Attack`.
+fn apply_attack(
+    world: &mut World,
+    issuer: TeamId,
+    mut units: Vec<UnitId>,
+    target: CombatTarget,
+) -> CommandResult {
+    units.sort_unstable();
+    units.dedup();
+    let mut outcome = CommandResult::default();
+
+    for id in units {
+        let entity = match owned_unit_entity(world, id, issuer) {
+            Ok(entity) => entity,
+            Err(reason) => {
+                outcome.rejected_units.push((id, reason));
+                continue;
+            }
+        };
+        if world
+            .get::<Unit>(entity)
+            .is_none_or(|unit| unit_spec(unit.kind).combat.is_none())
+        {
+            outcome
+                .rejected_units
+                .push((id, RejectReason::NotCombatant));
+            continue;
+        }
+        if resolve_target(world, target).is_none() {
+            outcome
+                .rejected_units
+                .push((id, RejectReason::TargetMissing));
+            continue;
+        }
+        if !target_eligible(world, issuer, target) {
+            outcome
+                .rejected_units
+                .push((id, RejectReason::InvalidTarget));
+            continue;
+        }
+        // Fully validated: cancel the unit's previous activity before
+        // installing the combat order.
+        cancel_unit_activity(world, entity);
+        world.entity_mut(entity).insert(CombatOrder::Attack {
+            target,
+            last_target_cell: None,
+        });
+        outcome.accepted_units.push(id);
+    }
+
+    outcome
 }
 
 fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand) -> CommandResult {
@@ -213,17 +265,52 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
     let mut outcome = CommandResult::default();
 
     match kind {
-        UnitCommandKind::AttackMove { .. } => {
-            // Attack-move application lands with the combat step; until then
-            // the command accepts nobody. A typed rejection leaves every
-            // unit's worker/movement/combat state untouched.
+        UnitCommandKind::AttackMove { target } => {
+            // Per-unit: owned → combatant → walkable destination, then cancel
+            // and install the combat order plus the opening route toward the
+            // destination (Move semantics via `assign_move_toward`). Enemy
+            // acquisition happens in `step_combat`.
+            let destination = map.world_to_cell(target);
             for id in units {
-                match owned_unit_entity(world, id, issuer) {
-                    Ok(_) => outcome
+                let entity = match owned_unit_entity(world, id, issuer) {
+                    Ok(entity) => entity,
+                    Err(reason) => {
+                        outcome.rejected_units.push((id, reason));
+                        continue;
+                    }
+                };
+                if world
+                    .get::<Unit>(entity)
+                    .is_none_or(|unit| unit_spec(unit.kind).combat.is_none())
+                {
+                    outcome
                         .rejected_units
-                        .push((id, RejectReason::InvalidTarget)),
-                    Err(reason) => outcome.rejected_units.push((id, reason)),
+                        .push((id, RejectReason::NotCombatant));
+                    continue;
                 }
+                if !map.is_walkable(destination) {
+                    outcome.rejected_units.push((id, RejectReason::Unreachable));
+                    continue;
+                }
+                let Some(position) = world.get::<SimPosition>(entity).copied() else {
+                    outcome.rejected_units.push((id, RejectReason::UnknownUnit));
+                    continue;
+                };
+                // Fully validated: cancel, then install the order and route.
+                cancel_unit_activity(world, entity);
+                assign_move_toward(
+                    world,
+                    map,
+                    entity,
+                    map.world_to_cell(position.current),
+                    destination,
+                );
+                world.entity_mut(entity).insert(CombatOrder::AttackMove {
+                    destination,
+                    target: None,
+                    last_target_cell: None,
+                });
+                outcome.accepted_units.push(id);
             }
         }
         UnitCommandKind::Stop => {

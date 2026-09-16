@@ -89,6 +89,37 @@ fn set_blocked_out_of_bounds_returns_false_and_keeps_the_revision() {
 }
 
 #[test]
+fn closest_point_gives_town_center_melee_range() {
+    // Authored 4×4 Town Center footprint. Range against buildings is measured
+    // to the nearest point of the footprint rectangle — `Footprint::center()`
+    // is never the melee metric.
+    let town_center = Footprint::new(GridPos::new(12, 46), 4, 4);
+    let attacker = Vec2::new(11.5, 48.5);
+
+    let closest = town_center.closest_point(attacker);
+    assert_eq!(closest, Vec2::new(12.0, 48.5));
+    assert!(
+        attacker.distance(closest) <= 1.5,
+        "a unit on the perimeter cell is in melee range of the footprint"
+    );
+    assert!(
+        attacker.distance(town_center.center()) > 1.5,
+        "the geometric center would wrongly report out of melee range"
+    );
+
+    // A point inside the rectangle is its own closest point.
+    assert_eq!(
+        town_center.closest_point(Vec2::new(13.2, 47.4)),
+        Vec2::new(13.2, 47.4)
+    );
+    // Distant points clamp onto the rectangle edge.
+    assert_eq!(
+        town_center.closest_point(Vec2::new(20.5, 40.5)),
+        Vec2::new(16.0, 46.0)
+    );
+}
+
+#[test]
 fn find_path_rejects_unwalkable_endpoints() {
     let mut map = GridMap::new(8, 8);
     map.set_blocked(GridPos::new(2, 2), true);

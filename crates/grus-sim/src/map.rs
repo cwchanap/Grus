@@ -54,6 +54,18 @@ impl Footprint {
         )
     }
 
+    /// Nearest point of the footprint rectangle to `point` in world
+    /// coordinates; a point inside the rectangle is its own closest point.
+    /// The combat range metric against buildings — `center()` is never the
+    /// melee building range metric.
+    pub fn closest_point(&self, point: Vec2) -> Vec2 {
+        let min_x = self.anchor.x as f32;
+        let max_x = (self.anchor.x + i32::from(self.width)) as f32;
+        let min_y = self.anchor.y as f32;
+        let max_y = (self.anchor.y + i32::from(self.height)) as f32;
+        Vec2::new(point.x.clamp(min_x, max_x), point.y.clamp(min_y, max_y))
+    }
+
     /// The ring of cells immediately surrounding the footprint, row-major.
     /// Never contains a footprint cell and never scans a wider ring.
     pub fn perimeter_cells(&self) -> Vec<GridPos> {

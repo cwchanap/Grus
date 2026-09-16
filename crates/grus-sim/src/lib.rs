@@ -19,7 +19,10 @@ pub use catalog::{
     BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec, Cost, MAX_POPULATION, ResourceKind,
     UnitKind, UnitSpec, resource_amount,
 };
-pub use combat::{AttackCooldown, CombatEvent, CombatEvents, CombatOrder, CombatTarget, Health};
+pub use combat::{
+    AttackCooldown, CombatEvent, CombatEvents, CombatOrder, CombatTarget, Health, step_combat,
+    target_eligible,
+};
 pub use commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
     apply_player_command, spawn_unit,
