@@ -606,6 +606,96 @@ fn attack_move_acquires_buildings() {
     assert_eq!(recorded[0].position, Vec2::new(16.0, 48.5));
 }
 
+#[test]
+fn attack_move_diverts_to_an_acquired_stationary_unit() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 12.5),
+        UnitKind::Spearman,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(7.5, 12.5),
+        UnitKind::Villager,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
+    );
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+
+    // The destination route is replaced by pursuit the moment the target is
+    // acquired — even though the target never moves. The occupied target
+    // cell resolves to its nearest free ring slot.
+    let order = world
+        .get::<MoveOrder>(attacker)
+        .expect("pursues the acquired target");
+    assert_eq!(
+        order.goal,
+        GridPos::new(6, 11),
+        "diverts from the destination route to engage the stationary enemy"
+    );
+}
+
+#[test]
+fn attack_move_diverts_to_an_acquired_building() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 48.5),
+        UnitKind::Spearman,
+    );
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::TownCenter,
+        GridPos::new(12, 46),
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 52.5)),
+    );
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+
+    let order = world
+        .get::<MoveOrder>(attacker)
+        .expect("pursues the acquired building");
+    assert_eq!(
+        order.goal,
+        GridPos::new(11, 48),
+        "diverts from the destination route to the nearest perimeter slot"
+    );
+
+    // The diverted pursuit leg is kept while it is active: a static building
+    // never triggers a replan mid-route.
+    let paths = map.path_call_count();
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    assert_eq!(
+        map.path_call_count(),
+        paths,
+        "the diverted pursuit leg is reused, not replanned"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().goal,
+        GridPos::new(11, 48)
+    );
+}
+
 fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
     let mut world = World::new();
     let mut map = open_map();
@@ -807,6 +897,64 @@ fn attack_move_clears_the_dead_target_and_resumes_destination() {
         .get::<MoveOrder>(attacker)
         .expect("resumes destination");
     assert_eq!(order.goal, GridPos::new(20, 5));
+}
+
+#[test]
+fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 12.5),
+        UnitKind::Spearman,
+    );
+    let target = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(7.5, 12.5),
+        UnitKind::Villager,
+    );
+    world.get_mut::<Health>(target).unwrap().current = 5;
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
+    );
+    // Acquire the villager; its move then triggers a pursuit replan, so a
+    // real pursuit leg (beside the villager, not the destination) is active.
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    world
+        .entity_mut(target)
+        .insert(SimPosition::new(Vec2::new(7.5, 13.5)));
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().goal,
+        GridPos::new(6, 12),
+        "a pursuit leg toward the villager is active"
+    );
+
+    // The killing blow lands while the pursuit leg is still active.
+    world
+        .entity_mut(attacker)
+        .insert(SimPosition::new(Vec2::new(6.5, 13.5)));
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    assert!(events(&world)[0].killed);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_some(),
+        "stale leg present"
+    );
+
+    // The dead target frees the unit immediately — the stale pursuit leg is
+    // replaced instead of being waited out.
+    step_combat(&mut world, &map, SIM_STEP_SECONDS);
+    let order = world
+        .get::<MoveOrder>(attacker)
+        .expect("resumes the destination");
+    assert_eq!(order.goal, GridPos::new(20, 12));
 }
 
 #[test]

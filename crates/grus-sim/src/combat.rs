@@ -190,8 +190,9 @@ fn current_target(order: &CombatOrder) -> Option<CombatTarget> {
 /// Direct Attack (`None`) and is cleared from an AttackMove, which then
 /// acquires the nearest eligible target within `ATTACK_MOVE_RADIUS`. The
 /// pursuit cache of a retained target is left untouched so pursuit can
-/// detect target movement; it is rebuilt for a cleared or newly acquired
-/// target.
+/// detect target movement; a cleared or newly acquired target resets it to
+/// `None` so the first `pursue` assigns a route immediately — the
+/// still-active destination route must not read as an active pursuit leg.
 fn refresh_target(
     world: &World,
     attacker_team: TeamId,
@@ -216,17 +217,7 @@ fn refresh_target(
                 None => acquire_target(world, attacker_team, attacker_position),
             };
             let retained = input_target.is_some() && input_target == target;
-            let last_target_cell = if retained {
-                last_target_cell
-            } else {
-                target.and_then(|target| match target {
-                    CombatTarget::Unit(_) => {
-                        target_position(world, attacker_position, target).map(world_to_cell)
-                    }
-                    // Buildings never move; pursuit refreshes on route end.
-                    CombatTarget::Building(_) => None,
-                })
-            };
+            let last_target_cell = if retained { last_target_cell } else { None };
             Some(CombatOrder::AttackMove {
                 destination,
                 target,
@@ -293,9 +284,11 @@ fn target_position(world: &World, attacker_position: Vec2, target: CombatTarget)
 }
 
 /// Pursues the target: unit pursuit reuses the route until the target
-/// changes grid cell or the route ends; a static building's pursuit refreshes
-/// only when its route ends, picking the nearest-perimeter walkable slot
-/// (sorted by attacker distance here, at the combat call site only).
+/// changes grid cell or the route ends; a static building's pursuit reuses
+/// its active leg (the route whose goal is the cached pursuit slot) and
+/// otherwise — fresh assignment or route end — picks the
+/// nearest-perimeter walkable slot (sorted by attacker distance here, at
+/// the combat call site only).
 fn pursue(
     world: &mut World,
     map: &GridMap,
@@ -328,8 +321,12 @@ fn pursue(
                 .insert(with_last_target_cell(order, Some(target_cell)));
         }
         CombatTarget::Building(id) => {
-            // Static target: refresh only when the route ended.
-            if world.get::<MoveOrder>(attacker).is_some() {
+            // A leg whose goal is the cached pursuit slot is still en route
+            // to this building — keep it. Any other active route is the
+            // AttackMove destination (or a stale leg) and must not block
+            // engaging the target.
+            let route_goal = world.get::<MoveOrder>(attacker).map(|order| order.goal);
+            if route_goal.is_some() && last_target_cell(order) == route_goal {
                 return;
             }
             let Some(footprint) = world
@@ -383,6 +380,9 @@ fn pursue(
                             map_revision: map.revision(),
                             last_failed_replan: None,
                         });
+                        world
+                            .entity_mut(attacker)
+                            .insert(with_last_target_cell(order, Some(slot)));
                     }
                     break;
                 }
@@ -424,8 +424,10 @@ fn with_last_target_cell(order: &CombatOrder, cell: Option<GridPos>) -> CombatOr
     }
 }
 
-/// Reassigns the AttackMove route toward its destination when no route is
-/// active (arrival, a just-cleared target, or command acceptance failure).
+/// Reassigns the AttackMove route toward its destination. A leg already
+/// bound for the destination is kept; any other active leg is a stale
+/// pursuit route to a dead target's cell and is replaced now instead of
+/// being waited out.
 fn resume_destination(
     world: &mut World,
     map: &GridMap,
@@ -433,7 +435,10 @@ fn resume_destination(
     position: &SimPosition,
     destination: GridPos,
 ) {
-    if world.get::<MoveOrder>(attacker).is_some() {
+    if world
+        .get::<MoveOrder>(attacker)
+        .is_some_and(|order| order.goal == destination)
+    {
         return;
     }
     assign_move_toward(
