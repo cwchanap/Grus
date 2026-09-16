@@ -12,6 +12,7 @@ use crate::buildings::{Building, BuildingIndex, worker_at_slot};
 use crate::catalog::{
     AGE_TWO_GATHER_RATE, Age, BASE_GATHER_RATE, CARRY_LIMIT, ResourceKind, UnitKind,
 };
+use crate::combat::CombatOrder;
 use crate::commands::{
     CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity, release_slot,
     reserve_slot,
@@ -168,12 +169,12 @@ pub struct Dropoff {
     pub team: TeamId,
 }
 
-/// The one worker-activity cleanup path: clears any construction assignment
-/// and Farm reservation the worker held, resets its gather progress, returns
-/// it to `Idle`, and drops its route. Replacement commands cancel only after
-/// validating, and rejected commands never reach this. `Carry` is never
-/// touched.
-pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
+/// The one unit-activity cleanup path: clears any construction assignment
+/// and Farm reservation the unit held, resets its gather progress, returns
+/// it to `Idle`, and drops its route and any combat order. Replacement
+/// commands cancel only after validating, and rejected commands never reach
+/// this. `Carry` is never touched.
+pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
     let building = match world.get::<WorkerTask>(entity) {
         Some(WorkerTask::ToConstruction { building, .. })
         | Some(WorkerTask::Constructing { building }) => Some(*building),
@@ -211,6 +212,7 @@ pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).insert(WorkerTask::Idle);
     world.entity_mut(entity).insert(GatherProgress::default());
     world.entity_mut(entity).remove::<MoveOrder>();
+    world.entity_mut(entity).remove::<CombatOrder>();
 }
 
 /// Most recent route-failure reject, drained by the bridge into its feedback
@@ -220,15 +222,16 @@ pub(crate) fn cancel_worker_activity(world: &mut World, entity: Entity) {
 pub struct LastRouteReject(pub Option<RejectReason>);
 
 /// Terminal cleanup when a worker's required route becomes impossible: the
-/// full `cancel_worker_activity` semantics (Farm assignment released,
-/// active-builder cleared, progress reset, order dropped, `Idle`) plus the
+/// full `cancel_unit_activity` semantics (Farm assignment released,
+/// active-builder cleared, progress reset, order and combat intent dropped,
+/// `Idle`) plus the
 /// typed reject recorded for bridge feedback. `Carry` is never touched.
 pub(crate) fn idle_worker_on_route_failure(
     world: &mut World,
     entity: Entity,
     reason: RejectReason,
 ) {
-    cancel_worker_activity(world, entity);
+    cancel_unit_activity(world, entity);
     world.insert_resource(LastRouteReject(Some(reason)));
 }
 
@@ -364,7 +367,7 @@ pub(crate) fn apply_gather(
 
         // Fully validated: cancel the old activity (releasing any Farm
         // reservation it held) before installing the gather task.
-        cancel_worker_activity(world, entity);
+        cancel_unit_activity(world, entity);
         world.entity_mut(entity).insert(task);
         if !route.is_empty() {
             world.entity_mut(entity).insert(MoveOrder {

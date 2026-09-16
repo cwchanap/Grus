@@ -67,6 +67,21 @@ pub struct UnitSpec {
     pub train_seconds: u32,
     pub speed: f32,
     pub required_age: Age,
+    pub max_health: u32,
+    /// `None` for noncombatants (Villager).
+    pub combat: Option<CombatSpec>,
+}
+
+/// Combat tuning of one military unit. The counter bonus applies only to
+/// `counter_target`; every other kind takes base damage.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CombatSpec {
+    pub damage: u32,
+    pub attack_range: f32,
+    pub cooldown_seconds: f32,
+    pub counter_target: UnitKind,
+    pub counter_bonus: u32,
+    pub ranged: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,6 +92,9 @@ pub struct BuildingSpec {
     pub height: u8,
     pub population_capacity: u32,
     pub required_age: Age,
+    /// Construction sites use this full health from placement; progress
+    /// never scales it.
+    pub max_health: u32,
 }
 
 pub const AGE_TWO_COST: Cost = Cost {
@@ -89,6 +107,8 @@ pub const CARRY_LIMIT: u32 = 10;
 pub const BASE_GATHER_RATE: f32 = 2.0;
 pub const AGE_TWO_GATHER_RATE: f32 = 2.2;
 pub const MAX_POPULATION: u32 = 100;
+/// Attack-move target-acquisition radius in world units (cells).
+pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
 
 pub fn unit_spec(kind: UnitKind) -> UnitSpec {
     match kind {
@@ -100,6 +120,8 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             train_seconds: 15,
             speed: 6.0,
             required_age: Age::Age1,
+            max_health: 50,
+            combat: None,
         },
         UnitKind::Spearman => UnitSpec {
             cost: Cost {
@@ -109,6 +131,15 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             train_seconds: 20,
             speed: 6.0,
             required_age: Age::Age1,
+            max_health: 100,
+            combat: Some(CombatSpec {
+                damage: 10,
+                attack_range: 1.5,
+                cooldown_seconds: 1.0,
+                counter_target: UnitKind::Cavalry,
+                counter_bonus: 10,
+                ranged: false,
+            }),
         },
         UnitKind::Archer => UnitSpec {
             cost: Cost {
@@ -119,6 +150,18 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             train_seconds: 25,
             speed: 6.0,
             required_age: Age::Age1,
+            max_health: 70,
+            combat: Some(CombatSpec {
+                damage: 8,
+                attack_range: 6.0,
+                cooldown_seconds: 1.25,
+                // Deliberately +12, not +8: the Archer > Spearman leg must
+                // be carried by counter damage, not an opening-shot timing
+                // window.
+                counter_target: UnitKind::Spearman,
+                counter_bonus: 12,
+                ranged: true,
+            }),
         },
         UnitKind::Cavalry => UnitSpec {
             cost: Cost {
@@ -129,6 +172,15 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             train_seconds: 30,
             speed: 8.0,
             required_age: Age::Age2,
+            max_health: 140,
+            combat: Some(CombatSpec {
+                damage: 12,
+                attack_range: 1.5,
+                cooldown_seconds: 1.0,
+                counter_target: UnitKind::Archer,
+                counter_bonus: 12,
+                ranged: false,
+            }),
         },
     }
 }
@@ -142,6 +194,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 4,
             population_capacity: 10,
             required_age: Age::Age1,
+            max_health: 800,
         },
         BuildingKind::House => BuildingSpec {
             cost: Cost {
@@ -153,6 +206,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 2,
             population_capacity: 10,
             required_age: Age::Age1,
+            max_health: 250,
         },
         BuildingKind::Storehouse => BuildingSpec {
             cost: Cost {
@@ -164,6 +218,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 2,
             population_capacity: 0,
             required_age: Age::Age1,
+            max_health: 300,
         },
         BuildingKind::Farm => BuildingSpec {
             cost: Cost {
@@ -175,6 +230,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 2,
             population_capacity: 0,
             required_age: Age::Age1,
+            max_health: 200,
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
@@ -186,6 +242,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 3,
             population_capacity: 0,
             required_age: Age::Age1,
+            max_health: 400,
         },
         BuildingKind::ArcheryRange => BuildingSpec {
             cost: Cost {
@@ -197,6 +254,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 3,
             population_capacity: 0,
             required_age: Age::Age1,
+            max_health: 400,
         },
         BuildingKind::Stable => BuildingSpec {
             cost: Cost {
@@ -208,6 +266,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 3,
             population_capacity: 0,
             required_age: Age::Age2,
+            max_health: 400,
         },
     }
 }
