@@ -18,6 +18,7 @@ const BARRACKS_ANCHOR := Vector2i(17, 41)
 const ENEMY_TOWN_CENTER_CELL := Vector2(114.0, 48.0)
 
 var _main: Node3D
+var _fx: Node3D
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -48,6 +49,13 @@ func _unit_view(id: int) -> Node3D:
 func _building_view(id: int) -> Node3D:
 	return _find_view("building_views", "building_id", id)
 
+func _first_kind_view(group: String, meta: String, value: String, box: Dictionary) -> bool:
+	for node in get_tree().get_nodes_in_group(group):
+		if str(node.get_meta(meta, "")) == value:
+			box["view"] = node as Node3D
+			return true
+	return false
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -65,6 +73,7 @@ func _run() -> void:
 	window.size = TEST_VIEWPORT_SIZE
 	await get_tree().process_frame
 	_main = get_node("Main") as Node3D
+	_fx = _main.get_node("CombatFx") as Node3D
 
 	if not GrusBridge.set_sim_speed(20.0):
 		_fail("failed to accelerate the sim")
@@ -144,6 +153,58 @@ func _run() -> void:
 		_fail("villager role presentation is not the small unmarked body")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=roles-health start_reject=session_locked invalid_target_kinds=3 role_kinds=4")
+	# Combat journey: produce a combatant, then attack enemy villager 5.
+	if not GrusBridge.place_building(4, "Barracks", BARRACKS_ANCHOR.x, BARRACKS_ANCHOR.y):
+		_fail("Barracks placement was rejected")
+		return
+	var barracks_box := {"view": null}
+	if not await _wait_until(func(): return _first_kind_view("building_views", "building_kind", "Barracks", barracks_box), 25.0,
+			"Barracks view never appeared"):
+		return
+	var barracks: Node3D = barracks_box["view"]
+	var barracks_id := int(barracks.get_meta("building_id"))
+	if absf(float(barracks.call("health_ratio")) - 1.0) > 0.0001:
+		_fail("fresh Barracks health ratio is not 1.0")
+		return
+	if not await _wait_until(
+			func(): return bool(GrusBridge.building_snapshot(barracks_id).get("complete", false)), 40.0,
+			"Barracks never completed"):
+		return
+	if not GrusBridge.enqueue_unit(barracks_id, "Spearman"):
+		_fail("Spearman training was rejected")
+		return
+	var spear_box := {"view": null}
+	if not await _wait_until(func(): return _first_kind_view("unit_views", "unit_kind", "Spearman", spear_box), 30.0,
+			"Spearman never trained"):
+		return
+	var spearman: Node3D = spear_box["view"]
+	var spear_id := int(spearman.get_meta("unit_id"))
+	if spear_id < 9:
+		_fail("trained Spearman reused a seeded id: %d" % spear_id)
+		return
+	var spear_body := spearman.get_node("Body") as MeshInstance3D
+	if absf(spear_body.scale.x - 1.0) > 0.0001 \
+			or (spearman.get_node("RoleMarker") as Node3D).get_child_count() != 1:
+		_fail("Spearman role presentation is not the marked full-size body")
+		return
+
+	if not GrusBridge.attack_units(PackedInt32Array([spear_id]), "unit", 5):
+		_fail("attack_units refused the Spearman-vs-villager attack")
+		return
+	var victim := _unit_view(5)
+	if victim == null:
+		_fail("enemy villager 5 view is missing before the attack")
+		return
+	if not await _wait_until(func(): return float(victim.call("health_ratio")) < 1.0, 20.0,
+			"victim HP never decreased through the health bar"):
+		return
+	if not await _wait_until(func(): return _fx.call("effect_count") > 0, 20.0,
+			"no transient combat effects spawned during combat"):
+		return
+	if not await _wait_until(func(): return _unit_view(5) == null, 20.0,
+			"dead unit 5 view was never removed"):
+		return
+
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=combat-journey start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
