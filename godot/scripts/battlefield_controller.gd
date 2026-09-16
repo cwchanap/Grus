@@ -469,8 +469,18 @@ func _on_restart_pressed() -> void:
 func _on_quit_pressed() -> void:
 	get_tree().quit(0)
 
+## Restart clears every transient Godot-side fact while the bridge reseeds:
+## selection, control groups, placement, attack-move arming, and live combat
+## effects. No dead stable ids survive the reset.
 func _restart_match() -> void:
 	GrusBridge.restart_match()
+	selected_ids.clear()
+	selected_building_id = -1
+	_control_groups.clear()
+	_idle_cursor = 0
+	_attack_move_armed = false
+	_cancel_placement()
+	_fx.clear_all()
 
 func _selected_villager_ids() -> Array[int]:
 	var villagers: Array[int] = []

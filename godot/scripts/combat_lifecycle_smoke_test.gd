@@ -78,6 +78,19 @@ func _fixture_views_settled() -> bool:
 			return false
 	return true
 
+## The restart is only settled when every seeded villager 1..8 is present
+## with no stale views (e.g. the dead Spearman's node still alive) mixed in.
+func _restart_settled() -> bool:
+	if not _fixture_views_settled():
+		return false
+	var ids := {}
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		ids[int(node.get_meta("unit_id", -1))] = true
+	for id in range(1, 9):
+		if not ids.has(id):
+			return false
+	return ids.size() == 8
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -289,6 +302,45 @@ func _run() -> void:
 			"Result-phase gameplay order was not rejected with SessionLocked"):
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=result start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked")
+	# Restart hygiene: dead stable ids (the slain villager 5 and Spearman)
+	# sit in selection/control groups, a live effect is on the stage, then
+	# the restart must clear all of it while the bridge reseeds fresh ids.
+	var dead_ids: Array[int] = [5, spear_id]
+	_main.selected_ids = dead_ids
+	_main.selected_building_id = 2
+	_main._control_groups[1] = dead_ids.duplicate()
+	_main._attack_move_armed = true
+	_fx.call("spawn_death", Vector3.ZERO)
+	if int(_fx.call("effect_count")) != 1:
+		_fail("transient effect seed for the restart check did not land")
+		return
+	_main.call("_restart_match")
+	if not await _wait_until(_restart_settled, 20.0,
+			"restart never re-settled to the exact fresh 8-unit fixture"):
+		return
+	var fresh_units := get_tree().get_nodes_in_group("unit_views")
+	for unit in fresh_units:
+		var id := int(unit.get_meta("unit_id", -1))
+		if id < 1 or id > 8:
+			_fail("restart left a stale unit view id %d" % id)
+			return
+		if absf(float((unit as Node3D).call("health_ratio")) - 1.0) > 0.0001:
+			_fail("restarted unit %d is not at full health" % id)
+			return
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Start":
+		_fail("restart did not return the session to Start")
+		return
+	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible):
+		_fail("restart did not bring the Start overlay back")
+		return
+	if not _main.selected_ids.is_empty() or not _main._control_groups.is_empty() \
+			or int(_main.selected_building_id) != -1 or bool(_main._attack_move_armed):
+		_fail("restart left dead selection/control-group state behind")
+		return
+	if int(_fx.call("effect_count")) != 0:
+		_fail("restart left transient combat effects on the stage")
+		return
+
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked restart_cleared=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
