@@ -95,6 +95,24 @@ func _run() -> void:
 		_fail("start_match did not reach Playing")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=start-playing start_reject=session_locked")
+	# Attack bridge: the target kind is a closed string; anything else is
+	# rejected at the bridge before a command is queued.
+	if GrusBridge.attack_units(PackedInt32Array([1]), "cactus", 5):
+		_fail("attack_units accepted an invalid target kind")
+		return
+	if GrusBridge.attack_units(PackedInt32Array([1]), "unit", 0):
+		_fail("attack_units accepted a zero target id")
+		return
+	if GrusBridge.attack_units(PackedInt32Array([]), "unit", 5):
+		_fail("attack_units accepted an empty id list")
+		return
+	if not GrusBridge.attack_units(PackedInt32Array([1]), "unit", 5):
+		_fail("attack_units refused to queue a well-formed attack")
+		return
+	if not GrusBridge.attack_move_units(PackedInt32Array([1]), Vector2(20, 44)):
+		_fail("attack_move_units refused to queue")
+		return
+
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=attack-bridge start_reject=session_locked invalid_target_kinds=3")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
