@@ -76,14 +76,18 @@ func _process(_delta: float) -> void:
 	_refresh_hud()
 
 ## Reads the session once per frame: drives the overlay and drains
-## current-tick combat events only while Playing — the bridge keeps the last
-## Playing tick's events readable across a pause/Result, and those stale
-## events must never replay as fresh effects.
+## current-tick combat events while Playing — plus once on the first Result
+## frame, whose buffer still holds the settle tick's killing blow (strike
+## records the hit and resolves the match in the same fixed tick). Paused
+## leftovers stay unreadable: those stale events must never replay as fresh
+## effects.
 func _refresh_session() -> void:
 	var snap: Dictionary = GrusBridge.session_snapshot()
+	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
 	_refresh_session_overlay(snap)
-	if _session_phase != "Playing":
+	var result_frame := _session_phase == "Result" and previous_phase != "Result"
+	if _session_phase != "Playing" and not result_frame:
 		return
 	var events: Array = GrusBridge.drain_combat_events()
 	for event in events:
