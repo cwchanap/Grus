@@ -66,11 +66,14 @@ func _spawn_transient(mesh: Mesh, color: Color, lifetime: float) -> MeshInstance
 	_live.append(view)
 	# Real-time lifetime: SceneTreeTimer otherwise scales with the sim-speed
 	# multiplier, which would make 20x runs flash for a few milliseconds.
+	# Weakref capture: clear_all() on restart may free the view first, and a
+	# strong freed capture makes Godot log a capture error on every expiry.
+	var ref: WeakRef = weakref(view)
 	get_tree().create_timer(lifetime, true, false, true).timeout.connect(func() -> void:
-		_live.erase(view)
-		# clear_all() on restart may have freed the view first.
-		if is_instance_valid(view):
-			view.queue_free()
+		var node: Variant = ref.get_ref()
+		if node != null:
+			_live.erase(node)
+			node.queue_free()
 	)
 	return view
 
