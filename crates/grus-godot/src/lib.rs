@@ -360,10 +360,12 @@ impl GrusBridgeNode {
     }
 
     /// Current-tick combat events for cosmetics: drains and returns them while
-    /// the session is Playing, returns an empty array otherwise. The guard is
-    /// defense in depth: `step_combat` already clears `CombatEvents` on
-    /// every tick — Playing or frozen — so stale events can never survive a
-    /// pause/Result to replay as fresh effects.
+    /// the session is Playing, plus the settle tick's buffer on Result —
+    /// `strike()` records the killing blow and resolves the match in the same
+    /// fixed tick, and that buffer must present once. Returns an empty array
+    /// in Start/Paused. The guard is defense in depth: `step_combat` already
+    /// clears `CombatEvents` on every tick — Playing or frozen — so stale
+    /// events can never survive a pause to replay as fresh effects.
     #[func]
     fn drain_combat_events(&self) -> Array<VarDictionary> {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -373,7 +375,7 @@ impl GrusBridgeNode {
         let Some(app) = app_node.get_app_mut() else {
             return Array::new();
         };
-        take_playing_events(app.world_mut())
+        take_presentable_events(app.world_mut())
             .into_iter()
             .map(combat_event_dict)
             .collect()
@@ -808,12 +810,15 @@ fn queue_command(command: PlayerCommand) -> bool {
     true
 }
 
-/// Drains the current-tick combat events only while the session is Playing;
-/// defense in depth on top of `step_combat` clearing the buffer every tick,
-/// so nothing frozen can ever replay as fresh cosmetics across a
-/// pause/Result.
-fn take_playing_events(world: &mut World) -> Vec<CombatEvent> {
-    if !matches!(active_phase(world), MatchPhase::Playing) {
+/// Drains the current-tick combat events while the session is Playing, and
+/// once on Result: `strike()` pushes the killing blow and resolves the Town
+/// Center destruction to Result in the same fixed tick, so that settle
+/// tick's buffer must still drain or the winning hit/death cosmetics never
+/// present. Start/Paused stay blocked — defense in depth on top of
+/// `step_combat` clearing the buffer every tick, so nothing frozen can ever
+/// replay as fresh cosmetics across a pause.
+fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
+    if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
         return Vec::new();
     }
     world
@@ -1382,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn combat_event_drain_only_while_playing() {
+    fn combat_event_drain_blocks_frozen_but_releases_result() {
         let event = CombatEvent {
             attacker: UnitId(1),
             target: CombatTarget::Unit(UnitId(2)),
@@ -1395,32 +1400,34 @@ mod tests {
 
         // A frozen session keeps the last Playing tick's events readable;
         // the drain must not take or replay them.
-        world.insert_resource(MatchSession {
-            phase: MatchPhase::Paused,
-        });
-        world.insert_resource(CombatEvents(vec![event]));
-        assert!(take_playing_events(&mut world).is_empty());
-        assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
-
-        for phase in [
-            MatchPhase::Start,
-            MatchPhase::Result(grus_sim::MatchResult(TeamId(2))),
-        ] {
+        for phase in [MatchPhase::Paused, MatchPhase::Start] {
             world.insert_resource(MatchSession { phase });
-            assert!(take_playing_events(&mut world).is_empty());
+            world.insert_resource(CombatEvents(vec![event]));
+            assert!(take_presentable_events(&mut world).is_empty());
             assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
         }
+
+        // Result releases the settle tick's buffer once — `strike()` records
+        // the killing blow and resolves the match in the same fixed tick —
+        // and the drained buffer stays empty on later Result frames.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Result(MatchResult(TeamId(2))),
+        });
+        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert!(world.resource::<CombatEvents>().0.is_empty());
+        assert!(take_presentable_events(&mut world).is_empty());
 
         // Playing takes the events and leaves the buffer empty.
         world.insert_resource(MatchSession {
             phase: MatchPhase::Playing,
         });
-        assert_eq!(take_playing_events(&mut world), vec![event]);
+        world.insert_resource(CombatEvents(vec![event]));
+        assert_eq!(take_presentable_events(&mut world), vec![event]);
         assert!(world.resource::<CombatEvents>().0.is_empty());
         // A missing session reads as Playing (benchmark contract).
         world.remove_resource::<MatchSession>();
         world.insert_resource(CombatEvents(vec![event]));
-        assert_eq!(take_playing_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![event]);
     }
 
     #[test]
