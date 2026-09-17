@@ -259,6 +259,31 @@ func _run() -> void:
 		_fail("Spearman role presentation is not the marked full-size body")
 		return
 
+	# Controller-level attack-move: arm through the A-key handler, then
+	# right-click open ground in the north corridor — the arm must clear and
+	# the Spearman must march (movement-observed AttackMove). This runs while
+	# the Spearman is still beside the home Barracks: issued next to the
+	# enemy Town Center it would correctly acquire the building inside
+	# ATTACK_MOVE_RADIUS and fight in place instead of marching.
+	var ground_click := _screen_of(Vector3(62.5, 0.0, 12.5))
+	var march_selection: Array[int] = [spear_id]
+	_main.selected_ids = march_selection
+	_press_a()
+	if not bool(_main._attack_move_armed):
+		_fail("the A-key handler did not arm attack-move")
+		return
+	_main.call("_issue_context_command", ground_click)
+	if bool(_main._attack_move_armed) \
+			or _main.command_status.text != "Attack-move queued":
+		_fail("armed ground click did not queue an attack-move: %s"
+				% _main.command_status.text)
+		return
+	var spear_before := spearman.global_position
+	if not await _wait_until(
+			func(): return spearman.global_position.distance_to(spear_before) > 2.0, 15.0,
+			"A-armed attack-move never moved the Spearman"):
+		return
+
 	var victim := _unit_view(5)
 	if victim == null:
 		_fail("enemy villager 5 view is missing before the attack")
@@ -285,28 +310,6 @@ func _run() -> void:
 		return
 	if not await _wait_until(func(): return _unit_view(5) == null, 20.0,
 			"dead unit 5 view was never removed"):
-		return
-
-	# Controller-level attack-move: arm through the A-key handler, then
-	# right-click open ground in the north corridor — the arm must clear and
-	# the Spearman must march (movement-observed AttackMove).
-	var ground_click := _screen_of(Vector3(62.5, 0.0, 12.5))
-	var march_selection: Array[int] = [spear_id]
-	_main.selected_ids = march_selection
-	_press_a()
-	if not bool(_main._attack_move_armed):
-		_fail("the A-key handler did not arm attack-move")
-		return
-	_main.call("_issue_context_command", ground_click)
-	if bool(_main._attack_move_armed) \
-			or _main.command_status.text != "Attack-move queued":
-		_fail("armed ground click did not queue an attack-move: %s"
-				% _main.command_status.text)
-		return
-	var spear_before := spearman.global_position
-	if not await _wait_until(
-			func(): return spearman.global_position.distance_to(spear_before) > 2.0, 15.0,
-			"A-armed attack-move never moved the Spearman"):
 		return
 
 	# Attack-move onto the enemy Town Center: acquisition must pick it up
