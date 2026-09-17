@@ -361,9 +361,9 @@ impl GrusBridgeNode {
 
     /// Current-tick combat events for cosmetics: drains and returns them while
     /// the session is Playing, returns an empty array otherwise. The guard is
-    /// deliberate: `step_combat` only clears `CombatEvents` once gameplay is
-    /// active, so the last Playing tick's events stay readable across a
-    /// pause/Result and must never replay as fresh effects.
+    /// defense in depth: `step_combat` already clears `CombatEvents` on
+    /// every tick — Playing or frozen — so stale events can never survive a
+    /// pause/Result to replay as fresh effects.
     #[func]
     fn drain_combat_events(&self) -> Array<VarDictionary> {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -809,8 +809,9 @@ fn queue_command(command: PlayerCommand) -> bool {
 }
 
 /// Drains the current-tick combat events only while the session is Playing;
-/// frozen sessions keep their last Playing tick's events untouched so they
-/// cannot replay as fresh cosmetics across a pause/Result.
+/// defense in depth on top of `step_combat` clearing the buffer every tick,
+/// so nothing frozen can ever replay as fresh cosmetics across a
+/// pause/Result.
 fn take_playing_events(world: &mut World) -> Vec<CombatEvent> {
     if !matches!(active_phase(world), MatchPhase::Playing) {
         return Vec::new();

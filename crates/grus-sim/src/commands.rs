@@ -275,10 +275,14 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
 
     match kind {
         UnitCommandKind::AttackMove { target } => {
-            // Per-unit: owned → combatant → walkable destination, then cancel
-            // and install the combat order plus the opening route toward the
-            // destination (Move semantics via `assign_move_toward`). Enemy
-            // acquisition happens in `step_combat`.
+            // Per-unit: owned → combatant → walkable and reachable
+            // destination. Reachability is probed once at accept time
+            // through the exact assignment seam the install uses; an
+            // unreachable destination is rejected with the unit's prior
+            // state fully untouched (no cancelled intent, no per-tick A*
+            // retry), and only a reachable destination cancels the prior
+            // activity and installs the combat order plus its opening
+            // route. Enemy acquisition happens in `step_combat`.
             let destination = map.world_to_cell(target);
             for id in units {
                 let entity = match owned_unit_entity(world, id, issuer) {
@@ -305,15 +309,25 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     outcome.rejected_units.push((id, RejectReason::UnknownUnit));
                     continue;
                 };
-                // Fully validated: cancel, then install the order and route.
+                let start = map.world_to_cell(position.current);
+                let Some((goal, waypoints)) =
+                    plan_move_route(world, map, entity, start, destination)
+                else {
+                    outcome.rejected_units.push((id, RejectReason::Unreachable));
+                    continue;
+                };
+                // Reachable: cancel prior activity, then install the probed
+                // route and order.
                 cancel_unit_activity(world, entity);
-                assign_move_toward(
-                    world,
-                    map,
-                    entity,
-                    map.world_to_cell(position.current),
-                    destination,
-                );
+                if !waypoints.is_empty() {
+                    world.entity_mut(entity).insert(MoveOrder {
+                        waypoints,
+                        next: 0,
+                        goal,
+                        map_revision: map.revision(),
+                        last_failed_replan: None,
+                    });
+                }
                 world.entity_mut(entity).insert(CombatOrder::AttackMove {
                     destination,
                     target: None,
@@ -493,6 +507,33 @@ pub(crate) fn assign_move_toward(
     start: GridPos,
     target: GridPos,
 ) -> Option<GridPos> {
+    let (goal, waypoints) = plan_move_route(world, map, entity, start, target)?;
+    if !waypoints.is_empty() {
+        world.entity_mut(entity).insert(MoveOrder {
+            waypoints,
+            next: 0,
+            goal,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+    }
+    Some(goal)
+}
+
+/// Plans one unit's route toward `target` — the Move-command destination
+/// generation and reservation seeding, so the plan cannot claim a cell
+/// another live unit stands on or already has a `MoveOrder` goal for —
+/// without mutating anything. Returns the assigned goal cell and its
+/// waypoints, or `None` when no reachable free slot exists. Callers probe
+/// reachability with this, then install through `assign_move_toward` or
+/// their own `MoveOrder` insert.
+fn plan_move_route(
+    world: &World,
+    map: &GridMap,
+    entity: Entity,
+    start: GridPos,
+    target: GridPos,
+) -> Option<(GridPos, Vec<Vec2>)> {
     if !map.is_walkable(target) {
         return None;
     }
@@ -525,16 +566,7 @@ pub(crate) fn assign_move_toward(
                     .skip(1)
                     .map(|cell| map.cell_center(cell))
                     .collect();
-                if !waypoints.is_empty() {
-                    world.entity_mut(entity).insert(MoveOrder {
-                        waypoints,
-                        next: 0,
-                        goal: slot,
-                        map_revision: map.revision(),
-                        last_failed_replan: None,
-                    });
-                }
-                slot
+                (slot, waypoints)
             })
         })
 }
