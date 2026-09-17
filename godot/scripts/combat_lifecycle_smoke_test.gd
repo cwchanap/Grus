@@ -1,10 +1,11 @@
 extends Node
 
-## HPA-472 combat/lifecycle smoke. Drives the bridge directly — no
-## synthesized mouse/keyboard input — and grows with each integration slice:
-## Start -> attack bridge -> HP decrease -> death/view removal -> result
-## overlay -> input rejection -> restart -> fresh state, plus role
-## readability assertions that do not depend on final art.
+## HPA-472 combat/lifecycle smoke. Drives the bridge for seam contracts and
+## the battlefield controller's input handlers directly (constructed
+## arguments, no synthesized OS input) for the input path: Start -> attack
+## bridge -> HP decrease -> death/view removal -> result overlay -> input
+## rejection -> restart -> fresh state, plus role readability assertions
+## that do not depend on final art.
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
@@ -79,6 +80,38 @@ func _fixture_views_settled() -> bool:
 			return false
 	return true
 
+
+## Screen position of a world point through the controller's own camera —
+## the exact projection its picking and ground targeting invert.
+func _screen_of(world_point: Vector3) -> Vector2:
+	return _main.camera.unproject_position(world_point)
+
+
+## Presses A through the controller's own key handler (a constructed
+## InputEventKey argument — no OS event is injected into the tree).
+func _press_a() -> void:
+	var key := InputEventKey.new()
+	key.keycode = KEY_A
+	key.pressed = true
+	_main.call("_handle_key", key)
+
+
+## Outside Playing neither input handler may reach the bridge: the context
+## command is refused with status text, A arms nothing, and the command
+## feedback revision (bumped by every queued command) stays put.
+func _assert_input_gated(where: String) -> bool:
+	var revision := int(GrusBridge.command_feedback_revision())
+	_main.call("_issue_context_command", Vector2(TEST_VIEWPORT_SIZE) / 2.0)
+	_press_a()
+	if _main.command_status.text != "Match is not playing":
+		_fail("%s: context command was not refused: %s" % [where, _main.command_status.text])
+		return false
+	if bool(_main._attack_move_armed) \
+			or int(GrusBridge.command_feedback_revision()) != revision:
+		_fail("%s: an input handler reached the bridge while not Playing" % where)
+		return false
+	return true
+
 ## The restart is only settled when every seeded villager 1..8 is present
 ## with no stale views (e.g. the dead Spearman's node still alive) mixed in.
 func _restart_settled() -> bool:
@@ -124,6 +157,11 @@ func _run() -> void:
 	if not await _wait_until(
 			func(): return int(GrusBridge.last_reject_code()) == REJECT_SESSION_LOCKED, 5.0,
 			"Start-phase gameplay order was not rejected with SessionLocked (%d)" % REJECT_SESSION_LOCKED):
+		return
+
+	# Controller-level input gating during Start: right-click and A refuse
+	# without queuing anything.
+	if not _assert_input_gated("Start"):
 		return
 
 	if not GrusBridge.start_match():
@@ -221,14 +259,25 @@ func _run() -> void:
 		_fail("Spearman role presentation is not the marked full-size body")
 		return
 
-	if not GrusBridge.attack_units(PackedInt32Array([spear_id]), "unit", 5):
-		_fail("attack_units refused the Spearman-vs-villager attack")
-		return
 	var victim := _unit_view(5)
 	if victim == null:
 		_fail("enemy villager 5 view is missing before the attack")
 		return
-	if not await _wait_until(func(): return float(victim.call("health_ratio")) < 1.0, 20.0,
+	# Controller-level right-click attack: select the Spearman and drive
+	# _issue_context_command with the screen position of enemy villager 5 —
+	# the enemy-picking path must queue the same bridge attack.
+	var enemy_click := _screen_of(victim.global_position)
+	var attack_selection: Array[int] = [spear_id]
+	_main.selected_ids = attack_selection
+	_main.call("_issue_context_command", enemy_click)
+	if _main.command_status.text != "Attack command queued":
+		_fail("controller right-click on the enemy did not queue an attack: %s"
+				% _main.command_status.text)
+		return
+	# Null-safe lookup: the view node is freed the moment the unit dies.
+	if not await _wait_until(
+			func(): return _unit_view(5) == null \
+					or float(_unit_view(5).call("health_ratio")) < 1.0, 20.0,
 			"victim HP never decreased through the health bar"):
 		return
 	if not await _wait_until(func(): return _fx.call("effect_count") > 0, 20.0,
@@ -236,6 +285,28 @@ func _run() -> void:
 		return
 	if not await _wait_until(func(): return _unit_view(5) == null, 20.0,
 			"dead unit 5 view was never removed"):
+		return
+
+	# Controller-level attack-move: arm through the A-key handler, then
+	# right-click open ground in the north corridor — the arm must clear and
+	# the Spearman must march (movement-observed AttackMove).
+	var ground_click := _screen_of(Vector3(62.5, 0.0, 12.5))
+	var march_selection: Array[int] = [spear_id]
+	_main.selected_ids = march_selection
+	_press_a()
+	if not bool(_main._attack_move_armed):
+		_fail("the A-key handler did not arm attack-move")
+		return
+	_main.call("_issue_context_command", ground_click)
+	if bool(_main._attack_move_armed) \
+			or _main.command_status.text != "Attack-move queued":
+		_fail("armed ground click did not queue an attack-move: %s"
+				% _main.command_status.text)
+		return
+	var spear_before := spearman.global_position
+	if not await _wait_until(
+			func(): return spearman.global_position.distance_to(spear_before) > 2.0, 15.0,
+			"A-armed attack-move never moved the Spearman"):
 		return
 
 	# Attack-move onto the enemy Town Center: acquisition must pick it up
@@ -274,6 +345,11 @@ func _run() -> void:
 			or float(enemy_tc.call("health_ratio")) != hp_before:
 		_fail("paused session kept simulating or replayed stale combat effects")
 		return
+
+	# Controller-level input gating while Paused.
+	if not _assert_input_gated("Paused"):
+		return
+
 	if not GrusBridge.set_paused(false):
 		_fail("set_paused(false) was refused")
 		return
@@ -306,6 +382,10 @@ func _run() -> void:
 			"Result-phase gameplay order was not rejected with SessionLocked"):
 		return
 
+	# Controller-level input gating during Result.
+	if not _assert_input_gated("Result"):
+		return
+
 	# Restart hygiene: dead stable ids (the slain villager 5 and Spearman)
 	# sit in selection/control groups, a live effect is on the stage, then
 	# the restart must clear all of it while the bridge reseeds fresh ids.
@@ -314,8 +394,11 @@ func _run() -> void:
 	_main.selected_building_id = 2
 	_main._control_groups[1] = dead_ids.duplicate()
 	_main._attack_move_armed = true
+	# Seed at least one live effect for the restart-hygiene check. A
+	# killing-blow effect drained on the settle frame may legitimately still
+	# be alive here, so only "nothing landed" is a failure.
 	_fx.call("spawn_death", Vector3.ZERO)
-	if int(_fx.call("effect_count")) != 1:
+	if int(_fx.call("effect_count")) < 1:
 		_fail("transient effect seed for the restart check did not land")
 		return
 	_main.call("_restart_match")
@@ -346,6 +429,6 @@ func _run() -> void:
 		_fail("restart left transient combat effects on the stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked restart_cleared=true")
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result restart_cleared=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)

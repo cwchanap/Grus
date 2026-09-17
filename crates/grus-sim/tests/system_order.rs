@@ -1,7 +1,8 @@
-//! Canonical fixed-step order: commands → movement → economy → construction →
-//! production. Movement arrival is visible to economy/construction in the same
-//! fixed tick, and production runs last, so the economy step of the tick in
-//! which the Age 2 job completes still uses the Age 1 gather rate.
+//! Canonical fixed-step order: commands → combat → movement → economy →
+//! construction → production → route feedback. Movement arrival is visible to
+//! economy/construction in the same fixed tick, and production runs last, so
+//! the economy step of the tick in which the Age 2 job completes still uses
+//! the Age 1 gather rate.
 
 use std::cell::RefCell;
 

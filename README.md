@@ -25,7 +25,7 @@ Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-s
 - **buildings** — placement validation, construction, completion grants (Dropoff, queues, Farm sources)
 - **production** — FIFO queues, population caps, spawn clearance, rally points, one-time Age 2
 
-Systems tick in a fixed order (movement → economy → construction → production) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+Systems tick in a fixed order (commands → combat → movement → economy → construction → production → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
 ## HPA-472 combat and match lifecycle
 
