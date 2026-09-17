@@ -131,7 +131,20 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 	_fx.spawn_hit(hit)
 	if bool(event.get("killed", false)):
 		_fx.spawn_death(hit)
+		_prune_destroyed_selection(str(event.get("target_kind", "")), int(event.get("target_id", -1)))
 	_fx.play_hit_cue()
+
+## A kill event names the destroyed stable id: drop it from the selection and
+## every control group so later orders never reference a dead object, then
+## reconcile the live selection state.
+func _prune_destroyed_selection(target_kind: String, target_id: int) -> void:
+	if target_kind == "unit":
+		selected_ids.erase(target_id)
+		for group in _control_groups:
+			_control_groups[group].erase(target_id)
+	elif target_kind == "building" and selected_building_id == target_id:
+		selected_building_id = -1
+	_apply_selection()
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
@@ -327,6 +340,15 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		return
 	var armed := _attack_move_armed
 	_attack_move_armed = false
+	# An armed attack-move is a modal order: it outranks every contextual
+	# pick (villager gather/construction, enemy attack, rally, move).
+	if armed and not selected_ids.is_empty():
+		var target = _ground_target(screen_position)
+		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
+			command_status.text = "Attack-move queued"
+		else:
+			command_status.text = "Attack-move rejected"
+		return
 	var villagers := _selected_villager_ids()
 	if not villagers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
@@ -355,13 +377,6 @@ func _issue_context_command(screen_position: Vector2) -> void:
 			command_status.text = "Attack command queued"
 		else:
 			command_status.text = "Attack command rejected"
-		return
-	if armed and not selected_ids.is_empty():
-		var target = _ground_target(screen_position)
-		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
-			command_status.text = "Attack-move queued"
-		else:
-			command_status.text = "Attack-move rejected"
 		return
 	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)

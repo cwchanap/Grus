@@ -258,6 +258,11 @@ pub(crate) fn reroute_dropoff_worker(
                 dropoff,
                 slot,
             });
+            // The stale route toward the destroyed drop-off must not
+            // survive an empty reroute: with the worker already standing on
+            // the replacement slot, a lingering MoveOrder would walk it
+            // away before the deposit lands.
+            world.entity_mut(worker).remove::<MoveOrder>();
             if !route.is_empty() {
                 world.entity_mut(worker).insert(MoveOrder {
                     waypoints: route,
