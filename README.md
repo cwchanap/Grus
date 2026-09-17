@@ -27,6 +27,14 @@ Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-s
 
 Systems tick in a fixed order (movement → economy → construction → production) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
+## HPA-472 combat and match lifecycle
+
+Combat runs in `grus-sim` on the same fixed tick: melee/ranged range and cooldowns, the Spearman → Cavalry → Archer counter triangle, attack-move acquisition with pursuit, and building attacks that path to the nearest walkable perimeter and range-check against `Footprint::closest_point`. Godot stays presentational: contextual right-click attacks on enemy units/buildings, `A`-armed attack-move, health bars and role markers on unit/building views, and transient tracer/hit/death effects with a generated audio blip — all driven by Playing-gated `CombatEvents` drained from the bridge.
+
+The match lifecycle is simulated-side: the skirmish boots into **Start** (gameplay orders reject with `SessionLocked`), the Start button moves to **Playing**, `Esc` or the Pause button toggles **Paused** (sim and cosmetics freeze; interpolation collapses `previous = current` so nothing oscillates), and destroying one side's last Town Center settles **Result** (Victory!/Defeat overlay; later gameplay mutation is rejected). Restart/Quit belong to Result: Restart reseeds one fresh match — no duplicate nodes, stale ids, leftover selection/control groups, or lingering effects; Quit exits the app. Workers, buildings, and construction sites die with full economy/occupancy/queue cleanup.
+
+Fog of war and economic AI remain owned by HPA-473.
+
 ### Build and launch
 
 Install Godot 4.6.2 with export templates, then from the repository root:
@@ -53,17 +61,20 @@ godot --headless --path godot --editor --quit-after 120
 godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
+godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness.
 
 ### Controls
 
 - Left click: select a friendly unit or building (units take priority within the click radius)
 - Shift + left click: add to selection
 - Left drag: box select
-- Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, set a rally point when a producer is selected, otherwise move
+- Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, attack an enemy unit/building with the selected combatants, set a rally point when a producer is selected, otherwise move
+- `A`: arm attack-move; the next right-click moves to the ground point and engages enemies acquired on the way
 - `S`: stop selected units
+- `Esc`: pause/resume the match (cancels an armed placement first)
 - `Ctrl+1` through `Ctrl+9`: assign a control group
 - `1` through `9`: recall a control group
 - Mouse wheel: zoom
@@ -92,7 +103,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import/smoke/export validations, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 

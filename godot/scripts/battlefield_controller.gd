@@ -93,22 +93,26 @@ func _refresh_session_overlay(snap: Dictionary) -> void:
 	var playing := _session_phase == "Playing"
 	session_panel.visible = not playing
 	pause_button.visible = playing
+	# Restart/Quit belong to Result only.
 	match _session_phase:
 		"Start":
 			session_label.text = "Skirmish ready"
 			start_button.visible = true
 			resume_button.visible = false
 			restart_button.visible = false
+			quit_button.visible = false
 		"Paused":
 			session_label.text = "Paused"
 			start_button.visible = false
 			resume_button.visible = true
 			restart_button.visible = false
+			quit_button.visible = false
 		"Result":
 			session_label.text = "Victory!" if int(snap.get("winner_team", -1)) == 1 else "Defeat"
 			start_button.visible = false
 			resume_button.visible = false
 			restart_button.visible = true
+			quit_button.visible = true
 		_:
 			# Playing: panel hidden.
 			pass
