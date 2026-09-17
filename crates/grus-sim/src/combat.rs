@@ -107,13 +107,16 @@ pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarge
 /// `UnitIndex` re-resolution; dead units and buildings are destroyed
 /// atomically.
 pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
-    if !gameplay_active(world) {
-        return;
-    }
+    // Draining the presentation-feedback buffer is bookkeeping, not
+    // gameplay: it must happen even on frozen ticks, or the last Playing
+    // tick's events survive a pause and replay on the first resumed frame.
     if world.get_resource::<CombatEvents>().is_none() {
         world.init_resource::<CombatEvents>();
     }
     world.resource_mut::<CombatEvents>().0.clear();
+    if !gameplay_active(world) {
+        return;
+    }
 
     let mut cooldowns = world.query::<&mut AttackCooldown>();
     for mut cooldown in cooldowns.iter_mut(world) {
@@ -180,7 +183,16 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         };
 
         if position.current.distance(point) <= spec.attack_range {
-            // Already in range: never path.
+            // Already in range: never path. A leg bound for the cached
+            // pursuit cell is this target's pursuit leg and ends here, so a
+            // pursuer stops closing once it can strike. A destination leg
+            // (goal never cached as a pursuit cell) is never touched — a
+            // unit with a dead or cleared target must keep walking.
+            if let Some(goal) = world.get::<MoveOrder>(entity).map(|order| order.goal)
+                && is_pursuit_leg(&order, goal)
+            {
+                world.entity_mut(entity).remove::<MoveOrder>();
+            }
             if cooldown_ready {
                 strike(world, map, entity, &unit, spec, target, point);
             }
@@ -400,6 +412,19 @@ fn pursue(
                 }
             }
         }
+    }
+}
+
+/// Whether `goal` belongs to this order's pursuit leg for its cached
+/// pursuit cell: building pursuit caches the assigned perimeter slot, unit
+/// pursuit the target's cell whose assigned slot may be any immediate
+/// neighbour (the target's own cell can be reserved), so one ring of
+/// slack covers both. A destination leg has no pursuit cache and never
+/// matches.
+fn is_pursuit_leg(order: &CombatOrder, goal: GridPos) -> bool {
+    match last_target_cell(order) {
+        Some(cell) => (cell.x - goal.x).abs() <= 1 && (cell.y - goal.y).abs() <= 1,
+        None => false,
     }
 }
 

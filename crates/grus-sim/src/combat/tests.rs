@@ -18,6 +18,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
 use crate::session::tests as journeys;
+use crate::session::{MatchPhase, MatchSession};
 
 fn open_map() -> GridMap {
     GridMap::new(32, 64)
@@ -293,6 +294,61 @@ fn cooldown_gates_repeat_strikes_until_elapsed() {
         "second strike waits roughly one cooldown, got tick {restrike_at}"
     );
     assert_eq!(world.get::<Health>(defender).unwrap().current, 80);
+}
+
+#[test]
+fn frozen_ticks_clear_combat_events_so_nothing_replays_after_resume() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    let defender = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Spearman,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(events(&world).len(), 1, "the Playing tick records its hit");
+
+    // Draining the presentation buffer is bookkeeping, not gameplay: a
+    // frozen tick must still clear it, or the last Playing tick's events
+    // survive and replay on the first resumed frame.
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Paused,
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        events(&world).is_empty(),
+        "a frozen tick must drain CombatEvents"
+    );
+
+    // Resume replays nothing: frozen ticks never ticked the strike
+    // cooldown, so the first Playing tick is still on cooldown.
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        events(&world).is_empty(),
+        "resume must not replay stale hits"
+    );
+    assert_eq!(world.get::<Health>(defender).unwrap().current, 90);
+    // The resumed tick ticks the cooldown (one SIM_STEP_SECONDS off) but is
+    // still far from ready: no replayed strike.
+    assert_eq!(world.get::<AttackCooldown>(attacker).unwrap().0, 0.95);
 }
 
 #[test]
@@ -975,6 +1031,122 @@ fn attack_move_rejects_unreachable_destinations() {
 }
 
 #[test]
+fn attack_move_rejects_walled_off_destinations_without_disturbing_prior_orders() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    let enemy = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Villager,
+    );
+
+    // Prior intent: a direct Attack plus an active route, and no WorkerTask
+    // (a cancellation would install `Idle`, so `None` must stay `None`).
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    world.entity_mut(attacker).insert(MoveOrder {
+        waypoints: vec![map.cell_center(GridPos::new(6, 5))],
+        next: 0,
+        goal: GridPos::new(6, 5),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    let order_before = world.get::<CombatOrder>(attacker).cloned().unwrap();
+    let route_before = world.get::<MoveOrder>(attacker).cloned().unwrap();
+    let worker_before = world.get::<WorkerTask>(attacker).cloned();
+
+    // Wall the attacker in; the destination cell itself stays walkable, so
+    // only the reachability probe can tell the two cases apart.
+    for cell in [
+        GridPos::new(4, 4),
+        GridPos::new(5, 4),
+        GridPos::new(6, 4),
+        GridPos::new(4, 5),
+        GridPos::new(6, 5),
+        GridPos::new(4, 6),
+        GridPos::new(5, 6),
+        GridPos::new(6, 6),
+    ] {
+        map.set_blocked(cell, true);
+    }
+
+    let rejected = issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+    assert_eq!(
+        rejected.rejected_units,
+        vec![(UnitId(1), RejectReason::Unreachable)]
+    );
+    assert_eq!(
+        world.get::<CombatOrder>(attacker).cloned().unwrap(),
+        order_before,
+        "the prior CombatOrder must survive the rejection"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().goal,
+        route_before.goal,
+        "the prior MoveOrder must survive the rejection"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().waypoints,
+        route_before.waypoints,
+        "the prior route must survive the rejection"
+    );
+    assert!(
+        world.get::<WorkerTask>(attacker) == worker_before.as_ref(),
+        "a rejected AttackMove must not touch the unit's activity"
+    );
+    assert_eq!(
+        world.get::<Health>(enemy).unwrap().current,
+        unit_spec(UnitKind::Villager).max_health,
+        "the rejected command must not touch the target"
+    );
+
+    // Reopen one wall cell: the same destination is reachable and must be
+    // accepted, cancelling the prior activity and installing both the order
+    // and the opening route.
+    map.set_blocked(GridPos::new(5, 4), false);
+    let accepted = issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+    assert_eq!(accepted.accepted_units, vec![UnitId(1)]);
+    assert_eq!(
+        world.get::<CombatOrder>(attacker).cloned(),
+        Some(CombatOrder::AttackMove {
+            destination: GridPos::new(20, 5),
+            target: None,
+            last_target_cell: None,
+        }),
+        "a reachable destination is accepted after the reorder"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().goal,
+        GridPos::new(20, 5)
+    );
+    assert_eq!(
+        world.get::<WorkerTask>(attacker),
+        Some(&WorkerTask::Idle),
+        "acceptance cancels the prior activity"
+    );
+}
+
+#[test]
 fn attack_move_targets_the_nearest_enemy_within_radius() {
     let mut world = World::new();
     let mut map = open_map();
@@ -1472,15 +1644,16 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
         "a pursuit leg toward the villager is active"
     );
 
-    // The killing blow lands while the pursuit leg is still active.
+    // The pursuit leg ended at range (it must not outlive engagement), so
+    // the killing blow lands with no stale leg present at all.
     world
         .entity_mut(attacker)
         .insert(SimPosition::new(Vec2::new(6.5, 13.5)));
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
     assert!(
-        world.get::<MoveOrder>(attacker).is_some(),
-        "stale leg present"
+        world.get::<MoveOrder>(attacker).is_none(),
+        "the pursuit leg ended when range was reached"
     );
 
     // The dead target frees the unit immediately — the stale pursuit leg is
@@ -1662,6 +1835,87 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(map.path_call_count() > paths, "a ended route is reassigned");
     assert_eq!(world.get::<MoveOrder>(attacker).unwrap().goal, goal);
+}
+
+#[test]
+fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 5.5),
+        UnitKind::Archer,
+    );
+    let defender = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(16.5, 5.5),
+        UnitKind::Spearman,
+    );
+    let range = unit_spec(UnitKind::Archer).combat.unwrap().attack_range;
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_some(),
+        "an out-of-range archer pursues"
+    );
+
+    // March until combat first sees attack range: the pursuit leg must end
+    // exactly there so the archer stops closing and fights from range.
+    let mut settled = None;
+    for _ in 0..200 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        let position = world.get::<SimPosition>(attacker).unwrap().current;
+        if position.distance(world.get::<SimPosition>(defender).unwrap().current) <= range {
+            settled = Some(position);
+            break;
+        }
+    }
+    let settled = settled.expect("the archer must reach attack range");
+    // The first combat tick that sees the in-range position ends the leg.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_none(),
+        "the pursuit leg is dropped the moment range is reached"
+    );
+    let health_at_range = world.get::<Health>(defender).unwrap().current;
+    assert!(
+        health_at_range < unit_spec(UnitKind::Spearman).max_health,
+        "the archer already fired on reaching range"
+    );
+
+    // Holding position: no closing into melee, and the next shot still
+    // lands once the cooldown elapses (20 = 8 base + 12 counter vs
+    // Spearman).
+    let mut rearmed = false;
+    for _ in 0..30 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        assert_eq!(
+            world.get::<SimPosition>(attacker).unwrap().current,
+            settled,
+            "the attacker must not close past its first in-range position"
+        );
+        assert!(world.get::<MoveOrder>(attacker).is_none());
+        if !events(&world).is_empty() {
+            rearmed = true;
+            break;
+        }
+    }
+    assert!(rearmed, "the settled archer keeps attacking on cooldown");
+    assert_eq!(
+        world.get::<Health>(defender).unwrap().current,
+        health_at_range - 20
+    );
 }
 
 #[test]
