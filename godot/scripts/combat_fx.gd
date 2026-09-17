@@ -68,7 +68,9 @@ func _spawn_transient(mesh: Mesh, color: Color, lifetime: float) -> MeshInstance
 	# multiplier, which would make 20x runs flash for a few milliseconds.
 	get_tree().create_timer(lifetime, true, false, true).timeout.connect(func() -> void:
 		_live.erase(view)
-		view.queue_free()
+		# clear_all() on restart may have freed the view first.
+		if is_instance_valid(view):
+			view.queue_free()
 	)
 	return view
 

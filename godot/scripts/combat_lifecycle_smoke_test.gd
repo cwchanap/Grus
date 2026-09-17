@@ -8,8 +8,9 @@ extends Node
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
-## RejectReason discriminant order (crates/grus-sim/src/commands.rs); the
-## bridge reports "no rejection" as -1.
+## RejectReason declaration order (crates/grus-sim/src/commands.rs):
+## SessionLocked is the 19th variant (0-based 18). The bridge exposes
+## numeric codes only (last_reject_code) and reports "no rejection" as -1.
 const REJECT_SESSION_LOCKED := 18
 
 ## Proven-open Barracks anchor for the Team 1 base
@@ -113,8 +114,9 @@ func _run() -> void:
 	if str(session.get("phase", "")) != "Start":
 		_fail("skirmish boot session is not Start: %s" % [session])
 		return
-	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible):
-		_fail("Start overlay is not up during the Start phase")
+	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible \
+				and not _button("HUD/SessionPanel/QuitButton").visible):
+		_fail("Start overlay is not up during the Start phase (Quit must stay Result-only)")
 		return
 	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
 		_fail("bridge refused to queue the Start-phase probe command")
@@ -259,8 +261,10 @@ func _run() -> void:
 		return
 	if not await _wait_until(
 			func(): return _session_panel().visible and _button("HUD/SessionPanel/ResumeButton").visible \
-					and not _button("HUD/PauseButton").visible and _session_label().text == "Paused", 5.0,
-			"Paused overlay is not showing Resume with the Pause button hidden"):
+					and not _button("HUD/PauseButton").visible \
+					and not _button("HUD/SessionPanel/QuitButton").visible \
+					and _session_label().text == "Paused", 5.0,
+			"Paused overlay is not showing Resume with Pause/Quit hidden"):
 		return
 	var fx_before := int(_fx.call("effect_count"))
 	var hp_before := float(enemy_tc.call("health_ratio"))
@@ -330,8 +334,9 @@ func _run() -> void:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Start":
 		_fail("restart did not return the session to Start")
 		return
-	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible):
-		_fail("restart did not bring the Start overlay back")
+	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible \
+				and not _button("HUD/SessionPanel/QuitButton").visible):
+		_fail("restart did not bring the Start overlay back with Quit hidden")
 		return
 	if not _main.selected_ids.is_empty() or not _main._control_groups.is_empty() \
 			or int(_main.selected_building_id) != -1 or bool(_main._attack_move_armed):
