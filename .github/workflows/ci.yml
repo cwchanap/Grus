@@ -90,23 +90,29 @@ jobs:
       - name: Import Godot project and load extension
         run: timeout 30s godot --headless --path godot --editor --quit-after 120
       - name: Run Godot bridge smoke contract
-        # Gate on the printed contract marker, not the exit code: a crash
-        # after the marker is engine/gdext teardown (a separate defect), so
-        # it warns instead of flaking the job.
+        # Gate on the printed contract marker: a post-marker 139 is engine/
+        # gdext teardown (a separate defect), so it warns instead of flaking
+        # the job. Any other non-zero exit still fails the step.
         run: |
           timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log
           rc=${PIPESTATUS[0]}
           grep -q "GRUS_GODOT_SMOKE_OK" bridge-smoke.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::bridge smoke contract held but godot exited $rc during teardown"
+          if [ "$rc" -eq 139 ]; then
+            echo "::warning::bridge smoke contract held but godot exited 139 during teardown"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::bridge smoke contract held but godot exited $rc"
+            exit 1
           fi
       - name: Run fixture reset smoke
         run: |
           timeout 45s godot --headless --path godot res://scenes/reset_test.tscn 2>&1 | tee reset-smoke.log
           rc=${PIPESTATUS[0]}
           grep -q "GRUS_RESET_SMOKE_OK" reset-smoke.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::reset smoke contract held but godot exited $rc during teardown"
+          if [ "$rc" -eq 139 ]; then
+            echo "::warning::reset smoke contract held but godot exited 139 during teardown"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::reset smoke contract held but godot exited $rc"
+            exit 1
           fi
       - name: Run HPA-471 economy integration smoke
         # 2x observed CI elapsed (~33s) + 10s, rounded up to a 15s bucket.
@@ -114,8 +120,11 @@ jobs:
           timeout 90s godot --headless --path godot res://scenes/economy_smoke_test.tscn 2>&1 | tee economy-smoke.log
           rc=${PIPESTATUS[0]}
           grep -q "GRUS_ECONOMY_SMOKE_OK" economy-smoke.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::economy smoke contract held but godot exited $rc during teardown"
+          if [ "$rc" -eq 139 ]; then
+            echo "::warning::economy smoke contract held but godot exited 139 during teardown"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::economy smoke contract held but godot exited $rc"
+            exit 1
           fi
       - name: Run HPA-472 combat lifecycle smoke
         # ~11s locally at 20x sim speed; 45s sibling smoke bucket with CI
@@ -124,8 +133,11 @@ jobs:
           timeout 45s godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn 2>&1 | tee combat-smoke.log
           rc=${PIPESTATUS[0]}
           grep -q "GRUS_COMBAT_LIFECYCLE_SMOKE_OK" combat-smoke.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::combat smoke contract held but godot exited $rc during teardown"
+          if [ "$rc" -eq 139 ]; then
+            echo "::warning::combat smoke contract held but godot exited 139 during teardown"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::combat smoke contract held but godot exited $rc"
+            exit 1
           fi
       - name: Export Linux x86_64 desktop build
         run: |
@@ -161,8 +173,11 @@ jobs:
           timeout 90s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log || rc=$?
           rc=${rc:-0}
           grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::warning::benchmark contract held but godot exited $rc during teardown"
+          if [ "$rc" -eq 139 ]; then
+            echo "::warning::benchmark contract held but godot exited 139 during teardown"
+          elif [ "$rc" -ne 0 ]; then
+            echo "::error::benchmark contract held but godot exited $rc"
+            exit 1
           fi
       - name: Upload failure diagnostics
         if: failure()
