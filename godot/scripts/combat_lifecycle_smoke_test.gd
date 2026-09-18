@@ -33,8 +33,8 @@ func _fail(message: String) -> void:
 	get_tree().quit(1)
 
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
-	var deadline_ms := Time.get_ticks_msec() + int(timeout_s * 1000.0)
-	while Time.get_ticks_msec() < deadline_ms:
+	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	for _frame in frame_budget:
 		if condition.call():
 			return true
 		await get_tree().physics_frame
