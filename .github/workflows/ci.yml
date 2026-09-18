@@ -99,6 +99,7 @@ jobs:
           grep -q "GRUS_GODOT_SMOKE_OK" bridge-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::bridge smoke contract held but godot exited 139 during teardown"
+            echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
           elif [ "$rc" -ne 0 ]; then
             echo "::error::bridge smoke contract held but godot exited $rc"
             exit 1
@@ -110,6 +111,7 @@ jobs:
           grep -q "GRUS_RESET_SMOKE_OK" reset-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::reset smoke contract held but godot exited 139 during teardown"
+            echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
           elif [ "$rc" -ne 0 ]; then
             echo "::error::reset smoke contract held but godot exited $rc"
             exit 1
@@ -122,6 +124,7 @@ jobs:
           grep -q "GRUS_ECONOMY_SMOKE_OK" economy-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::economy smoke contract held but godot exited 139 during teardown"
+            echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
           elif [ "$rc" -ne 0 ]; then
             echo "::error::economy smoke contract held but godot exited $rc"
             exit 1
@@ -135,6 +138,7 @@ jobs:
           grep -q "GRUS_COMBAT_LIFECYCLE_SMOKE_OK" combat-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::combat smoke contract held but godot exited 139 during teardown"
+            echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
           elif [ "$rc" -ne 0 ]; then
             echo "::error::combat smoke contract held but godot exited $rc"
             exit 1
@@ -175,12 +179,16 @@ jobs:
           grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::benchmark contract held but godot exited 139 during teardown"
+            echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
           elif [ "$rc" -ne 0 ]; then
             echo "::error::benchmark contract held but godot exited $rc"
             exit 1
           fi
       - name: Upload failure diagnostics
-        if: failure()
+        # TEARDOWN_WARNED is set by any smoke/benchmark step that tolerated a
+        # post-marker 139 — those steps warn but stay green, so failure()
+        # alone would skip uploading the teardown-crash logs.
+        if: failure() || env.TEARDOWN_WARNED == '1'
         uses: actions/upload-artifact@v4
         with:
           name: e2e-failure-diagnostics
