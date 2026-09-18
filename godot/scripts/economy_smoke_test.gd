@@ -96,11 +96,11 @@ func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 
-## Polls a condition every physics frame until it holds or the wall-clock
-## deadline passes; fails the smoke on timeout.
+## Polls a condition every physics frame until it holds or the frame budget
+## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
-	var deadline_ms := Time.get_ticks_msec() + int(timeout_s * 1000.0)
-	while Time.get_ticks_msec() < deadline_ms:
+	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	for _frame in frame_budget:
 		if condition.call():
 			return true
 		await get_tree().physics_frame
@@ -209,8 +209,8 @@ func _area_clear_of_units(point: Vector3, radius: float) -> bool:
 ## Waits until no friendly unit sits inside the unit-priority click radius of
 ## a building origin, so the next left-click selects the building.
 func _wait_units_clear(point: Vector3, radius: float, timeout_s: float) -> bool:
-	var deadline_ms := Time.get_ticks_msec() + int(timeout_s * 1000.0)
-	while Time.get_ticks_msec() < deadline_ms:
+	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	for _frame in frame_budget:
 		if _area_clear_of_units(point, radius):
 			return true
 		await get_tree().physics_frame
