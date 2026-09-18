@@ -104,8 +104,8 @@ jobs:
         # gdext teardown (a separate defect), so it warns instead of flaking
         # the job. Any other non-zero exit still fails the step.
         run: |
-          timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log
-          rc=${PIPESTATUS[0]}
+          timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log || rc=$?
+          rc=${rc:-0}
           grep -q "GRUS_GODOT_SMOKE_OK" bridge-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::bridge smoke contract held but godot exited 139 during teardown"
@@ -115,8 +115,8 @@ jobs:
           fi
       - name: Run fixture reset smoke
         run: |
-          timeout 45s godot --headless --path godot res://scenes/reset_test.tscn 2>&1 | tee reset-smoke.log
-          rc=${PIPESTATUS[0]}
+          timeout 45s godot --headless --path godot res://scenes/reset_test.tscn 2>&1 | tee reset-smoke.log || rc=$?
+          rc=${rc:-0}
           grep -q "GRUS_RESET_SMOKE_OK" reset-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::reset smoke contract held but godot exited 139 during teardown"
@@ -127,8 +127,8 @@ jobs:
       - name: Run HPA-471 economy integration smoke
         # 2x observed CI elapsed (~33s) + 10s, rounded up to a 15s bucket.
         run: |
-          timeout 90s godot --headless --path godot res://scenes/economy_smoke_test.tscn 2>&1 | tee economy-smoke.log
-          rc=${PIPESTATUS[0]}
+          timeout 90s godot --headless --path godot res://scenes/economy_smoke_test.tscn 2>&1 | tee economy-smoke.log || rc=$?
+          rc=${rc:-0}
           grep -q "GRUS_ECONOMY_SMOKE_OK" economy-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::economy smoke contract held but godot exited 139 during teardown"
@@ -140,8 +140,8 @@ jobs:
         # ~11s locally at 20x sim speed; 45s sibling smoke bucket with CI
         # runner margin.
         run: |
-          timeout 45s godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn 2>&1 | tee combat-smoke.log
-          rc=${PIPESTATUS[0]}
+          timeout 45s godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn 2>&1 | tee combat-smoke.log || rc=$?
+          rc=${rc:-0}
           grep -q "GRUS_COMBAT_LIFECYCLE_SMOKE_OK" combat-smoke.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::combat smoke contract held but godot exited 139 during teardown"
