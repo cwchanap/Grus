@@ -363,9 +363,10 @@ impl GrusBridgeNode {
     /// the session is Playing, plus the settle tick's buffer on Result —
     /// `strike()` records the killing blow and resolves the match in the same
     /// fixed tick, and that buffer must present once. Returns an empty array
-    /// in Start/Paused. The guard is defense in depth: `step_combat` already
-    /// clears `CombatEvents` on every tick — Playing or frozen — so stale
-    /// events can never survive a pause to replay as fresh effects.
+    /// in Start/Paused. The guard is defense in depth: `step_combat` clears
+    /// `CombatEvents` on every non-Result tick — Playing or frozen — so stale
+    /// events can never survive a pause to replay as fresh effects; Result
+    /// ticks hold the buffer until this drain reads it.
     #[func]
     fn drain_combat_events(&self) -> Array<VarDictionary> {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -815,8 +816,9 @@ fn queue_command(command: PlayerCommand) -> bool {
 /// Center destruction to Result in the same fixed tick, so that settle
 /// tick's buffer must still drain or the winning hit/death cosmetics never
 /// present. Start/Paused stay blocked — defense in depth on top of
-/// `step_combat` clearing the buffer every tick, so nothing frozen can ever
-/// replay as fresh cosmetics across a pause.
+/// `step_combat` clearing the buffer on every non-Result tick, so nothing
+/// frozen can ever replay as fresh cosmetics across a pause; Result ticks
+/// hold the buffer until this drain reads it.
 fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
     if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
         return Vec::new();
