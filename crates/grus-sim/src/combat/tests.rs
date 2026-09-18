@@ -352,6 +352,59 @@ fn frozen_ticks_clear_combat_events_so_nothing_replays_after_resume() {
 }
 
 #[test]
+fn result_ticks_preserve_the_settle_events_until_the_bridge_drains() {
+    let mut world = World::new();
+    let mut map = open_map();
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(11.5, 48.5),
+        UnitKind::Spearman,
+    );
+    let town_center = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::TownCenter,
+        GridPos::new(12, 46),
+    );
+    world.get_mut::<Health>(town_center).unwrap().current = 10;
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(1),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        matches!(active_phase(&world), MatchPhase::Result(_)),
+        "the Town Center kill resolves the match in the same tick"
+    );
+    assert_eq!(events(&world).len(), 1);
+    assert!(events(&world)[0].killed);
+
+    // At high sim speed several fixed ticks run before Godot's next
+    // `_process` drain: a frozen Result tick must not erase the settle
+    // tick's buffer, or the killing blow never presents.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        events(&world).len(),
+        1,
+        "a frozen Result tick must preserve the settle tick's events"
+    );
+    assert!(events(&world)[0].killed);
+}
+
+#[test]
 fn killing_blow_atomically_destroys_a_building() {
     let mut world = World::new();
     let mut map = open_map();

@@ -16,7 +16,7 @@ use crate::economy::{
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
-use crate::session::{gameplay_active, resolve_result};
+use crate::session::{MatchPhase, active_phase, gameplay_active, resolve_result};
 
 /// Live and maximum hit points. Spawned units and seeded/placed buildings
 /// start at full health from their catalogue spec.
@@ -66,7 +66,8 @@ pub struct CombatEvent {
 
 /// Sim-owned drain buffer of current-tick combat events, cleared at the
 /// start of every combat step so headless runs cannot accumulate stale
-/// events. The bridge drains it during presentation.
+/// events — Result ticks excepted: they hold the settle tick's killing
+/// blow until the bridge drains it during presentation.
 #[derive(Debug, Default, Resource)]
 pub struct CombatEvents(pub Vec<CombatEvent>);
 
@@ -100,7 +101,8 @@ pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarge
 }
 
 /// Advances combat one fixed tick; runs before movement. Clears
-/// `CombatEvents`, decrements cooldowns, then lets every attacker act in
+/// `CombatEvents` (Result ticks preserve the settle tick's buffer for the
+/// bridge drain), decrements cooldowns, then lets every attacker act in
 /// ascending stable-ID order: refresh/validate its target, acquire one for
 /// AttackMove, strike when in range and cooldown-ready, or refresh pursuit.
 /// An attacker destroyed earlier in the same step is skipped via its
@@ -110,10 +112,17 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     // Draining the presentation-feedback buffer is bookkeeping, not
     // gameplay: it must happen even on frozen ticks, or the last Playing
     // tick's events survive a pause and replay on the first resumed frame.
+    // Result ticks are the exception: `strike()` records the killing blow
+    // and resolves the match in the same fixed tick, and at high sim speed
+    // several more frozen ticks can run before the bridge's next `_process`
+    // drain — clearing here would erase the settle tick's events before
+    // they ever present.
     if world.get_resource::<CombatEvents>().is_none() {
         world.init_resource::<CombatEvents>();
     }
-    world.resource_mut::<CombatEvents>().0.clear();
+    if !matches!(active_phase(world), MatchPhase::Result(_)) {
+        world.resource_mut::<CombatEvents>().0.clear();
+    }
     if !gameplay_active(world) {
         return;
     }
