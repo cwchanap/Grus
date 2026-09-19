@@ -109,6 +109,10 @@ pub const AGE_TWO_GATHER_RATE: f32 = 2.2;
 pub const MAX_POPULATION: u32 = 100;
 /// Attack-move target-acquisition radius in world units (cells).
 pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
+/// Initial per-unit vision radius in cells; a reveal covers every cell with
+/// `dx*dx + dy*dy <= radius*radius` from its origin. Must never be narrower
+/// than `ATTACK_MOVE_RADIUS` (locked by a catalogue regression).
+pub const VISION_RADIUS_CELLS: i32 = 10;
 
 pub fn unit_spec(kind: UnitKind) -> UnitSpec {
     match kind {

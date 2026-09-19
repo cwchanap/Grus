@@ -15,14 +15,14 @@ use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
 use crate::session::gameplay_active;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum UnitCommandKind {
     Move { target: Vec2 },
     AttackMove { target: Vec2 },
     Stop,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct UnitCommand {
     pub issuer: TeamId,
     pub units: Vec<UnitId>,
@@ -30,7 +30,7 @@ pub struct UnitCommand {
 }
 
 /// Top-level player command. Grows only when its owning behavior lands.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PlayerCommand {
     Units(UnitCommand),
     PlaceBuilding {
