@@ -17,6 +17,7 @@ use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::{MatchPhase, active_phase, gameplay_active, resolve_result};
+use crate::visibility::visible_to;
 
 /// Live and maximum hit points. Spawned units and seeded/placed buildings
 /// start at full health from their catalogue spec.
@@ -97,11 +98,36 @@ pub(crate) fn resolve_target(
 }
 
 /// The single eligibility seam for every direct attack and attack-move
-/// acquisition: the target exists in its index, has live Health, and belongs
-/// to another team. Buildings included; visibility lands in HPA-473 here.
+/// acquisition: the target exists in its index, has live Health, belongs to
+/// another team, and is currently visible to the attacker's team — through
+/// the one `visible_to` predicate, unconditionally (a unit by its current
+/// cell, a building by its footprint). Without a `VisibilityMap` the
+/// predicate passes everything, so pure-sim tests keep full information.
 pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarget) -> bool {
-    resolve_target(world, target)
-        .is_some_and(|(_, team, health)| team != attacker_team && health.current > 0)
+    resolve_target(world, target).is_some_and(|(entity, team, health)| {
+        team != attacker_team
+            && health.current > 0
+            && target_visible(world, attacker_team, target, entity)
+    })
+}
+
+/// Combat visibility through the one public predicate; no consumer picks a
+/// second visibility rule.
+fn target_visible(world: &World, team: TeamId, target: CombatTarget, entity: Entity) -> bool {
+    match target {
+        CombatTarget::Unit(_) => {
+            let position = world
+                .get::<SimPosition>(entity)
+                .expect("indexed unit carries a SimPosition");
+            visible_to(world, team, world_to_cell(position.current))
+        }
+        CombatTarget::Building(_) => {
+            let footprint = world
+                .get::<Footprint>(entity)
+                .expect("indexed building carries a Footprint");
+            visible_to(world, team, *footprint)
+        }
+    }
 }
 
 /// Advances combat one fixed tick; runs before movement. Clears
@@ -175,7 +201,8 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         let order = match refresh_target(world, unit.team, position.current, order) {
             Some(order) => order,
             None => {
-                // Direct Attack: the target died or vanished, the order ends.
+                // Direct Attack: the target died, vanished, or left vision —
+                // the order and its pursuit route end here.
                 let mut entity = world.entity_mut(entity);
                 entity.remove::<CombatOrder>();
                 entity.remove::<MoveOrder>();

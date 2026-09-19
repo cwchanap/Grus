@@ -11,10 +11,11 @@ use bevy::prelude::{Entity, World};
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
     Age, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget,
-    Dropoff, GatherProgress, GridMap, GridPos, Health, MapFixture, PlayerCommand, ResourceId,
-    ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind,
-    WorkerTask, apply_player_command, seed_skirmish, spawn_unit, step_combat, step_construction,
-    step_economy, step_movement, step_production,
+    Dropoff, Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, PlayerCommand,
+    ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId,
+    UnitIndex, UnitKind, VisibilityMap, WorkerTask, apply_player_command, explored_by,
+    refresh_visibility, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
+    step_movement, step_production, visible_to,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -250,5 +251,73 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         world.resource::<TeamEconomy>().0[&TEAM].stockpile.wood,
         300 - 75,
         "the stale deposit at the just-destroyed drop-off must never land"
+    );
+}
+
+/// Visibility contract of the construction boundary: a newly placed site
+/// grants no vision of itself while incomplete, and completion turns the
+/// footprint into a reveal origin. With every unit far from the site, the
+/// granted vision can only come from the completed building.
+#[test]
+fn incomplete_site_grants_no_vision_and_completion_grants_it() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    // Fog opt-in for this contract test; normal Godot setup gains the map
+    // in a later task.
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+
+    // Scout the future site, then walk home: the ground stays explored but
+    // falls out of current vision.
+    let site = Footprint::new(GridPos::new(30, 46), 2, 2); // Storehouse 2×2
+    let builder = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
+    world
+        .entity_mut(builder)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(30, 46))));
+    refresh_visibility(&mut world, &map);
+    world
+        .entity_mut(builder)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(17, 52))));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TEAM, site));
+    assert!(
+        !visible_to(&world, TEAM, site),
+        "scouted ground is explored but no longer currently visible"
+    );
+
+    // Placement on explored ground is accepted; the incomplete site grants
+    // no vision of itself.
+    let placed = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TEAM,
+            builder: UnitId(2),
+            kind: BuildingKind::Storehouse,
+            anchor: GridPos::new(30, 46),
+        },
+    );
+    assert_eq!(placed.reject, None, "placement on explored ground rejected");
+    let storehouse = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(3))
+        .unwrap();
+    assert!(
+        !visible_to(&world, TEAM, site),
+        "a newly placed incomplete site grants no vision"
+    );
+
+    // Completion is what flips the site into a reveal origin.
+    world
+        .get_mut::<Building>(storehouse)
+        .unwrap()
+        .construction
+        .complete = true;
+    refresh_visibility(&mut world, &map);
+    assert!(
+        visible_to(&world, TEAM, site),
+        "construction completion grants vision"
     );
 }

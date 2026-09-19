@@ -21,6 +21,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
+use crate::visibility::{explored_by, visible_to};
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
@@ -288,12 +289,13 @@ pub fn gather_rate_for_age(age: Age) -> f32 {
     }
 }
 
-/// Applies an accepted `Gather`: validates source, owned villagers, Farm
-/// availability, and shared reservation state; then assigns unique
-/// immediate-perimeter slots. A worker carrying resources routes to a
-/// reachable same-team Dropoff first (depositing) and only then to the
-/// requested source, so Carry never mixes kinds. Validation precedes any
-/// cancellation: a rejected worker keeps its old task and order.
+/// Applies an accepted `Gather`: validates source knowledge (explored
+/// standalone source, own completed Farm, or currently visible enemy Farm),
+/// owned villagers, Farm availability, and shared reservation state; then
+/// assigns unique immediate-perimeter slots. A worker carrying resources
+/// routes to a reachable same-team Dropoff first (depositing) and only then
+/// to the requested source, so Carry never mixes kinds. Validation precedes
+/// any cancellation: a rejected worker keeps its old task and order.
 pub(crate) fn apply_gather(
     world: &mut World,
     map: &mut GridMap,
@@ -317,6 +319,25 @@ pub(crate) fn apply_gather(
         .copied()
         .expect("registered resource source footprint");
     let is_farm = world.get::<Building>(source_entity).is_some();
+    // Knowledge gate, called unconditionally (both predicates pass through
+    // when no VisibilityMap exists, so pure-sim full information is kept):
+    // standalone sources are known once their cell was explored and stay
+    // known after vision is lost; own completed Farms are always valid
+    // knowledge; an enemy Farm is an enemy building and needs current
+    // visibility — it is never admitted merely by sitting in the
+    // `ResourceIndex`.
+    let source_known = if is_farm {
+        world
+            .get::<Building>(source_entity)
+            .is_some_and(|building| building.team == issuer)
+            || visible_to(world, issuer, footprint)
+    } else {
+        explored_by(world, issuer, footprint)
+    };
+    if !source_known {
+        outcome.reject = Some(RejectReason::Unexplored);
+        return outcome;
+    }
 
     // Same reservation seam as Move and building placement: seed every live
     // unit's current cell and MoveOrder goal. A commanded worker's own current

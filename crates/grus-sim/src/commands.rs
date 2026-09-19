@@ -14,6 +14,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
 use crate::session::gameplay_active;
+use crate::visibility::VisibilityMap;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UnitCommandKind {
@@ -91,6 +92,9 @@ pub enum RejectReason {
     TargetMissing,
     InvalidTarget,
     SessionLocked,
+    /// Appended last: numeric reject codes are a wire contract asserted by
+    /// GDScript smokes, so prior variants must never be reordered.
+    Unexplored,
 }
 
 /// Typed result of one player command. Batch unit commands report per-unit
@@ -210,6 +214,11 @@ pub fn apply_player_command(
 /// target eligible through the one `target_eligible` seam) before touching
 /// any state; an accepted unit then cancels its prior activity through the
 /// shared helper and receives a fresh `CombatOrder::Attack`.
+///
+/// Under runtime visibility the attack command must not become an
+/// id-enumeration oracle: a nonexistent target and a live-but-hidden target
+/// both reject `InvalidTarget`. `TargetMissing` survives only in the
+/// full-information (VisibilityMap-free) pure-sim seam.
 fn apply_attack(
     world: &mut World,
     issuer: TeamId,
@@ -219,6 +228,7 @@ fn apply_attack(
     units.sort_unstable();
     units.dedup();
     let mut outcome = CommandResult::default();
+    let runtime_visibility = world.get_resource::<VisibilityMap>().is_some();
 
     for id in units {
         let entity = match owned_unit_entity(world, id, issuer) {
@@ -238,9 +248,12 @@ fn apply_attack(
             continue;
         }
         if resolve_target(world, target).is_none() {
-            outcome
-                .rejected_units
-                .push((id, RejectReason::TargetMissing));
+            let reason = if runtime_visibility {
+                RejectReason::InvalidTarget
+            } else {
+                RejectReason::TargetMissing
+            };
+            outcome.rejected_units.push((id, reason));
             continue;
         }
         if !target_eligible(world, issuer, target) {
