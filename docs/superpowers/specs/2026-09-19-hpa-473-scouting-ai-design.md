@@ -6,7 +6,7 @@ Planning baseline for HPA-473. This design and its implementation plan live on t
 
 This extends the merged HPA-470 through HPA-472 seams. It deliberately avoids a second gameplay world, generic AI/behavior-tree framework, fog shader subsystem, minimap framework, duplicate command path, or extra content. HPA-474 remains the place for final tuning and measured performance work.
 
-A pre-implementation review is incorporated here. The architecture stays at two focused modules; the revision locks the visibility geometry, runtime insertion seam, AI idempotence, feedback ownership, no-leak presentation path, authored-coordinate ownership and smoke/test split before implementation starts.
+Two pre-implementation reviews are incorporated here. The architecture stays at two focused modules; the revisions lock the visibility geometry and predicates, runtime insertion seam, placement/attack anti-oracle behavior, AI determinism/idempotence, feedback ownership, no-leak presentation path, authored-coordinate ownership, smoke/test split and green-commit ordering before implementation starts.
 
 ## Outcome
 
@@ -63,6 +63,8 @@ pub const VISION_RADIUS_CELLS: i32 = 10;
 
 Radius 10 is intentional: with the authored starts, Team 1's gold at (25, 48) is 10 cells from the nearest Town Center footprint cell, and the mirrored Team 2 gold has the same geometry. The safe starting resource ring must be explored after initial reveal; expansion resources must remain unexplored. A fixture-level regression locks both facts so later tuning cannot silently make starting gold unknowable.
 
+A catalogue regression also asserts `VISION_RADIUS_CELLS as f32 >= ATTACK_MOVE_RADIUS`. Attack-move must never have a wider autonomous acquisition radius than the owning team can actually see.
+
 Visibility geometry is one contract for every consumer:
 
 - unit reveal origin: the unit's current `GridMap::world_to_cell(SimPosition.current)`;
@@ -72,6 +74,15 @@ Visibility geometry is one contract for every consumer:
 - building or standalone-resource known/visible: **any** footprint cell is known/visible.
 
 Unfinished construction sites reveal nothing. There is no terrain occlusion, elevation, facing cone, Chebyshev shortcut or line-of-sight raycast. Consumers do not independently choose center-vs-edge semantics.
+
+Exactly two public knowledge predicates own the optional-resource fallback:
+
+```rust
+visible_to(world, team, subject) -> bool
+explored_by(world, team, subject) -> bool
+```
+
+`subject` resolves to the locked cell/footprint geometry above. Both predicates return `true` when `VisibilityMap` is absent. **No combat, placement, gather, rendering, minimap or AI consumer checks for `VisibilityMap` directly.** They call these predicates unconditionally. Internal helpers may resolve cells/footprints, but the missing-resource/full-information rule lives in one place only.
 
 `refresh_visibility(world, map)` is the exclusive world-level visibility step. It recomputes the current-visible set from live ECS entities, unions it into explored state, and increments `revision` only when the resulting state changes.
 
@@ -101,7 +112,7 @@ A just-completed building grants vision in that tick. A newly placed incomplete 
 
 ### Combat
 
-`target_eligible(world, attacker_team, target)` keeps its current existence/health/enemy-team checks and additionally requires the target to be currently visible to the attacker team when `VisibilityMap` exists.
+`target_eligible(world, attacker_team, target)` keeps its current existence/health/enemy-team checks and calls `visible_to(...)` unconditionally.
 
 This automatically gives the right behavior to both direct Attack and attack-move acquisition:
 
@@ -112,9 +123,23 @@ This automatically gives the right behavior to both direct Attack and attack-mov
 
 Do not add a second combat visibility check.
 
+Direct Attack also must not become an ID-enumeration oracle. With runtime visibility enabled, a missing target ID and a live-but-hidden target both reject as `InvalidTarget`; `TargetMissing` remains available only in the full-information/missing-visibility test seam. GDScript must not be able to distinguish “hidden live entity” from “nonexistent id.”
+
 ### Placement
 
-Append one `RejectReason::Unexplored` variant. `validate_placement()` requires every footprint cell to be explored for the issuer before affordability/path application. The Godot placement preview already calls this authority for Team 1, so preview and final placement stay aligned.
+Append one `RejectReason::Unexplored` variant. Placement validation order is a privacy contract:
+
+1. owned villager;
+2. kind unlocked/buildable;
+3. footprint in bounds;
+4. **every footprint cell explored via `explored_by(...)`;**
+5. walkability/live-unit/current-goal occupancy;
+6. affordability;
+7. reachable perimeter slot.
+
+The Unexplored check must happen immediately after bounds and **before the function builds the all-unit occupancy set**. Otherwise `placement_preview()` becomes a fog oracle where `Occupied` reveals a hidden building/resource/unit or hidden enemy move goal. A regression places an unexplored footprint over a hidden enemy unit and asserts the reject code is `Unexplored`, never `Occupied`.
+
+The Godot placement preview already calls this authority for Team 1, so preview and final placement stay aligned.
 
 Placing a site never changes visibility by itself. Because incomplete buildings grant no vision, placement cannot be used as a remote scout.
 
@@ -128,7 +153,7 @@ Standalone finite resources are static map contents:
 
 Own completed Farms are always valid gather knowledge. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts and are never admitted merely because they are present in `ResourceIndex`.
 
-The gather command uses the same visibility helpers when `VisibilityMap` exists so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm requires current visibility and still cannot be gathered as an own economic source. Missing visibility keeps existing pure-sim behavior.
+The gather command calls `explored_by(...)` unconditionally so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm is never gathered as an own economic source. The predicate's missing-resource fallback preserves existing full-information pure-sim behavior.
 
 ## Presentation: one sim truth, no hidden-node leak
 
@@ -149,11 +174,12 @@ No gameplay truth is duplicated into Godot; node visibility is only a presentati
 
 ## Fog overlay
 
-Expose one local-player visibility snapshot from the bridge:
+Expose two local-player bridge calls following the existing command-feedback revision pattern:
 
-- `revision`
-- map width/height
-- packed cell states (0 Unexplored / 1 Explored / 2 Visible)
+- `visibility_revision() -> int`: cheap per-frame poll;
+- `visibility_snapshot()`: map width/height, packed cell states (0 Unexplored / 1 Explored / 2 Visible), **and the same revision**.
+
+Fog/minimap poll only `visibility_revision()`; they fetch the 12,288-cell payload only when it changes. Keeping revision in the snapshot lets a consumer detect a revision change during the read. The packed conversion is isolated at this bridge boundary so the underlying HashSet representation remains replaceable if HPA-474 ever measures a need.
 
 Add a small `fog_of_war.gd` presentation node. It rebuilds only when the sim revision changes and uses primitive horizontal quads above the terrain:
 
@@ -194,6 +220,8 @@ pub struct AiController {
 
 There is no behavior tree, utility scorer, planner graph, blackboard framework, cloned simulation world or persistent “squad entity”. Military groups are derived from live owned units at each decision.
 
+`PlayerCommand`, `UnitCommand`, and `UnitCommandKind` derive `PartialEq` so fairness tests compare actual command lists. AI enumeration is deterministic: every unit/building/resource candidate list is sorted by stable ID before policy choice, matching the existing combat/idle-worker determinism.
+
 The policy runs at a modest `AI_DECISION_SECONDS = 1.0` cadence through `step_ai(world, map, seconds)` and issues ordinary `PlayerCommand` values through `apply_player_command()`. `step_ai` returns immediately when `!gameplay_active(world)` **before advancing its accumulator**, so Start/Pause/Result do not create a catch-up decision on resume. AI command results are not written to the human command-feedback HUD.
 
 The 1 Hz policy is explicitly idempotent. A decision may emit several commands, but it never reissues a command merely because a goal remains true:
@@ -209,20 +237,20 @@ The controller may query all of its **own** live state. Enemy units/buildings mu
 
 ### Ordered policy
 
-Keep the decision logic as explicit ordered functions, not a generic goal system.
+Keep the decision logic as explicit ordered **pure** functions, not a generic goal system. Each policy step reads `&World`, `&AiController`/decision state and `&AiMapPlan` and returns zero or one `PlayerCommand`; `decide_ai_commands()` composes them in the fixed order below into `Vec<PlayerCommand>`. `step_ai()` is only the Playing/cadence gate plus the apply loop. This keeps the 90% production-line coverage gate practical and makes the hidden-state invariance test compare the pure decision output directly.
 
 1. **Defend visible threats.** If a currently visible enemy is near the AI Town Center/base area, direct available military units at the nearest visible threat.
 2. **Avoid population stalls.** If free capacity is low and cap is below 100, place the next authored House using a real villager command.
 3. **Replace workers.** Keep a small target worker count (initially 8). Queue Villagers at the Town Center through normal production.
-4. **Allocate idle workers.** Assign idle villagers to known available sources toward a simple Food/Wood/Gold split. Existing WorkerTask/resource assignment state is the source of truth.
-5. **Grow the base.** Build Barracks and Archery Range, then a Storehouse near a discovered expansion when useful; add Farms when known food supply is insufficient. Use authored slots and real placement validation.
-6. **Advance.** Attempt Age 2 only after the worker target and Age-1 production core exist and the shared catalogue cost is affordable.
-7. **Complete production.** Build Stable after Age 2.
-8. **Train army.** Queue Spearman/Archer/Cavalry through existing producer queues using a small round-robin composition, respecting affordability and population.
-9. **Scout.** Use the lowest stable-ID available Spearman as the scout. Send it along authored route waypoints with existing Move/AttackMove commands; if it dies, the next available Spearman naturally takes over.
+4. **Scout early.** Before expansion-dependent growth or army training, advance along the authored route with the lowest stable-ID idle military unit when available; otherwise use the lowest stable-ID **surplus idle Villager** once the economy is above its minimum worker floor. Villagers use ordinary Move; combatants may use AttackMove. Never retask an active gatherer/build worker just to scout.
+5. **Allocate idle workers.** Assign remaining idle villagers to known available sources toward a simple Food/Wood/Gold split. Existing WorkerTask/resource assignment state is the source of truth.
+6. **Grow the base.** Build Barracks and Archery Range, then a Storehouse near a discovered expansion when useful; add Farms when known food supply is insufficient. Use authored slots and real placement validation.
+7. **Advance.** Attempt Age 2 only after the worker target and Age-1 production core exist and the shared catalogue cost is affordable.
+8. **Complete production.** Build Stable after Age 2.
+9. **Train army.** Queue Spearman/Archer/Cavalry through existing producer queues using a small round-robin composition, respecting affordability and population.
 10. **Attack.** Once at least six military units are available, issue one grouped AttackMove. Use the remembered enemy Town Center cell if it has actually been seen; otherwise advance along the authored route. Visible threats can be directly attacked. Losses simply drop the live army count below threshold, so normal production/regrouping rebuilds the force.
 
-The exact worker target, six-unit attack threshold, route points and resource split are HPA-473 starting values; HPA-474 may tune them without changing architecture.
+The exact worker target, surplus-worker scouting floor, six-unit attack threshold, route points and resource split are HPA-473 starting values; HPA-474 may tune them without changing architecture. Early scouting is structural, not a tuning knob: the AI must be able to discover expansion resources before its late-game gold demand depends on them.
 
 ## Authored one-map AI data
 
@@ -238,9 +266,9 @@ Add a compact `AiMapPlan` returned by team:
 
 The plan contains only static map coordinates. It does not contain live enemy/resource identities. Team 1 and Team 2 plans are mirror images so the same policy can be tested from both starts.
 
-This becomes the **one authored base-coordinate table** for the existing tests and runtime smokes as well as the AI. Existing hard-coded Barracks/House/Farm/Storehouse/Range/Stable anchors migrate to `MapFixture::team_plan(team)`; the bridge exposes the same static plan to GDScript smoke code. Do not add a fourth parallel set of “AI-only” building anchors.
+This becomes the **one authored Rust base-coordinate table** for simulation/runtime AI data. Existing duplicate Rust anchors in session/system-order tests migrate to `MapFixture::team_plan(team)`. GDScript smoke constants remain test choreography for the human UI and are **not** exposed through a new bridge snapshot; do not couple those scripts to AI tuning just to deduplicate six test constants.
 
-If the full-match tests expose a real solvency or pathing gap, adjust the existing authored `expansion_resources()` table in this ticket. Do not add procedural resources or a second map. Prefer proving the current 18-source layout sufficient before adding more deposits.
+The existing 18-source map is the planned content. Do not pre-emptively adjust `expansion_resources()` to compensate for policy ordering. The full-match proof must demonstrate that the AI actually reached/discovered the authored expansion. If it still stalls after doing so, revise this plan with that evidence before changing map content; do not add procedural resources or a second map.
 
 ## AI visibility and memory contract
 
@@ -299,7 +327,7 @@ Focused unit/integration tests must cover:
 
 ### Godot/runtime
 
-Add **one** HPA-473 integration smoke and grow that same scene/script incrementally across the PR. It verifies:
+Add **one** HPA-473 integration smoke and grow that same scene/script incrementally across the PR. It runs with the real AI enabled and verifies:
 
 - initial fog and hidden enemy views;
 - reveal -> hide -> no stale selection/inspection;
@@ -311,7 +339,14 @@ Add **one** HPA-473 integration smoke and grow that same scene/script incrementa
 
 The complete fogged match -> Result proof stays in bounded pure-Rust journeys, parameterized by TeamId and capped by state/tick budget rather than wall-clock-exact arithmetic. The Godot smoke does **not** duplicate an entire long match.
 
-Existing HPA-471 economy and HPA-472 combat lifecycle smokes must be adapted under runtime fog in this same PR: they may explicitly scout/march to reveal their existing far placement/resource/combat targets, but they must not bypass visibility. HPA-470 reset/selection contracts remain intact.
+Existing HPA-470 command, HPA-471 economy and HPA-472 combat lifecycle smokes must be adapted under runtime fog in this same PR: they explicitly scout/march to reveal far placement/resource/combat targets, but they do not bypass visibility. Once AI lands, these **legacy scripted smokes disable only `AiController` while still in Start through one narrow test bridge helper** so their old deterministic choreography is not coupled to opponent timing; the HPA-473 smoke leaves AI enabled. Reset coverage still verifies a normal restart recreates fresh AI/visibility state.
+
+## Risks and accepted limitations
+
+- **Shared-pathing information leak (accepted):** `GridMap` remains global. An unexplored building/resource blocker can indirectly affect a route, revealing that some obstacle exists even though its identity is hidden. Eliminating this requires per-team knowledge-aware path maps or speculative routing, which is disproportionate to this MVP and explicitly out of scope. Fog prevents direct rendering/selection/targeting/preview oracles; path-shape inference is accepted.
+- **Coverage pressure:** `ai.rs` is production code under the >90% line gate. Pure per-policy decision functions plus a thin `step_ai` keep branches independently testable instead of forcing every branch through a long match.
+- **Runtime-fog migration:** turning visibility on breaks older full-information Godot choreography. Runtime insertion, presentation projection, and retargeting those smokes land together in one green commit.
+- **Optional-resource fallback:** missing `VisibilityMap` intentionally means full information for focused sim tests/benchmark. Consumers cannot branch on resource presence; only `visible_to` / `explored_by` own that fallback, and runtime setup/reset tests assert the resource is actually present.
 
 ## No art/SFX task
 
