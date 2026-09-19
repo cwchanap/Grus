@@ -103,3 +103,9 @@ fn buildings_carry_catalogue_health() {
 fn attack_move_radius_is_eight_world_units() {
     assert_eq!(ATTACK_MOVE_RADIUS, 8.0);
 }
+
+#[test]
+fn vision_radius_covers_attack_move_radius() {
+    // Attack-move must never acquire targets the owning team cannot see.
+    assert!(VISION_RADIUS_CELLS as f32 >= ATTACK_MOVE_RADIUS);
+}

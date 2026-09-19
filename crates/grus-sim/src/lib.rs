@@ -9,6 +9,7 @@ pub mod map;
 pub mod movement;
 pub mod production;
 pub mod session;
+pub mod visibility;
 
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
@@ -42,4 +43,7 @@ pub use production::{
 pub use session::{
     MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,
     set_paused, start_match,
+};
+pub use visibility::{
+    CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
