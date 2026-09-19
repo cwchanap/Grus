@@ -476,12 +476,15 @@ fn with_destination(order: &CombatOrder, destination: GridPos) -> CombatOrder {
 }
 
 /// Reassigns the AttackMove route toward its assigned destination. A leg
-/// already bound for that goal — or a unit already standing on it — is
-/// kept; any other active leg is a stale pursuit route to a dead target's
-/// cell and is replaced now instead of being waited out. A re-plan that
-/// lands on a neighbor cell re-anchors the stored destination to the
-/// accepted goal, or the leg would fail the exact-goal check again next
-/// tick and re-path forever.
+/// already bound for that goal — including one still finishing while the
+/// unit stands on the destination cell — is kept; any other active leg is
+/// a stale pursuit route to a dead target's cell and is removed now
+/// instead of being waited out. The stale leg is dropped before the
+/// re-plan so a failed assignment — or one that accepts the unit's own
+/// cell and installs no route — cannot leave the old pursuit route
+/// marching. A re-plan that lands on a neighbor cell re-anchors the stored
+/// destination to the accepted goal, or the leg would fail the exact-goal
+/// check again next tick and re-path forever.
 fn resume_destination(
     world: &mut World,
     map: &GridMap,
@@ -491,15 +494,17 @@ fn resume_destination(
     destination: GridPos,
 ) {
     let start = world_to_cell(position.current);
+    let route_goal = world.get::<MoveOrder>(attacker).map(|order| order.goal);
     if start == destination {
+        if route_goal.is_some_and(|goal| goal != destination) {
+            world.entity_mut(attacker).remove::<MoveOrder>();
+        }
         return;
     }
-    if world
-        .get::<MoveOrder>(attacker)
-        .is_some_and(|order| order.goal == destination)
-    {
+    if route_goal == Some(destination) {
         return;
     }
+    world.entity_mut(attacker).remove::<MoveOrder>();
     if let Some(goal) = assign_move_toward(world, map, attacker, start, destination)
         && goal != destination
     {

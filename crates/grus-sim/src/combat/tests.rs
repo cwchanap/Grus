@@ -1719,6 +1719,102 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
 }
 
 #[test]
+fn attack_move_drops_a_stale_route_once_the_unit_stands_on_the_destination() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(20.5, 5.5),
+        UnitKind::Spearman,
+    );
+
+    // Attack-moving onto the unit's own cell is accepted with no route:
+    // the assigned destination is that cell.
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+    assert_eq!(
+        world.get::<CombatOrder>(attacker).cloned(),
+        Some(CombatOrder::AttackMove {
+            destination: GridPos::new(20, 5),
+            target: None,
+            last_target_cell: None,
+        }),
+    );
+    assert!(world.get::<MoveOrder>(attacker).is_none());
+
+    // A stale pursuit leg — a dead target's cell — is dropped on the spot
+    // instead of marching the unit off its destination.
+    world.entity_mut(attacker).insert(MoveOrder {
+        waypoints: vec![map.cell_center(GridPos::new(8, 12))],
+        next: 0,
+        goal: GridPos::new(8, 12),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_none(),
+        "a leg bound elsewhere ends when the unit already stands on the destination"
+    );
+
+    // A leg still bound for the destination is kept while it finishes.
+    world.entity_mut(attacker).insert(MoveOrder {
+        waypoints: vec![map.cell_center(GridPos::new(20, 5))],
+        next: 0,
+        goal: GridPos::new(20, 5),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).unwrap().goal,
+        GridPos::new(20, 5),
+        "a leg bound for the destination is kept"
+    );
+}
+
+#[test]
+fn attack_move_drops_a_stale_route_when_the_destination_replan_fails() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+
+    // The destination turns unwalkable after acceptance (e.g. a building
+    // footprint lands on it) while a stale pursuit leg is still active.
+    map.set_blocked(GridPos::new(20, 5), true);
+    world.entity_mut(attacker).insert(MoveOrder {
+        waypoints: vec![map.cell_center(GridPos::new(8, 12))],
+        next: 0,
+        goal: GridPos::new(8, 12),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_none(),
+        "a failed re-plan leaves no route — never the stale pursuit leg"
+    );
+}
+
+#[test]
 fn grouped_attack_move_does_not_replan_assigned_destination_legs() {
     let mut world = World::new();
     let mut map = open_map();
