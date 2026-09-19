@@ -317,7 +317,10 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     continue;
                 };
                 // Reachable: cancel prior activity, then install the probed
-                // route and order.
+                // route and order. The order anchors the planner's accepted
+                // goal — a neighbor cell when the click was already claimed —
+                // so `resume_destination` recognizes this leg as its own
+                // instead of re-planning toward the clicked cell every tick.
                 cancel_unit_activity(world, entity);
                 if !waypoints.is_empty() {
                     world.entity_mut(entity).insert(MoveOrder {
@@ -329,7 +332,7 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     });
                 }
                 world.entity_mut(entity).insert(CombatOrder::AttackMove {
-                    destination,
+                    destination: goal,
                     target: None,
                     last_target_cell: None,
                 });

@@ -1719,6 +1719,57 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
 }
 
 #[test]
+fn grouped_attack_move_does_not_replan_assigned_destination_legs() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let first = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(4.5, 5.5),
+        UnitKind::Spearman,
+    );
+    let second = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(4.5, 6.5),
+        UnitKind::Spearman,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1), UnitId(2)], Vec2::new(20.5, 5.5)),
+    );
+
+    // The clicked cell hosts one leg: the second unit is assigned a free
+    // neighbor cell, and that assigned goal is what its leg must keep.
+    let first_goal = world.get::<MoveOrder>(first).unwrap().goal;
+    let second_goal = world.get::<MoveOrder>(second).unwrap().goal;
+    assert_eq!(first_goal, GridPos::new(20, 5));
+    assert_ne!(
+        second_goal, first_goal,
+        "the shared click deflects the second unit's leg"
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<MoveOrder>(first).is_some());
+    assert!(world.get::<MoveOrder>(second).is_some());
+
+    // Both destination legs still active: the next tick must not re-plan.
+    let paths = map.path_call_count();
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        map.path_call_count(),
+        paths,
+        "an assigned destination leg is reused, not replanned"
+    );
+    assert_eq!(world.get::<MoveOrder>(first).unwrap().goal, first_goal);
+    assert_eq!(world.get::<MoveOrder>(second).unwrap().goal, second_goal);
+}
+
+#[test]
 fn destroy_unit_releases_worker_state_and_index_entry() {
     let mut world = World::new();
     let mut map = open_map();

@@ -42,6 +42,10 @@ pub enum CombatOrder {
         last_target_cell: Option<GridPos>,
     },
     AttackMove {
+        /// The assigned destination leg's goal: the cell the
+        /// reservation-aware planner accepted, which may neighbor the
+        /// clicked cell. Compared against the active `MoveOrder`'s goal to
+        /// recognize the leg as its own.
         destination: GridPos,
         target: Option<CombatTarget>,
         last_target_cell: Option<GridPos>,
@@ -183,7 +187,7 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         let Some(target) = current_target(&order) else {
             // AttackMove without a target keeps moving toward its destination.
             if let CombatOrder::AttackMove { destination, .. } = order {
-                resume_destination(world, map, entity, &position, destination);
+                resume_destination(world, map, entity, &position, &order, destination);
             }
             continue;
         };
@@ -454,30 +458,55 @@ fn with_last_target_cell(order: &CombatOrder, cell: Option<GridPos>) -> CombatOr
     }
 }
 
-/// Reassigns the AttackMove route toward its destination. A leg already
-/// bound for the destination is kept; any other active leg is a stale
-/// pursuit route to a dead target's cell and is replaced now instead of
-/// being waited out.
+/// Returns the order re-anchored to a different assigned destination goal.
+/// Direct Attack has no destination and is returned unchanged.
+fn with_destination(order: &CombatOrder, destination: GridPos) -> CombatOrder {
+    match *order {
+        CombatOrder::Attack { .. } => order.clone(),
+        CombatOrder::AttackMove {
+            target,
+            last_target_cell,
+            ..
+        } => CombatOrder::AttackMove {
+            destination,
+            target,
+            last_target_cell,
+        },
+    }
+}
+
+/// Reassigns the AttackMove route toward its assigned destination. A leg
+/// already bound for that goal — or a unit already standing on it — is
+/// kept; any other active leg is a stale pursuit route to a dead target's
+/// cell and is replaced now instead of being waited out. A re-plan that
+/// lands on a neighbor cell re-anchors the stored destination to the
+/// accepted goal, or the leg would fail the exact-goal check again next
+/// tick and re-path forever.
 fn resume_destination(
     world: &mut World,
     map: &GridMap,
     attacker: Entity,
     position: &SimPosition,
+    order: &CombatOrder,
     destination: GridPos,
 ) {
+    let start = world_to_cell(position.current);
+    if start == destination {
+        return;
+    }
     if world
         .get::<MoveOrder>(attacker)
         .is_some_and(|order| order.goal == destination)
     {
         return;
     }
-    assign_move_toward(
-        world,
-        map,
-        attacker,
-        world_to_cell(position.current),
-        destination,
-    );
+    if let Some(goal) = assign_move_toward(world, map, attacker, start, destination)
+        && goal != destination
+    {
+        world
+            .entity_mut(attacker)
+            .insert(with_destination(order, goal));
+    }
 }
 
 /// Lands one validated hit: counter bonus only against the named unit kind,
