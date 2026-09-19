@@ -73,6 +73,7 @@ func _process(_delta: float) -> void:
 		_feedback_revision = revision
 		command_status.text = str(GrusBridge.command_feedback())
 	_refresh_session()
+	_reconcile_selection()
 	_refresh_hud()
 
 ## Reads the session once per frame: drives the overlay and drains
@@ -135,20 +136,33 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 	_fx.spawn_hit(hit)
 	if bool(event.get("killed", false)):
 		_fx.spawn_death(hit)
-		_prune_destroyed_selection(str(event.get("target_kind", "")), int(event.get("target_id", -1)))
 	_fx.play_hit_cue()
 
-## A kill event names the destroyed stable id: drop it from the selection and
-## every control group so later orders never reference a dead object, then
-## reconcile the live selection state.
-func _prune_destroyed_selection(target_kind: String, target_id: int) -> void:
-	if target_kind == "unit":
-		selected_ids.erase(target_id)
-		for group in _control_groups:
-			_control_groups[group].erase(target_id)
-	elif target_kind == "building" and selected_building_id == target_id:
+## Selection truth is the live view tree, never the cosmetic event buffer:
+## step_combat clears CombatEvents on every non-Result tick, so a kill can
+## be wiped before this drain ever sees it. Once per frame, drop stable ids
+## with no live view from the selection and every control group — then
+## reconcile rings and attack-move arming only when something changed.
+func _reconcile_selection() -> void:
+	var live_ids := {}
+	for unit in _friendly_units():
+		live_ids[int(unit.get_meta("unit_id", -1))] = true
+	var changed := false
+	for i in range(selected_ids.size() - 1, -1, -1):
+		if not live_ids.has(selected_ids[i]):
+			selected_ids.remove_at(i)
+			changed = true
+	for group in _control_groups:
+		var ids: Array = _control_groups[group]
+		for i in range(ids.size() - 1, -1, -1):
+			if not live_ids.has(int(ids[i])):
+				ids.remove_at(i)
+				changed = true
+	if selected_building_id > 0 and _building_view(selected_building_id) == null:
 		selected_building_id = -1
-	_apply_selection()
+		changed = true
+	if changed:
+		_apply_selection()
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
@@ -474,6 +488,12 @@ func _unit_kind(unit_id: int) -> String:
 func _unit_view(unit_id: int) -> Node3D:
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		if int(node.get_meta("unit_id", -1)) == unit_id:
+			return node as Node3D
+	return null
+
+func _building_view(building_id: int) -> Node3D:
+	for node in get_tree().get_nodes_in_group("building_views"):
+		if int(node.get_meta("building_id", -1)) == building_id:
 			return node as Node3D
 	return null
 

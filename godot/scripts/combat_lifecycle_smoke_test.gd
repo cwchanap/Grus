@@ -312,6 +312,18 @@ func _run() -> void:
 			"dead unit 5 view was never removed"):
 		return
 
+	# Selection truth is the live view tree, not the cosmetic kill event —
+	# at 20x a later fixed tick can wipe the event before the drain. Seed
+	# dead unit 5 into the selection and a control group; reconcile must
+	# prune both without any event arriving.
+	var dead_five: Array[int] = [5]
+	_main.selected_ids = dead_five
+	_main._control_groups[3] = dead_five.duplicate()
+	if not await _wait_until(
+			func(): return _main.selected_ids.is_empty() and _main._control_groups[3].is_empty(), 5.0,
+			"dead unit 5 was never reconciled out of selection/control groups"):
+		return
+
 	# Attack-move onto the enemy Town Center: acquisition must pick it up
 	# and drop its health through the building health bar.
 	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), ENEMY_TOWN_CENTER_CELL):
@@ -389,6 +401,14 @@ func _run() -> void:
 	if not _assert_input_gated("Result"):
 		return
 
+	# The destroyed Town Center reconciles out of selected_building_id the
+	# same way — the settle tick's preserved kill event is cosmetic only.
+	_main.selected_building_id = 2
+	if not await _wait_until(
+			func(): return int(_main.selected_building_id) == -1, 5.0,
+			"destroyed Town Center 2 was never reconciled out of selected_building_id"):
+		return
+
 	# Restart hygiene: dead stable ids (the slain villager 5 and Spearman)
 	# sit in selection/control groups, a live effect is on the stage, then
 	# the restart must clear all of it while the bridge reseeds fresh ids.
@@ -432,6 +452,6 @@ func _run() -> void:
 		_fail("restart left transient combat effects on the stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result restart_cleared=true")
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result selection_reconciled=true restart_cleared=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
