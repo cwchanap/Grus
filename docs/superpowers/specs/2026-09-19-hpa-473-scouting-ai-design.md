@@ -1,0 +1,295 @@
+# HPA-473 Scouting-Aware Economic AI Skirmish Design
+
+## Status
+
+Planning baseline for HPA-473. This design and its implementation plan live on the same branch and draft PR that will carry the implementation; there is no follow-up implementation PR for this ticket.
+
+This extends the merged HPA-470 through HPA-472 seams. It deliberately avoids a second gameplay world, generic AI/behavior-tree framework, fog shader subsystem, minimap framework, duplicate command path, or extra content. HPA-474 remains the place for final tuning and measured performance work.
+
+## Outcome
+
+Turn the current complete-but-full-information combat sandbox into the first real human-versus-economic-AI skirmish. Scouting must matter: unexplored terrain hides content, explored terrain remains known, enemy units/buildings require current vision, direct attacks cannot target hidden enemies, attack-move may continue through fog and reacquire visible targets, and the AI must obey the same information and economy rules as the human.
+
+Runtime remains one human (Team 1) versus one scripted AI (Team 2). Rust tests parameterize the AI by TeamId and exercise both authored starting sides; no side-selection mode is added.
+
+## Existing seams we keep
+
+- Bevy ECS remains the only mutable gameplay model. Godot owns input, rendering, HUD and effects.
+- Simulation remains fixed-step at 20 Hz.
+- `PlayerCommand` / `CommandResult` / `RejectReason` remain the only gameplay-order contract.
+- `target_eligible()` remains the one direct-attack / attack-move eligibility seam; HPA-473 adds current visibility there.
+- `UnitIndex`, `BuildingIndex`, `ResourceIndex`, stable IDs and `MapFixture` remain identity/map seams.
+- `validate_placement()` remains the placement authority.
+- `TeamEconomy`, `WorkerTask`, `ProductionQueue`, `population_used()` and `population_cap()` remain the economy/production read surface.
+- The existing clear + reseed path remains the restart seam.
+- Existing CI keeps the >90% `grus-sim` production-line coverage gate, Godot smokes, export validation, Bevy E2E boot and 200-unit regression benchmark.
+
+HPA-473 adds only two focused simulation modules: `visibility.rs` and `ai.rs`.
+
+## Authoritative visibility
+
+Use one small simulation-owned per-team visibility resource:
+
+```rust
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellVisibility {
+    Unexplored = 0,
+    Explored = 1,
+    Visible = 2,
+}
+
+#[derive(Debug, Default, Resource)]
+pub struct VisibilityMap {
+    teams: HashMap<TeamId, TeamVision>,
+    revision: u64,
+}
+
+#[derive(Debug, Default)]
+struct TeamVision {
+    explored: HashSet<GridPos>,
+    visible: HashSet<GridPos>,
+}
+```
+
+The battlefield is only 128x96. Two `HashSet<GridPos>` collections per team are simpler than a compressed bitset and are sufficient for the MVP. HPA-474 may optimize only if measurement justifies it.
+
+Use one initial tuning constant:
+
+```rust
+pub const VISION_RADIUS_CELLS: i32 = 8;
+```
+
+Every living unit and every **completed** building reveals a simple circle of cells for its team. Unfinished construction sites reveal nothing. There is no terrain occlusion, elevation, facing cone or line-of-sight raycast.
+
+`refresh_visibility()` recomputes the current-visible set from live ECS entities, unions it into explored state, and increments `revision` only when the resulting state changes. The normal skirmish setup performs one refresh immediately after seeding so the Start screen already has correct initial fog.
+
+For isolated pure-sim tests and the benchmark, a missing `VisibilityMap` means full information. Normal runtime always inserts visibility. This mirrors the existing “missing MatchSession means Playing” test seam and avoids forcing unrelated combat/economy unit tests to construct fog state.
+
+## Fixed-step order
+
+Extend the current canonical order to:
+
+```text
+human pending commands
+-> combat
+-> movement
+-> economy
+-> construction
+-> production
+-> visibility refresh
+-> AI decision/application
+-> route feedback
+```
+
+This gives visibility the post-movement/post-production world for the next decision. AI sees the same freshly computed visibility that presentation receives. AI commands are applied through `apply_player_command()` after the decision and take effect in movement/combat on the next fixed step.
+
+A just-completed building grants vision in that tick. A newly placed incomplete site does not. Human commands at the start of a tick validate against the visibility produced at the end of the previous tick, which is the normal 20 Hz authoritative state.
+
+## Visibility rules at gameplay boundaries
+
+### Combat
+
+`target_eligible(world, attacker_team, target)` keeps its current existence/health/enemy-team checks and additionally requires the target to be currently visible to the attacker team when `VisibilityMap` exists.
+
+This automatically gives the right behavior to both direct Attack and attack-move acquisition:
+
+- a hidden enemy cannot receive a new direct attack;
+- a direct-attack target that leaves vision is cleared and pursuit stops;
+- an attack-move target that leaves vision is cleared, the unit resumes its ground destination and may later acquire another visible enemy;
+- no last-known enemy unit/building position is read from live ECS combat queries.
+
+Do not add a second combat visibility check.
+
+### Placement
+
+Append one `RejectReason::Unexplored` variant. `validate_placement()` requires every footprint cell to be explored for the issuer before affordability/path application. The Godot placement preview already calls this authority for Team 1, so preview and final placement stay aligned.
+
+Placing a site never changes visibility by itself. Because incomplete buildings grant no vision, placement cannot be used as a remote scout.
+
+### Resource knowledge and gathering
+
+Standalone finite resources are static map contents:
+
+- hidden while their cell is Unexplored;
+- remain known/rendered after first exploration even when no longer currently visible;
+- AI may select them only after its team has explored their cell.
+
+Own Farms are always known. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts.
+
+The gather command also checks resource knowledge when `VisibilityMap` exists so guessed ResourceIds cannot bypass fog. Missing visibility keeps existing pure-sim behavior.
+
+## Presentation: one sim truth, no hidden-node leak
+
+Rust remains responsible for turning authoritative visibility into entity presentation state.
+
+Add an Update system beside the existing metadata/health systems that uses `GodotNodeHandle` to set Godot `Node3D.visible`:
+
+- friendly units/buildings: always visible;
+- enemy units/buildings: visible only while currently visible to Team 1;
+- standalone resource views: visible once explored;
+- enemy Farm/resource view: follows enemy-building current visibility.
+
+Godot picking helpers must explicitly skip nodes that are not visible in tree. A stale selected enemy building is cleared if it becomes hidden, and `building_snapshot()` returns an empty dictionary for a hidden enemy so the HUD cannot inspect health/queue/construction through fog.
+
+Combat cosmetics must also obey visibility. A hidden enemy attacker must not reveal its exact position through a tracer origin. Hit/death feedback may still render on a visible friendly target, but enemy-origin effects are suppressed unless that enemy is currently visible.
+
+No gameplay truth is duplicated into Godot; node visibility is only a presentation projection of `VisibilityMap`.
+
+## Fog overlay
+
+Expose one local-player visibility snapshot from the bridge:
+
+- `revision`
+- map width/height
+- packed cell states (0 Unexplored / 1 Explored / 2 Visible)
+
+Add a small `fog_of_war.gd` presentation node. It rebuilds only when the sim revision changes and uses primitive horizontal quads above the terrain:
+
+- Unexplored: opaque/dark
+- Explored: translucent/dark
+- Visible: no overlay instance
+
+Use two `MultiMeshInstance3D` collections (Unexplored and Explored) with simple transparent StandardMaterial3D. No custom shader, image asset or fog framework is needed.
+
+## Minimap
+
+Add one `minimap.gd` Control inside the existing HUD.
+
+The base texture is a 128x96 Image updated only when visibility revision changes. It reflects unexplored/explored/visible terrain states. Overlay drawing uses existing live scene views:
+
+- friendly unit/building markers always;
+- enemy markers only when their node is currently visible;
+- explored standalone resource markers;
+- current camera viewport rectangle.
+
+Clicking the minimap converts the Control coordinate back into a map cell/world point and recenters the existing camera. It does not issue simulation commands and does not own gameplay state.
+
+Do not create a minimap scene graph of one Control per unit/cell.
+
+## Feature-local economic AI
+
+Add one small runtime resource:
+
+```rust
+pub struct AiController {
+    pub team: TeamId,
+    decision_accumulator: f32,
+    scout_route_index: usize,
+    remembered_enemy_town_center: Option<GridPos>,
+    next_army_kind: usize,
+}
+```
+
+There is no behavior tree, utility scorer, planner graph, blackboard framework, cloned simulation world or persistent “squad entity”. Military groups are derived from live owned units at each decision.
+
+The policy runs at a modest `AI_DECISION_SECONDS = 1.0` cadence and issues ordinary `PlayerCommand` values through `apply_player_command()`. AI command results are not written to the human command-feedback HUD.
+
+The controller may query all of its **own** live state. Enemy units/buildings must be filtered through current visibility before their position/health is read. Neutral standalone resources must be explored before the policy can choose them. The only retained enemy memory is the last cell of an enemy Town Center that was genuinely observed.
+
+### Ordered policy
+
+Keep the decision logic as explicit ordered functions, not a generic goal system.
+
+1. **Defend visible threats.** If a currently visible enemy is near the AI Town Center/base area, direct available military units at the nearest visible threat.
+2. **Avoid population stalls.** If free capacity is low and cap is below 100, place the next authored House using a real villager command.
+3. **Replace workers.** Keep a small target worker count (initially 8). Queue Villagers at the Town Center through normal production.
+4. **Allocate idle workers.** Assign idle villagers to known available sources toward a simple Food/Wood/Gold split. Existing WorkerTask/resource assignment state is the source of truth.
+5. **Grow the base.** Build Barracks and Archery Range, then a Storehouse near a discovered expansion when useful; add Farms when known food supply is insufficient. Use authored slots and real placement validation.
+6. **Advance.** Attempt Age 2 only after the worker target and Age-1 production core exist and the shared catalogue cost is affordable.
+7. **Complete production.** Build Stable after Age 2.
+8. **Train army.** Queue Spearman/Archer/Cavalry through existing producer queues using a small round-robin composition, respecting affordability and population.
+9. **Scout.** Use the lowest stable-ID available Spearman as the scout. Send it along authored route waypoints with existing Move/AttackMove commands; if it dies, the next available Spearman naturally takes over.
+10. **Attack.** Once at least six military units are available, issue one grouped AttackMove. Use the remembered enemy Town Center cell if it has actually been seen; otherwise advance along the authored route. Visible threats can be directly attacked. Losses simply drop the live army count below threshold, so normal production/regrouping rebuilds the force.
+
+The exact worker target, six-unit attack threshold, route points and resource split are HPA-473 starting values; HPA-474 may tune them without changing architecture.
+
+## Authored one-map AI data
+
+Map-specific authored data belongs beside `MapFixture`, not in a generic AI map service.
+
+Add a compact `AiMapPlan` returned by team:
+
+- mirrored House slots;
+- Barracks / Archery Range / Stable slots;
+- Farm slots;
+- safe and expansion Storehouse slots;
+- one mirrored scout/attack route.
+
+The plan contains only static map coordinates. It does not contain live enemy/resource identities. Team 1 and Team 2 plans are mirror images so the same policy can be tested from both starts.
+
+If the full-match tests expose a real solvency or pathing gap, adjust the existing authored `expansion_resources()` table in this ticket. Do not add procedural resources or a second map. Prefer proving the current 18-source layout sufficient before adding more deposits.
+
+## AI visibility and memory contract
+
+The policy may read:
+
+- own units/buildings/tasks/queues/economy;
+- static GridMap bounds/blockers and its own `AiMapPlan`;
+- standalone resource sources whose cells are explored;
+- enemy entities currently visible to its team;
+- `remembered_enemy_town_center`, written only while that Town Center is visible.
+
+It may not read hidden enemy positions, health, queues, stockpiles or hidden resource positions.
+
+A required regression constructs identical AI own/observed state twice but moves hidden enemies to different cells. The next command list must be identical. Making a threat visible is then allowed to change the command list.
+
+## Session and restart
+
+AI decisions run only in Playing. Start, Paused and Result perform no AI command generation and no simulation mutation.
+
+Normal setup/restart:
+
+1. clears old gameplay entities/resources;
+2. reseeds the same authored skirmish;
+3. inserts fresh `VisibilityMap` and performs initial reveal;
+4. inserts a fresh Team-2 `AiController`;
+5. returns MatchSession to Start.
+
+`clear_gameplay_world()` removes visibility/AI state and clears human pending commands. AI has no separate pending-command queue, so there is nothing else to drain.
+
+Restart therefore clears prior exploration, remembered Town Center location, scout route progress and any derived attack grouping automatically.
+
+The benchmark reset remains visibility/AI-free so the existing HPA-470 movement baseline stays comparable; HPA-474 owns final full-game performance measurement.
+
+## Verification strategy
+
+### Rust
+
+Focused unit/integration tests must cover:
+
+- first reveal, retained exploration and loss of current vision;
+- incomplete sites grant no vision; completion starts vision;
+- hidden direct target rejection and direct-order cancellation when vision is lost;
+- attack-move reacquisition only from visible enemies;
+- explored-only placement and resource knowledge;
+- AI decision invariance under different hidden enemy positions;
+- visible threat changes AI defense decision;
+- worker replacement, idle-worker allocation, population recovery;
+- ordinary-command building/training/age-up with no grants;
+- scouting updates remembered enemy Town Center only after observation;
+- attack assembly, loss/regroup/rebuild;
+- real worker raids reduce AI income/production;
+- pause/result freeze and fresh restart state;
+- the same AI controller works from both authored team starts.
+
+### Godot/runtime
+
+Add one HPA-473 integration smoke that grows incrementally during the PR and verifies:
+
+- initial fog and hidden enemy views;
+- reveal -> hide -> no stale selection/inspection;
+- hidden enemies absent from contextual attack and minimap;
+- explored standalone resources persist on map/minimap;
+- minimap click recenters the existing camera;
+- AI makes ordinary economy/build/train/scout/age progress;
+- a bounded real match reaches Victory or Defeat and restart returns to fresh Start/fog/AI state.
+
+Keep the existing HPA-470/HPA-471/HPA-472 smokes. Do not clone their full flows into the new smoke.
+
+## No art/SFX task
+
+This ticket needs no generated image art or new SFX. Fog uses primitive transparent quads; minimap uses runtime pixels/markers; existing low-poly unit/building presentation and combat cue remain sufficient. Therefore no separate asset-generation ticket is required.
+
+## Out of scope
+
+Extra difficulty modes, machine learning, behavior trees, utility-AI frameworks, influence maps, navmesh/flow-field work, last-seen enemy-building ghosts, terrain occlusion, elevation vision, stealth, radar, extra units/buildings/factions/maps, procedural map generation, replay/save/load, multiplayer, custom fog shader pipeline, minimap framework, image-generation pipeline and final balance/performance tuning.
