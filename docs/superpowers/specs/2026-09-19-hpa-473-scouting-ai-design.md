@@ -6,6 +6,8 @@ Planning baseline for HPA-473. This design and its implementation plan live on t
 
 This extends the merged HPA-470 through HPA-472 seams. It deliberately avoids a second gameplay world, generic AI/behavior-tree framework, fog shader subsystem, minimap framework, duplicate command path, or extra content. HPA-474 remains the place for final tuning and measured performance work.
 
+A pre-implementation review is incorporated here. The architecture stays at two focused modules; the revision locks the visibility geometry, runtime insertion seam, AI idempotence, feedback ownership, no-leak presentation path, authored-coordinate ownership and smoke/test split before implementation starts.
+
 ## Outcome
 
 Turn the current complete-but-full-information combat sandbox into the first real human-versus-economic-AI skirmish. Scouting must matter: unexplored terrain hides content, explored terrain remains known, enemy units/buildings require current vision, direct attacks cannot target hidden enemies, attack-move may continue through fog and reacquire visible targets, and the AI must obey the same information and economy rules as the human.
@@ -53,17 +55,27 @@ struct TeamVision {
 
 The battlefield is only 128x96. Two `HashSet<GridPos>` collections per team are simpler than a compressed bitset and are sufficient for the MVP. HPA-474 may optimize only if measurement justifies it.
 
-Use one initial tuning constant:
+Keep the one initial tuning constant beside `ATTACK_MOVE_RADIUS` in `catalog.rs`:
 
 ```rust
-pub const VISION_RADIUS_CELLS: i32 = 8;
+pub const VISION_RADIUS_CELLS: i32 = 10;
 ```
 
-Every living unit and every **completed** building reveals a simple circle of cells for its team. Unfinished construction sites reveal nothing. There is no terrain occlusion, elevation, facing cone or line-of-sight raycast.
+Radius 10 is intentional: with the authored starts, Team 1's gold at (25, 48) is 10 cells from the nearest Town Center footprint cell, and the mirrored Team 2 gold has the same geometry. The safe starting resource ring must be explored after initial reveal; expansion resources must remain unexplored. A fixture-level regression locks both facts so later tuning cannot silently make starting gold unknowable.
 
-`refresh_visibility()` recomputes the current-visible set from live ECS entities, unions it into explored state, and increments `revision` only when the resulting state changes. The normal skirmish setup performs one refresh immediately after seeding so the Start screen already has correct initial fog.
+Visibility geometry is one contract for every consumer:
 
-For isolated pure-sim tests and the benchmark, a missing `VisibilityMap` means full information. Normal runtime always inserts visibility. This mirrors the existing “missing MatchSession means Playing” test seam and avoids forcing unrelated combat/economy unit tests to construct fog state.
+- unit reveal origin: the unit's current `GridMap::world_to_cell(SimPosition.current)`;
+- completed-building reveal origins: **every** cell in its `Footprint::cells()`;
+- reveal circle: Euclidean cell distance, `dx*dx + dy*dy <= radius*radius`;
+- unit known/visible: its current cell is known/visible;
+- building or standalone-resource known/visible: **any** footprint cell is known/visible.
+
+Unfinished construction sites reveal nothing. There is no terrain occlusion, elevation, facing cone, Chebyshev shortcut or line-of-sight raycast. Consumers do not independently choose center-vs-edge semantics.
+
+`refresh_visibility(world, map)` is the exclusive world-level visibility step. It recomputes the current-visible set from live ECS entities, unions it into explored state, and increments `revision` only when the resulting state changes.
+
+For isolated pure-sim tests and the benchmark, a missing `VisibilityMap` means full information. **Do not insert visibility in `seed_skirmish()`.** That seed remains the shared full-information fixture used by existing simulation tests. Normal runtime inserts a fresh `VisibilityMap` only in `setup_fixture()` / `reset_fixture_world()`, beside `MatchSession`, then performs one initial refresh so the Start screen already has correct fog. Fog-aware Rust journeys opt in explicitly through their own test setup helper. The benchmark remains visibility-free.
 
 ## Fixed-step order
 
@@ -114,15 +126,15 @@ Standalone finite resources are static map contents:
 - remain known/rendered after first exploration even when no longer currently visible;
 - AI may select them only after its team has explored their cell.
 
-Own Farms are always known. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts.
+Own completed Farms are always valid gather knowledge. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts and are never admitted merely because they are present in `ResourceIndex`.
 
-The gather command also checks resource knowledge when `VisibilityMap` exists so guessed ResourceIds cannot bypass fog. Missing visibility keeps existing pure-sim behavior.
+The gather command uses the same visibility helpers when `VisibilityMap` exists so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm requires current visibility and still cannot be gathered as an own economic source. Missing visibility keeps existing pure-sim behavior.
 
 ## Presentation: one sim truth, no hidden-node leak
 
 Rust remains responsible for turning authoritative visibility into entity presentation state.
 
-Add an Update system beside the existing metadata/health systems that uses `GodotNodeHandle` to set Godot `Node3D.visible`:
+Gameplay view scene roots default to hidden. The first `initialize_view_metadata` pass stamps both metadata **and** the authoritative initial visibility before a new node can be picked or intentionally rendered; a later Update system beside metadata/health keeps `Node3D.visible` synchronized as visibility changes:
 
 - friendly units/buildings: always visible;
 - enemy units/buildings: visible only while currently visible to Team 1;
@@ -131,7 +143,7 @@ Add an Update system beside the existing metadata/health systems that uses `Godo
 
 Godot picking helpers must explicitly skip nodes that are not visible in tree. A stale selected enemy building is cleared if it becomes hidden, and `building_snapshot()` returns an empty dictionary for a hidden enemy so the HUD cannot inspect health/queue/construction through fog.
 
-Combat cosmetics must also obey visibility. A hidden enemy attacker must not reveal its exact position through a tracer origin. Hit/death feedback may still render on a visible friendly target, but enemy-origin effects are suppressed unless that enemy is currently visible.
+Combat cosmetics must also obey visibility. `take_presentable_events()` derives local-player presentation permission before dictionaries reach GDScript: a hidden enemy attacker cannot expose its stable id/position for a tracer origin, while the same event may still carry hit/death position for a visible friendly target. GDScript never performs a second live hidden-attacker lookup.
 
 No gameplay truth is duplicated into Godot; node visibility is only a presentation projection of `VisibilityMap`.
 
@@ -182,7 +194,16 @@ pub struct AiController {
 
 There is no behavior tree, utility scorer, planner graph, blackboard framework, cloned simulation world or persistent “squad entity”. Military groups are derived from live owned units at each decision.
 
-The policy runs at a modest `AI_DECISION_SECONDS = 1.0` cadence and issues ordinary `PlayerCommand` values through `apply_player_command()`. AI command results are not written to the human command-feedback HUD.
+The policy runs at a modest `AI_DECISION_SECONDS = 1.0` cadence through `step_ai(world, map, seconds)` and issues ordinary `PlayerCommand` values through `apply_player_command()`. `step_ai` returns immediately when `!gameplay_active(world)` **before advancing its accumulator**, so Start/Pause/Result do not create a catch-up decision on resume. AI command results are not written to the human command-feedback HUD.
+
+The 1 Hz policy is explicitly idempotent. A decision may emit several commands, but it never reissues a command merely because a goal remains true:
+
+- gather/build workers must be truly idle: `WorkerTask::Idle` and no `MoveOrder`; lift the existing bridge `idle_worker_ids` semantics into `grus-sim` and reuse it from both HUD and AI;
+- production enqueues only when the relevant producer queue is empty (or below the one explicitly tested cap);
+- building placement skips a kind/slot already satisfied by a completed or incomplete building;
+- scout/attack decisions skip units already holding the intended `MoveOrder` / `CombatOrder`.
+
+This prevents a 1 Hz Gather from repeatedly calling the existing cancellation path and resetting `GatherProgress`, prevents movement/combat thrash, and prevents queue flooding.
 
 The controller may query all of its **own** live state. Enemy units/buildings must be filtered through current visibility before their position/health is read. Neutral standalone resources must be explored before the policy can choose them. The only retained enemy memory is the last cell of an enemy Town Center that was genuinely observed.
 
@@ -217,6 +238,8 @@ Add a compact `AiMapPlan` returned by team:
 
 The plan contains only static map coordinates. It does not contain live enemy/resource identities. Team 1 and Team 2 plans are mirror images so the same policy can be tested from both starts.
 
+This becomes the **one authored base-coordinate table** for the existing tests and runtime smokes as well as the AI. Existing hard-coded Barracks/House/Farm/Storehouse/Range/Stable anchors migrate to `MapFixture::team_plan(team)`; the bridge exposes the same static plan to GDScript smoke code. Do not add a fourth parallel set of “AI-only” building anchors.
+
 If the full-match tests expose a real solvency or pathing gap, adjust the existing authored `expansion_resources()` table in this ticket. Do not add procedural resources or a second map. Prefer proving the current 18-source layout sufficient before adding more deposits.
 
 ## AI visibility and memory contract
@@ -231,7 +254,7 @@ The policy may read:
 
 It may not read hidden enemy positions, health, queues, stockpiles or hidden resource positions.
 
-A required regression constructs identical AI own/observed state twice but moves hidden enemies to different cells. The next command list must be identical. Making a threat visible is then allowed to change the command list.
+A required regression seeds **two separate worlds** with identical AI own/observed state, then places hidden enemies at different unseen cells. The next command list must be identical; this repository does not need a `World` clone facility. Making a threat visible is then allowed to change the command list.
 
 ## Session and restart
 
@@ -246,6 +269,8 @@ Normal setup/restart:
 5. returns MatchSession to Start.
 
 `clear_gameplay_world()` removes visibility/AI state and clears human pending commands. AI has no separate pending-command queue, so there is nothing else to drain.
+
+Route-failure feedback remains one sim resource/channel but becomes team-aware (one latest reject per team). Worker route failure records the worker's TeamId; the bridge drains only Team 1 into human `CommandFeedback`. Team 2 failures therefore cannot surface as “Worker route impossible” or overwrite a same-tick Team 1 reject.
 
 Restart therefore clears prior exploration, remembered Town Center location, scout route progress and any derived attack grouping automatically.
 
@@ -274,17 +299,19 @@ Focused unit/integration tests must cover:
 
 ### Godot/runtime
 
-Add one HPA-473 integration smoke that grows incrementally during the PR and verifies:
+Add **one** HPA-473 integration smoke and grow that same scene/script incrementally across the PR. It verifies:
 
 - initial fog and hidden enemy views;
 - reveal -> hide -> no stale selection/inspection;
 - hidden enemies absent from contextual attack and minimap;
 - explored standalone resources persist on map/minimap;
 - minimap click recenters the existing camera;
-- AI makes ordinary economy/build/train/scout/age progress;
-- a bounded real match reaches Victory or Defeat and restart returns to fresh Start/fog/AI state.
+- ordinary AI economy/build/train/scout/age progress;
+- restart returns to fresh Start/fog/AI state.
 
-Keep the existing HPA-470/HPA-471/HPA-472 smokes. Do not clone their full flows into the new smoke.
+The complete fogged match -> Result proof stays in bounded pure-Rust journeys, parameterized by TeamId and capped by state/tick budget rather than wall-clock-exact arithmetic. The Godot smoke does **not** duplicate an entire long match.
+
+Existing HPA-471 economy and HPA-472 combat lifecycle smokes must be adapted under runtime fog in this same PR: they may explicitly scout/march to reveal their existing far placement/resource/combat targets, but they must not bypass visibility. HPA-470 reset/selection contracts remain intact.
 
 ## No art/SFX task
 
