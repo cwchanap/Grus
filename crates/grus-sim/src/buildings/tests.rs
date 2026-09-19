@@ -8,6 +8,7 @@ use crate::economy::{
 };
 use crate::ids::{IdAllocator, ResourceId};
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
 
 fn setup_build_test() -> (World, GridMap, Entity) {
     let mut world = World::new();
@@ -37,6 +38,12 @@ fn setup_build_test() -> (World, GridMap, Entity) {
         .entity_mut(villager)
         .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
     (world, map, villager)
+}
+
+/// Opts the world into runtime fog and stamps the initial reveal.
+fn reveal(world: &mut World, map: &GridMap) {
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(world, map);
 }
 
 /// Places a House next to the test villager and drives the production API
@@ -740,6 +747,51 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
             .map(|index| index.iter().count())
             .unwrap_or(0),
         0
+    );
+}
+
+/// An unexplored footprint that overlaps a hidden enemy unit and its move
+/// goal must reject `Unexplored` before the occupancy scan runs — never
+/// `Occupied`, which would leak the hidden unit/goal through the preview.
+#[test]
+fn unexplored_footprint_rejects_unexplored_never_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let scout = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(24.5, 10.5),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(scout).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(25, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    reveal(&mut world, &map);
+    assert!(
+        !explored_by(&world, TeamId(1), GridPos::new(24, 10)),
+        "the planned footprint is unexplored ground"
+    );
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(24, 10),
+        },
+    );
+
+    assert_eq!(
+        result.reject,
+        Some(RejectReason::Unexplored),
+        "unexplored ground rejects before the occupancy scan can leak the hidden unit or goal"
     );
 }
 

@@ -18,6 +18,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
 use crate::session::gameplay_active;
+use crate::visibility::explored_by;
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -67,10 +68,13 @@ pub struct PlacementPlan {
 }
 
 /// Authoritative placement validation. Checks, in order: owned villager →
-/// kind unlocked/buildable → footprint in bounds → footprint cells walkable
-/// and free of any live unit's current cell or claimed `MoveOrder` goal →
-/// affordability → reachable reserved immediate-perimeter builder slot,
-/// evaluated on the post-placement map (footprint cells already blocked).
+/// kind unlocked/buildable → footprint in bounds → every footprint cell
+/// explored → footprint cells walkable and free of any live unit's current
+/// cell or claimed `MoveOrder` goal → affordability → reachable
+/// reserved immediate-perimeter builder slot, evaluated on the
+/// post-placement map (footprint cells already blocked). The explored check
+/// runs before the all-unit occupancy scan so `Occupied` can never reveal a
+/// hidden unit, building, or move goal through the placement preview.
 /// Mutates nothing; apply the returned plan only after every check passes.
 pub fn validate_placement(
     world: &World,
@@ -106,7 +110,18 @@ pub fn validate_placement(
         return Err(RejectReason::OutOfBounds);
     }
 
-    // 4. footprint cells walkable and free of any live unit's current cell or
+    // 4. every footprint cell explored — immediately after bounds and before
+    // the all-unit occupancy set below, so an `Occupied` reject can never
+    // leak a hidden enemy unit, building, or claimed move goal.
+    if !footprint
+        .cells()
+        .iter()
+        .all(|cell| explored_by(world, issuer, *cell))
+    {
+        return Err(RejectReason::Unexplored);
+    }
+
+    // 5. footprint cells walkable and free of any live unit's current cell or
     // claimed MoveOrder goal: placement would block the cells and permanently
     // entomb a unit standing inside the footprint (find_path needs a walkable
     // start), or strand a unit whose goal lies inside on a preserved order
@@ -133,7 +148,7 @@ pub fn validate_placement(
         return Err(RejectReason::Occupied);
     }
 
-    // 5. affordable.
+    // 6. affordable.
     let affordable = world
         .get_resource::<TeamEconomy>()
         .and_then(|economy| economy.0.get(&issuer))
@@ -146,7 +161,7 @@ pub fn validate_placement(
         return Err(RejectReason::InsufficientResources);
     }
 
-    // 6. reachable immediate-perimeter builder slot, checked against the
+    // 7. reachable immediate-perimeter builder slot, checked against the
     // post-placement map: acceptance blocks the footprint, so a route that
     // only exists through those cells would charge for a site the builder
     // then cannot reach — the first movement replan fails and it idles.
