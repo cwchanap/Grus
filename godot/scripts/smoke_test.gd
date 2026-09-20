@@ -130,6 +130,11 @@ func _run() -> void:
 	if str(boot_session.get("phase", "")) != "Start":
 		_fail("skirmish boot session is not Start: %s" % [boot_session])
 		return
+	# This scripted choreography runs AI-free: the Start-only test seam must
+	# lift the Team-2 controller before gameplay opens.
+	if not GrusBridge.disable_ai_for_test():
+		_fail("disable_ai_for_test did not lift the AI from Start")
+		return
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
 		return

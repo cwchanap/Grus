@@ -39,6 +39,25 @@ pub struct ResourceSpawn {
     pub amount: u32,
 }
 
+/// Coordinate-only authored AI base layout for one team: building slots and
+/// the scout/attack route, mirrored between the two team starts. Deliberately
+/// no live `UnitId`/`BuildingId`/`ResourceId` references — the AI policy
+/// resolves everything through the indexes and real command validation at
+/// apply time. Not exposed through any bridge snapshot; GDScript smoke build
+/// constants stay independent human-UI test choreography.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AiMapPlan {
+    pub town_center_anchor: GridPos,
+    pub house_slots: Vec<GridPos>,
+    pub farm_slots: Vec<GridPos>,
+    pub safe_storehouse_slots: Vec<GridPos>,
+    pub expansion_storehouse_slots: Vec<GridPos>,
+    pub barracks_anchor: GridPos,
+    pub archery_range_anchor: GridPos,
+    pub stable_anchor: GridPos,
+    pub scout_route: Vec<GridPos>,
+}
+
 #[derive(Clone, Debug)]
 pub struct MapFixture {
     pub map: GridMap,
@@ -124,6 +143,62 @@ impl MapFixture {
             resources: Self::starting_resources()
                 .into_iter()
                 .chain(Self::expansion_resources())
+                .collect(),
+        }
+    }
+
+    /// The one authored **Rust** base-coordinate table: the team-1 layout
+    /// below, mirrored for team 2. Base slots flip on the vertical center
+    /// line (footprint-width aware) and the scout route plus expansion
+    /// storehouse point-reflect through the map center, where the authored
+    /// blockers and expansion resources are symmetric. Session/system-order
+    /// tests anchor their choreography here so there is exactly one table.
+    pub fn team_plan(team: TeamId) -> AiMapPlan {
+        let plan = AiMapPlan {
+            town_center_anchor: GridPos::new(12, 46),
+            house_slots: vec![
+                GridPos::new(8, 44),
+                GridPos::new(8, 48),
+                GridPos::new(8, 52),
+            ],
+            farm_slots: vec![
+                GridPos::new(22, 44),
+                GridPos::new(22, 50),
+                GridPos::new(22, 56),
+            ],
+            safe_storehouse_slots: vec![GridPos::new(21, 46)],
+            expansion_storehouse_slots: vec![GridPos::new(45, 20)],
+            barracks_anchor: GridPos::new(17, 51),
+            archery_range_anchor: GridPos::new(17, 38),
+            stable_anchor: GridPos::new(17, 55),
+            scout_route: vec![
+                GridPos::new(30, 36),
+                GridPos::new(45, 17),
+                GridPos::new(64, 12),
+                GridPos::new(85, 25),
+                GridPos::new(106, 44),
+            ],
+        };
+        if team == TeamId(1) {
+            return plan;
+        }
+        AiMapPlan {
+            town_center_anchor: mirror_anchor(plan.town_center_anchor, 4),
+            house_slots: mirrored(&plan.house_slots, 2),
+            farm_slots: mirrored(&plan.farm_slots, 2),
+            safe_storehouse_slots: mirrored(&plan.safe_storehouse_slots, 2),
+            expansion_storehouse_slots: plan
+                .expansion_storehouse_slots
+                .iter()
+                .map(|slot| point_reflect(*slot))
+                .collect(),
+            barracks_anchor: mirror_anchor(plan.barracks_anchor, 3),
+            archery_range_anchor: mirror_anchor(plan.archery_range_anchor, 3),
+            stable_anchor: mirror_anchor(plan.stable_anchor, 3),
+            scout_route: plan
+                .scout_route
+                .iter()
+                .map(|cell| point_reflect(*cell))
                 .collect(),
         }
     }
@@ -250,6 +325,25 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     }
 
     world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 19));
+}
+
+/// Horizontal mirror of a `width`-wide footprint anchor on the 128-wide
+/// battlefield: cells `x..x+w` map to `127-(x+w-1)..127-x`.
+fn mirror_anchor(anchor: GridPos, width: u8) -> GridPos {
+    GridPos::new(127 - anchor.x - i32::from(width) + 1, anchor.y)
+}
+
+/// Point reflection through the map center — the axis pair the battlefield
+/// blockers and the expansion resources are symmetric under.
+fn point_reflect(cell: GridPos) -> GridPos {
+    GridPos::new(127 - cell.x, 95 - cell.y)
+}
+
+fn mirrored(anchors: &[GridPos], width: u8) -> Vec<GridPos> {
+    anchors
+        .iter()
+        .map(|anchor| mirror_anchor(*anchor, width))
+        .collect()
 }
 
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {

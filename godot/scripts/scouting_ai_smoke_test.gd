@@ -107,6 +107,26 @@ func _move_scout(unit_id: int, target: Vector2, what: String) -> bool:
 func _cell_state(states: PackedInt32Array, cell: Vector2i) -> int:
 	return states[cell.y * 128 + cell.x]
 
+func _team_unit_views(team: int) -> Array:
+	var views := []
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if int(node.get_meta("team_id", -1)) == team:
+			views.append(node)
+	return views
+
+## Minimap enemy markers must equal the currently presented enemy views —
+## the AI keeps training and moving units, so a marker count of zero is not
+## a stable expectation; the fog contract is.
+func _presented_enemy_view_count() -> int:
+	var count := 0
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if int(node.get_meta("team_id", -1)) == 2 and _shown(node as Node3D):
+			count += 1
+	for node in get_tree().get_nodes_in_group("building_views"):
+		if int(node.get_meta("team_id", -1)) == 2 and _shown(node as Node3D):
+			count += 1
+	return count
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -185,6 +205,14 @@ func _run() -> void:
 		_fail("start_match did not reach Playing")
 		return
 
+	# The Team-2 economic AI ships inside normal setup and this smoke never
+	# disables it. Ordinary AI progress must show up as a fifth Team-2 unit
+	# view: Team 2 boots with exactly four villagers, and only a live
+	# controller can queue and pay for a replacement through production.
+	if not await _wait_until(func(): return _team_unit_views(2).size() >= 5, 90.0,
+			"the Team-2 AI never trained its replacement villager"):
+		return
+
 	# Scout leg 1: reveal the expansion tree.
 	if not await _move_scout(1, TREE_VANTAGE, "tree scout"):
 		return
@@ -233,8 +261,15 @@ func _run() -> void:
 	if not GrusBridge.building_snapshot(2).is_empty():
 		_fail("building_snapshot(2) leaked data after the enemy hid again")
 		return
-	if int(_minimap.enemy_marker_count) != 0:
-		_fail("minimap still marks the hidden enemy Town Center")
+	# The hidden enemy Town Center must not be a marker. The live AI keeps
+	# training/moving Team-2 units, so markers are checked against the fog
+	# contract (only presented enemies may be marked) instead of a brittle
+	# count of zero.
+	for _frame in 2:
+		await get_tree().process_frame
+	if int(_minimap.enemy_marker_count) != _presented_enemy_view_count():
+		_fail("minimap enemy markers (%d) do not match presented enemy views (%d)"
+				% [int(_minimap.enemy_marker_count), _presented_enemy_view_count()])
 		return
 
 	# Minimap click recenters the camera and never queues a command.
@@ -266,7 +301,7 @@ func _run() -> void:
 		_fail("failed to restore sim speed")
 		return
 
-	print("GRUS_SCOUTING_AI_SMOKE_OK boot_hidden=enemies_tc initial_reveal=own_start scout_reveal=tree14_enemy_start hide_on_leave=true explored_persist=true stale_selection_cleared=true snapshot_fog_gated=true minimap_markers=fog_gated recenter=command_free revision=%d" % int(GrusBridge.visibility_revision()))
+	print("GRUS_SCOUTING_AI_SMOKE_OK boot_hidden=enemies_tc initial_reveal=own_start scout_reveal=tree14_enemy_start hide_on_leave=true explored_persist=true stale_selection_cleared=true snapshot_fog_gated=true minimap_markers=fog_gated recenter=command_free ai_progress=replacement_trained ai_present=true revision=%d" % int(GrusBridge.visibility_revision()))
 	get_tree().quit(0)
 
 func _main_selected_building(value := -99) -> int:

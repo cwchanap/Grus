@@ -689,8 +689,8 @@ fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
         "the idle never discards Carry"
     );
     assert_eq!(
-        world.resource::<LastRouteReject>().0,
-        Some(RejectReason::Unreachable),
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable),
         "typed route failure recorded for bridge feedback"
     );
 }

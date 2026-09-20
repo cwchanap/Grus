@@ -8,16 +8,16 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
-    AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos, Health,
-    IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
-    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
-    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WorkerTask,
-    active_phase, apply_player_command, explored_by, gather_rate_for_age, population_cap,
+    AGE_TWO_COST, AGE_TWO_SECONDS, Age, AiController, Building, BuildingId, BuildingIndex,
+    BuildingKind, CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap,
+    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
+    apply_player_command, explored_by, gather_rate_for_age, idle_worker_ids, population_cap,
     population_used, produces, refresh_visibility, seed_skirmish, set_paused, spawn_unit,
-    start_match, step_combat, step_construction, step_economy, step_movement, step_production,
-    validate_placement, visible_to,
+    start_match, step_ai, step_combat, step_construction, step_economy, step_movement,
+    step_production, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -297,6 +297,23 @@ impl GrusBridgeNode {
         true
     }
 
+    /// Test-only AI removal for scripted legacy gameplay smokes: succeeds
+    /// only while the session sits in Start (never mid-match) and removes
+    /// only the `AiController` — visibility, entities and session state are
+    /// untouched. The HPA-473 scouting smoke deliberately never calls this:
+    /// it asserts the AI stays present.
+    #[func]
+    fn disable_ai_for_test(&self) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        disable_ai_in_world(app.world_mut())
+    }
+
     /// Pause/Resume. Changes the session phase only — never
     /// `Engine.time_scale`, which stays the headless sim-speed control.
     #[func]
@@ -505,7 +522,10 @@ impl GrusBridgeNode {
             );
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
-            dict.set("idle_worker_ids", &PackedInt32Array::from_iter(idle));
+            dict.set(
+                "idle_worker_ids",
+                &PackedInt32Array::from_iter(idle.iter().filter_map(|id| i32::try_from(id.0).ok())),
+            );
             dict.set(
                 "last_reject_code",
                 world
@@ -745,6 +765,7 @@ fn build_app(app: &mut App) {
                 advance_construction,
                 advance_production,
                 advance_visibility,
+                advance_ai,
                 drain_route_reject_feedback,
             )
                 .chain(),
@@ -979,6 +1000,9 @@ fn setup_fixture(world: &mut World) {
         phase: MatchPhase::Start,
     });
     insert_fresh_visibility(world);
+    // The Team-2 economic AI opponent ships with every normal setup; the
+    // benchmark reset never inserts one.
+    world.insert_resource(AiController::new(TeamId(2)));
 }
 
 /// Normal runtime gameplay runs fogged: a fresh `VisibilityMap` beside the
@@ -1323,6 +1347,9 @@ fn reset_fixture_world(world: &mut World) {
         phase: MatchPhase::Start,
     });
     insert_fresh_visibility(world);
+    // A fresh controller: scout progress, exploration-adjacent decision
+    // state and the remembered enemy Town Center all restart clean.
+    world.insert_resource(AiController::new(TeamId(2)));
     // The clear despawns the selector-bearing gameplay entities; reattach the
     // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
     #[cfg(feature = "e2e")]
@@ -1343,6 +1370,20 @@ fn reset_benchmark_world(world: &mut World) {
             12.0,
         );
     }
+}
+
+/// The narrow test-disable seam behind `disable_ai_for_test`: Start-only and
+/// controller-only.
+fn disable_ai_in_world(world: &mut World) -> bool {
+    if !matches!(
+        world
+            .get_resource::<MatchSession>()
+            .map(|session| &session.phase),
+        Some(MatchPhase::Start)
+    ) {
+        return false;
+    }
+    world.remove_resource::<AiController>().is_some()
 }
 
 fn clear_gameplay_world(world: &mut World) {
@@ -1371,6 +1412,9 @@ fn clear_gameplay_world(world: &mut World) {
     // Visibility dies with the match: the benchmark restart must stay
     // visibility-free, and a normal reset re-inserts a fresh fogged map.
     world.remove_resource::<VisibilityMap>();
+    // The AI controller dies with the match: the benchmark stays AI-free and
+    // a normal reset re-inserts a fresh Team-2 controller.
+    world.remove_resource::<AiController>();
     // Combat/session transients die with the match: the benchmark restarts
     // session-free (missing session = Playing), the normal reset re-inserts
     // Start.
@@ -1385,36 +1429,8 @@ fn clear_gameplay_world(world: &mut World) {
         feedback.last_reject_code = None;
     }
     if let Some(mut route_reject) = world.get_resource_mut::<LastRouteReject>() {
-        route_reject.0 = None;
+        route_reject.0.clear();
     }
-}
-
-fn idle_worker_ids(world: &World, team: TeamId) -> Vec<i32> {
-    let mut ids: Vec<i32> = world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter_map(|(id, entity)| {
-                    let unit = world.get::<Unit>(*entity)?;
-                    if unit.team != team || unit.kind != UnitKind::Villager {
-                        return None;
-                    }
-                    if world.get::<WorkerTask>(*entity) != Some(&WorkerTask::Idle) {
-                        return None;
-                    }
-                    // A villager with a route (e.g. just rallied or moved) is
-                    // traveling, not idle.
-                    if world.get::<MoveOrder>(*entity).is_some() {
-                        return None;
-                    }
-                    i32::try_from(id.0).ok()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort_unstable();
-    ids
 }
 
 fn apply_pending_commands(world: &mut World) {
@@ -1552,13 +1568,24 @@ fn advance_visibility(world: &mut World) {
     world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
 
-/// Drains the sim's latest worker route-failure reject into the existing
-/// feedback channel, so mid-step idles surface as typed codes with a
-/// revision bump instead of disappearing silently.
+/// The Team-2 AI fixed step, last mutation before the feedback drain: the
+/// decision reads exactly the fog the presentation received this tick.
+fn advance_ai(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_ai(world, &mut map, seconds);
+    });
+}
+
+/// Drains the sim's latest Team-1 worker route-failure reject into the
+/// existing feedback channel, so mid-step idles surface as typed codes with
+/// a revision bump instead of disappearing silently. Team 2's entries stay
+/// in the sim resource: the AI's private rejects must never surface as — or
+/// overwrite — the human player's feedback.
 fn drain_route_reject_feedback(world: &mut World) {
     let reason = world
         .get_resource_mut::<LastRouteReject>()
-        .and_then(|mut slot| slot.0.take());
+        .and_then(|mut slot| slot.0.remove(&TeamId(1)));
     let Some(reason) = reason else {
         return;
     };
@@ -1617,7 +1644,7 @@ mod tests {
     use bevy::prelude::World;
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
-    use grus_sim::{CombatEvent, CombatTarget, MatchResult};
+    use grus_sim::{CombatEvent, CombatTarget, MatchResult, MoveOrder, WorkerTask};
 
     use super::*;
 
@@ -1732,6 +1759,49 @@ mod tests {
         // 200-villager benchmark run full-information.
         reset_benchmark_world(&mut world);
         assert!(world.get_resource::<VisibilityMap>().is_none());
+    }
+
+    /// Normal setup/reset insert a fresh Team-2 controller; the benchmark
+    /// stays AI-free; the test-disable seam lifts only the controller and
+    /// only from Start.
+    #[test]
+    fn the_team_two_ai_controller_follows_setup_reset_and_test_disable() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "normal setup ships the Team-2 AI opponent"
+        );
+
+        reset_fixture_world(&mut world);
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "a restart re-inserts a fresh controller"
+        );
+
+        reset_benchmark_world(&mut world);
+        assert!(
+            world.get_resource::<AiController>().is_none(),
+            "the benchmark fixture stays AI-free"
+        );
+
+        // The disable seam: no session at all must fail closed, Start must
+        // succeed exactly once, and Playing/Paused must refuse.
+        assert!(!disable_ai_in_world(&mut world), "no session: refuse");
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Start,
+        });
+        world.insert_resource(AiController::new(TeamId(2)));
+        assert!(disable_ai_in_world(&mut world), "Start: disable succeeds");
+        assert!(!disable_ai_in_world(&mut world), "already disabled: refuse");
+        world.insert_resource(AiController::new(TeamId(2)));
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        assert!(!disable_ai_in_world(&mut world), "Playing: refuse");
+        assert!(world.get_resource::<AiController>().is_some());
     }
 
     #[test]
@@ -1880,7 +1950,7 @@ mod tests {
             6.0,
         );
 
-        assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![1]);
+        assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![UnitId(1)]);
     }
 
     #[test]
