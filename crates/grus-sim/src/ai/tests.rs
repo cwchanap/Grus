@@ -971,6 +971,39 @@ fn decisions_are_invariant_to_hidden_enemy_positions() {
     );
 }
 
+/// Hidden enemy workers on a shared neutral source must not consume gather
+/// capacity in the AI's eyes: their task state is hidden enemy state, so two
+/// hidden enemy villagers tasked to the team's lowest known food source must
+/// leave the decision unchanged.
+#[test]
+fn decisions_are_invariant_to_hidden_enemy_workers_on_shared_sources() {
+    let mut command_lists = Vec::new();
+    for hidden_food_workers in [0_u32, 2] {
+        let (mut world, map) = ai_world(TeamId(2));
+        for index in 0..hidden_food_workers {
+            let entity = spawn_villager(
+                &mut world,
+                &map,
+                UnitId(60 + index),
+                TeamId(1),
+                GridPos::new(60, 60),
+            );
+            world.entity_mut(entity).insert(WorkerTask::Gathering {
+                source: ResourceId(7),
+            });
+        }
+        assert!(
+            !crate::visibility::explored_by(&world, TeamId(2), GridPos::new(60, 60)),
+            "the enemy villagers must be hidden for the invariance premise"
+        );
+        command_lists.push(decide(&mut world));
+    }
+    assert_eq!(
+        command_lists[0], command_lists[1],
+        "hidden enemy worker tasks on a shared source must not influence the decision"
+    );
+}
+
 #[test]
 fn visible_base_threat_pulls_idle_military_into_defense() {
     let (mut world, map) = ai_world(TeamId(2));
