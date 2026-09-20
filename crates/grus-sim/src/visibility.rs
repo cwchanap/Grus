@@ -66,6 +66,30 @@ impl VisibilitySubject {
 }
 
 impl VisibilityMap {
+    /// Monotonic change counter for cheap per-frame polling (the Godot fog
+    /// overlay and minimap fetch the packed payload only when this moves).
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Row-major `width`×`height` cell states (0 Unexplored / 1 Explored /
+    /// 2 Visible) for `team`. The HashSet→payload conversion lives here so
+    /// the underlying representation stays replaceable; the bridge is the
+    /// only caller.
+    pub fn packed_cell_states(&self, team: TeamId, width: i32, height: i32) -> Vec<u8> {
+        let mut states = vec![0_u8; (width * height) as usize];
+        if let Some(vision) = self.teams.get(&team) {
+            let index = |cell: &GridPos| (cell.y * width + cell.x) as usize;
+            for cell in &vision.explored {
+                states[index(cell)] = 1;
+            }
+            for cell in &vision.visible {
+                states[index(cell)] = 2;
+            }
+        }
+        states
+    }
+
     /// Effective cell state for `team`; a team absent from the map has
     /// explored nothing. Test-only: consumers use the two predicates below.
     #[cfg(test)]

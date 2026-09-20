@@ -1,8 +1,9 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
 [ext_resource type="Script" path="res://scripts/combat_fx.gd" id="3_fx"]
+[ext_resource type="Script" path="res://scripts/minimap.gd" id="4_minimap"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -243,3 +244,10 @@ offset_top = 170.0
 offset_right = 392.0
 offset_bottom = 210.0
 text = "Quit"
+
+[node name="Minimap" type="Control" parent="HUD"]
+offset_left = 1120.0
+offset_top = 592.0
+offset_right = 1248.0
+offset_bottom = 688.0
+script = ExtResource("4_minimap")

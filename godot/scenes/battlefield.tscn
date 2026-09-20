@@ -1,4 +1,6 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://scripts/fog_of_war.gd" id="1_fog"]
 
 [sub_resource type="StandardMaterial3D" id="Material_ground"]
 albedo_color = Color(0.23, 0.34, 0.22, 1)
@@ -38,3 +40,6 @@ material_override = SubResource("Material_obstacle")
 position = Vector3(64, 1, 48)
 mesh = SubResource("BoxMesh_obstacle_b")
 material_override = SubResource("Material_obstacle")
+
+[node name="FogOfWar" type="Node3D" parent="."]
+script = ExtResource("1_fog")
