@@ -116,9 +116,10 @@ type PolicyStep =
 /// Ordered composition of the pure policy steps. Every step sees the same
 /// pre-decision world; `claimed` keeps two steps of this same decision from
 /// commanding the same villager. The order is the contract: visible-threat
-/// defense, worker replacement, scouting, idle-worker allocation, base growth
-/// (House, Barracks, Archery Range, Farm, Storehouse), the Age-2 attempt, the
-/// Stable, the round-robin army and the grouped attack.
+/// defense, population-stall avoidance (House), worker replacement, scouting,
+/// idle-worker allocation, base growth (Barracks, Archery Range, Storehouse,
+/// Farm), the Age-2 attempt, the Stable, the round-robin army and the grouped
+/// attack.
 pub fn decide_ai_commands(
     world: &World,
     controller: &mut AiController,
@@ -131,14 +132,14 @@ pub fn decide_ai_commands(
     let mut claimed = Vec::new();
     for step in [
         defend_visible_threats as PolicyStep,
+        place_house,
         queue_replacement_worker,
         scout,
         allocate_idle_worker,
-        place_house,
         place_barracks,
         place_archery_range,
-        place_farm,
         place_storehouse,
+        place_farm,
         attempt_age_two,
         place_stable,
         train_round_robin,
@@ -309,7 +310,7 @@ fn allocate_idle_worker(
         let Some(source) = sources
             .iter()
             .filter(|source| source.kind == kind)
-            .find(|source| source_has_capacity(world, source))
+            .find(|source| source_has_capacity(world, controller.team, source))
         else {
             continue;
         };
@@ -738,25 +739,31 @@ fn known_sources(world: &World, team: TeamId) -> Vec<KnownSource> {
 
 /// A Farm serves exactly one assigned worker; a standalone source hosts a
 /// small fixed number.
-fn source_has_capacity(world: &World, source: &KnownSource) -> bool {
+fn source_has_capacity(world: &World, team: TeamId, source: &KnownSource) -> bool {
     if source.farm {
         world
             .get::<ResourceSource>(source.entity)
             .is_some_and(|state| state.assigned_worker.is_none())
     } else {
-        workers_tasked_to(world, source.id) < WORKERS_PER_STANDALONE_SOURCE
+        workers_tasked_to(world, team, source.id) < WORKERS_PER_STANDALONE_SOURCE
     }
 }
 
-/// Workers currently tasked to a specific source (any team — capacity is
-/// consumed by whoever holds the task).
-fn workers_tasked_to(world: &World, source: ResourceId) -> u32 {
+/// Own workers currently tasked to a specific source. Enemy workers are never
+/// counted: their task state is hidden enemy state, and hidden enemy state
+/// must not influence any decision.
+fn workers_tasked_to(world: &World, team: TeamId, source: ResourceId) -> u32 {
     world
         .get_resource::<UnitIndex>()
         .map(|index| {
             index
                 .iter()
-                .filter(|(_, entity)| task_source(world, **entity) == Some(source))
+                .filter(|(_, entity)| {
+                    world
+                        .get::<Unit>(**entity)
+                        .is_some_and(|unit| unit.team == team)
+                        && task_source(world, **entity) == Some(source)
+                })
                 .count() as u32
         })
         .unwrap_or(0)
