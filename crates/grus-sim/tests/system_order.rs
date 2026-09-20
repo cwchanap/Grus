@@ -1,8 +1,8 @@
 //! Canonical fixed-step order: commands → combat → movement → economy →
-//! construction → production → route feedback. Movement arrival is visible to
-//! economy/construction in the same fixed tick, and production runs last, so
-//! the economy step of the tick in which the Age 2 job completes still uses
-//! the Age 1 gather rate.
+//! construction → production → visibility → AI → route feedback. Movement
+//! arrival is visible to economy/construction in the same fixed tick, and
+//! production runs last, so the economy step of the tick in which the Age 2
+//! job completes still uses the Age 1 gather rate.
 
 use std::cell::RefCell;
 
@@ -47,7 +47,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
     }
 
     // Gatherer A parks beside the berries at (22, 42); villager 2 stays home
-    // as the builder for a Barracks site south-east of the Town Center.
+    // as the builder for the authored Barracks slot from team_plan.
     let gatherer = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world
         .entity_mut(gatherer)
@@ -69,15 +69,15 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
 
     // Tick arithmetic (0.3 cells per movement tick at villager speed):
     // - Age job enqueued at tick 1 completes at tick 900 (45s / 0.05).
-    // - Barracks placed at tick 886: builder walks 4 cells over 14 movement
-    //   ticks (887..=900) and arrives at tick 900.
+    // - Barracks placed at tick 870: builder walks 6 cells over 24 movement
+    //   ticks (871..=894) and arrives at tick 894.
     // - Gather tasked at tick 896: gatherer walks 1 cell over 4 movement
     //   ticks (897..=900) and arrives at tick 900.
     let place_barracks = PlayerCommand::PlaceBuilding {
         issuer: TEAM,
         builder: UnitId(2),
         kind: BuildingKind::Barracks,
-        anchor: GridPos::new(15, 52),
+        anchor: MapFixture::team_plan(TEAM).barracks_anchor,
     };
     let gather_berries = PlayerCommand::Gather {
         issuer: TEAM,
@@ -88,7 +88,7 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
     let mut progress_before_completion_tick = 0.0;
     for tick in 1..=900 {
         match tick {
-            886 => queue.borrow_mut().push(place_barracks.clone()),
+            870 => queue.borrow_mut().push(place_barracks.clone()),
             896 => queue.borrow_mut().push(gather_berries.clone()),
             _ => {}
         }
@@ -165,10 +165,11 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // A second team-1 drop-off south-west of the Town Center so the
+    // A second team-1 drop-off beside the Town Center's resource line so the
     // destroyed drop-off's worker has a same-team reroute target. Placed
-    // through the public command path and completed instantly; the first
-    // runtime building id after the two Town Centers is 3.
+    // through the public command path on the authored team_plan slot and
+    // completed instantly; the first runtime building id after the two Town
+    // Centers is 3.
     let placed = apply_player_command(
         &mut world,
         &mut map,
@@ -176,7 +177,7 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
             issuer: TEAM,
             builder: UnitId(2),
             kind: BuildingKind::Storehouse,
-            anchor: GridPos::new(8, 40),
+            anchor: MapFixture::team_plan(TEAM).safe_storehouse_slots[0],
         },
     );
     assert_eq!(placed.reject, None, "storehouse placement rejected");

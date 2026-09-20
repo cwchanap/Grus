@@ -217,11 +217,12 @@ pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).remove::<CombatOrder>();
 }
 
-/// Most recent route-failure reject, drained by the bridge into its feedback
-/// channel. Single slot — the latest failure in a tick wins. Lives in the sim
-/// so the cleanup helper stays Godot-free.
+/// Most recent route-failure reject per team, drained by the bridge into its
+/// feedback channel (Team 1 only — a Team-2 AI worker's failure can never
+/// surface as, or overwrite, the human player's feedback). One latest slot
+/// per team. Lives in the sim so the cleanup helper stays Godot-free.
 #[derive(Debug, Default, Resource)]
-pub struct LastRouteReject(pub Option<RejectReason>);
+pub struct LastRouteReject(pub HashMap<TeamId, RejectReason>);
 
 /// Terminal cleanup when a worker's required route becomes impossible: the
 /// full `cancel_unit_activity` semantics (Farm assignment released,
@@ -233,8 +234,15 @@ pub(crate) fn idle_worker_on_route_failure(
     entity: Entity,
     reason: RejectReason,
 ) {
+    // Capture the worker's team before cancellation touches the entity.
+    let team = world.get::<Unit>(entity).map(|unit| unit.team);
     cancel_unit_activity(world, entity);
-    world.insert_resource(LastRouteReject(Some(reason)));
+    if let Some(team) = team {
+        world
+            .get_resource_or_insert_with(LastRouteReject::default)
+            .0
+            .insert(team, reason);
+    }
 }
 
 /// Narrow combat-destruction seam over the existing drop-off routing: a
@@ -280,6 +288,36 @@ pub(crate) fn reroute_dropoff_worker(
             false
         }
     }
+}
+
+/// The one idle-villager definition: Villager + `WorkerTask::Idle` + no
+/// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count and the AI
+/// worker pool read the same truth.
+pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
+    world
+        .get::<Unit>(entity)
+        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        && world.get::<WorkerTask>(entity) == Some(&WorkerTask::Idle)
+        && world.get::<MoveOrder>(entity).is_none()
+}
+
+/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD
+/// and the AI alike.
+pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    (world.get::<Unit>(*entity)?.team == team && is_idle_worker(world, *entity))
+                        .then_some(*id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
 }
 
 pub fn gather_rate_for_age(age: Age) -> f32 {

@@ -658,9 +658,42 @@ fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
         "cleanup never discards Carry"
     );
     assert_eq!(
-        world.resource::<LastRouteReject>().0,
-        Some(RejectReason::Unreachable),
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable),
         "typed code recorded for bridge feedback"
+    );
+}
+
+/// The feedback slot is team-aware: a Team-2 worker's route failure records
+/// under Team 2 and never overwrites a pending Team-1 reject (the bridge
+/// drains Team 1 only).
+#[test]
+fn route_reject_feedback_is_team_aware() {
+    let mut world = World::new();
+    let map = GridMap::new(16, 16);
+    test_economy(&mut world);
+
+    let team_one = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(2, 2)));
+    let team_two = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(4, 2)));
+    world.entity_mut(team_two).insert(Unit {
+        id: UnitId(2),
+        team: TeamId(2),
+        kind: UnitKind::Villager,
+        speed: 6.0,
+    });
+
+    idle_worker_on_route_failure(&mut world, team_one, RejectReason::Unreachable);
+    idle_worker_on_route_failure(&mut world, team_two, RejectReason::Crowded);
+
+    let rejects = &world.resource::<LastRouteReject>().0;
+    assert_eq!(rejects.get(&TeamId(1)), Some(&RejectReason::Unreachable));
+    assert_eq!(rejects.get(&TeamId(2)), Some(&RejectReason::Crowded));
+
+    // The latest failure per team wins.
+    idle_worker_on_route_failure(&mut world, team_one, RejectReason::Unreachable);
+    assert_eq!(
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable)
     );
 }
 
