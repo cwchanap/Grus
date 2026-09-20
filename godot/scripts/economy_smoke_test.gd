@@ -87,13 +87,16 @@ func _key_tap(keycode: int) -> void:
 func _click_view(view: Node3D, button: int) -> void:
 	_mouse_click(_camera.unproject_position(view.global_position), button)
 	await get_tree().process_frame
+	await get_tree().process_frame
 
 func _click_world(point: Vector2, button: int) -> void:
 	_mouse_click(_camera.unproject_position(Vector3(point.x + 0.25, 0.0, point.y + 0.25)), button)
 	await get_tree().process_frame
+	await get_tree().process_frame
 
 func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
 	await get_tree().process_frame
 
 ## Polls a condition every physics frame until it holds or the frame budget
@@ -409,6 +412,19 @@ func _run() -> void:
 		return
 	if int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
 		_fail("completed House did not raise the population cap to 20")
+		return
+
+	# Fog retarget (HPA-473): the Storehouse anchor (38,22) and the northeast
+	# expansion tree (43,18) boot Unexplored — placement validates explored
+	# footprints and gather requires explored sources, so scout the corridor
+	# first. The expansion tree's view becoming visible is the explored
+	# proof (views are the presentation projection of the sim fog).
+	await _click_view(builder, MOUSE_BUTTON_LEFT)
+	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
+	if not await _wait_until(
+			func(): return _resource_view(FAR_TREE_ID) != null \
+					and (_resource_view(FAR_TREE_ID) as Node3D).is_visible_in_tree(),
+			60.0, "scout never revealed the far expansion tree"):
 		return
 
 	# Step 5: Storehouse delivery proof. Retask villager 1 to the northeast

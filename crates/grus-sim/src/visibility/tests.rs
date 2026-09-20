@@ -265,3 +265,23 @@ fn predicates_report_full_information_when_visibility_map_is_absent() {
         Footprint::new(GridPos::new(102, 48), 4, 4)
     ));
 }
+
+#[test]
+fn packed_cell_states_report_the_row_major_payload_and_revision() {
+    let (mut world, map) = lone_unit_world(TeamId(1), GridPos::new(20, 20));
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    let visibility = world.resource::<VisibilityMap>();
+
+    let states = visibility.packed_cell_states(TeamId(1), map.width(), map.height());
+    assert_eq!(states.len(), (128 * 96) as usize);
+    // Row-major indexing: (x, y) reads as y * width + x. The lone unit's
+    // own cell is Visible; the enemy start cell is Unexplored.
+    assert_eq!(states[(20 * 128 + 20) as usize], 2);
+    assert_eq!(states[(46 * 128 + 112) as usize], 0);
+    assert!(visibility.revision() >= 1);
+
+    // A team absent from the map reads as fully Unexplored.
+    let enemy_states = visibility.packed_cell_states(TeamId(2), map.width(), map.height());
+    assert!(enemy_states.iter().all(|&state| state == 0));
+}

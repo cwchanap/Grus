@@ -6,17 +6,18 @@ use godot::classes::{Engine, INode, Node, Node3D, SceneTree};
 use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
-use grus_sim::catalog::{building_spec, unit_spec};
+use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
     CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos, Health,
     IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
     ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
     ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, active_phase,
-    apply_player_command, gather_rate_for_age, population_cap, population_used, produces,
-    seed_skirmish, set_paused, spawn_unit, start_match, step_combat, step_construction,
-    step_economy, step_movement, step_production, validate_placement,
+    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WorkerTask,
+    active_phase, apply_player_command, explored_by, gather_rate_for_age, population_cap,
+    population_used, produces, refresh_visibility, seed_skirmish, set_paused, spawn_unit,
+    start_match, step_combat, step_construction, step_economy, step_movement, step_production,
+    validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -393,6 +394,48 @@ impl GrusBridgeNode {
         .unwrap_or_default()
     }
 
+    /// Monotonic Team-1 visibility revision for cheap per-frame polling: fog
+    /// and minimap fetch the packed snapshot only when this changes. `-1`
+    /// when no visibility state exists (the visibility-free benchmark).
+    #[func]
+    fn visibility_revision(&self) -> i64 {
+        with_app(|app| {
+            app.world()
+                .get_resource::<VisibilityMap>()
+                .map(|visibility| visibility.revision() as i64)
+                .unwrap_or(-1)
+        })
+        .unwrap_or(-1)
+    }
+
+    /// Packed Team-1 fog payload: map width/height, row-major cell states
+    /// (0 Unexplored / 1 Explored / 2 Visible), and the revision observed
+    /// during the read so a consumer can detect a mid-read change. Empty
+    /// dict when visibility state is absent.
+    #[func]
+    fn visibility_snapshot(&self) -> VarDictionary {
+        with_app(|app| {
+            let world = app.world();
+            let Some(visibility) = world.get_resource::<VisibilityMap>() else {
+                return VarDictionary::new();
+            };
+            let Some(map) = world.get_resource::<GridMap>() else {
+                return VarDictionary::new();
+            };
+            let states = visibility.packed_cell_states(TeamId(1), map.width(), map.height());
+            let mut dict = VarDictionary::new();
+            dict.set("width", i64::from(map.width()));
+            dict.set("height", i64::from(map.height()));
+            dict.set("revision", visibility.revision() as i64);
+            dict.set(
+                "states",
+                &PackedInt32Array::from_iter(states.into_iter().map(i32::from)),
+            );
+            dict
+        })
+        .unwrap_or_default()
+    }
+
     #[func]
     fn command_feedback(&self) -> GString {
         with_app(|app| {
@@ -478,7 +521,9 @@ impl GrusBridgeNode {
 
     /// One building's state by stable id: completion, construction and queue
     /// progress (0..1), queue head label, blocked code (0 = none), and rally
-    /// cell (-1/-1 when unset). Empty dict when the building does not exist.
+    /// cell (-1/-1 when unset). Empty dict when the building does not exist
+    /// or is a hidden enemy — fog must not leak health/queue/construction
+    /// through stale ids.
     #[func]
     fn building_snapshot(&self, building_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -493,6 +538,9 @@ impl GrusBridgeNode {
             else {
                 return dict;
             };
+            if building_hidden_from_local_player(world, entity) {
+                return dict;
+            }
             let Some(building) = world.get::<Building>(entity) else {
                 return dict;
             };
@@ -682,6 +730,7 @@ fn build_app(app: &mut App) {
                 attach_missing_gameplay_views,
                 initialize_view_metadata,
                 stamp_late_resource_metadata,
+                sync_view_visibility,
                 sync_interpolated_unit_transforms,
                 update_health_bars,
             ),
@@ -695,6 +744,7 @@ fn build_app(app: &mut App) {
                 advance_economy,
                 advance_construction,
                 advance_production,
+                advance_visibility,
                 drain_route_reject_feedback,
             )
                 .chain(),
@@ -823,10 +873,64 @@ fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
     if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
         return Vec::new();
     }
-    world
+    let mut events = world
         .get_resource_mut::<CombatEvents>()
         .map(|mut events| std::mem::take(&mut events.0))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Presentation permission is derived here, before dictionaries reach
+    // GDScript: a hidden enemy attacker must not expose its stable id as a
+    // tracer origin (GDScript never re-looks-up live attackers). The event's
+    // position is the target's — always a friendly (always visible) when the
+    // attacker is a hidden enemy — so hit/death feedback stays intact. Id 0
+    // matches every id-reject convention: no live unit carries it.
+    for event in &mut events {
+        if !attacker_presentable(world, event.attacker) {
+            event.attacker = UnitId(0);
+        }
+    }
+    events
+}
+
+/// The attacker's stable id may reach GDScript only when it exists and is
+/// either friendly or currently visible to the local team. A missing attacker
+/// (already despawned) is scrubbed too — dead men leak no positions.
+fn attacker_presentable(world: &World, attacker: UnitId) -> bool {
+    let Some(entity) = world
+        .get_resource::<UnitIndex>()
+        .and_then(|index| index.entity(attacker))
+    else {
+        return false;
+    };
+    let Some(unit) = world.get::<Unit>(entity) else {
+        return false;
+    };
+    if unit.team == TeamId(1) {
+        return true;
+    }
+    let Some(map) = world.get_resource::<GridMap>() else {
+        return true;
+    };
+    let Some(position) = world.get::<SimPosition>(entity) else {
+        return false;
+    };
+    visible_to(world, TeamId(1), map.world_to_cell(position.current))
+}
+
+/// A building is fog-hidden from the local player when it is an enemy whose
+/// footprint is not currently Team-1 visible. Friendly buildings are always
+/// presentable. Drives the `building_snapshot` empty dict and nothing else —
+/// view rendering goes through `sync_view_visibility`.
+fn building_hidden_from_local_player(world: &World, entity: Entity) -> bool {
+    let Some(building) = world.get::<Building>(entity) else {
+        return false;
+    };
+    if building.team == TeamId(1) {
+        return false;
+    }
+    match world.get::<Footprint>(entity) {
+        Some(footprint) => !visible_to(world, TeamId(1), *footprint),
+        None => false,
+    }
 }
 
 fn combat_event_dict(event: CombatEvent) -> VarDictionary {
@@ -874,6 +978,15 @@ fn setup_fixture(world: &mut World) {
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+    insert_fresh_visibility(world);
+}
+
+/// Normal runtime gameplay runs fogged: a fresh `VisibilityMap` beside the
+/// session plus one initial refresh so the Start screen already has correct
+/// fog. The benchmark reset never calls this — it stays visibility-free.
+fn insert_fresh_visibility(world: &mut World) {
+    world.insert_resource(VisibilityMap::default());
+    world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
 
 #[allow(clippy::type_complexity)]
@@ -982,50 +1095,181 @@ fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transfor
     ));
 }
 
-fn initialize_view_metadata(
-    mut commands: Commands,
-    units: Query<(Entity, &Unit, &GodotNodeHandle), Without<ViewMetaInitialized>>,
-    buildings: Query<
-        (Entity, &Building, Option<&ResourceSource>, &GodotNodeHandle),
+/// Exclusive (main-thread) because the authoritative-visibility predicates
+/// read the `World` while the pass writes Godot node state — a parametric
+/// `&World` would conflict with `GodotAccess`'s main-thread guard. Stamps
+/// identity metadata AND the initial authoritative visibility in the same
+/// pass, so a newly instantiated view never spends a frame visible before
+/// the sim truth lands (scene roots default hidden).
+fn initialize_view_metadata(world: &mut World) {
+    let map = world.resource::<GridMap>().clone();
+
+    #[allow(clippy::type_complexity)]
+    let mut units = world.query_filtered::<
+        (Entity, &Unit, &SimPosition, &GodotNodeHandle),
         Without<ViewMetaInitialized>,
-    >,
-    resources: Query<(Entity, &ResourceSource, &GodotNodeHandle), Without<ViewMetaInitialized>>,
-    mut godot: GodotAccess,
-) {
-    for (entity, unit, handle) in &units {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    >();
+    let unit_batch: Vec<(Entity, UnitId, TeamId, UnitKind, GridPos, GodotNodeHandle)> = units
+        .iter(world)
+        .map(|(entity, unit, position, handle)| {
+            (
+                entity,
+                unit.id,
+                unit.team,
+                unit.kind,
+                map.world_to_cell(position.current),
+                *handle,
+            )
+        })
+        .collect();
+    let mut buildings = world.query_filtered::<(
+        Entity,
+        &Building,
+        &Footprint,
+        Option<&ResourceSource>,
+        &GodotNodeHandle,
+    ), Without<ViewMetaInitialized>>();
+    #[allow(clippy::type_complexity)]
+    let building_batch: Vec<(
+        Entity,
+        BuildingId,
+        BuildingKind,
+        TeamId,
+        Footprint,
+        Option<(ResourceId, ResourceKind)>,
+        GodotNodeHandle,
+    )> = buildings
+        .iter(world)
+        .map(|(entity, building, footprint, source, handle)| {
+            (
+                entity,
+                building.id,
+                building.kind,
+                building.team,
+                *footprint,
+                source.map(|source| (source.id, source.kind)),
+                *handle,
+            )
+        })
+        .collect();
+    let mut resources = world.query_filtered::<(
+        Entity,
+        &ResourceSource,
+        &Footprint,
+        &GodotNodeHandle,
+    ), (Without<Building>, Without<ViewMetaInitialized>)>();
+    let resource_batch: Vec<(Entity, ResourceId, ResourceKind, Footprint, GodotNodeHandle)> =
+        resources
+            .iter(world)
+            .map(|(entity, source, footprint, handle)| {
+                (entity, source.id, source.kind, *footprint, *handle)
+            })
+            .collect();
+
+    for (entity, id, team, kind, cell, handle) in unit_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("unit_id", &i64::from(unit.id.0).to_variant());
-        node.set_meta("team_id", &i64::from(unit.team.0).to_variant());
-        node.set_meta("unit_kind", &debug_variant(unit.kind));
-        commands.entity(entity).insert(ViewMetaInitialized);
+        node.set_meta("unit_id", &i64::from(id.0).to_variant());
+        node.set_meta("team_id", &i64::from(team.0).to_variant());
+        node.set_meta("unit_kind", &debug_variant(kind));
+        let visible = team == TeamId(1) || visible_to(world, TeamId(1), cell);
+        node.set_visible(visible);
+        world.entity_mut(entity).insert(ViewMetaInitialized);
     }
-    for (entity, building, source, handle) in &buildings {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    for (entity, id, kind, team, footprint, source, handle) in building_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("building_id", &i64::from(building.id.0).to_variant());
-        node.set_meta("building_kind", &debug_variant(building.kind));
-        node.set_meta("team_id", &i64::from(building.team.0).to_variant());
+        node.set_meta("building_id", &i64::from(id.0).to_variant());
+        node.set_meta("building_kind", &debug_variant(kind));
+        node.set_meta("team_id", &i64::from(team.0).to_variant());
         // A completed Farm carries both its building identity and its
         // renewable Food source on the same entity.
-        if let Some(source) = source {
-            node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
-            node.set_meta("resource_kind", &debug_variant(source.kind));
-            commands.entity(entity).insert(ResourceMetaInitialized);
+        if let Some((source_id, source_kind)) = source {
+            node.set_meta("resource_id", &i64::from(source_id.0).to_variant());
+            node.set_meta("resource_kind", &debug_variant(source_kind));
+            world.entity_mut(entity).insert(ResourceMetaInitialized);
         }
-        commands.entity(entity).insert(ViewMetaInitialized);
+        // Enemy Farms follow enemy-building visibility: the building branch
+        // owns the stamp, never the resource branch below.
+        let visible = team == TeamId(1) || visible_to(world, TeamId(1), footprint);
+        node.set_visible(visible);
+        world.entity_mut(entity).insert(ViewMetaInitialized);
     }
-    for (entity, source, handle) in &resources {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    for (entity, id, kind, footprint, handle) in resource_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
-        node.set_meta("resource_kind", &debug_variant(source.kind));
-        commands
-            .entity(entity)
+        node.set_meta("resource_id", &i64::from(id.0).to_variant());
+        node.set_meta("resource_kind", &debug_variant(kind));
+        // Standalone sources appear on first exploration and persist.
+        let visible = explored_by(world, TeamId(1), footprint);
+        node.set_visible(visible);
+        world
+            .entity_mut(entity)
             .insert((ViewMetaInitialized, ResourceMetaInitialized));
+    }
+}
+
+/// The exclusive pass can't hold a query borrow while mutating entities, so
+/// it batches first; this helper only unwraps node handles.
+fn node_from_handle(handle: GodotNodeHandle) -> Option<Gd<Node3D>> {
+    Gd::<Node3D>::try_from_instance_id(handle.instance_id()).ok()
+}
+
+/// Maintains every gameplay view's `Node3D.visible` from the authoritative
+/// Team-1 visibility each Update: friendly units/buildings always visible,
+/// enemies only while currently visible (enemy Farms included — they ride
+/// the building branch), standalone resources once explored and staying.
+/// Exclusive for the same reason as `initialize_view_metadata`; the initial
+/// stamp happens there, this system only maintains the value.
+fn sync_view_visibility(world: &mut World) {
+    let map = world.resource::<GridMap>().clone();
+
+    let mut units = world.query::<(&Unit, &SimPosition, &GodotNodeHandle)>();
+    let unit_batch: Vec<(TeamId, GridPos, GodotNodeHandle)> = units
+        .iter(world)
+        .map(|(unit, position, handle)| (unit.team, map.world_to_cell(position.current), *handle))
+        .collect();
+    let mut buildings = world.query::<(&Building, &Footprint, &GodotNodeHandle)>();
+    let building_batch: Vec<(TeamId, Footprint, GodotNodeHandle)> = buildings
+        .iter(world)
+        .map(|(building, footprint, handle)| (building.team, *footprint, *handle))
+        .collect();
+    let mut resources = world.query_filtered::<
+        (&Footprint, &GodotNodeHandle),
+        (With<ResourceSource>, Without<Building>),
+    >();
+    let resource_batch: Vec<(Footprint, GodotNodeHandle)> = resources
+        .iter(world)
+        .map(|(footprint, handle)| (*footprint, *handle))
+        .collect();
+
+    for (team, cell, handle) in unit_batch {
+        set_view_visible(
+            handle,
+            team == TeamId(1) || visible_to(world, TeamId(1), cell),
+        );
+    }
+    for (team, footprint, handle) in building_batch {
+        set_view_visible(
+            handle,
+            team == TeamId(1) || visible_to(world, TeamId(1), footprint),
+        );
+    }
+    for (footprint, handle) in resource_batch {
+        set_view_visible(handle, explored_by(world, TeamId(1), footprint));
+    }
+}
+
+/// Value-gated write: idle views don't re-raise Godot visibility flags.
+fn set_view_visible(handle: GodotNodeHandle, visible: bool) {
+    let Some(mut node) = node_from_handle(handle) else {
+        return;
+    };
+    if node.is_visible() != visible {
+        node.set_visible(visible);
     }
 }
 
@@ -1073,10 +1317,12 @@ fn reset_fixture_world(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
-    // A normal-skirmish restart returns the session to Start.
+    // A normal-skirmish restart returns the session to Start — fogged with a
+    // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+    insert_fresh_visibility(world);
     // The clear despawns the selector-bearing gameplay entities; reattach the
     // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
     #[cfg(feature = "e2e")]
@@ -1122,6 +1368,9 @@ fn clear_gameplay_world(world: &mut World) {
     world.remove_resource::<ResourceIndex>();
     world.remove_resource::<TeamEconomy>();
     world.remove_resource::<IdAllocator>();
+    // Visibility dies with the match: the benchmark restart must stay
+    // visibility-free, and a normal reset re-inserts a fresh fogged map.
+    world.remove_resource::<VisibilityMap>();
     // Combat/session transients die with the match: the benchmark restarts
     // session-free (missing session = Playing), the normal reset re-inserts
     // Start.
@@ -1296,6 +1545,13 @@ fn advance_production(world: &mut World) {
     });
 }
 
+/// Canonical post-production step: presentation and (later) AI consume the
+/// same freshly computed Team-1 visibility the command validation of the
+/// next tick will enforce.
+fn advance_visibility(world: &mut World) {
+    world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
+}
+
 /// Drains the sim's latest worker route-failure reject into the existing
 /// feedback channel, so mid-step idles surface as typed codes with a
 /// revision bump instead of disappearing silently.
@@ -1409,13 +1665,19 @@ mod tests {
             assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
         }
 
+        // Without a UnitIndex the attacker's existence (and therefore its
+        // presentation permission) cannot be verified: the id is scrubbed
+        // to 0 while the target-position feedback survives.
+        let mut scrubbed = event;
+        scrubbed.attacker = UnitId(0);
+
         // Result releases the settle tick's buffer once — `strike()` records
         // the killing blow and resolves the match in the same fixed tick —
         // and the drained buffer stays empty on later Result frames.
         world.insert_resource(MatchSession {
             phase: MatchPhase::Result(MatchResult(TeamId(2))),
         });
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
         assert!(world.resource::<CombatEvents>().0.is_empty());
         assert!(take_presentable_events(&mut world).is_empty());
 
@@ -1424,12 +1686,141 @@ mod tests {
             phase: MatchPhase::Playing,
         });
         world.insert_resource(CombatEvents(vec![event]));
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
         assert!(world.resource::<CombatEvents>().0.is_empty());
         // A missing session reads as Playing (benchmark contract).
         world.remove_resource::<MatchSession>();
         world.insert_resource(CombatEvents(vec![event]));
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
+    }
+
+    /// Runtime setup fog: the fixture boots with a fresh `VisibilityMap`, an
+    /// initial refresh (revision >= 1), the enemy start Unexplored and the
+    /// own start Visible. Restarts re-fog; the benchmark stays free of
+    /// visibility so its full-information contract cannot silently flip.
+    #[test]
+    fn runtime_setup_and_resets_manage_the_visibility_resource() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+
+        let revision = world.resource::<VisibilityMap>().revision();
+        assert!(
+            revision >= 1,
+            "initial refresh must have bumped the revision"
+        );
+        let own_town_center = GridPos::new(12, 46);
+        let enemy_town_center = GridPos::new(112, 46);
+        let states = world
+            .resource::<VisibilityMap>()
+            .packed_cell_states(TeamId(1), 128, 96);
+        assert_eq!(
+            states[(own_town_center.y * 128 + own_town_center.x) as usize],
+            2
+        );
+        assert_eq!(
+            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            0,
+            "the enemy start must boot Unexplored — runtime is not full-info"
+        );
+
+        // A normal restart re-inserts a fresh fogged map.
+        reset_fixture_world(&mut world);
+        assert!(world.get_resource::<VisibilityMap>().is_some());
+        assert!(world.resource::<VisibilityMap>().revision() >= 1);
+
+        // The benchmark reset must remove visibility: seed_skirmish and the
+        // 200-villager benchmark run full-information.
+        reset_benchmark_world(&mut world);
+        assert!(world.get_resource::<VisibilityMap>().is_none());
+    }
+
+    #[test]
+    fn hidden_enemy_attackers_are_scrubbed_but_visible_ones_present() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        // Runtime parity: presentation paths read the GridMap resource.
+        world.insert_resource(map.clone());
+        world.insert_resource(VisibilityMap::default());
+        refresh_visibility(&mut world, &map);
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+
+        let event_from = |attacker: UnitId| CombatEvent {
+            attacker,
+            target: CombatTarget::Unit(UnitId(1)),
+            damage: 2,
+            position: Vec2::new(11.5, 45.5),
+            ranged: true,
+            killed: false,
+        };
+        let enemy_at_home = UnitId(5);
+        let missing = UnitId(999);
+        world.insert_resource(CombatEvents(vec![
+            event_from(UnitId(1)),
+            event_from(enemy_at_home),
+            event_from(missing),
+        ]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(drained[0].attacker, UnitId(1), "friendly attacker stays");
+        assert_eq!(
+            drained[1].attacker,
+            UnitId(0),
+            "hidden enemy attacker must not expose its stable id"
+        );
+        assert_eq!(drained[1].position, event_from(enemy_at_home).position);
+        assert_eq!(
+            drained[2].attacker,
+            UnitId(0),
+            "missing attacker is scrubbed"
+        );
+
+        // March the enemy unit into Team-1 vision; its id becomes presentable.
+        let enemy_entity = world.resource::<UnitIndex>().entity(enemy_at_home).unwrap();
+        world
+            .entity_mut(enemy_entity)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(22, 46))));
+        refresh_visibility(&mut world, &map);
+        world.insert_resource(CombatEvents(vec![event_from(enemy_at_home)]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(
+            drained[0].attacker, enemy_at_home,
+            "a visible enemy attacker may present"
+        );
+    }
+
+    #[test]
+    fn enemy_buildings_are_fog_hidden_and_friendly_ones_are_not() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        world.insert_resource(VisibilityMap::default());
+        refresh_visibility(&mut world, &map);
+
+        let own = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .unwrap();
+        let enemy = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(2))
+            .unwrap();
+        assert!(!building_hidden_from_local_player(&world, own));
+        assert!(
+            building_hidden_from_local_player(&world, enemy),
+            "the far enemy Town Center starts hidden"
+        );
+
+        // A team-1 scout beside the enemy footprint clears it for presentation.
+        let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        world
+            .entity_mut(scout)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
+        refresh_visibility(&mut world, &map);
+        assert!(!building_hidden_from_local_player(&world, enemy));
     }
 
     #[test]

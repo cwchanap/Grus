@@ -288,16 +288,38 @@ func _run() -> void:
 	if victim == null:
 		_fail("enemy villager 5 view is missing before the attack")
 		return
+	# Fog retarget (HPA-473): the enemy start boots hidden, so the pickers
+	# would rightly ignore villager 5 — march the Spearman into vision first.
+	# A queued bridge call is not acceptance: assert the sim's own feedback.
+	var march_revision := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(PackedInt32Array([spear_id]), Vector2(108.5, 44.5)):
+		_fail("bridge refused to queue the scouting march")
+		return
+	if not await _wait_until(
+			func(): return int(GrusBridge.command_feedback_revision()) > march_revision \
+					and str(GrusBridge.command_feedback()).begins_with("Command accepted"), 20.0,
+			"the scouting march was never accepted by the sim"):
+		return
+	if not await _wait_until(
+			func(): return victim.is_visible_in_tree(), 60.0,
+			"the march never scouted enemy villager 5 into vision"):
+		return
 	# Controller-level right-click attack: select the Spearman and drive
 	# _issue_context_command with the screen position of enemy villager 5 —
 	# the enemy-picking path must queue the same bridge attack.
 	var enemy_click := _screen_of(victim.global_position)
 	var attack_selection: Array[int] = [spear_id]
 	_main.selected_ids = attack_selection
+	var attack_revision := int(GrusBridge.command_feedback_revision())
 	_main.call("_issue_context_command", enemy_click)
 	if _main.command_status.text != "Attack command queued":
 		_fail("controller right-click on the enemy did not queue an attack: %s"
 				% _main.command_status.text)
+		return
+	if not await _wait_until(
+			func(): return int(GrusBridge.command_feedback_revision()) > attack_revision \
+					and str(GrusBridge.command_feedback()).begins_with("Command accepted"), 10.0,
+			"the sim rejected the right-click attack instead of accepting it"):
 		return
 	# Null-safe lookup: the view node is freed the moment the unit dies.
 	if not await _wait_until(
