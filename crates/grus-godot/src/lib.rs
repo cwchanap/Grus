@@ -2084,6 +2084,70 @@ mod tests {
         assert_fixture_restored(&world);
     }
 
+    /// Restart wipes everything a used match banked: pending human commands
+    /// and explored fog. The AI's scout cursor, remembered Town Center and
+    /// cadence accumulator ride the fresh `AiController` reseed — their deep
+    /// reset is proven in grus-sim's `ai::tests`, which can read the private
+    /// fields the bridge cannot.
+    #[test]
+    fn restart_clears_pending_commands_and_used_fog() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        start_match(&mut world);
+
+        // A queued human command that never reached a fixed tick. The raw
+        // test world has no app plugin, so insert the channel first.
+        world.insert_resource(PendingCommands::default());
+        world
+            .resource_mut::<PendingCommands>()
+            .0
+            .push(PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(1)],
+                kind: UnitCommandKind::Move {
+                    target: Vec2::new(60.5, 60.5),
+                },
+            }));
+
+        // Use the fog: a scout beside the enemy start explores its Town
+        // Center footprint.
+        let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        let fixture = MapFixture::battlefield();
+        let map = fixture.map;
+        world
+            .entity_mut(scout)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
+        let enemy_town_center_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(2))
+            .unwrap();
+        let enemy_town_center_footprint =
+            *world.get::<Footprint>(enemy_town_center_entity).unwrap();
+        refresh_visibility(&mut world, &map);
+        assert!(explored_by(&world, TeamId(1), enemy_town_center_footprint));
+
+        reset_fixture_world(&mut world);
+
+        assert!(
+            world.resource::<PendingCommands>().0.is_empty(),
+            "restart must clear pending human commands"
+        );
+        assert!(matches!(
+            world.resource::<MatchSession>().phase,
+            MatchPhase::Start
+        ));
+        assert_eq!(world.resource::<AiController>().team, TeamId(2));
+        let states = world
+            .resource::<VisibilityMap>()
+            .packed_cell_states(TeamId(1), 128, 96);
+        let enemy_town_center = GridPos::new(112, 46);
+        assert_eq!(
+            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            0,
+            "restart must return the used fog to boot Unexplored"
+        );
+    }
+
     #[test]
     fn benchmark_world_moves_units_without_a_session() {
         let mut world = World::new();
