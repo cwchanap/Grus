@@ -11,7 +11,7 @@ use crate::combat::{CombatOrder, CombatTarget};
 use crate::commands::spawn_unit;
 use crate::economy::{Carry, GatherProgress, ResourceStockpile};
 use crate::movement::SimPosition;
-use crate::session::{MatchPhase, MatchSession};
+use crate::session::{MatchPhase, MatchSession, active_phase};
 use crate::visibility::{VisibilityMap, refresh_visibility};
 use crate::{
     SIM_STEP_SECONDS, seed_skirmish, step_combat, step_construction, step_economy, step_movement,
@@ -50,10 +50,16 @@ fn step_tick(world: &mut World, map: &mut GridMap) {
     step_ai(world, map, SIM_STEP_SECONDS);
 }
 
-fn run_until(world: &mut World, map: &mut GridMap, what: &str, condition: impl Fn(&World) -> bool) {
-    for _ in 0..JOURNEY_BUDGET {
+/// Returns the ticks stepped so journeys can report their budget use.
+fn run_until(
+    world: &mut World,
+    map: &mut GridMap,
+    what: &str,
+    condition: impl Fn(&World) -> bool,
+) -> u32 {
+    for ticks in 0..JOURNEY_BUDGET {
         if condition(world) {
-            return;
+            return ticks;
         }
         step_tick(world, map);
     }
@@ -1576,6 +1582,193 @@ fn economy_journey_reaches_age_two_without_grants() {
     run_until(&mut world, &mut map, "Age 2", |world| {
         age_of(world, team) == Age::Age2
     });
+}
+
+/// The Task-6 full-match proof, parameterized over the authored start: the
+/// one authored AI policy drives a real sessioned match — economy ->
+/// scouting -> army -> combat -> Result — entirely through ordinary commands
+/// and the real fixed steps, with zero grants. The opponent is passive (no
+/// controller); the AI must conquer it and settle a genuine
+/// `MatchPhase::Result` through `resolve_result`. Returns the ticks used so
+/// both starts' budgets stay visible in failures and reports.
+fn full_match_journey(side: TeamId) -> u32 {
+    let (mut world, mut map) = ai_world(side);
+    let plan = MapFixture::team_plan(side);
+    let enemy_town_center = town_center_of(&world, other(side));
+    let mut ticks = 0;
+
+    // Economy: workers grow past the authored four through paid production.
+    ticks += run_until(&mut world, &mut map, "worker growth", |world| {
+        villagers_of(world, side).len() >= 6
+    });
+
+    // Scouting: the authored expansion nearest this start is genuinely
+    // discovered — the same gate the expansion Storehouse depends on.
+    let expansion_gold = MapFixture::expansion_resources()
+        .into_iter()
+        .min_by_key(|spawn| {
+            let anchor = plan.town_center_anchor;
+            (spawn.cell.x - anchor.x).pow(2) + (spawn.cell.y - anchor.y).pow(2)
+        })
+        .expect("an authored expansion resource");
+    ticks += run_until(&mut world, &mut map, "expansion discovery", |world| {
+        world
+            .resource::<ResourceIndex>()
+            .entity(expansion_gold.id)
+            .and_then(|entity| world.get::<Footprint>(entity))
+            .is_some_and(|footprint| explored_by(world, side, *footprint))
+    });
+
+    // Army: military production through the real queues.
+    ticks += run_until(&mut world, &mut map, "army training", |world| {
+        world.resource::<UnitIndex>().iter().any(|(_, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .is_some_and(|unit| unit.team == side && unit_spec(unit.kind).combat.is_some())
+        })
+    });
+
+    // Combat -> Result: at the attack threshold the army marches and razes
+    // the passive enemy Town Center; the session settles the winner.
+    ticks += run_until(&mut world, &mut map, "the full match", |world| {
+        matches!(active_phase(world), MatchPhase::Result(_))
+    });
+    assert_eq!(
+        active_phase(&world),
+        MatchPhase::Result(crate::session::MatchResult(side)),
+        "the AI side must win its own match from {side:?}'s authored start"
+    );
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(enemy_town_center)
+            .is_none(),
+        "the Result must come from the enemy Town Center's destruction"
+    );
+    ticks
+}
+
+#[test]
+fn full_match_journey_team_one_wins_from_the_left_start() {
+    let ticks = full_match_journey(TeamId(1));
+    println!("team 1 full match settled in {ticks} ticks");
+}
+
+#[test]
+fn full_match_journey_team_two_wins_from_the_right_start() {
+    let ticks = full_match_journey(TeamId(2));
+    println!("team 2 full match settled in {ticks} ticks");
+}
+
+fn town_center_of(world: &World, team: TeamId) -> BuildingId {
+    world
+        .resource::<BuildingIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Building>(*entity)
+                .is_some_and(|building| {
+                    building.team == team && building.kind == BuildingKind::TownCenter
+                })
+                .then_some(*id)
+        })
+        .min()
+        .expect("the passive opponent keeps its Town Center until the razement")
+}
+
+/// The deep restart regression: explored fog, the remembered enemy Town
+/// Center, the scout-route cursor and the cadence accumulator all bank match
+/// progress — and the bridge reset's fresh reseed (the exact resource
+/// operations `reset_fixture_world` performs: drop + `VisibilityMap::default()`
+/// plus drop + `AiController::new`) returns every one of them to boot values
+/// so the next decision scouts route leg 0 again.
+#[test]
+fn restart_returns_explored_fog_and_ai_state_to_boot_values() {
+    let team = TeamId(2);
+    let (mut world, mut map) = ai_world(team);
+    let plan = MapFixture::team_plan(team);
+
+    // Bank progress: an idle Spearman scouts on the first decision; a
+    // villager walked to the enemy start puts its Town Center on camera.
+    let _spearman = spawn_military(
+        &mut world,
+        &map,
+        UnitId(900),
+        team,
+        GridPos::new(108, 52),
+        UnitKind::Spearman,
+    );
+    let tourist = world.resource::<UnitIndex>().entity(UnitId(5)).unwrap();
+    world
+        .entity_mut(tourist)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 44))));
+    refresh_visibility(&mut world, &map);
+    let enemy_town_center_entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(1))
+        .unwrap();
+    let enemy_town_center_footprint = *world.get::<Footprint>(enemy_town_center_entity).unwrap();
+    assert!(explored_by(&world, team, enemy_town_center_footprint));
+
+    // 25 Playing ticks: the first decision fires (scout takes route[0], the
+    // memory is written) and the next cadence cycle is part-banked.
+    for _ in 0..25 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    let scout_entity = world.resource::<UnitIndex>().entity(UnitId(900)).unwrap();
+    assert_eq!(
+        world.get::<MoveOrder>(scout_entity).unwrap().goal,
+        plan.scout_route[0],
+        "the used match's scout took route leg 0"
+    );
+    {
+        let controller = world.resource::<AiController>();
+        assert_eq!(controller.scout_route_index, 1);
+        assert_eq!(
+            controller.remembered_enemy_town_center,
+            Some(GridPos::new(12, 46))
+        );
+        assert!(controller.decision_accumulator > 0.0);
+    }
+
+    // The restart seam, exactly as `reset_fixture_world` performs it: the
+    // bridge also reseeds entities (stale routes die with them), so the
+    // tourist and the pre-reset scout return home un-ordered before the
+    // fresh fog is inserted.
+    world
+        .entity_mut(tourist)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(116, 50))));
+    world.entity_mut(scout_entity).remove::<MoveOrder>();
+    world
+        .entity_mut(scout_entity)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(111, 50))));
+    world.remove_resource::<VisibilityMap>();
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    world.remove_resource::<AiController>();
+    world.insert_resource(AiController::new(team));
+
+    assert!(
+        !explored_by(&world, team, enemy_town_center_footprint),
+        "restart must wipe explored state back to Unexplored"
+    );
+    let controller = world.resource::<AiController>();
+    assert_eq!(controller.team, team);
+    assert_eq!(controller.decision_accumulator, 0.0);
+    assert_eq!(controller.scout_route_index, 0);
+    assert_eq!(controller.remembered_enemy_town_center, None);
+    assert_eq!(controller.next_army_kind, 0);
+
+    // And the fresh controller behaves boot-fresh: its first decision sends
+    // the (again lowest-idle) scout to route leg 0, not leg 1.
+    for _ in 0..20 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    assert_eq!(
+        world.get::<MoveOrder>(scout_entity).unwrap().goal,
+        plan.scout_route[0],
+        "restart must return the scout cursor to route leg 0"
+    );
 }
 
 /// A real raid: enemy combat kills the AI's food gatherers; gross food
