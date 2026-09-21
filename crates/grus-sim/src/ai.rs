@@ -20,7 +20,7 @@ use crate::catalog::{
     AGE_TWO_COST, Age, BuildingKind, Cost, MAX_POPULATION, ResourceKind, UnitKind, building_spec,
     unit_spec,
 };
-use crate::combat::CombatOrder;
+use crate::combat::{CombatOrder, CombatTarget};
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
 };
@@ -100,7 +100,7 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
     if controller.decision_accumulator >= AI_DECISION_SECONDS {
         controller.decision_accumulator -= AI_DECISION_SECONDS;
         let plan = MapFixture::team_plan(controller.team);
-        for command in decide_ai_commands(world, &mut controller, &plan) {
+        for command in decide_ai_commands(world, &mut controller, &plan, map) {
             // Results are deliberately dropped: AI rejects never surface in
             // the human `CommandFeedback` channel.
             let _ = apply_player_command(world, map, command);
@@ -109,9 +109,10 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
     world.insert_resource(controller);
 }
 
-/// The one ordered policy step: a pure decision over the pre-decision world.
+/// The one ordered policy step: a pure decision over the pre-decision world
+/// (the `GridMap` is static bounds/blockers data, explicitly readable).
 type PolicyStep =
-    fn(&World, &mut AiController, &AiMapPlan, &mut Vec<UnitId>) -> Option<PlayerCommand>;
+    fn(&World, &mut AiController, &AiMapPlan, &GridMap, &mut Vec<UnitId>) -> Option<PlayerCommand>;
 
 /// Ordered composition of the pure policy steps. Every step sees the same
 /// pre-decision world; `claimed` keeps two steps of this same decision from
@@ -124,6 +125,7 @@ pub fn decide_ai_commands(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    map: &GridMap,
 ) -> Vec<PlayerCommand> {
     // The memory step writes controller state, not a command: while an enemy
     // Town Center is actually visible, its cell is the retained memory.
@@ -145,7 +147,7 @@ pub fn decide_ai_commands(
         train_round_robin,
         attack,
     ] {
-        if let Some(command) = step(world, controller, plan, &mut claimed) {
+        if let Some(command) = step(world, controller, plan, map, &mut claimed) {
             commands.push(command);
         }
     }
@@ -154,18 +156,22 @@ pub fn decide_ai_commands(
 
 /// Defend visible threats: a currently visible enemy unit inside the base
 /// radius pulls every available (idle, unclaimed) military unit into one
-/// AttackMove at the nearest threat — nearest by distance to the Town
-/// Center, ties broken by stable ID. Units already holding a Move/Combat
-/// order keep theirs; the decision never retasks an engaged unit.
+/// direct Attack on the nearest threat — nearest by distance to the Town
+/// Center, ties broken by stable ID. The threat is visible right now, so
+/// the direct entity target is legitimate; a hidden enemy never reaches
+/// this step, so hidden threats cannot change the decision. Units already
+/// holding a Move/Combat order keep theirs; the decision never retasks an
+/// engaged unit.
 fn defend_visible_threats(
     world: &World,
     controller: &mut AiController,
     _plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let (_, town_center_entity) = town_center(world, controller.team)?;
     let home = town_center_cell_center(world, town_center_entity)?;
-    let threat = visible_threats(world, controller.team, home)
+    let (threat_id, _) = visible_threats(world, controller.team, home)
         .into_iter()
         .min_by(|(a_id, a_position), (b_id, b_position)| {
             a_position
@@ -178,11 +184,11 @@ fn defend_visible_threats(
         return None;
     }
     claimed.extend_from_slice(&defenders);
-    Some(PlayerCommand::Units(UnitCommand {
+    Some(PlayerCommand::Attack {
         issuer: controller.team,
         units: defenders,
-        kind: UnitCommandKind::AttackMove { target: threat.1 },
-    }))
+        target: CombatTarget::Unit(threat_id),
+    })
 }
 
 /// The retained enemy memory: while an enemy Town Center is currently
@@ -223,6 +229,7 @@ fn queue_replacement_worker(
     world: &World,
     controller: &mut AiController,
     _plan: &AiMapPlan,
+    _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     if villager_ids(world, controller.team).len() as u32 >= TARGET_WORKERS {
@@ -253,6 +260,7 @@ fn scout(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     if controller.scout_route_index >= plan.scout_route.len() {
@@ -289,16 +297,22 @@ fn villager_scout_id(world: &World, team: TeamId, claimed: &[UnitId]) -> Option<
 
 /// Assign one idle villager per decision toward a simple Food/Wood/Gold
 /// split. Existing `WorkerTask`/assignment state is the source of truth;
-/// candidates are explored standalone sources and own completed Farms only.
+/// candidates are explored standalone sources and own completed Farms, and
+/// the kind's nearest known source to the own Town Center wins (ties by
+/// stable ID) — an explored enemy-base fringe source never outranks a home
+/// source just because it has a lower ID.
 fn allocate_idle_worker(
     world: &World,
     controller: &mut AiController,
     _plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let idle = idle_worker_ids(world, controller.team)
         .into_iter()
         .find(|id| !claimed.contains(id))?;
+    let home = town_center(world, controller.team)
+        .and_then(|(_, entity)| town_center_cell_center(world, entity));
     let sources = known_sources(world, controller.team);
     let counts = task_kind_counts(world, controller.team);
     let total = villager_ids(world, controller.team).len() as u32;
@@ -310,7 +324,12 @@ fn allocate_idle_worker(
         let Some(source) = sources
             .iter()
             .filter(|source| source.kind == kind)
-            .find(|source| source_has_capacity(world, controller.team, source))
+            .filter(|source| source_has_capacity(world, controller.team, source))
+            .min_by(|a, b| {
+                source_distance(a, home)
+                    .total_cmp(&source_distance(b, home))
+                    .then(a.id.cmp(&b.id))
+            })
         else {
             continue;
         };
@@ -324,12 +343,19 @@ fn allocate_idle_worker(
     None
 }
 
+/// Distance from a known source to the own Town Center; without a Town
+/// Center every source ties and stable ID decides.
+fn source_distance(source: &KnownSource, home: Option<Vec2>) -> f32 {
+    home.map_or(0.0, |home| source.center.distance_squared(home))
+}
+
 /// Avoid population stalls: with low free capacity and cap below 100, place
 /// the next authored House using a real villager command.
 fn place_house(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let cap = population_cap(world, controller.team);
@@ -349,6 +375,7 @@ fn place_barracks(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     if any_own_building(world, controller.team, BuildingKind::Barracks) {
@@ -368,6 +395,7 @@ fn place_archery_range(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     if any_own_building(world, controller.team, BuildingKind::ArcheryRange) {
@@ -388,6 +416,7 @@ fn place_farm(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let total = villager_ids(world, controller.team).len() as u32;
@@ -421,6 +450,7 @@ fn place_storehouse(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let expansion = plan.expansion_storehouse_slots.iter().find(|slot| {
@@ -444,6 +474,7 @@ fn attempt_age_two(
     world: &World,
     controller: &mut AiController,
     _plan: &AiMapPlan,
+    _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let state = world
@@ -474,6 +505,7 @@ fn place_stable(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    _map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let age = world
@@ -500,6 +532,7 @@ fn train_round_robin(
     world: &World,
     controller: &mut AiController,
     _plan: &AiMapPlan,
+    _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let team_age = world
@@ -531,14 +564,20 @@ fn train_round_robin(
 
 /// Attack: once at least the threshold of military units is live, the
 /// available (idle, unclaimed) ones march as one grouped AttackMove toward
-/// the remembered enemy Town Center cell — or, if none has ever been seen,
-/// the far end of the authored route (enemy ground; scouting progress in
-/// `scout_route_index` is not consumed). Units already holding a
-/// Move/Combat order are skipped, so an active push is never reissued.
+/// the nearest walkable ground cell beside the remembered enemy Town Center
+/// anchor (the anchor itself is a blocked footprint cell while the building
+/// stands) — or, if none has ever been seen, the far end of the authored
+/// route (enemy ground; scouting progress in `scout_route_index` is not
+/// consumed). The target is always a ground cell, never an entity. Units
+/// already holding a Move/Combat order are skipped, so an active push is
+/// never reissued; losses simply drop the live count below the threshold
+/// until ordinary production rebuilds the force and a later decision
+/// regroups it — there is no persistent squad state to repair.
 fn attack(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     if own_military_count(world, controller.team) < ATTACK_THRESHOLD {
@@ -548,17 +587,39 @@ fn attack(
     if attackers.is_empty() {
         return None;
     }
-    let target_cell = controller
-        .remembered_enemy_town_center
-        .or_else(|| plan.scout_route.last().copied())?;
+    let target_cell = match controller.remembered_enemy_town_center {
+        Some(remembered) => nearest_walkable_cell(map, remembered)?,
+        None => *plan.scout_route.last()?,
+    };
     claimed.extend_from_slice(&attackers);
     Some(PlayerCommand::Units(UnitCommand {
         issuer: controller.team,
         units: attackers,
         kind: UnitCommandKind::AttackMove {
-            target: Vec2::new(target_cell.x as f32 + 0.5, target_cell.y as f32 + 0.5),
+            target: map.cell_center(target_cell),
         },
     }))
+}
+
+/// The nearest walkable ground cell to `cell`, searched outward ring by ring
+/// in a fixed order (so the result never depends on enumeration order). A
+/// remembered footprint anchor is itself blocked while the building stands;
+/// an AttackMove there would reject `Unreachable` for every attacker.
+fn nearest_walkable_cell(map: &GridMap, cell: GridPos) -> Option<GridPos> {
+    for radius in 0i32..8 {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if radius > 0 && dx.abs() != radius && dy.abs() != radius {
+                    continue; // interior cells were covered by a smaller ring
+                }
+                let candidate = GridPos::new(cell.x + dx, cell.y + dy);
+                if map.is_walkable(candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 // ---- Pure read helpers ------------------------------------------------------
@@ -703,6 +764,7 @@ struct KnownSource {
     kind: ResourceKind,
     entity: Entity,
     farm: bool,
+    center: Vec2,
 }
 
 fn known_sources(world: &World, team: TeamId) -> Vec<KnownSource> {
@@ -714,12 +776,17 @@ fn known_sources(world: &World, team: TeamId) -> Vec<KnownSource> {
                 .filter_map(|(id, entity)| {
                     let source = world.get::<ResourceSource>(*entity)?;
                     let footprint = world.get::<Footprint>(*entity)?;
+                    let center = Vec2::new(
+                        footprint.anchor.x as f32 + f32::from(footprint.width) / 2.0,
+                        footprint.anchor.y as f32 + f32::from(footprint.height) / 2.0,
+                    );
                     if let Some(building) = world.get::<Building>(*entity) {
                         (building.team == team).then_some(KnownSource {
                             id: *id,
                             kind: source.kind,
                             entity: *entity,
                             farm: true,
+                            center,
                         })
                     } else {
                         explored_by(world, team, *footprint).then_some(KnownSource {
@@ -727,6 +794,7 @@ fn known_sources(world: &World, team: TeamId) -> Vec<KnownSource> {
                             kind: source.kind,
                             entity: *entity,
                             farm: false,
+                            center,
                         })
                     }
                 })
