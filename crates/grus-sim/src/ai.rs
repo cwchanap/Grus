@@ -359,7 +359,10 @@ fn place_house(
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
     let cap = population_cap(world, controller.team);
-    if cap >= MAX_POPULATION || cap - population_used(world, controller.team) >= POPULATION_HEADROOM
+    // Destruction can drive the cap below the live population; saturate so
+    // the rebuild path still sees zero free capacity instead of panicking.
+    if cap >= MAX_POPULATION
+        || cap.saturating_sub(population_used(world, controller.team)) >= POPULATION_HEADROOM
     {
         return None;
     }
@@ -485,6 +488,7 @@ fn attempt_age_two(
         || state.age_up_started
         || (villager_ids(world, controller.team).len() as u32) < TARGET_WORKERS
         || !has_completed_building(world, controller.team, BuildingKind::Barracks)
+        || !has_completed_building(world, controller.team, BuildingKind::ArcheryRange)
     {
         return None;
     }
