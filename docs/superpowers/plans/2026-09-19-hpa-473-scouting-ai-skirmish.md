@@ -265,7 +265,8 @@ cargo test -p grus-sim combat
 - [ ] Restart regression asserts Unexplored/explored state, remembered Town Center, scout-route cursor and AI state return to their initial values; human pending commands remain cleared by the existing seam.
 - [ ] Add a bounded pure-Rust full-match journey with ordinary systems/commands: economy -> scouting -> army -> combat -> Result. Follow the existing `run_army_journey` shape: state/tick capped, no exact tick arithmetic or wall-clock dependency.
 - [ ] Run the same AI policy from both authored sides in separate headless scenarios. This is a test parameter, not a new runtime mode.
-- [ ] Extend the **same** HPA-473 Godot smoke from Task 3 with ordinary AI economy/build/train/scout/age progress and Restart freshness. Do not require a full Victory/Defeat match in Godot CI; Rust owns that proof.
+- [x] Extend the **same** HPA-473 Godot smoke from Task 3 with ordinary AI economy/build/train/scout/age progress and Restart freshness. Do not require a full Victory/Defeat match in Godot CI; Rust owns that proof.
+  > Evidence note (Task 7): the smoke's **age beat is Rust-owned** — the sessioned AI full match settles the Result before Age 2, so no bounded, state-predicated Godot age assertion exists to make; this is documented in `godot/scripts/scouting_ai_smoke_test.gd`. Economy/build/train/scout/restart coverage stays in the smoke as planned.
 - [ ] Keep the runtime smoke bounded by state/event predicates; avoid brittle “after exactly N ticks” assertions.
 - [ ] Assert the bounded journey actually discovers/reaches an authored expansion before any late-game rebuild expectation. The existing 18-resource table is not a planned edit.
 - [ ] If the AI reaches the expansion and still stalls because of genuine authored scarcity, stop and revise the plan with that evidence before changing map content. Do not add procedural resource spawning, debug grants or a second fixture.
