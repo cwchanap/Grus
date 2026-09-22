@@ -729,6 +729,39 @@ fn house_fires_on_population_pressure_and_stops_at_satisfied_slots() {
     )));
 }
 
+/// Regression: destruction can drive the population cap below the live
+/// population (Houses fall, units live on). `place_house` must saturate
+/// instead of underflowing — and still place the rebuild House.
+#[test]
+fn house_survives_population_cap_below_usage() {
+    let (mut world, map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    // Seed cap is 10 (Town Center) with 4 villagers; push usage past the cap
+    // as if Houses were destroyed while the units lived on.
+    for index in 0..7_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(200 + index),
+            TeamId(2),
+            Vec2::new(110.5, 60.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+    assert!(population_cap(&world, TeamId(2)) < population_used(&world, TeamId(2)));
+    let commands = decide(&mut world, &map);
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::House,
+                ..
+            }
+        )),
+        "used > cap must still rebuild a House: {commands:?}"
+    );
+}
+
 #[test]
 fn farm_fires_only_when_food_capacity_drops_below_target() {
     let (mut world, map) = ai_world(TeamId(2));
@@ -814,8 +847,29 @@ fn age_two_requires_workers_core_and_affordability() {
     assert!(
         decide(&mut world, &map)
             .iter()
-            .all(|command| !matches!(command, PlayerCommand::EnqueueAgeUp { .. }))
+            .all(|command| !matches!(command, PlayerCommand::EnqueueAgeUp { .. })),
+        "the Age-1 core is Barracks AND Archery Range: Barracks alone must not fire"
     );
+
+    // Complete the Archery Range on its authored slot: the core now stands.
+    let plan = MapFixture::team_plan(TeamId(2));
+    let entity = world.spawn((
+        Building {
+            id: BuildingId(11),
+            team: TeamId(2),
+            kind: BuildingKind::ArcheryRange,
+            construction: ConstructionState {
+                progress_seconds: 0.0,
+                complete: true,
+                active_builder: None,
+            },
+        },
+        Footprint::new(plan.archery_range_anchor, 3, 3),
+    ));
+    let range_entity = entity.id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(11), range_entity);
 
     // Affordable -> the attempt fires against the Town Center.
     grant(&mut world, TeamId(2), 300, 0, 200);
