@@ -817,7 +817,8 @@ fn age_two_requires_workers_core_and_affordability() {
             .all(|command| !matches!(command, PlayerCommand::EnqueueAgeUp { .. }))
     );
 
-    // Workers + core but unaffordable -> still no attempt.
+    // Workers + Barracks, affordable -> still no attempt: only the Archery Range
+    // is missing, so this checkpoint isolates the core prerequisite.
     for index in 0..4_u32 {
         spawn_villager(
             &mut world,
@@ -844,6 +845,7 @@ fn age_two_requires_workers_core_and_affordability() {
     world
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(BuildingId(10), barracks_entity);
+    grant(&mut world, TeamId(2), 300, 0, 200);
     assert!(
         decide(&mut world, &map)
             .iter()
@@ -871,8 +873,7 @@ fn age_two_requires_workers_core_and_affordability() {
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(BuildingId(11), range_entity);
 
-    // Affordable -> the attempt fires against the Town Center.
-    grant(&mut world, TeamId(2), 300, 0, 200);
+    // Cored (and still affordable) -> the attempt fires against the Town Center.
     let age = decide(&mut world, &map)
         .into_iter()
         .find(|command| matches!(command, PlayerCommand::EnqueueAgeUp { .. }));
