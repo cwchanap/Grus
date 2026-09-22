@@ -1000,6 +1000,85 @@ fn round_robin_rotates_and_respects_queues_and_ages() {
 }
 
 #[test]
+fn round_robin_needs_population_headroom_to_train() {
+    let (mut world, map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 3000, 3000, 2000);
+    let plan = MapFixture::team_plan(TeamId(2));
+
+    // One completed Barracks with an empty queue: population is the only
+    // limiter under test.
+    let entity = world
+        .spawn((
+            Building {
+                id: BuildingId(10),
+                team: TeamId(2),
+                kind: BuildingKind::Barracks,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.barracks_anchor, 3, 3),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(10), entity);
+
+    // Fill every free slot: at zero headroom no army Train command may
+    // fire (the decision-side population gate), while non-production
+    // decisions keep working.
+    while crate::production::population_used(&world, TeamId(2))
+        < crate::production::population_cap(&world, TeamId(2))
+    {
+        let index = crate::production::population_used(&world, TeamId(2));
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(800 + index),
+            TeamId(2),
+            GridPos::new(108, 60 + index as i32),
+            UnitKind::Spearman,
+        );
+    }
+    assert!(decide(&mut world, &map).iter().all(|command| !matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+
+    // A completed House reopens headroom and training resumes.
+    let house = world
+        .spawn((
+            Building {
+                id: BuildingId(11),
+                team: TeamId(2),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.house_slots[0], 2, 2),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(11), house);
+    assert!(decide(&mut world, &map).iter().any(|command| matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+}
+
+#[test]
 fn stable_places_on_the_authored_slot_once_age_two_lands() {
     let (mut world, map) = ai_world(TeamId(2));
     let plan = MapFixture::team_plan(TeamId(2));
@@ -1075,6 +1154,22 @@ fn decisions_are_invariant_to_hidden_enemy_workers_on_shared_sources() {
         let mut command_lists = Vec::new();
         for hidden_food_workers in [0_u32, 2] {
             let (mut world, map) = ai_world(team);
+            if hidden_food_workers == 0 {
+                // Premise: the shared source must be this team's lowest-ID
+                // explored standalone food source, so the hidden gatherers
+                // sit on a source the AI actually uses — otherwise the
+                // invariance proof below passes vacuously.
+                let lowest_food = known_sources(&world, team)
+                    .into_iter()
+                    .filter(|source| !source.farm && source.kind == ResourceKind::Food)
+                    .map(|source| source.id)
+                    .min();
+                assert_eq!(
+                    lowest_food,
+                    Some(shared_food),
+                    "team {team:?}: shared source must be the lowest-ID explored standalone food source"
+                );
+            }
             for index in 0..hidden_food_workers {
                 let entity = spawn_villager(
                     &mut world,
@@ -1437,102 +1532,103 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
 /// survivors and replacements into one fresh group — no squad state.
 #[test]
 fn attack_regroups_after_losses_and_rebuild() {
-    let team = TeamId(2);
-    let (mut world, mut map) = ai_world(team);
-    let plan = MapFixture::team_plan(team);
-    world.resource_mut::<AiController>().scout_route_index = plan.scout_route.len();
+    for team in [TeamId(1), TeamId(2)] {
+        let (mut world, mut map) = ai_world(team);
+        let plan = MapFixture::team_plan(team);
+        world.resource_mut::<AiController>().scout_route_index = plan.scout_route.len();
 
-    // Assembly: six live military march as one grouped AttackMove.
-    for index in 0..6_u32 {
+        // Assembly: six live military march as one grouped AttackMove.
+        for index in 0..6_u32 {
+            spawn_military(
+                &mut world,
+                &map,
+                UnitId(20 + index),
+                team,
+                GridPos::new(108, 52 + index as i32),
+                UnitKind::Spearman,
+            );
+        }
+        let assembled = decide_and_apply(&mut world, &mut map)
+            .into_iter()
+            .find(|command| {
+                matches!(command, PlayerCommand::Units(units)
+                    if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
+            });
+        let Some(PlayerCommand::Units(units)) = assembled else {
+            panic!("six live military must assemble one grouped attack");
+        };
+        assert_eq!(
+            units.units,
+            vec![
+                UnitId(20),
+                UnitId(21),
+                UnitId(22),
+                UnitId(23),
+                UnitId(24),
+                UnitId(25)
+            ],
+            "the whole idle army marches as one group"
+        );
+
+        // Losses: two die mid-march; the live count drops below the threshold
+        // and no further attack fires while production must rebuild.
+        for id in [UnitId(21), UnitId(22)] {
+            let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+            world.despawn(entity);
+            world.resource_mut::<UnitIndex>().remove(id);
+        }
+        assert!(
+            decide(&mut world, &map)
+                .iter()
+                .all(|command| !matches!(command,
+            PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. })))
+        );
+
+        // Production rebuilt two replacements and the march has resolved (the
+        // survivors are idle again): the next decision regroups all six.
         spawn_military(
             &mut world,
             &map,
-            UnitId(20 + index),
+            UnitId(40),
             team,
-            GridPos::new(108, 52 + index as i32),
+            GridPos::new(108, 60),
             UnitKind::Spearman,
         );
-    }
-    let assembled = decide_and_apply(&mut world, &mut map)
-        .into_iter()
-        .find(|command| {
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(41),
+            team,
+            GridPos::new(108, 61),
+            UnitKind::Spearman,
+        );
+        for id in [UnitId(20), UnitId(23), UnitId(24), UnitId(25)] {
+            let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+            world
+                .entity_mut(entity)
+                .remove::<MoveOrder>()
+                .remove::<CombatOrder>();
+        }
+        let regrouped = decide(&mut world, &map).into_iter().find(|command| {
             matches!(command, PlayerCommand::Units(units)
                 if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
         });
-    let Some(PlayerCommand::Units(units)) = assembled else {
-        panic!("six live military must assemble one grouped attack");
-    };
-    assert_eq!(
-        units.units,
-        vec![
-            UnitId(20),
-            UnitId(21),
-            UnitId(22),
-            UnitId(23),
-            UnitId(24),
-            UnitId(25)
-        ],
-        "the whole idle army marches as one group"
-    );
-
-    // Losses: two die mid-march; the live count drops below the threshold
-    // and no further attack fires while production must rebuild.
-    for id in [UnitId(21), UnitId(22)] {
-        let entity = world.resource::<UnitIndex>().entity(id).unwrap();
-        world.despawn(entity);
-        world.resource_mut::<UnitIndex>().remove(id);
+        let Some(PlayerCommand::Units(units)) = regrouped else {
+            panic!("the rebuilt army must regroup into one fresh attack");
+        };
+        assert_eq!(
+            units.units,
+            vec![
+                UnitId(20),
+                UnitId(23),
+                UnitId(24),
+                UnitId(25),
+                UnitId(40),
+                UnitId(41)
+            ],
+            "survivors and replacements march together as one group"
+        );
     }
-    assert!(
-        decide(&mut world, &map)
-            .iter()
-            .all(|command| !matches!(command,
-        PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. })))
-    );
-
-    // Production rebuilt two replacements and the march has resolved (the
-    // survivors are idle again): the next decision regroups all six.
-    spawn_military(
-        &mut world,
-        &map,
-        UnitId(40),
-        team,
-        GridPos::new(108, 60),
-        UnitKind::Spearman,
-    );
-    spawn_military(
-        &mut world,
-        &map,
-        UnitId(41),
-        team,
-        GridPos::new(108, 61),
-        UnitKind::Spearman,
-    );
-    for id in [UnitId(20), UnitId(23), UnitId(24), UnitId(25)] {
-        let entity = world.resource::<UnitIndex>().entity(id).unwrap();
-        world
-            .entity_mut(entity)
-            .remove::<MoveOrder>()
-            .remove::<CombatOrder>();
-    }
-    let regrouped = decide(&mut world, &map).into_iter().find(|command| {
-        matches!(command, PlayerCommand::Units(units)
-            if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
-    });
-    let Some(PlayerCommand::Units(units)) = regrouped else {
-        panic!("the rebuilt army must regroup into one fresh attack");
-    };
-    assert_eq!(
-        units.units,
-        vec![
-            UnitId(20),
-            UnitId(23),
-            UnitId(24),
-            UnitId(25),
-            UnitId(40),
-            UnitId(41)
-        ],
-        "survivors and replacements march together as one group"
-    );
 }
 
 // ---- Idempotence ------------------------------------------------------------
@@ -1832,6 +1928,10 @@ fn restart_returns_explored_fog_and_ai_state_to_boot_values() {
 fn raid_reduces_income_until_paid_replacement_lands() {
     let team = TeamId(2);
     let (mut world, mut map) = ai_world(team);
+    // Session-free like the economy journey: the AI's contracted conquest
+    // can settle a Result mid-journey, and a settled session would freeze
+    // the sim before the scenario finishes.
+    world.remove_resource::<MatchSession>();
 
     run_until(&mut world, &mut map, "worker growth", |world| {
         villagers_of(world, team).len() >= 6
@@ -1946,6 +2046,10 @@ fn raid_reduces_income_until_paid_replacement_lands() {
 fn population_stall_builds_a_house_and_recovers() {
     let team = TeamId(2);
     let (mut world, mut map) = ai_world(team);
+    // Session-free like the economy journey: the AI's contracted conquest
+    // can settle a Result mid-journey, and a settled session would freeze
+    // the sim before the scenario finishes.
+    world.remove_resource::<MatchSession>();
     // Grants are fine here — the stall is the scenario under test.
     grant(&mut world, team, 3000, 3000, 2000);
 

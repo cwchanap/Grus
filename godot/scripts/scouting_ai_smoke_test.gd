@@ -328,6 +328,12 @@ func _run() -> void:
 		_fail("minimap shows no enemy markers after the reveal")
 		return
 	# A visible enemy building may be selected, and reconcile keeps it.
+	# Deliberate test seam: the selection is poked directly because the enemy
+	# Town Center boots hidden under fog, and the real picking funnel
+	# (battlefield _select_at) rightly skips not-visible-in-tree views —
+	# selecting it through a real click would first require marching the
+	# scout into the enemy start, machinery the fog contract under test
+	# does not need.
 	_main_selected_building(2)
 	for _frame in 3:
 		await get_tree().process_frame

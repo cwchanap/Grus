@@ -305,17 +305,45 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
         .resource::<BuildingIndex>()
         .entity(BuildingId(3))
         .unwrap();
+    // Live-state check: recompute fog so this assert sees the freshly
+    // placed site, not the pre-placement map the last refresh produced.
+    refresh_visibility(&mut world, &map);
     assert!(
         !visible_to(&world, TEAM, site),
         "a newly placed incomplete site grants no vision"
     );
 
-    // Completion is what flips the site into a reveal origin.
+    // Completion is what flips the site into a reveal origin — driven
+    // through the real construction step (teleport the tasked builder onto
+    // its stored slot, then step until the 20 s Storehouse job finishes;
+    // the bound covers the full build plus float-error slack)
+    // instead of poking `construction.complete` by hand.
+    let slot = match world.get::<WorkerTask>(builder).unwrap() {
+        WorkerTask::ToConstruction { slot, .. } => *slot,
+        other => panic!("placed site must task its builder, got {other:?}"),
+    };
     world
-        .get_mut::<Building>(storehouse)
-        .unwrap()
-        .construction
-        .complete = true;
+        .entity_mut(builder)
+        .insert(SimPosition::new(map.cell_center(slot)));
+    for _ in 0..450 {
+        step_construction(&mut world, SIM_STEP_SECONDS);
+        if world
+            .get::<Building>(storehouse)
+            .unwrap()
+            .construction
+            .complete
+        {
+            break;
+        }
+    }
+    assert!(
+        world
+            .get::<Building>(storehouse)
+            .unwrap()
+            .construction
+            .complete,
+        "the storehouse never completed through the real construction step"
+    );
     refresh_visibility(&mut world, &map);
     assert!(
         visible_to(&world, TEAM, site),

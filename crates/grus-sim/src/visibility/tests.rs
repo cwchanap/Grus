@@ -68,12 +68,28 @@ fn authored_start_resources_are_explored_and_expansions_are_not() {
 
     refresh_visibility(&mut world, &map);
 
+    // Premise for the x<64 attribution below: the authored starts really
+    // split at the midline — team 1's Town Center sits west of x=64, team
+    // 2's east of it, and every starting resource shares its attributed
+    // team's side. A fixture shift fails loudly here instead of silently
+    // mis-owning the reveal assertions.
+    assert!(
+        MapFixture::team_plan(TeamId(1)).town_center_anchor.x < 64
+            && MapFixture::team_plan(TeamId(2)).town_center_anchor.x >= 64,
+        "the authored Town Centers must sit on opposite sides of the x=64 split"
+    );
     for spawn in MapFixture::starting_resources() {
         let team = if spawn.cell.x < 64 {
             TeamId(1)
         } else {
             TeamId(2)
         };
+        assert_eq!(
+            MapFixture::team_plan(team).town_center_anchor.x < 64,
+            spawn.cell.x < 64,
+            "starting resource at {:?} must share team {team:?}'s side of the x=64 split",
+            spawn.cell
+        );
         assert!(
             visible_to(&world, team, spawn.cell),
             "starting resource at {:?} must be visible to {team:?}",
