@@ -1126,6 +1126,8 @@ fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transfor
 /// pass, so a newly instantiated view never spends a frame visible before
 /// the sim truth lands (scene roots default hidden).
 fn initialize_view_metadata(world: &mut World) {
+    // ponytail: full GridMap clone per Update; fine at 128x96, pass
+    // &GridMap through a resource if profiling ever flags it.
     let map = world.resource::<GridMap>().clone();
 
     #[allow(clippy::type_complexity)]
@@ -1249,6 +1251,8 @@ fn node_from_handle(handle: GodotNodeHandle) -> Option<Gd<Node3D>> {
 /// Exclusive for the same reason as `initialize_view_metadata`; the initial
 /// stamp happens there, this system only maintains the value.
 fn sync_view_visibility(world: &mut World) {
+    // ponytail: full GridMap clone per Update; fine at 128x96, pass
+    // &GridMap through a resource if profiling ever flags it.
     let map = world.resource::<GridMap>().clone();
 
     let mut units = world.query::<(&Unit, &SimPosition, &GodotNodeHandle)>();

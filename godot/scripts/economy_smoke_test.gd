@@ -84,19 +84,20 @@ func _key_tap(keycode: int) -> void:
 	release.pressed = false
 	Input.parse_input_event(release)
 
-func _click_view(view: Node3D, button: int) -> void:
+func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
 	_mouse_click(_camera.unproject_position(view.global_position), button)
 	await get_tree().process_frame
-	await get_tree().process_frame
+	# Extra frame only for fog-gated targets whose view was recently
+	# revealed; plain clicks keep the original single-frame settle.
+	if fog_settle:
+		await get_tree().process_frame
 
 func _click_world(point: Vector2, button: int) -> void:
 	_mouse_click(_camera.unproject_position(Vector3(point.x + 0.25, 0.0, point.y + 0.25)), button)
 	await get_tree().process_frame
-	await get_tree().process_frame
 
 func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
-	await get_tree().process_frame
 	await get_tree().process_frame
 
 ## Polls a condition every physics frame until it holds or the frame budget
@@ -447,7 +448,8 @@ func _run() -> void:
 		_fail("wood worker or expansion tree view is missing")
 		return
 	await _click_view(wood_worker, MOUSE_BUTTON_LEFT)
-	await _click_view(far_tree, MOUSE_BUTTON_RIGHT)
+	# The far tree's view is fog-revealed: it pays the fog settle.
+	await _click_view(far_tree, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"wood": int(GrusBridge.economy_snapshot().get("wood", -1))}
 	if not await _wait_until(_wood_deposited_at_storehouse.bind(wood_worker, storehouse.global_position, delivery_box), 45.0,
 			"no wood delivery ever reached the Storehouse"):

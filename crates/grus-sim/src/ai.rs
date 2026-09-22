@@ -530,8 +530,9 @@ fn place_stable(
 }
 
 /// Train the army through the existing producer queues: one round-robin
-/// enqueue per decision against an empty queue, respecting unlock age and
-/// affordability (producer compatibility comes from the shared catalogue).
+/// enqueue per decision against an empty queue, respecting unlock age,
+/// affordability, and population headroom (producer compatibility comes
+/// from the shared catalogue).
 fn train_round_robin(
     world: &World,
     controller: &mut AiController,
@@ -539,6 +540,15 @@ fn train_round_robin(
     _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
 ) -> Option<PlayerCommand> {
+    // Decision-side population gate: with zero free slots the enqueue would
+    // be a guaranteed apply-time rejection, so leave the rotation cursor
+    // untouched until headroom exists (mirrors `place_house`'s saturation).
+    if population_cap(world, controller.team)
+        .saturating_sub(population_used(world, controller.team))
+        < 1
+    {
+        return None;
+    }
     let team_age = world
         .get_resource::<TeamEconomy>()?
         .0
@@ -605,10 +615,12 @@ fn attack(
     }))
 }
 
-/// The nearest walkable ground cell to `cell`, searched outward ring by ring
-/// in a fixed order (so the result never depends on enumeration order). A
-/// remembered footprint anchor is itself blocked while the building stands;
-/// an AttackMove there would reject `Unreachable` for every attacker.
+/// The nearest walkable ground cell to `cell`: rings expand outward by
+/// Chebyshev distance and each ring is visited row-major (dy outer, dx
+/// inner), so the result is the nearest ring (Chebyshev) with a row-major
+/// tie-break — not the Euclidean-nearest cell. A remembered footprint
+/// anchor is itself blocked while the building stands; an AttackMove there
+/// would reject `Unreachable` for every attacker.
 fn nearest_walkable_cell(map: &GridMap, cell: GridPos) -> Option<GridPos> {
     for radius in 0i32..8 {
         for dy in -radius..=radius {

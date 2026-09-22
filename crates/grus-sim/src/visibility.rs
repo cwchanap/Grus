@@ -171,9 +171,11 @@ pub fn refresh_visibility(world: &mut World, map: &GridMap) {
         return;
     };
 
-    // Recompute every team the map knows plus any team with live origins; a
-    // known team with no origins currently sees nothing (explored retained).
-    let teams: Vec<TeamId> = visibility
+    // Recompute the distinct union of teams the map knows and teams with
+    // live origins; a known team with no origins currently sees nothing
+    // (explored retained). Per-team updates are independent, so iteration
+    // order never affects the result.
+    let teams: HashSet<TeamId> = visibility
         .teams
         .keys()
         .chain(origins.keys())

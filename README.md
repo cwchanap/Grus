@@ -57,7 +57,7 @@ Worker and building losses have real economic consequences for the AI — it gat
 
 ### Runtime setup
 
-The runtime match is **human Team 1 vs AI Team 2**. Starting the AI from the other side is **automated Rust-test coverage only** (the full-match journeys run the same policy from both authored starts: Team 1 wins in ~3305 ticks, Team 2 in ~3215), not a user-selectable mode. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, enemies hidden again) and fresh AI memory.
+The runtime match is **human Team 1 vs AI Team 2**. Starting the AI from the other side is **automated Rust-test coverage only** (the full-match journeys run the same policy from both authored starts, and both sides settle real conquest wins — roughly 3.3k and 3.2k ticks at 20 Hz; exact figures shift with any balance change), not a user-selectable mode. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, enemies hidden again) and fresh AI memory.
 
 ### Build and launch
 
