@@ -177,6 +177,14 @@ jobs:
           mkdir -p build
           godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
           test -x build/Grus.x86_64
+      - name: Debug exported build crash (TEMPORARY)
+        run: |
+          which gdb || (sudo apt-get update -qq && sudo apt-get install -y -qq gdb)
+          gdb -batch \
+            -ex 'set pagination off' \
+            -ex 'run --headless --quit-after 30' \
+            -ex 'bt 40' \
+            ./build/Grus.x86_64 || true
       - name: Verify exported build loads Rust extension
         run: |
           set -o pipefail
