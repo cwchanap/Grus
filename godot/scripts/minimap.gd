@@ -122,9 +122,9 @@ func _draw() -> void:
 
 ## The camera frustum's intersection with the ground plane, minimap-space.
 func _camera_ground_corners() -> PackedVector2Array:
-	var size := get_viewport().get_visible_rect().size
+	var viewport_size := get_viewport().get_visible_rect().size
 	var corners := PackedVector2Array()
-	for screen_point in [Vector2.ZERO, Vector2(size.x, 0.0), size, Vector2(0.0, size.y)]:
+	for screen_point in [Vector2.ZERO, Vector2(viewport_size.x, 0.0), viewport_size, Vector2(0.0, viewport_size.y)]:
 		var origin := _camera.project_ray_origin(screen_point)
 		var direction := _camera.project_ray_normal(screen_point)
 		if absf(direction.y) < 0.0001:
