@@ -18,7 +18,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
 use crate::session::gameplay_active;
-use crate::visibility::explored_by;
+use crate::visibility::{explored_by, visible_to};
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -69,12 +69,17 @@ pub struct PlacementPlan {
 
 /// Authoritative placement validation. Checks, in order: owned villager →
 /// kind unlocked/buildable → footprint in bounds → every footprint cell
-/// explored → footprint cells walkable and free of any live unit's current
-/// cell or claimed `MoveOrder` goal → affordability → reachable
+/// explored → footprint cells walkable and free of any unit's current cell
+/// or claimed `MoveOrder` goal the issuer can see → affordability → reachable
 /// reserved immediate-perimeter builder slot, evaluated on the
 /// post-placement map (footprint cells already blocked). The explored check
-/// runs before the all-unit occupancy scan so `Occupied` can never reveal a
-/// hidden unit, building, or move goal through the placement preview.
+/// runs before the occupancy scan, and the scan itself only counts
+/// occupancy the issuer can observe — hidden enemy units and their move
+/// goals never produce `Occupied`, so the preview cannot map them.
+/// Blocked cells stay honest regardless of vision: footprint walkability is
+/// shared-map state, the same accepted channel as path shape/failure, and a
+/// physically blocked cell can never accept a building anyway. A hidden unit
+/// standing inside an accepted footprint is displaced at apply time.
 /// Mutates nothing; apply the returned plan only after every check passes.
 pub fn validate_placement(
     world: &World,
@@ -121,20 +126,29 @@ pub fn validate_placement(
         return Err(RejectReason::Unexplored);
     }
 
-    // 5. footprint cells walkable and free of any live unit's current cell or
-    // claimed MoveOrder goal: placement would block the cells and permanently
-    // entomb a unit standing inside the footprint (find_path needs a walkable
-    // start), or strand a unit whose goal lies inside on a preserved order
-    // that can never replan onto blocked cells. The builder's own goal is
-    // exempt because acceptance cancels that order.
+    // 5. footprint cells walkable and free of any observable unit's current
+    // cell or claimed MoveOrder goal: placement would block the cells and
+    // permanently entomb a unit standing inside the footprint (find_path
+    // needs a walkable start), or strand a unit whose goal lies inside on a
+    // preserved order that can never replan onto blocked cells. Only
+    // occupancy the issuer can see counts — a hidden enemy's position or
+    // goal must never surface as an `Occupied` reject through the preview;
+    // apply handles that collision by displacement instead. Own units are
+    // always observable to their issuer. The builder's own goal is exempt
+    // because acceptance cancels that order.
     let mut unit_cells: HashSet<GridPos> = HashSet::new();
     if let Some(index) = world.get_resource::<UnitIndex>() {
         for (_, unit_entity) in index.iter() {
+            let unit_team = world.get::<Unit>(*unit_entity).map(|unit| unit.team);
             if let Some(position) = world.get::<SimPosition>(*unit_entity) {
-                unit_cells.insert(map.world_to_cell(position.current));
+                let cell = map.world_to_cell(position.current);
+                if unit_team == Some(issuer) || visible_to(world, issuer, cell) {
+                    unit_cells.insert(cell);
+                }
             }
             if *unit_entity != entity
                 && let Some(order) = world.get::<MoveOrder>(*unit_entity)
+                && (unit_team == Some(issuer) || visible_to(world, issuer, order.goal))
             {
                 unit_cells.insert(order.goal);
             }
@@ -169,7 +183,8 @@ pub fn validate_placement(
     for cell in footprint.cells() {
         occupied_map.set_blocked(cell, true);
     }
-    let (slot, route) = reachable_builder_slot(world, &occupied_map, entity, footprint, None)?;
+    let (slot, route) =
+        reachable_builder_slot(world, &occupied_map, issuer, entity, footprint, None)?;
     Ok(PlacementPlan {
         builder: entity,
         footprint,
@@ -213,6 +228,15 @@ pub(crate) fn apply_place_building(
     }
 
     let id = world.resource_mut::<IdAllocator>().allocate_building();
+
+    // A hidden enemy unit can stand inside an accepted footprint — its cell
+    // was excluded from occupancy — so push occupants out before the cells
+    // block; otherwise it would be entombed on an unwalkable start cell that
+    // `find_path` can never route from. A hidden move goal inside the
+    // footprint is likewise retargeted to open ground so the preserved
+    // order can never strand on blocked cells.
+    displace_footprint_occupants(world, map, plan.footprint);
+    retarget_footprint_goals(world, map, plan.footprint);
 
     for cell in plan.footprint.cells() {
         map.set_blocked(cell, true);
@@ -298,14 +322,20 @@ pub(crate) fn apply_resume_construction(
                 .get_resource::<UnitIndex>()
                 .and_then(|index| index.entity(previous))
         });
-    let (slot, route) =
-        match reachable_builder_slot(world, map, builder_entity, footprint, previous_entity) {
-            Ok(slot) => slot,
-            Err(reason) => {
-                result.reject = Some(reason);
-                return result;
-            }
-        };
+    let (slot, route) = match reachable_builder_slot(
+        world,
+        map,
+        issuer,
+        builder_entity,
+        footprint,
+        previous_entity,
+    ) {
+        Ok(slot) => slot,
+        Err(reason) => {
+            result.reject = Some(reason);
+            return result;
+        }
+    };
 
     // The site's previous builder is paused before the new one takes over:
     // one active builder per building, never two.
@@ -365,14 +395,17 @@ fn validate_resume(
 }
 
 /// Picks the builder's approach slot: the first reachable walkable cell on the
-/// footprint's immediate perimeter that no live unit stands on or moves to.
-/// `goal_released` names a unit whose `MoveOrder` an accepted command cancels
-/// (a construction site's previous builder on takeover): its goal is not
-/// seeded because acceptance frees it, while its current cell still reserves.
-/// Returns the slot and its route waypoints.
+/// footprint's immediate perimeter that no live unit the issuer can observe
+/// stands on or moves to — a hidden unit never reserves a slot, matching the
+/// occupancy rule above (and the collision resolves through ordinary
+/// separation on arrival). `goal_released` names a unit whose `MoveOrder` an
+/// accepted command cancels (a construction site's previous builder on
+/// takeover): its goal is not seeded because acceptance frees it, while its
+/// current cell still reserves. Returns the slot and its route waypoints.
 fn reachable_builder_slot(
     world: &World,
     map: &GridMap,
+    issuer: TeamId,
     builder: Entity,
     footprint: Footprint,
     goal_released: Option<Entity>,
@@ -385,7 +418,9 @@ fn reachable_builder_slot(
     // Same reservation seam as Move: seed every live unit's current cell and
     // existing MoveOrder goal, excluding the builder's own current cell and
     // old goal exactly as Move releases a commanded unit's reservations before
-    // reassignment. `goal_released` frees one more goal ahead of acceptance:
+    // reassignment — and only when the issuer can observe the occupant, so a
+    // hidden enemy never blocks an approach slot through this command either.
+    // `goal_released` frees one more goal ahead of acceptance:
     // the order carrying it is cancelled once the command applies, so only
     // that unit's current cell still reserves. When the new order replaces
     // the old one, `cancel_unit_activity` drops the old route (releasing
@@ -400,11 +435,18 @@ fn reachable_builder_slot(
         if entity == builder {
             continue;
         }
+        let observable = world
+            .get::<Unit>(entity)
+            .is_some_and(|unit| unit.team == issuer);
         if let Some(position) = world.get::<SimPosition>(entity) {
-            used.insert(map.world_to_cell(position.current));
+            let cell = map.world_to_cell(position.current);
+            if observable || visible_to(world, issuer, cell) {
+                used.insert(cell);
+            }
         }
         if Some(entity) != goal_released
             && let Some(order) = world.get::<MoveOrder>(entity)
+            && (observable || visible_to(world, issuer, order.goal))
         {
             used.insert(order.goal);
         }
@@ -420,6 +462,84 @@ fn reachable_builder_slot(
         }
     }
     Err(RejectReason::Unreachable)
+}
+
+/// Pushes every unit standing inside `footprint` onto the nearest open cell
+/// outside it. Runs just before the footprint blocks: validation only rejects
+/// occupancy the issuer can see, so a hidden enemy unit can be inside an
+/// accepted footprint, and leaving it there would entomb it.
+fn displace_footprint_occupants(world: &mut World, map: &GridMap, footprint: Footprint) {
+    let footprint_cells: HashSet<GridPos> = footprint.cells().into_iter().collect();
+    let entities: Vec<Entity> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| index.iter().map(|(_, entity)| *entity).collect())
+        .unwrap_or_default();
+    for entity in entities {
+        let Some(cell) = world
+            .get::<SimPosition>(entity)
+            .map(|position| map.world_to_cell(position.current))
+        else {
+            continue;
+        };
+        if !footprint_cells.contains(&cell) {
+            continue;
+        }
+        let Some(open) = nearest_open_cell(map, cell, &footprint_cells) else {
+            continue;
+        };
+        let center = map.cell_center(open);
+        if let Some(mut position) = world.get_mut::<SimPosition>(entity) {
+            // Teleport semantics: `previous` collapses onto `current` so the
+            // interpolated Godot view does not slide across the displacement.
+            position.previous = center;
+            position.current = center;
+        }
+    }
+}
+
+/// Retargets every `MoveOrder` whose goal lies inside `footprint` to the
+/// nearest open cell outside it. Validation only rejects goals the issuer
+/// can see, so a hidden enemy route can end inside an accepted footprint;
+/// leaving it would strand the unit on an order that can never replan onto
+/// blocked cells. The next map revision replans the route to the new goal.
+fn retarget_footprint_goals(world: &mut World, map: &GridMap, footprint: Footprint) {
+    let footprint_cells: HashSet<GridPos> = footprint.cells().into_iter().collect();
+    let entities: Vec<Entity> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| index.iter().map(|(_, entity)| *entity).collect())
+        .unwrap_or_default();
+    for entity in entities {
+        let new_goal = world.get::<MoveOrder>(entity).and_then(|order| {
+            footprint_cells
+                .contains(&order.goal)
+                .then(|| nearest_open_cell(map, order.goal, &footprint_cells).unwrap_or(order.goal))
+        });
+        if let Some(goal) = new_goal
+            && let Some(mut order) = world.get_mut::<MoveOrder>(entity)
+        {
+            order.goal = goal;
+            order.last_failed_replan = None;
+        }
+    }
+}
+
+/// The nearest walkable cell outside `excluded`, searched by expanding
+/// Chebyshev rings row-major — same ring order as the AI target picker.
+fn nearest_open_cell(map: &GridMap, cell: GridPos, excluded: &HashSet<GridPos>) -> Option<GridPos> {
+    for radius in 1_i32..8 {
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx.abs() != radius && dy.abs() != radius {
+                    continue;
+                }
+                let candidate = GridPos::new(cell.x + dx, cell.y + dy);
+                if map.is_walkable(candidate) && !excluded.contains(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Advances construction one fixed tick. A worker transitions

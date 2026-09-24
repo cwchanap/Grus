@@ -399,8 +399,13 @@ func _run() -> void:
 	get_tree().root.push_input(release)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	if not _camera.position.is_equal_approx(Vector3(20.5, _camera.position.y, 80.5)):
-		_fail("minimap click did not recenter the camera: %s" % [_camera.position])
+	# The camera is pitched down: the click must center the *viewed* ground
+	# cell — where the view axis hits y=0 — computed from the logical
+	# transform because `project_ray_*` read the physics-interpolated one.
+	var forward := -_camera.global_transform.basis.z.normalized()
+	var ground_hit := _camera.global_position + forward * (-_camera.global_position.y / forward.y)
+	if not Vector2(ground_hit.x, ground_hit.z).is_equal_approx(Vector2(20.5, 80.5)):
+		_fail("minimap click did not center the clicked ground cell: %s" % [ground_hit])
 		return
 	if int(GrusBridge.command_feedback_revision()) != feedback_revision:
 		_fail("minimap click leaked a gameplay command")

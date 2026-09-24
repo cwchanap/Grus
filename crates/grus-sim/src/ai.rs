@@ -15,14 +15,14 @@ use std::collections::HashMap;
 use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
-use crate::buildings::{Building, BuildingIndex};
+use crate::buildings::{Building, BuildingIndex, validate_placement};
 use crate::catalog::{
     AGE_TWO_COST, Age, BuildingKind, Cost, MAX_POPULATION, ResourceKind, UnitKind, building_spec,
     unit_spec,
 };
 use crate::combat::{CombatOrder, CombatTarget};
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
+    CommandResult, PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
 };
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, idle_worker_ids};
 use crate::fixture::{AiMapPlan, MapFixture};
@@ -54,6 +54,10 @@ const POPULATION_HEADROOM: u32 = 2;
 const DEFENSE_RADIUS: f32 = 12.0;
 /// Live military count at which one grouped AttackMove marches.
 const ATTACK_THRESHOLD: u32 = 6;
+/// Rejected scout legs retry at later decisions, but a leg that keeps
+/// rejecting is skipped so a permanent blocker cannot stall the rest of the
+/// route.
+const MAX_SCOUT_LEG_FAILURES: u32 = 3;
 /// Round-robin army composition cursor order.
 const ARMY_ROTATION: [UnitKind; 3] = [UnitKind::Spearman, UnitKind::Archer, UnitKind::Cavalry];
 
@@ -66,6 +70,9 @@ pub struct AiController {
     pub team: TeamId,
     decision_accumulator: f32,
     scout_route_index: usize,
+    /// Rejections of the currently issued scout leg; reaching
+    /// `MAX_SCOUT_LEG_FAILURES` skips the leg instead of stalling the route.
+    scout_leg_failures: u32,
     /// The only retained enemy memory: the last cell of an enemy Town Center
     /// genuinely seen by this team. Written only while one is visible;
     /// restart removes the controller wholesale, which drops it.
@@ -79,8 +86,50 @@ impl AiController {
             team,
             decision_accumulator: 0.0,
             scout_route_index: 0,
+            scout_leg_failures: 0,
             remembered_enemy_town_center: None,
             next_army_kind: 0,
+        }
+    }
+}
+
+/// One decided command plus the controller transition it commits only when
+/// its `CommandResult` accepts it: a rejected command must never consume
+/// persistent progress (a scout leg skipped forever without being walked, an
+/// army kind rotated past without being trained).
+#[derive(Debug)]
+pub struct PlannedCommand {
+    /// The ordinary player command to apply.
+    pub command: PlayerCommand,
+    pub(crate) commit: Option<AiCommit>,
+}
+
+/// A controller transition deferred until its paired command is accepted.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum AiCommit {
+    /// A scout Move was issued to `unit`: advance the route cursor on
+    /// acceptance; on rejection count a leg failure and skip the leg after
+    /// `MAX_SCOUT_LEG_FAILURES` so a permanent blocker cannot stall the route.
+    ScoutLeg { unit: UnitId },
+    /// An army enqueue was issued: on acceptance store the next rotation
+    /// cursor.
+    ArmyCursor(usize),
+}
+
+impl PlannedCommand {
+    /// A command carrying no controller transition.
+    fn plain(command: PlayerCommand) -> Self {
+        Self {
+            command,
+            commit: None,
+        }
+    }
+
+    /// A command whose controller transition applies only on acceptance.
+    fn on_accept(command: PlayerCommand, commit: AiCommit) -> Self {
+        Self {
+            command,
+            commit: Some(commit),
         }
     }
 }
@@ -100,19 +149,45 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
     if controller.decision_accumulator >= AI_DECISION_SECONDS {
         controller.decision_accumulator -= AI_DECISION_SECONDS;
         let plan = MapFixture::team_plan(controller.team);
-        for command in decide_ai_commands(world, &mut controller, &plan, map) {
-            // Results are deliberately dropped: AI rejects never surface in
-            // the human `CommandFeedback` channel.
-            let _ = apply_player_command(world, map, command);
+        for planned in decide_ai_commands(world, &mut controller, &plan, map) {
+            // Rejects never reach the human `CommandFeedback` channel, but
+            // they do gate the controller transition the command carried.
+            let result = apply_player_command(world, map, planned.command);
+            commit_outcome(&mut controller, planned.commit, &result);
         }
     }
     world.insert_resource(controller);
 }
 
+/// Commits one deferred controller transition for an applied command: the
+/// scout cursor and army rotation move only on acceptance, and a scout leg
+/// that keeps rejecting is skipped so a permanent blocker cannot stall the
+/// route. `step_ai` and the test harness share this seam.
+fn commit_outcome(controller: &mut AiController, commit: Option<AiCommit>, result: &CommandResult) {
+    match commit {
+        Some(AiCommit::ScoutLeg { unit }) => {
+            if result.accepted_units.contains(&unit) {
+                controller.scout_route_index += 1;
+                controller.scout_leg_failures = 0;
+            } else {
+                controller.scout_leg_failures += 1;
+                if controller.scout_leg_failures >= MAX_SCOUT_LEG_FAILURES {
+                    controller.scout_route_index += 1;
+                    controller.scout_leg_failures = 0;
+                }
+            }
+        }
+        Some(AiCommit::ArmyCursor(next)) if result.reject.is_none() => {
+            controller.next_army_kind = next;
+        }
+        _ => {}
+    }
+}
+
 /// The one ordered policy step: a pure decision over the pre-decision world
 /// (the `GridMap` is static bounds/blockers data, explicitly readable).
 type PolicyStep =
-    fn(&World, &mut AiController, &AiMapPlan, &GridMap, &mut Vec<UnitId>) -> Option<PlayerCommand>;
+    fn(&World, &mut AiController, &AiMapPlan, &GridMap, &mut Vec<UnitId>) -> Option<PlannedCommand>;
 
 /// Ordered composition of the pure policy steps. Every step sees the same
 /// pre-decision world; `claimed` keeps two steps of this same decision from
@@ -126,7 +201,7 @@ pub fn decide_ai_commands(
     controller: &mut AiController,
     plan: &AiMapPlan,
     map: &GridMap,
-) -> Vec<PlayerCommand> {
+) -> Vec<PlannedCommand> {
     // The memory step writes controller state, not a command: while an enemy
     // Town Center is actually visible, its cell is the retained memory.
     update_remembered_town_center(world, controller);
@@ -168,7 +243,7 @@ fn defend_visible_threats(
     _plan: &AiMapPlan,
     _map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let (_, town_center_entity) = town_center(world, controller.team)?;
     let home = town_center_cell_center(world, town_center_entity)?;
     let (threat_id, _) = visible_threats(world, controller.team, home)
@@ -184,11 +259,11 @@ fn defend_visible_threats(
         return None;
     }
     claimed.extend_from_slice(&defenders);
-    Some(PlayerCommand::Attack {
+    Some(PlannedCommand::plain(PlayerCommand::Attack {
         issuer: controller.team,
         units: defenders,
         target: CombatTarget::Unit(threat_id),
-    })
+    }))
 }
 
 /// The retained enemy memory: while an enemy Town Center is currently
@@ -231,7 +306,7 @@ fn queue_replacement_worker(
     _plan: &AiMapPlan,
     _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     if villager_ids(world, controller.team).len() as u32 >= TARGET_WORKERS {
         return None;
     }
@@ -241,11 +316,11 @@ fn queue_replacement_worker(
     {
         return None;
     }
-    Some(PlayerCommand::EnqueueUnit {
+    Some(PlannedCommand::plain(PlayerCommand::EnqueueUnit {
         issuer: controller.team,
         building: town_center_id,
         kind: UnitKind::Villager,
-    })
+    }))
 }
 
 /// Scout early, before any expansion-dependent growth: the lowest stable-ID
@@ -255,14 +330,16 @@ fn queue_replacement_worker(
 /// `MoveOrder` and is skipped). Both use ordinary Move: combatants may use
 /// AttackMove, but a scouting combatant that attacked what it saw would turn
 /// route patrol into an unrequested raid. The route is traversed once; the
-/// index never wraps, so the surplus worker returns to the economy.
+/// index never wraps, so the surplus worker returns to the economy. The
+/// cursor is a deferred commit: it advances only when the Move is accepted,
+/// so a rejected leg is retried rather than silently skipped.
 fn scout(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
     _map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     if controller.scout_route_index >= plan.scout_route.len() {
         return None;
     }
@@ -273,13 +350,15 @@ fn scout(
         Some(id) => id,
         None => villager_scout_id(world, controller.team, claimed)?,
     };
-    controller.scout_route_index += 1;
     claimed.push(scout_id);
-    Some(PlayerCommand::Units(UnitCommand {
-        issuer: controller.team,
-        units: vec![scout_id],
-        kind: UnitCommandKind::Move { target },
-    }))
+    Some(PlannedCommand::on_accept(
+        PlayerCommand::Units(UnitCommand {
+            issuer: controller.team,
+            units: vec![scout_id],
+            kind: UnitCommandKind::Move { target },
+        }),
+        AiCommit::ScoutLeg { unit: scout_id },
+    ))
 }
 
 /// A villager may scout only above the worker floor and only when the economy
@@ -307,7 +386,7 @@ fn allocate_idle_worker(
     _plan: &AiMapPlan,
     _map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let idle = idle_worker_ids(world, controller.team)
         .into_iter()
         .find(|id| !claimed.contains(id))?;
@@ -334,11 +413,11 @@ fn allocate_idle_worker(
             continue;
         };
         claimed.push(idle);
-        return Some(PlayerCommand::Gather {
+        return Some(PlannedCommand::plain(PlayerCommand::Gather {
             issuer: controller.team,
             workers: vec![idle],
             source: source.id,
-        });
+        }));
     }
     None
 }
@@ -355,9 +434,9 @@ fn place_house(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let cap = population_cap(world, controller.team);
     // Destruction can drive the cap below the live population; saturate so
     // the rebuild path still sees zero free capacity instead of panicking.
@@ -366,11 +445,21 @@ fn place_house(
     {
         return None;
     }
-    let anchor = *plan
+    let anchors: Vec<GridPos> = plan
         .house_slots
         .iter()
-        .find(|slot| !has_building_at(world, controller.team, BuildingKind::House, **slot))?;
-    place_at_slot(world, controller, claimed, BuildingKind::House, anchor)
+        .copied()
+        .filter(|slot| !has_building_at(world, controller.team, BuildingKind::House, *slot))
+        .collect();
+    place_at_slot(
+        world,
+        controller.team,
+        claimed,
+        map,
+        BuildingKind::House,
+        &anchors,
+    )
+    .map(PlannedCommand::plain)
 }
 
 /// Grow the production core: one Barracks on the authored slot.
@@ -378,19 +467,21 @@ fn place_barracks(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     if any_own_building(world, controller.team, BuildingKind::Barracks) {
         return None;
     }
     place_at_slot(
         world,
-        controller,
+        controller.team,
         claimed,
+        map,
         BuildingKind::Barracks,
-        plan.barracks_anchor,
+        &[plan.barracks_anchor],
     )
+    .map(PlannedCommand::plain)
 }
 
 /// Grow the production core: one Archery Range on the authored slot.
@@ -398,19 +489,21 @@ fn place_archery_range(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     if any_own_building(world, controller.team, BuildingKind::ArcheryRange) {
         return None;
     }
     place_at_slot(
         world,
-        controller,
+        controller.team,
         claimed,
+        map,
         BuildingKind::ArcheryRange,
-        plan.archery_range_anchor,
+        &[plan.archery_range_anchor],
     )
+    .map(PlannedCommand::plain)
 }
 
 /// Add Farms only when known food supply is insufficient: food worker
@@ -419,9 +512,9 @@ fn place_farm(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let total = villager_ids(world, controller.team).len() as u32;
     let food_target = total / 2;
     let capacity: u32 = known_sources(world, controller.team)
@@ -438,11 +531,21 @@ fn place_farm(
     if capacity >= food_target {
         return None;
     }
-    let anchor = *plan
+    let anchors: Vec<GridPos> = plan
         .farm_slots
         .iter()
-        .find(|slot| !has_building_at(world, controller.team, BuildingKind::Farm, **slot))?;
-    place_at_slot(world, controller, claimed, BuildingKind::Farm, anchor)
+        .copied()
+        .filter(|slot| !has_building_at(world, controller.team, BuildingKind::Farm, *slot))
+        .collect();
+    place_at_slot(
+        world,
+        controller.team,
+        claimed,
+        map,
+        BuildingKind::Farm,
+        &anchors,
+    )
+    .map(PlannedCommand::plain)
 }
 
 /// A Storehouse near a discovered expansion: the authored expansion slot
@@ -453,22 +556,34 @@ fn place_storehouse(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
-    let expansion = plan.expansion_storehouse_slots.iter().find(|slot| {
-        !has_building_at(world, controller.team, BuildingKind::Storehouse, **slot)
-            && slot_explored(world, controller.team, **slot)
-    });
-    let safe = if any_own_building(world, controller.team, BuildingKind::Barracks) {
-        plan.safe_storehouse_slots
-            .iter()
-            .find(|slot| !has_building_at(world, controller.team, BuildingKind::Storehouse, **slot))
-    } else {
-        None
-    };
-    let anchor = *expansion.or(safe)?;
-    place_at_slot(world, controller, claimed, BuildingKind::Storehouse, anchor)
+) -> Option<PlannedCommand> {
+    // Expansion candidates first — a discovered expansion is preferred — then
+    // the safe home slots once the production core exists.
+    let mut anchors: Vec<GridPos> = plan
+        .expansion_storehouse_slots
+        .iter()
+        .copied()
+        .filter(|slot| {
+            !has_building_at(world, controller.team, BuildingKind::Storehouse, *slot)
+                && slot_explored(world, controller.team, *slot)
+        })
+        .collect();
+    if any_own_building(world, controller.team, BuildingKind::Barracks) {
+        anchors.extend(plan.safe_storehouse_slots.iter().copied().filter(|slot| {
+            !has_building_at(world, controller.team, BuildingKind::Storehouse, *slot)
+        }));
+    }
+    place_at_slot(
+        world,
+        controller.team,
+        claimed,
+        map,
+        BuildingKind::Storehouse,
+        &anchors,
+    )
+    .map(PlannedCommand::plain)
 }
 
 /// Advance after the worker target is met, the Age-1 production core stands,
@@ -479,7 +594,7 @@ fn attempt_age_two(
     _plan: &AiMapPlan,
     _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let state = world
         .get_resource::<TeamEconomy>()?
         .0
@@ -498,10 +613,10 @@ fn attempt_age_two(
     {
         return None;
     }
-    Some(PlayerCommand::EnqueueAgeUp {
+    Some(PlannedCommand::plain(PlayerCommand::EnqueueAgeUp {
         issuer: controller.team,
         building: town_center_id,
-    })
+    }))
 }
 
 /// Complete production: the Stable unlocks at Age 2.
@@ -509,9 +624,9 @@ fn place_stable(
     world: &World,
     controller: &mut AiController,
     plan: &AiMapPlan,
-    _map: &GridMap,
+    map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     let age = world
         .get_resource::<TeamEconomy>()?
         .0
@@ -522,11 +637,13 @@ fn place_stable(
     }
     place_at_slot(
         world,
-        controller,
+        controller.team,
         claimed,
+        map,
         BuildingKind::Stable,
-        plan.stable_anchor,
+        &[plan.stable_anchor],
     )
+    .map(PlannedCommand::plain)
 }
 
 /// Train the army through the existing producer queues: one round-robin
@@ -539,7 +656,7 @@ fn train_round_robin(
     _plan: &AiMapPlan,
     _map: &GridMap,
     _claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     // Decision-side population gate: with zero free slots the enqueue would
     // be a guaranteed apply-time rejection, so leave the rotation cursor
     // untouched until headroom exists (mirrors `place_house`'s saturation).
@@ -566,12 +683,17 @@ fn train_round_robin(
         if !can_afford(world, controller.team, unit_spec(kind).cost) {
             continue;
         }
-        controller.next_army_kind = (index + 1) % ARMY_ROTATION.len();
-        return Some(PlayerCommand::EnqueueUnit {
-            issuer: controller.team,
-            building: producer_id,
-            kind,
-        });
+        // The rotation cursor is a deferred commit: it moves only when the
+        // enqueue is accepted, so a rejected command retries the same kind
+        // instead of silently rotating past it.
+        return Some(PlannedCommand::on_accept(
+            PlayerCommand::EnqueueUnit {
+                issuer: controller.team,
+                building: producer_id,
+                kind,
+            },
+            AiCommit::ArmyCursor((index + 1) % ARMY_ROTATION.len()),
+        ));
     }
     None
 }
@@ -593,7 +715,7 @@ fn attack(
     plan: &AiMapPlan,
     map: &GridMap,
     claimed: &mut Vec<UnitId>,
-) -> Option<PlayerCommand> {
+) -> Option<PlannedCommand> {
     if own_military_count(world, controller.team) < ATTACK_THRESHOLD {
         return None;
     }
@@ -606,13 +728,13 @@ fn attack(
         None => *plan.scout_route.last()?,
     };
     claimed.extend_from_slice(&attackers);
-    Some(PlayerCommand::Units(UnitCommand {
+    Some(PlannedCommand::plain(PlayerCommand::Units(UnitCommand {
         issuer: controller.team,
         units: attackers,
         kind: UnitCommandKind::AttackMove {
             target: map.cell_center(target_cell),
         },
-    }))
+    })))
 }
 
 /// The nearest walkable ground cell to `cell`: rings expand outward by
@@ -1004,24 +1126,31 @@ fn slot_explored(world: &World, team: TeamId, anchor: GridPos) -> bool {
 }
 
 /// Shared placement tail: a real idle builder (never claimed earlier in this
-/// decision), catalogue affordability, then the ordinary command — real
-/// placement validation happens at apply time.
+/// decision), catalogue affordability, then the first candidate anchor that
+/// survives the real `validate_placement` for that builder — a slot already
+/// occupied by something else no longer starves every later candidate of a
+/// retry each decision. The apply-time validator remains the authority.
 fn place_at_slot(
     world: &World,
-    controller: &mut AiController,
+    team: TeamId,
     claimed: &mut Vec<UnitId>,
+    map: &GridMap,
     kind: BuildingKind,
-    anchor: GridPos,
+    anchors: &[GridPos],
 ) -> Option<PlayerCommand> {
-    let builder = idle_worker_ids(world, controller.team)
+    let builder = idle_worker_ids(world, team)
         .into_iter()
         .find(|id| !claimed.contains(id))?;
-    if !can_afford(world, controller.team, building_spec(kind).cost) {
+    if !can_afford(world, team, building_spec(kind).cost) {
         return None;
     }
+    let anchor = anchors
+        .iter()
+        .copied()
+        .find(|anchor| validate_placement(world, map, team, builder, kind, *anchor).is_ok())?;
     claimed.push(builder);
     Some(PlayerCommand::PlaceBuilding {
-        issuer: controller.team,
+        issuer: team,
         builder,
         kind,
         anchor,

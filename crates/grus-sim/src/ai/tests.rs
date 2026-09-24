@@ -67,20 +67,33 @@ fn run_until(
 }
 
 /// Pure decision pass: takes the controller out (its private state is
-/// module-local), composes the ordered commands, puts it back.
+/// module-local), composes the ordered commands, puts it back. Deferred
+/// commits are dropped — nothing applies, so no controller transition can
+/// fire.
 fn decide(world: &mut World, map: &GridMap) -> Vec<PlayerCommand> {
     let mut controller = world.remove_resource::<AiController>().unwrap();
     let plan = MapFixture::team_plan(controller.team);
-    let commands = decide_ai_commands(world, &mut controller, &plan, map);
+    let planned = decide_ai_commands(world, &mut controller, &plan, map);
     world.insert_resource(controller);
-    commands
+    planned.into_iter().map(|planned| planned.command).collect()
 }
 
+/// Decision pass plus the same apply/commit seam `step_ai` runs: commands
+/// apply through the one dispatcher and their deferred controller
+/// transitions commit only on acceptance.
 fn decide_and_apply(world: &mut World, map: &mut GridMap) -> Vec<PlayerCommand> {
-    let commands = decide(world, map);
-    for command in commands.clone() {
-        apply_player_command(world, map, command);
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    let plan = MapFixture::team_plan(controller.team);
+    let planned = decide_ai_commands(world, &mut controller, &plan, map);
+    let commands: Vec<PlayerCommand> = planned
+        .iter()
+        .map(|planned| planned.command.clone())
+        .collect();
+    for planned in planned {
+        let result = apply_player_command(world, map, planned.command);
+        commit_outcome(&mut controller, planned.commit, &result);
     }
+    world.insert_resource(controller);
     commands
 }
 
@@ -408,6 +421,48 @@ fn scout_traverses_the_authored_route_once_and_discovers_the_expansion() {
     );
 }
 
+/// A rejected scout leg must not consume the cursor: the same leg is
+/// re-emitted until it accepts, and only a leg that keeps rejecting past
+/// the failure budget is skipped — a transient blocker retries, a
+/// permanent one cannot stall the whole route.
+#[test]
+fn scout_leg_retries_rejects_and_skips_a_permanent_blocker() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    spawn_military(
+        &mut world,
+        &map,
+        UnitId(20),
+        TeamId(2),
+        GridPos::new(112, 44),
+        UnitKind::Spearman,
+    );
+
+    // Permanently block the first route leg: every emitted Move rejects
+    // `Unreachable` at apply time.
+    map.set_blocked(plan.scout_route[0], true);
+    for attempt in 1..MAX_SCOUT_LEG_FAILURES {
+        decide_and_apply(&mut world, &mut map);
+        assert_eq!(
+            world.resource::<AiController>().scout_route_index,
+            0,
+            "attempt {attempt}: a rejected leg must not consume the cursor"
+        );
+        assert_eq!(world.resource::<AiController>().scout_leg_failures, attempt);
+    }
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        world.resource::<AiController>().scout_route_index,
+        1,
+        "a permanently blocked leg is skipped once the failure budget is spent"
+    );
+    assert_eq!(world.resource::<AiController>().scout_leg_failures, 0);
+
+    // The next leg is open: one accepted Move advances the cursor normally.
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(world.resource::<AiController>().scout_route_index, 2);
+}
+
 // ---- Allocation -------------------------------------------------------------
 
 #[test]
@@ -620,7 +675,8 @@ fn growth_places_barracks_range_and_discovered_storehouse_on_authored_slots() {
     }
     let mut controller = world.remove_resource::<AiController>().unwrap();
     let mut claimed = Vec::new();
-    let command = place_storehouse(&world, &mut controller, &plan, &map, &mut claimed);
+    let command = place_storehouse(&world, &mut controller, &plan, &map, &mut claimed)
+        .map(|planned| planned.command);
     world.insert_resource(controller);
     assert!(
         matches!(command,
@@ -727,6 +783,49 @@ fn house_fires_on_population_pressure_and_stops_at_satisfied_slots() {
             ..
         }
     )));
+}
+
+/// An authored slot whose footprint is blocked — by anything already on
+/// the shared occupancy map — must not stall growth: the policy walks the
+/// remaining candidates and takes the first one the real placement
+/// validator accepts, instead of re-firing the same doomed slot forever.
+#[test]
+fn blocked_house_slot_falls_back_to_the_next_candidate() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+
+    // Manufacture the same population pressure as the satisfied-slots test.
+    for index in 0..6_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(100 + index),
+            TeamId(2),
+            Vec2::new(110.5, 40.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+
+    // Occupy the whole first authored slot; the second must now win.
+    for cell in Footprint::new(plan.house_slots[0], 2, 2).cells() {
+        map.set_blocked(cell, true);
+    }
+
+    let commands = decide(&mut world, &map);
+    let anchor = commands.iter().find_map(|command| match command {
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::House,
+            anchor,
+            ..
+        } => Some(*anchor),
+        _ => None,
+    });
+    assert_eq!(
+        anchor,
+        Some(plan.house_slots[1]),
+        "the blocked first slot is skipped for the next viable candidate"
+    );
 }
 
 /// Regression: destruction can drive the population cap below the live
@@ -981,7 +1080,8 @@ fn round_robin_rotates_and_respects_queues_and_ages() {
         }
     )));
     // The locked decision's rotation falls through to the unlocked legs and
-    // moves the cursor; pin it back to the Cavalry leg for the unlock proof.
+    // carries a deferred cursor commit; pin it back to the Cavalry leg for
+    // the unlock proof.
     world.resource_mut::<AiController>().next_army_kind = 2;
     world
         .get_resource_mut::<TeamEconomy>()
@@ -997,6 +1097,63 @@ fn round_robin_rotates_and_respects_queues_and_ages() {
             ..
         }
     )));
+}
+
+/// A rejected enqueue must not advance the army rotation: the cursor moves
+/// only when the order actually lands, so the same leg is re-offered until
+/// acceptance instead of silently skipping a unit kind.
+#[test]
+fn rejected_enqueue_keeps_the_army_cursor_on_the_leg() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+
+    // One completed Barracks with an empty queue.
+    let barracks = world
+        .spawn((
+            Building {
+                id: BuildingId(10),
+                team: TeamId(2),
+                kind: BuildingKind::Barracks,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.barracks_anchor, 3, 3),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(10), barracks);
+
+    // Stockpile sized so the Villager enqueue (50f) passes its decide-time
+    // check alongside the Spearman (60f) but leaves 59f once it applies —
+    // the Spearman enqueue rejects `InsufficientResources` mid-batch.
+    world
+        .get_resource_mut::<TeamEconomy>()
+        .unwrap()
+        .0
+        .get_mut(&TeamId(2))
+        .unwrap()
+        .stockpile = ResourceStockpile {
+        food: 109,
+        wood: 0,
+        gold: 0,
+    };
+
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        world.resource::<AiController>().next_army_kind,
+        0,
+        "a rejected enqueue must not advance the rotation"
+    );
+
+    // With food restored, the re-offered Spearman leg lands and the cursor
+    // moves exactly once.
+    grant(&mut world, TeamId(2), 60, 0, 0);
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(world.resource::<AiController>().next_army_kind, 1);
 }
 
 #[test]

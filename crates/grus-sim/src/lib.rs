@@ -12,7 +12,7 @@ pub mod production;
 pub mod session;
 pub mod visibility;
 
-pub use ai::{AI_DECISION_SECONDS, AiController, decide_ai_commands, step_ai};
+pub use ai::{AI_DECISION_SECONDS, AiController, PlannedCommand, decide_ai_commands, step_ai};
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
     validate_placement,

@@ -145,6 +145,15 @@ func _gui_input(event: InputEvent) -> void:
 	var cell := Vector2i(
 		clampi(int(click.position.x), 0, MAP_WIDTH - 1),
 		clampi(int(click.position.y), 0, MAP_HEIGHT - 1))
-	_camera.position.x = cell.x + 0.5
-	_camera.position.z = cell.y + 0.5
+	# The camera is pitched down, so its position is not its viewed ground
+	# point: shift the camera by the difference between the clicked cell and
+	# where the viewport-center ray currently hits the ground. The center
+	# ray is computed from the logical transform — `project_ray_*` read the
+	# physics-interpolated transform, which lags a fresh jump by a frame.
+	var forward := -_camera.global_transform.basis.z.normalized()
+	if absf(forward.y) >= 0.0001:
+		var hit := _camera.global_position + forward * (-_camera.global_position.y / forward.y)
+		_camera.position.x += (cell.x + 0.5) - hit.x
+		_camera.position.z += (cell.y + 0.5) - hit.z
+		_camera.reset_physics_interpolation()
 	accept_event()
