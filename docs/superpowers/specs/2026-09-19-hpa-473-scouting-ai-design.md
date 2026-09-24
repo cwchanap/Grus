@@ -237,7 +237,7 @@ The controller may query all of its **own** live state. Enemy units/buildings mu
 
 ### Ordered policy
 
-Keep the decision logic as explicit ordered **pure** functions, not a generic goal system. Each policy step reads `&World`, `&AiController`/decision state and `&AiMapPlan` and returns zero or one `PlayerCommand`; `decide_ai_commands()` composes them in the fixed order below into `Vec<PlayerCommand>`. `step_ai()` is only the Playing/cadence gate plus the apply loop. This keeps the 90% production-line coverage gate practical and makes the hidden-state invariance test compare the pure decision output directly.
+Keep the decision logic as explicit ordered **pure** functions, not a generic goal system. Each policy step reads `&World`, `&AiController`/decision state and `&AiMapPlan` and returns zero or one `PlannedCommand` — a `PlayerCommand` plus an optional deferred controller transition; `decide_ai_commands()` composes them in the fixed order below into `Vec<PlannedCommand>`. `step_ai()` is the Playing/cadence gate plus the apply loop, and commits each transition only when that command's `CommandResult` accepts it — a rejected command cannot consume acceptance-sensitive progress such as the scout-route or army-kind cursor. This keeps the 90% production-line coverage gate practical and makes the hidden-state invariance test compare the pure decision output directly.
 
 1. **Defend visible threats.** If a currently visible enemy is near the AI Town Center/base area, direct available military units at the nearest visible threat.
 2. **Avoid population stalls.** If free capacity is low and cap is below 100, place the next authored House using a real villager command.
