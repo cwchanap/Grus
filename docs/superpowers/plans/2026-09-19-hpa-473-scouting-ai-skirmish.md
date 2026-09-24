@@ -2,7 +2,7 @@
 
 **Goal:** Ship the first complete Grus human-versus-economic-AI match with authoritative fog/visibility, minimap, fair scripted AI, scouting/defense/attack behavior, and restart-safe integration.
 
-**Architecture:** Bevy ECS stays authoritative. Add only `visibility.rs` and `ai.rs`; extend the existing command/combat/placement/reset seams and the Godot presentation bridge. Visibility is the single information gate shared by combat, placement, resource knowledge, rendering, minimap and AI. AI uses ordinary `PlayerCommand` application and never mutates economy/resources/spawns directly. This draft PR is the implementation PR for HPA-473.
+**Architecture:** Bevy ECS stays authoritative. Add only `visibility.rs` and `ai.rs`; extend the existing command/combat/placement/reset seams and the Godot presentation bridge. Visibility is the single information gate shared by combat, placement, resource knowledge, rendering, minimap and AI. AI uses ordinary `PlayerCommand` application and never mutates economy/resources/spawns directly. This PR is the implementation PR for HPA-473.
 
 **Tech Stack:** Rust 1.95.0, Bevy 0.19.1, godot-bevy 0.12.0, godot-rust 0.5.5, Godot 4.6.2, GDScript, existing GitHub Actions CI.
 

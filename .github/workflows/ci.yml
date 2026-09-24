@@ -190,7 +190,10 @@ jobs:
           timeout 20s ./build/Grus.x86_64 --headless --quit-after 30 2>&1 | tee export-smoke.log || rc=$?
           rc=${rc:-0}
           grep -q "Initialize godot-rust" export-smoke.log
-          ! grep -Eq "Failed to load.*GDExtension|Can't open dynamic library|Cannot open dynamic library" export-smoke.log
+          if grep -Eq "Failed to load.*GDExtension|Can't open dynamic library|Cannot open dynamic library" export-smoke.log; then
+            echo "::error::exported build failed to load the Rust GDExtension"
+            exit 1
+          fi
           if [ "$rc" -eq 139 ]; then
             echo "::warning::export smoke contract held but godot exited 139 during teardown"
           elif [ "$rc" -ne 0 ]; then

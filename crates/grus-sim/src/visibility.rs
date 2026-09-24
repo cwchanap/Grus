@@ -147,6 +147,12 @@ pub fn explored_by(world: &World, team: TeamId, subject: impl Into<VisibilitySub
 /// by inserting one (normal runtime does this in `setup_fixture`, then calls
 /// this once so the Start screen already has correct fog).
 pub fn refresh_visibility(world: &mut World, map: &GridMap) {
+    // Opt out before paying the origin-collection scan: worlds without a
+    // VisibilityMap (focused pure-sim tests, the benchmark) run with full
+    // information and must not collect origins they will never use.
+    if !world.contains_resource::<VisibilityMap>() {
+        return;
+    }
     let mut origins: HashMap<TeamId, Vec<GridPos>> = HashMap::new();
 
     let mut units = world.query::<(&Unit, &SimPosition)>();

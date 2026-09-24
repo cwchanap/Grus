@@ -795,6 +795,168 @@ fn unexplored_footprint_rejects_unexplored_never_occupied() {
     );
 }
 
+/// Explored-but-not-visible ground must not leak a hidden enemy occupant
+/// through `Occupied` either: the preview/validation scan skips occupants
+/// the issuer cannot see, and acceptance displaces the unit clear of the
+/// footprint instead of entombing it under blocked cells.
+#[test]
+fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), anchor));
+
+    // Vision withdraws: the footprint stays explored but leaves current
+    // visibility, so an enemy standing on it is genuinely hidden.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), anchor) && !visible_to(&world, TeamId(1), anchor),
+        "the footprint is explored fog, not current vision"
+    );
+
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(14, 11)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok(),
+        "a hidden occupant must not surface as `Occupied` through the preview seam"
+    );
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    // The hidden unit survives — displaced to open ground, not entombed.
+    let cell = map.world_to_cell(world.get::<SimPosition>(enemy).unwrap().current);
+    assert!(
+        !Footprint::new(anchor, 2, 2).cells().contains(&cell) && map.is_walkable(cell),
+        "the displaced unit stands on open ground outside the footprint: {cell:?}"
+    );
+}
+
+/// A hidden enemy move goal inside the footprint is likewise invisible to
+/// the preview seam; acceptance retargets the order to open ground so the
+/// preserved route can never strand on blocked cells.
+#[test]
+fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), anchor));
+
+    // The hidden enemy walks toward a cell the footprint will cover.
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(40, 40)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(enemy).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(14, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok()
+    );
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    let order = world.get::<MoveOrder>(enemy).expect("order preserved");
+    assert_ne!(
+        order.goal,
+        GridPos::new(14, 11),
+        "the covered goal is retargeted off the footprint"
+    );
+    assert!(
+        map.is_walkable(order.goal) && !Footprint::new(anchor, 2, 2).cells().contains(&order.goal),
+        "the new goal {goal:?} is open ground outside the footprint",
+        goal = order.goal
+    );
+}
+
+/// Current vision restores the honest rejection: a *visible* enemy unit
+/// inside the footprint still surfaces `Occupied` — the seam only hides
+/// what the issuer genuinely cannot see.
+#[test]
+fn visible_enemy_inside_footprint_still_rejects_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(14, 11)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    reveal(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(14, 11)));
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+}
+
 /// A sibling already moving to a cell inside the footprint has that goal
 /// reserved: accepting the placement would block the goal and strand the
 /// unit on a preserved order that can never replan onto blocked cells.
