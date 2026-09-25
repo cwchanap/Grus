@@ -22,7 +22,8 @@ use crate::catalog::{
 };
 use crate::combat::{CombatOrder, CombatTarget};
 use crate::commands::{
-    CommandResult, PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
+    CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
+    apply_player_command,
 };
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, idle_worker_ids};
 use crate::fixture::{AiMapPlan, MapFixture};
@@ -77,6 +78,12 @@ pub struct AiController {
     /// genuinely seen by this team. Written only while one is visible;
     /// restart removes the controller wholesale, which drops it.
     remembered_enemy_town_center: Option<GridPos>,
+    /// Authored anchors whose placement command rejected `Occupied` at
+    /// apply time — a hidden enemy building stands there (the
+    /// knowledge-aware validator let the footprint through the preview).
+    /// `place_at_slot` skips them so one unseen blocker cannot stall AI
+    /// growth forever; restart drops the controller and this with it.
+    blocked_anchors: Vec<GridPos>,
     next_army_kind: usize,
 }
 
@@ -88,6 +95,7 @@ impl AiController {
             scout_route_index: 0,
             scout_leg_failures: 0,
             remembered_enemy_town_center: None,
+            blocked_anchors: Vec::new(),
             next_army_kind: 0,
         }
     }
@@ -114,6 +122,10 @@ pub(crate) enum AiCommit {
     /// An army enqueue was issued: on acceptance store the next rotation
     /// cursor.
     ArmyCursor(usize),
+    /// A building placement was issued at `anchor`: an `Occupied` apply-time
+    /// reject means a hidden enemy building stands there — remember the
+    /// anchor so the AI stops offering it every decision.
+    PlaceAnchor { anchor: GridPos },
 }
 
 impl PlannedCommand {
@@ -179,6 +191,12 @@ fn commit_outcome(controller: &mut AiController, commit: Option<AiCommit>, resul
         }
         Some(AiCommit::ArmyCursor(next)) if result.reject.is_none() => {
             controller.next_army_kind = next;
+        }
+        Some(AiCommit::PlaceAnchor { anchor })
+            if result.reject == Some(RejectReason::Occupied)
+                && !controller.blocked_anchors.contains(&anchor) =>
+        {
+            controller.blocked_anchors.push(anchor);
         }
         _ => {}
     }
@@ -453,13 +471,12 @@ fn place_house(
         .collect();
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::House,
         &anchors,
     )
-    .map(PlannedCommand::plain)
 }
 
 /// Grow the production core: one Barracks on the authored slot.
@@ -475,13 +492,12 @@ fn place_barracks(
     }
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::Barracks,
         &[plan.barracks_anchor],
     )
-    .map(PlannedCommand::plain)
 }
 
 /// Grow the production core: one Archery Range on the authored slot.
@@ -497,13 +513,12 @@ fn place_archery_range(
     }
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::ArcheryRange,
         &[plan.archery_range_anchor],
     )
-    .map(PlannedCommand::plain)
 }
 
 /// Add Farms only when known food supply is insufficient: food worker
@@ -539,13 +554,12 @@ fn place_farm(
         .collect();
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::Farm,
         &anchors,
     )
-    .map(PlannedCommand::plain)
 }
 
 /// A Storehouse near a discovered expansion: the authored expansion slot
@@ -577,13 +591,12 @@ fn place_storehouse(
     }
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::Storehouse,
         &anchors,
     )
-    .map(PlannedCommand::plain)
 }
 
 /// Advance after the worker target is met, the Age-1 production core stands,
@@ -637,13 +650,12 @@ fn place_stable(
     }
     place_at_slot(
         world,
-        controller.team,
+        controller,
         claimed,
         map,
         BuildingKind::Stable,
         &[plan.stable_anchor],
     )
-    .map(PlannedCommand::plain)
 }
 
 /// Train the army through the existing producer queues: one round-robin
@@ -1128,33 +1140,39 @@ fn slot_explored(world: &World, team: TeamId, anchor: GridPos) -> bool {
 /// Shared placement tail: a real idle builder (never claimed earlier in this
 /// decision), catalogue affordability, then the first candidate anchor that
 /// survives the real `validate_placement` for that builder — a slot already
-/// occupied by something else no longer starves every later candidate of a
-/// retry each decision. The apply-time validator remains the authority.
+/// occupied by something observable no longer starves every later candidate
+/// of a retry each decision, and an anchor that rejected `Occupied` at apply
+/// time is skipped until restart. The apply-time validator remains the
+/// authority; the command carries a deferred commit so an apply reject is
+/// remembered instead of retried forever.
 fn place_at_slot(
     world: &World,
-    team: TeamId,
+    controller: &AiController,
     claimed: &mut Vec<UnitId>,
     map: &GridMap,
     kind: BuildingKind,
     anchors: &[GridPos],
-) -> Option<PlayerCommand> {
-    let builder = idle_worker_ids(world, team)
+) -> Option<PlannedCommand> {
+    let builder = idle_worker_ids(world, controller.team)
         .into_iter()
         .find(|id| !claimed.contains(id))?;
-    if !can_afford(world, team, building_spec(kind).cost) {
+    if !can_afford(world, controller.team, building_spec(kind).cost) {
         return None;
     }
-    let anchor = anchors
-        .iter()
-        .copied()
-        .find(|anchor| validate_placement(world, map, team, builder, kind, *anchor).is_ok())?;
+    let anchor = anchors.iter().copied().find(|anchor| {
+        !controller.blocked_anchors.contains(anchor)
+            && validate_placement(world, map, controller.team, builder, kind, *anchor).is_ok()
+    })?;
     claimed.push(builder);
-    Some(PlayerCommand::PlaceBuilding {
-        issuer: team,
-        builder,
-        kind,
-        anchor,
-    })
+    Some(PlannedCommand::on_accept(
+        PlayerCommand::PlaceBuilding {
+            issuer: controller.team,
+            builder,
+            kind,
+            anchor,
+        },
+        AiCommit::PlaceAnchor { anchor },
+    ))
 }
 
 #[cfg(test)]

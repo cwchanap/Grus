@@ -139,6 +139,8 @@ Append one `RejectReason::Unexplored` variant. Placement validation order is a p
 
 The Unexplored check must happen immediately after bounds and **before the function builds the all-unit occupancy set**. Otherwise `placement_preview()` becomes a fog oracle where `Occupied` reveals a hidden building/resource/unit or hidden enemy move goal. A regression places an unexplored footprint over a hidden enemy unit and asserts the reject code is `Unexplored`, never `Occupied`.
 
+Walkability inside step 5 is knowledge-aware about *buildings*: terrain, resources and own buildings stay honest (static or own-map state), but an enemy building's cells count as blocked only while currently visible — probing a previously scouted, now hidden enemy footprint answers exactly like identical empty explored ground, never `Occupied`. Buildings get no last-seen ghosts, so remembering them is not an option. The committed command re-checks real occupancy and rejects `Occupied` at apply time, because two real buildings can never overlap; a one-shot command rejection is the accepted shared-map channel, unlike the passive mouse-motion preview. The AI's authored-slot selection uses the same knowledge-aware validator, and an apply-time `Occupied` is remembered as a blocked anchor until restart so one unseen blocker cannot stall AI growth.
+
 The Godot placement preview already calls this authority for Team 1, so preview and final placement stay aligned.
 
 Placing a site never changes visibility by itself. Because incomplete buildings grant no vision, placement cannot be used as a remote scout.
@@ -153,7 +155,7 @@ Standalone finite resources are static map contents:
 
 Own completed Farms are always valid gather knowledge. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts and are never admitted merely because they are present in `ResourceIndex`.
 
-The gather command calls `explored_by(...)` unconditionally so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm is never gathered as an own economic source. The predicate's missing-resource fallback preserves existing full-information pure-sim behavior.
+The gather command calls `explored_by(...)` unconditionally so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm is never gathered as an own economic source — while hidden it rejects `Unexplored` (fog privacy), and once visible ownership rejects it `NotOwned`, matching the Godot picker that never offers enemy Farm views. The predicate's missing-resource fallback preserves existing full-information pure-sim behavior.
 
 ## Presentation: one sim truth, no hidden-node leak
 

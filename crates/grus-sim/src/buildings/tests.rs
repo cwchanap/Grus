@@ -957,6 +957,117 @@ fn visible_enemy_inside_footprint_still_rejects_occupied() {
     assert_eq!(result.reject, Some(RejectReason::Occupied));
 }
 
+/// A completed 2×2 House of `team` standing on `anchor`, fully registered
+/// (cells blocked, index updated) — the manual shape of an applied
+/// placement, for knowledge-gate tests.
+fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anchor: GridPos) {
+    let footprint = Footprint::new(anchor, 2, 2);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+}
+
+/// A previously scouted, now hidden enemy building footprint must answer
+/// the preview exactly like identical empty explored ground — `Occupied`
+/// from walkability would map the hidden building directly. The committed
+/// command stays honest: two real buildings can never overlap.
+#[test]
+fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+
+    // Team 1 scouts the enemy building standing on the anchor.
+    spawn_enemy_building(&mut world, &mut map, TeamId(2), anchor);
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), anchor));
+
+    // Vision withdraws: the footprint stays explored but leaves current
+    // visibility, so the building is genuinely hidden.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), anchor) && !visible_to(&world, TeamId(1), anchor),
+        "the footprint is explored fog, not current vision"
+    );
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok(),
+        "a hidden enemy building must not surface as `Occupied` through the preview seam"
+    );
+
+    // The committed command re-checks real occupancy: no overlap, no charge.
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        500
+    );
+}
+
+/// Current vision keeps the honest rejection: a *visible* enemy building
+/// footprint still surfaces `Occupied` — the seam only hides what the
+/// issuer genuinely cannot see.
+#[test]
+fn visible_enemy_building_footprint_still_rejects_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    spawn_enemy_building(&mut world, &mut map, TeamId(2), anchor);
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), anchor));
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+}
+
 /// A sibling already moving to a cell inside the footprint has that goal
 /// reserved: accepting the placement would block the goal and strand the
 /// unit on a preserved order that can never replan onto blocked cells.
