@@ -70,17 +70,20 @@ pub struct PlacementPlan {
 /// Authoritative placement validation. Checks, in order: owned villager →
 /// kind unlocked/buildable → footprint in bounds → every footprint cell
 /// explored → footprint cells walkable and free of any unit's current cell
-/// or claimed `MoveOrder` goal the issuer can see → affordability → reachable
+/// or claimed `MoveOrder` goal the issuer can see, with hidden enemy
+/// *building* cells treated as free ground → affordability → reachable
 /// reserved immediate-perimeter builder slot, evaluated on the
 /// post-placement map (footprint cells already blocked). The explored check
 /// runs before the occupancy scan, and the scan itself only counts
-/// occupancy the issuer can observe — hidden enemy units and their move
-/// goals never produce `Occupied`, so the preview cannot map them.
-/// Blocked cells stay honest regardless of vision: footprint walkability is
-/// shared-map state, the same accepted channel as path shape/failure, and a
-/// physically blocked cell can never accept a building anyway. A hidden unit
-/// standing inside an accepted footprint is displaced at apply time.
-/// Mutates nothing; apply the returned plan only after every check passes.
+/// occupancy the issuer can observe — hidden enemy units, their move
+/// goals, and hidden enemy building footprints never produce `Occupied`,
+/// so the preview cannot map them. Terrain, resources and own buildings
+/// stay honest regardless of vision: static or own-map state, and those
+/// cells can never accept a building anyway. A hidden unit standing inside
+/// an accepted footprint is displaced at apply time; a hidden enemy
+/// building overlaps nothing because the apply path re-checks real
+/// occupancy. Mutates nothing; apply the returned plan only after every
+/// check passes.
 pub fn validate_placement(
     world: &World,
     map: &GridMap,
@@ -154,11 +157,34 @@ pub fn validate_placement(
             }
         }
     }
-    if !footprint
-        .cells()
-        .iter()
-        .all(|cell| map.is_walkable(*cell) && !unit_cells.contains(cell))
-    {
+    // Cells blocked by a *hidden* enemy building are treated as free: a
+    // building is dynamic state the issuer cannot remember (no last-seen
+    // ghosts), so an `Occupied` from its footprint would map it exactly —
+    // the preview must answer explored-hidden ground like identical empty
+    // ground. Terrain, resources and own buildings are static or own state
+    // and stay honest. The apply path re-checks real occupancy, because
+    // two real buildings can never overlap.
+    let mut hidden_enemy_cells: HashSet<GridPos> = HashSet::new();
+    if let Some(index) = world.get_resource::<BuildingIndex>() {
+        for (_, building_entity) in index.iter() {
+            let owner = world
+                .get::<Building>(*building_entity)
+                .map(|building| building.team);
+            if owner == Some(issuer) {
+                continue;
+            }
+            if let Some(building_footprint) = world.get::<Footprint>(*building_entity) {
+                for cell in building_footprint.cells() {
+                    if !visible_to(world, issuer, cell) {
+                        hidden_enemy_cells.insert(cell);
+                    }
+                }
+            }
+        }
+    }
+    if !footprint.cells().iter().all(|cell| {
+        (map.is_walkable(*cell) || hidden_enemy_cells.contains(cell)) && !unit_cells.contains(cell)
+    }) {
         return Err(RejectReason::Occupied);
     }
 
@@ -213,6 +239,22 @@ pub(crate) fn apply_place_building(
             return result;
         }
     };
+
+    // The knowledge-aware validator deliberately passes footprints over
+    // hidden enemy building cells (fog privacy), but two real buildings can
+    // never overlap: the committed command re-checks real occupancy and
+    // rejects instead. A one-shot command rejection is the accepted
+    // shared-map channel — unlike the mouse-motion preview, an actual
+    // command never maps hidden state on its own.
+    if plan
+        .footprint
+        .cells()
+        .iter()
+        .any(|cell| !map.is_walkable(*cell))
+    {
+        result.reject = Some(RejectReason::Occupied);
+        return result;
+    }
 
     cancel_unit_activity(world, plan.builder);
 

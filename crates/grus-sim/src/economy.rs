@@ -328,9 +328,10 @@ pub fn gather_rate_for_age(age: Age) -> f32 {
 }
 
 /// Applies an accepted `Gather`: validates source knowledge (explored
-/// standalone source, own completed Farm, or currently visible enemy Farm),
-/// owned villagers, Farm availability, and shared reservation state; then
-/// assigns unique immediate-perimeter slots. A worker carrying resources
+/// standalone source or own completed Farm) then source ownership — a
+/// foreign Farm, even while currently visible, is never an own economic
+/// source — plus owned villagers, Farm availability, and shared
+/// reservation state; then assigns unique immediate-perimeter slots. A worker carrying resources
 /// routes to a reachable same-team Dropoff first (depositing) and only then
 /// to the requested source, so Carry never mixes kinds. Validation precedes
 /// any cancellation: a rejected worker keeps its old task and order.
@@ -362,8 +363,8 @@ pub(crate) fn apply_gather(
     // standalone sources are known once their cell was explored and stay
     // known after vision is lost; own completed Farms are always valid
     // knowledge; an enemy Farm is an enemy building and needs current
-    // visibility — it is never admitted merely by sitting in the
-    // `ResourceIndex`.
+    // visibility merely to be *known* — it is never admitted merely by
+    // sitting in the `ResourceIndex`.
     let source_known = if is_farm {
         world
             .get::<Building>(source_entity)
@@ -374,6 +375,18 @@ pub(crate) fn apply_gather(
     };
     if !source_known {
         outcome.reject = Some(RejectReason::Unexplored);
+        return outcome;
+    }
+    // Ownership: a foreign Farm stays `Unexplored` while hidden (fog
+    // privacy), but once visible the command authority refuses it — the
+    // Godot picker never offers enemy Farm views, and the Rust rule is the
+    // same: an enemy Farm is never gathered as an own economic source.
+    if is_farm
+        && !world
+            .get::<Building>(source_entity)
+            .is_some_and(|building| building.team == issuer)
+    {
+        outcome.reject = Some(RejectReason::NotOwned);
         return outcome;
     }
 

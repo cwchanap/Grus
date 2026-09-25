@@ -828,6 +828,115 @@ fn blocked_house_slot_falls_back_to_the_next_candidate() {
     );
 }
 
+/// A hidden enemy building on an authored slot passes the knowledge-aware
+/// validator, so the apply path rejects `Occupied` — and the AI must
+/// remember the anchor instead of re-firing the same doomed command every
+/// decision. Base slots are permanently self-visible through the Town
+/// Center's reveal, so the real case is an expansion Storehouse slot.
+#[test]
+fn hidden_blocker_on_an_authored_slot_is_remembered_after_apply_reject() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    let blocked_slot = plan.expansion_storehouse_slots[0];
+
+    let move_team_eyes = |world: &mut World, at: Vec2| {
+        let eyes: Vec<_> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Unit>(**entity)
+                    .is_some_and(|unit| unit.team == TeamId(2))
+            })
+            .map(|(_, entity)| *entity)
+            .collect();
+        for entity in eyes {
+            world.entity_mut(entity).insert(SimPosition::new(at));
+        }
+    };
+
+    // Scout the expansion slot, then walk every Team-2 eye well away: the
+    // slot stays explored but leaves current vision.
+    move_team_eyes(&mut world, map.cell_center(blocked_slot));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(2), blocked_slot));
+    move_team_eyes(&mut world, Vec2::new(98.5, 46.5));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(2), blocked_slot)
+            && !visible_to(&world, TeamId(2), blocked_slot),
+        "the expansion slot is explored fog, not current vision"
+    );
+
+    // A hidden Team-1 House stands on the expansion slot.
+    let footprint = Footprint::new(blocked_slot, 2, 2);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team: TeamId(1),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    refresh_visibility(&mut world, &map);
+
+    let storehouse_anchor = |commands: &[PlayerCommand]| {
+        commands.iter().find_map(|command| match command {
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Storehouse,
+                anchor,
+                ..
+            } => Some(*anchor),
+            _ => None,
+        })
+    };
+
+    // The knowledge-aware validator passes the hidden footprint, the apply
+    // path rejects `Occupied`, and the deferred commit remembers the anchor.
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        storehouse_anchor(&commands),
+        Some(blocked_slot),
+        "the hidden-blocked slot passes the preview-level validator: {commands:?}"
+    );
+    assert_eq!(
+        world.resource::<AiController>().blocked_anchors,
+        vec![blocked_slot],
+        "the apply-time Occupied reject is remembered"
+    );
+
+    // Later decisions never re-offer the remembered anchor, whatever else
+    // the economy does with its workers.
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    for _ in 0..3 {
+        let commands = decide_and_apply(&mut world, &mut map);
+        assert_ne!(
+            storehouse_anchor(&commands),
+            Some(blocked_slot),
+            "a remembered anchor is never re-offered"
+        );
+    }
+    assert_eq!(
+        world.resource::<AiController>().blocked_anchors,
+        vec![blocked_slot]
+    );
+}
+
 /// Regression: destruction can drive the population cap below the live
 /// population (Houses fall, units live on). `place_house` must saturate
 /// instead of underflowing — and still place the rebuild House.

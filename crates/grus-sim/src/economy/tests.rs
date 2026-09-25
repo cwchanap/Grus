@@ -1064,6 +1064,57 @@ fn enemy_farm_is_never_an_own_gather_source_through_fog() {
     );
 }
 
+/// Ownership: current vision makes an enemy Farm *known*, but it is still
+/// never an own economic source — the command authority rejects it where
+/// the Godot picker never offers it. The same unconditional rule covers
+/// full-information worlds (no `VisibilityMap`).
+#[test]
+fn visible_enemy_farm_is_rejected_not_gathered() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
+
+    // Stand next to the farm: its footprint is currently visible.
+    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 43))));
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(45, 40)));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(
+        outcome.reject,
+        Some(RejectReason::NotOwned),
+        "a visible enemy farm is known but never gatherable: {outcome:?}"
+    );
+    assert!(outcome.accepted_units.is_empty());
+}
+
+/// The same ownership rule without fog: a full-information world refuses
+/// the foreign Farm too — ownership is not a visibility artifact.
+#[test]
+fn full_information_enemy_farm_is_still_not_gatherable() {
+    let (mut world, mut map) = skirmish_world();
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(outcome.reject, Some(RejectReason::NotOwned));
+    assert!(outcome.accepted_units.is_empty());
+}
+
 #[test]
 fn gather_replaces_an_active_move_order_and_frees_its_goal() {
     let mut world = World::new();
