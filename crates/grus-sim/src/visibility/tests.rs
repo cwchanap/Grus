@@ -301,3 +301,27 @@ fn packed_cell_states_report_the_row_major_payload_and_revision() {
     let enemy_states = visibility.packed_cell_states(TeamId(2), map.width(), map.height());
     assert!(enemy_states.iter().all(|&state| state == 0));
 }
+
+/// Review item: revealing from a building's edge cells only must cover
+/// exactly the same union as revealing from every footprint cell — the
+/// interior origins' circles are subsumed by the edge cells' circles. This
+/// locks the equivalence the refresh optimization relies on.
+#[test]
+fn edge_cell_origins_reveal_the_same_union_as_every_cell() {
+    let map = GridMap::new(64, 64);
+    for (anchor, width, height) in [
+        (GridPos::new(10, 10), 1_u8, 1_u8),
+        (GridPos::new(20, 10), 2, 2),
+        (GridPos::new(30, 10), 3, 3),
+        (GridPos::new(40, 10), 4, 4),
+        (GridPos::new(50, 10), 6, 4),
+    ] {
+        let footprint = Footprint::new(anchor, width, height);
+        let from_all: HashSet<GridPos> = reveal_circle(&map, &footprint.cells());
+        let from_edges: HashSet<GridPos> = reveal_circle(&map, &footprint.edge_cells());
+        assert_eq!(
+            from_all, from_edges,
+            "edge origins must cover the same cells as all origins for {footprint:?}"
+        );
+    }
+}

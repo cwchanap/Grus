@@ -56,12 +56,21 @@ struct GameplayViewRequested;
 #[class(base=Node)]
 struct GrusBridgeNode {
     base: Base<Node>,
+    /// Last fog payload handed to GDScript, keyed by its visibility
+    /// revision: the fog overlay and the minimap both fetch per revision
+    /// change, and rebuilding the 12k-cell payload twice per revision is
+    /// pure waste. `VarDictionary` is refcounted, so the cache hit clones a
+    /// handle, not the payload.
+    visibility_cache: Option<(i64, VarDictionary)>,
 }
 
 #[godot_api]
 impl INode for GrusBridgeNode {
     fn init(base: Base<Node>) -> Self {
-        Self { base }
+        Self {
+            base,
+            visibility_cache: None,
+        }
     }
 }
 
@@ -428,14 +437,22 @@ impl GrusBridgeNode {
     /// Packed Team-1 fog payload: map width/height, row-major cell states
     /// (0 Unexplored / 1 Explored / 2 Visible), and the revision observed
     /// during the read so a consumer can detect a mid-read change. Empty
-    /// dict when visibility state is absent.
+    /// dict when visibility state is absent. Cached per revision: both
+    /// GDScript consumers poll every frame and fetch only on change, so at
+    /// most one rebuild lands per revision change.
     #[func]
-    fn visibility_snapshot(&self) -> VarDictionary {
+    fn visibility_snapshot(&mut self) -> VarDictionary {
         with_app(|app| {
             let world = app.world();
             let Some(visibility) = world.get_resource::<VisibilityMap>() else {
                 return VarDictionary::new();
             };
+            let revision = visibility.revision() as i64;
+            if let Some((cached_revision, cached)) = &self.visibility_cache
+                && *cached_revision == revision
+            {
+                return cached.clone();
+            }
             let Some(map) = world.get_resource::<GridMap>() else {
                 return VarDictionary::new();
             };
@@ -443,11 +460,12 @@ impl GrusBridgeNode {
             let mut dict = VarDictionary::new();
             dict.set("width", i64::from(map.width()));
             dict.set("height", i64::from(map.height()));
-            dict.set("revision", visibility.revision() as i64);
+            dict.set("revision", revision);
             dict.set(
                 "states",
                 &PackedInt32Array::from_iter(states.into_iter().map(i32::from)),
             );
+            self.visibility_cache = Some((revision, dict.clone()));
             dict
         })
         .unwrap_or_default()
@@ -1126,16 +1144,12 @@ fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transfor
 /// pass, so a newly instantiated view never spends a frame visible before
 /// the sim truth lands (scene roots default hidden).
 fn initialize_view_metadata(world: &mut World) {
-    // ponytail: full GridMap clone per Update; fine at 128x96, pass
-    // &GridMap through a resource if profiling ever flags it.
-    let map = world.resource::<GridMap>().clone();
-
     #[allow(clippy::type_complexity)]
     let mut units = world.query_filtered::<
         (Entity, &Unit, &SimPosition, &GodotNodeHandle),
         Without<ViewMetaInitialized>,
     >();
-    let unit_batch: Vec<(Entity, UnitId, TeamId, UnitKind, GridPos, GodotNodeHandle)> = units
+    let unit_batch: Vec<(Entity, UnitId, TeamId, UnitKind, Vec2, GodotNodeHandle)> = units
         .iter(world)
         .map(|(entity, unit, position, handle)| {
             (
@@ -1143,7 +1157,7 @@ fn initialize_view_metadata(world: &mut World) {
                 unit.id,
                 unit.team,
                 unit.kind,
-                map.world_to_cell(position.current),
+                position.current,
                 *handle,
             )
         })
@@ -1192,13 +1206,16 @@ fn initialize_view_metadata(world: &mut World) {
             })
             .collect();
 
-    for (entity, id, team, kind, cell, handle) in unit_batch {
+    for (entity, id, team, kind, position, handle) in unit_batch {
         let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
         node.set_meta("unit_id", &i64::from(id.0).to_variant());
         node.set_meta("team_id", &i64::from(team.0).to_variant());
         node.set_meta("unit_kind", &debug_variant(kind));
+        // Borrow, never clone: `world_to_cell` is pure coordinate math, and
+        // the exclusive pass needs the map only while no &mut is held.
+        let cell = world.resource::<GridMap>().world_to_cell(position);
         let visible = team == TeamId(1) || visible_to(world, TeamId(1), cell);
         node.set_visible(visible);
         world.entity_mut(entity).insert(ViewMetaInitialized);
@@ -1251,14 +1268,10 @@ fn node_from_handle(handle: GodotNodeHandle) -> Option<Gd<Node3D>> {
 /// Exclusive for the same reason as `initialize_view_metadata`; the initial
 /// stamp happens there, this system only maintains the value.
 fn sync_view_visibility(world: &mut World) {
-    // ponytail: full GridMap clone per Update; fine at 128x96, pass
-    // &GridMap through a resource if profiling ever flags it.
-    let map = world.resource::<GridMap>().clone();
-
     let mut units = world.query::<(&Unit, &SimPosition, &GodotNodeHandle)>();
-    let unit_batch: Vec<(TeamId, GridPos, GodotNodeHandle)> = units
+    let unit_batch: Vec<(TeamId, Vec2, GodotNodeHandle)> = units
         .iter(world)
-        .map(|(unit, position, handle)| (unit.team, map.world_to_cell(position.current), *handle))
+        .map(|(unit, position, handle)| (unit.team, position.current, *handle))
         .collect();
     let mut buildings = world.query::<(&Building, &Footprint, &GodotNodeHandle)>();
     let building_batch: Vec<(TeamId, Footprint, GodotNodeHandle)> = buildings
@@ -1274,7 +1287,9 @@ fn sync_view_visibility(world: &mut World) {
         .map(|(footprint, handle)| (*footprint, *handle))
         .collect();
 
-    for (team, cell, handle) in unit_batch {
+    for (team, position, handle) in unit_batch {
+        // Borrow, never clone: `world_to_cell` is pure coordinate math.
+        let cell = world.resource::<GridMap>().world_to_cell(position);
         set_view_visible(
             handle,
             team == TeamId(1) || visible_to(world, TeamId(1), cell),

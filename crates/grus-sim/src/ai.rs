@@ -10,12 +10,12 @@
 //! command-feedback channel. Every candidate enumeration is sorted by stable
 //! ID before a choice, so decisions never depend on HashMap order.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
-use crate::buildings::{Building, BuildingIndex, validate_placement};
+use crate::buildings::{Building, BuildingIndex, nearest_open_cell, validate_placement};
 use crate::catalog::{
     AGE_TWO_COST, Age, BuildingKind, Cost, MAX_POPULATION, ResourceKind, UnitKind, building_spec,
     unit_spec,
@@ -53,8 +53,16 @@ const POPULATION_HEADROOM: u32 = 2;
 /// Radius (world units == cells) around the own Town Center inside which a
 /// currently visible enemy unit counts as a base threat.
 const DEFENSE_RADIUS: f32 = 12.0;
-/// Live military count at which one grouped AttackMove marches.
+/// Idle-and-unengaged military count at which one grouped AttackMove
+/// marches. Only *available* units count: the previous wave is still alive
+/// but marching, and counting it let every post-wave replacement trickle
+/// into the enemy base alone.
 const ATTACK_THRESHOLD: u32 = 6;
+/// A gather candidate whose command keeps rejecting is skipped after this
+/// many consecutive failures, the same bounded-retry contract as scout
+/// legs — a permanently unusable source must never stall a villager or
+/// starve the fallback sources of retries.
+const MAX_GATHER_FAILURES: u32 = 3;
 /// Rejected scout legs retry at later decisions, but a leg that keeps
 /// rejecting is skipped so a permanent blocker cannot stall the rest of the
 /// route.
@@ -79,11 +87,20 @@ pub struct AiController {
     /// restart removes the controller wholesale, which drops it.
     remembered_enemy_town_center: Option<GridPos>,
     /// Authored anchors whose placement command rejected `Occupied` at
-    /// apply time — a hidden enemy building stands there (the
-    /// knowledge-aware validator let the footprint through the preview).
-    /// `place_at_slot` skips them so one unseen blocker cannot stall AI
-    /// growth forever; restart drops the controller and this with it.
+    /// apply time *because the shared map itself is blocked there* — a
+    /// hidden enemy building stands on the slot (the knowledge-aware
+    /// validator let the footprint through the preview). Transient
+    /// occupancy rejects (an own worker's goal from an earlier command in
+    /// the same decision) do not land here: the anchor is retried once the
+    /// blocker walks on. `place_at_slot` skips blocked anchors so one
+    /// unseen building cannot stall AI growth forever; restart drops the
+    /// controller and this with it.
     blocked_anchors: Vec<GridPos>,
+    /// Consecutive rejects of each gather candidate the allocation step
+    /// offered; at `MAX_GATHER_FAILURES` the source is skipped so the next
+    /// decision falls back to another source instead of re-firing the same
+    /// doomed command every second.
+    gather_failures: HashMap<ResourceId, u32>,
     next_army_kind: usize,
 }
 
@@ -96,6 +113,7 @@ impl AiController {
             scout_leg_failures: 0,
             remembered_enemy_town_center: None,
             blocked_anchors: Vec::new(),
+            gather_failures: HashMap::new(),
             next_army_kind: 0,
         }
     }
@@ -122,10 +140,16 @@ pub(crate) enum AiCommit {
     /// An army enqueue was issued: on acceptance store the next rotation
     /// cursor.
     ArmyCursor(usize),
-    /// A building placement was issued at `anchor`: an `Occupied` apply-time
-    /// reject means a hidden enemy building stands there — remember the
-    /// anchor so the AI stops offering it every decision.
-    PlaceAnchor { anchor: GridPos },
+    /// A building placement was issued at `anchor`: an apply-time
+    /// `Occupied` whose anchor really is blocked on the shared map means a
+    /// hidden enemy building stands there — remember the anchor so the AI
+    /// stops offering it every decision. Any other `Occupied` (an own
+    /// unit's fresh goal) is transient and merely retried later.
+    PlaceAnchor { anchor: GridPos, kind: BuildingKind },
+    /// A gather assignment was issued to `worker` at `source`: on reject
+    /// the failure count rises, and at `MAX_GATHER_FAILURES` the source is
+    /// skipped so the fallback sources take over.
+    GatherSource { worker: UnitId, source: ResourceId },
 }
 
 impl PlannedCommand {
@@ -165,17 +189,24 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
             // Rejects never reach the human `CommandFeedback` channel, but
             // they do gate the controller transition the command carried.
             let result = apply_player_command(world, map, planned.command);
-            commit_outcome(&mut controller, planned.commit, &result);
+            commit_outcome(&mut controller, planned.commit, &result, map);
         }
     }
     world.insert_resource(controller);
 }
 
 /// Commits one deferred controller transition for an applied command: the
-/// scout cursor and army rotation move only on acceptance, and a scout leg
+/// scout cursor and army rotation move only on acceptance, a scout leg
 /// that keeps rejecting is skipped so a permanent blocker cannot stall the
-/// route. `step_ai` and the test harness share this seam.
-fn commit_outcome(controller: &mut AiController, commit: Option<AiCommit>, result: &CommandResult) {
+/// route, a gather source that keeps rejecting is dropped for its
+/// fallbacks, and only a genuinely map-blocked anchor is remembered as a
+/// hidden enemy building. `step_ai` and the test harness share this seam.
+fn commit_outcome(
+    controller: &mut AiController,
+    commit: Option<AiCommit>,
+    result: &CommandResult,
+    map: &GridMap,
+) {
     match commit {
         Some(AiCommit::ScoutLeg { unit }) => {
             if result.accepted_units.contains(&unit) {
@@ -189,14 +220,32 @@ fn commit_outcome(controller: &mut AiController, commit: Option<AiCommit>, resul
                 }
             }
         }
+        Some(AiCommit::GatherSource { worker, source }) => {
+            if result.accepted_units.contains(&worker) {
+                controller.gather_failures.remove(&source);
+            } else {
+                *controller.gather_failures.entry(source).or_default() += 1;
+            }
+        }
         Some(AiCommit::ArmyCursor(next)) if result.reject.is_none() => {
             controller.next_army_kind = next;
         }
-        Some(AiCommit::PlaceAnchor { anchor })
-            if result.reject == Some(RejectReason::Occupied)
-                && !controller.blocked_anchors.contains(&anchor) =>
+        Some(AiCommit::PlaceAnchor { anchor, kind })
+            if result.reject == Some(RejectReason::Occupied) =>
         {
-            controller.blocked_anchors.push(anchor);
+            // Permanent only when the anchor's cells are really blocked on
+            // the shared map — the hidden-enemy-building case. An
+            // `Occupied` from transient unit occupancy (an own gather
+            // goal issued earlier in the same decision) leaves the anchor
+            // unblocked and retryable.
+            let spec = building_spec(kind);
+            let blocked = Footprint::new(anchor, spec.width, spec.height)
+                .cells()
+                .iter()
+                .any(|cell| !map.is_walkable(*cell));
+            if blocked && !controller.blocked_anchors.contains(&anchor) {
+                controller.blocked_anchors.push(anchor);
+            }
         }
         _ => {}
     }
@@ -422,6 +471,17 @@ fn allocate_idle_worker(
             .iter()
             .filter(|source| source.kind == kind)
             .filter(|source| source_has_capacity(world, controller.team, source))
+            // A source whose gather command keeps rejecting is skipped so
+            // the next-best source takes over instead of the same doomed
+            // assignment re-firing every decision.
+            .filter(|source| {
+                controller
+                    .gather_failures
+                    .get(&source.id)
+                    .copied()
+                    .unwrap_or(0)
+                    < MAX_GATHER_FAILURES
+            })
             .min_by(|a, b| {
                 source_distance(a, home)
                     .total_cmp(&source_distance(b, home))
@@ -431,11 +491,17 @@ fn allocate_idle_worker(
             continue;
         };
         claimed.push(idle);
-        return Some(PlannedCommand::plain(PlayerCommand::Gather {
-            issuer: controller.team,
-            workers: vec![idle],
-            source: source.id,
-        }));
+        return Some(PlannedCommand::on_accept(
+            PlayerCommand::Gather {
+                issuer: controller.team,
+                workers: vec![idle],
+                source: source.id,
+            },
+            AiCommit::GatherSource {
+                worker: idle,
+                source: source.id,
+            },
+        ));
     }
     None
 }
@@ -461,6 +527,12 @@ fn place_house(
     if cap >= MAX_POPULATION
         || cap.saturating_sub(population_used(world, controller.team)) >= POPULATION_HEADROOM
     {
+        return None;
+    }
+    // One at a time: only completed Houses raise the cap, so while one is
+    // under construction the pressure looks unchanged and a per-decision
+    // placement would stack duplicates on every free authored slot.
+    if has_incomplete_own_building(world, controller.team, BuildingKind::House) {
         return None;
     }
     let anchors: Vec<GridPos> = plan
@@ -523,6 +595,8 @@ fn place_archery_range(
 
 /// Add Farms only when known food supply is insufficient: food worker
 /// capacity (two per standalone source, one per Farm) below the split target.
+/// One Farm at a time — a Farm counts as capacity only on completion, so an
+/// in-flight site must not trigger a second placement each decision.
 fn place_farm(
     world: &World,
     controller: &mut AiController,
@@ -544,6 +618,9 @@ fn place_farm(
         })
         .sum();
     if capacity >= food_target {
+        return None;
+    }
+    if has_incomplete_own_building(world, controller.team, BuildingKind::Farm) {
         return None;
     }
     let anchors: Vec<GridPos> = plan
@@ -581,7 +658,7 @@ fn place_storehouse(
         .copied()
         .filter(|slot| {
             !has_building_at(world, controller.team, BuildingKind::Storehouse, *slot)
-                && slot_explored(world, controller.team, *slot)
+                && slot_explored(world, controller.team, *slot, BuildingKind::Storehouse)
         })
         .collect();
     if any_own_building(world, controller.team, BuildingKind::Barracks) {
@@ -710,17 +787,19 @@ fn train_round_robin(
     None
 }
 
-/// Attack: once at least the threshold of military units is live, the
-/// available (idle, unclaimed) ones march as one grouped AttackMove toward
-/// the nearest walkable ground cell beside the remembered enemy Town Center
+/// Attack: once at least the threshold of *available* (idle, unclaimed)
+/// military units stands, they march as one grouped AttackMove toward the
+/// nearest walkable ground cell beside the remembered enemy Town Center
 /// anchor (the anchor itself is a blocked footprint cell while the building
 /// stands) — or, if none has ever been seen, the far end of the authored
 /// route (enemy ground; scouting progress in `scout_route_index` is not
 /// consumed). The target is always a ground cell, never an entity. Units
 /// already holding a Move/Combat order are skipped, so an active push is
-/// never reissued; losses simply drop the live count below the threshold
-/// until ordinary production rebuilds the force and a later decision
-/// regroups it — there is no persistent squad state to repair.
+/// never reissued — and never counted toward the threshold: the marching
+/// wave is still alive, so counting it let every post-wave replacement
+/// attack alone. Losses and departures simply drop the available count
+/// below the threshold until production rebuilds the force and a later
+/// decision regroups it — there is no persistent squad state to repair.
 fn attack(
     world: &World,
     controller: &mut AiController,
@@ -728,15 +807,12 @@ fn attack(
     map: &GridMap,
     claimed: &mut Vec<UnitId>,
 ) -> Option<PlannedCommand> {
-    if own_military_count(world, controller.team) < ATTACK_THRESHOLD {
-        return None;
-    }
     let attackers = available_military_ids(world, controller.team, claimed);
-    if attackers.is_empty() {
+    if attackers.len() < ATTACK_THRESHOLD as usize {
         return None;
     }
     let target_cell = match controller.remembered_enemy_town_center {
-        Some(remembered) => nearest_walkable_cell(map, remembered)?,
+        Some(remembered) => nearest_open_cell(map, remembered, &HashSet::new())?,
         None => *plan.scout_route.last()?,
     };
     claimed.extend_from_slice(&attackers);
@@ -747,29 +823,6 @@ fn attack(
             target: map.cell_center(target_cell),
         },
     })))
-}
-
-/// The nearest walkable ground cell to `cell`: rings expand outward by
-/// Chebyshev distance and each ring is visited row-major (dy outer, dx
-/// inner), so the result is the nearest ring (Chebyshev) with a row-major
-/// tie-break — not the Euclidean-nearest cell. A remembered footprint
-/// anchor is itself blocked while the building stands; an AttackMove there
-/// would reject `Unreachable` for every attacker.
-fn nearest_walkable_cell(map: &GridMap, cell: GridPos) -> Option<GridPos> {
-    for radius in 0i32..8 {
-        for dy in -radius..=radius {
-            for dx in -radius..=radius {
-                if radius > 0 && dx.abs() != radius && dy.abs() != radius {
-                    continue; // interior cells were covered by a smaller ring
-                }
-                let candidate = GridPos::new(cell.x + dx, cell.y + dy);
-                if map.is_walkable(candidate) {
-                    return Some(candidate);
-                }
-            }
-        }
-    }
-    None
 }
 
 // ---- Pure read helpers ------------------------------------------------------
@@ -854,23 +907,7 @@ fn idle_military_id(world: &World, team: TeamId, claimed: &[UnitId]) -> Option<U
         .next()
 }
 
-/// Live combatant count of one team — the attack threshold's population.
-fn own_military_count(world: &World, team: TeamId) -> u32 {
-    world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter(|(_, entity)| {
-                    world.get::<Unit>(**entity).is_some_and(|unit| {
-                        unit.team == team && unit_spec(unit.kind).combat.is_some()
-                    })
-                })
-                .count() as u32
-        })
-        .unwrap_or(0)
-}
-
+/// Live combatant count of one team.
 /// Currently visible enemy units within the base radius of `home`, as
 /// (stable ID, current position). Hidden enemies are never enumerated —
 /// their positions cannot influence any decision.
@@ -901,10 +938,10 @@ fn visible_threats(world: &World, team: TeamId, home: Vec2) -> Vec<(UnitId, Vec2
     threats
 }
 
-/// The completed Town Center's footprint anchor as a world-space center.
+/// The completed Town Center's footprint geometric center as a world-space
+/// point (combat/defense home reference).
 fn town_center_cell_center(world: &World, entity: Entity) -> Option<Vec2> {
-    let anchor = world.get::<Footprint>(entity)?.anchor;
-    Some(Vec2::new(anchor.x as f32 + 2.0, anchor.y as f32 + 2.0))
+    Some(world.get::<Footprint>(entity)?.center())
 }
 
 /// One gather candidate: an explored standalone source or an own completed
@@ -926,10 +963,7 @@ fn known_sources(world: &World, team: TeamId) -> Vec<KnownSource> {
                 .filter_map(|(id, entity)| {
                     let source = world.get::<ResourceSource>(*entity)?;
                     let footprint = world.get::<Footprint>(*entity)?;
-                    let center = Vec2::new(
-                        footprint.anchor.x as f32 + f32::from(footprint.width) / 2.0,
-                        footprint.anchor.y as f32 + f32::from(footprint.height) / 2.0,
-                    );
+                    let center = footprint.center();
                     if let Some(building) = world.get::<Building>(*entity) {
                         (building.team == team).then_some(KnownSource {
                             id: *id,
@@ -1128,10 +1162,25 @@ fn has_completed_building(world: &World, team: TeamId, kind: BuildingKind) -> bo
     })
 }
 
-/// True when every cell of a 2×2 authored slot has been explored — the
-/// "scouting actually discovered it" gate.
-fn slot_explored(world: &World, team: TeamId, anchor: GridPos) -> bool {
-    Footprint::new(anchor, 2, 2)
+/// An own building of `kind` is currently under construction: gates the
+/// House/Farm steps to one placement at a time, because neither counts
+/// toward population cap or food capacity until completion.
+fn has_incomplete_own_building(world: &World, team: TeamId, kind: BuildingKind) -> bool {
+    world.get_resource::<BuildingIndex>().is_some_and(|index| {
+        index.iter().any(|(_, entity)| {
+            world.get::<Building>(*entity).is_some_and(|building| {
+                building.team == team && building.kind == kind && !building.construction.complete
+            })
+        })
+    })
+}
+
+/// True when every cell of an authored `kind` slot has been explored — the
+/// "scouting actually discovered it" gate. Footprint size comes from the
+/// catalogue, not a local constant.
+fn slot_explored(world: &World, team: TeamId, anchor: GridPos, kind: BuildingKind) -> bool {
+    let spec = building_spec(kind);
+    Footprint::new(anchor, spec.width, spec.height)
         .cells()
         .iter()
         .all(|cell| explored_by(world, team, *cell))
@@ -1171,7 +1220,7 @@ fn place_at_slot(
             kind,
             anchor,
         },
-        AiCommit::PlaceAnchor { anchor },
+        AiCommit::PlaceAnchor { anchor, kind },
     ))
 }
 

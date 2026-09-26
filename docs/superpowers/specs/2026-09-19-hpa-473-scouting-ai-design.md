@@ -155,7 +155,7 @@ Standalone finite resources are static map contents:
 
 Own completed Farms are always valid gather knowledge. Enemy Farms are enemy buildings and therefore require current visibility; they do not become last-seen ghosts and are never admitted merely because they are present in `ResourceIndex`.
 
-The gather command calls `explored_by(...)` unconditionally so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm is never gathered as an own economic source — while hidden it rejects `Unexplored` (fog privacy), and once visible ownership rejects it `NotOwned`, matching the Godot picker that never offers enemy Farm views. The predicate's missing-resource fallback preserves existing full-information pure-sim behavior.
+The gather command calls `explored_by(...)` unconditionally so guessed ResourceIds cannot bypass fog: explored standalone sources or own completed Farms are valid candidates; an enemy Farm is never gathered as an own economic source — while hidden it rejects `SourceMissing`, the same code as an absent id (fog privacy: distinct codes would let a caller probe ids to count hidden enemy Farms or watch a hidden source deplete), and once visible ownership rejects it `NotOwned`, matching the Godot picker that never offers enemy Farm views. The predicate's missing-resource fallback preserves existing full-information pure-sim behavior. The same unknown-equals-missing rule applies to train/age-up/rally/resume on hidden enemy buildings: they answer `BuildingMissing`, never `NotOwned`.
 
 ## Presentation: one sim truth, no hidden-node leak
 

@@ -237,9 +237,27 @@ fn ai_map_plan_slots_are_buildable_mirrored_and_route_walkable() {
         two.expansion_storehouse_slots,
         one.expansion_storehouse_slots
             .iter()
-            .map(|slot| point_reflect(*slot))
+            .map(|slot| point_reflect_anchor(*slot, BuildingKind::Storehouse))
             .collect::<Vec<_>>()
     );
+    // Footprint-aware reflection keeps the mirrored Storehouse off the
+    // team-2 expansion trees' gathering cells: the raw point reflection of
+    // the anchor (82,75) covered tree 17's (83,76) approach cell.
+    let battlefield = MapFixture::battlefield();
+    let southeast_trees: HashSet<GridPos> = battlefield
+        .resources
+        .iter()
+        .filter(|spawn| spawn.id.0 >= 16)
+        .flat_map(|spawn| Footprint::new(spawn.cell, 1, 1).perimeter_cells())
+        .collect();
+    for slot in &two.expansion_storehouse_slots {
+        for cell in Footprint::new(*slot, 2, 2).cells() {
+            assert!(
+                !southeast_trees.contains(&cell),
+                "mirrored expansion Storehouse covers a team-2 gathering cell {cell:?}"
+            );
+        }
+    }
     assert_eq!(two.barracks_anchor, mirror_anchor(one.barracks_anchor, 3));
     assert_eq!(
         two.archery_range_anchor,

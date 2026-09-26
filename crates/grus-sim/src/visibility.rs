@@ -142,7 +142,10 @@ pub fn explored_by(world: &World, team: TeamId, subject: impl Into<VisibilitySub
 /// current-visible set from live entities, unions it into explored state, and
 /// increments `revision` only when some team's effective visibility or
 /// exploration actually changed. Reveal origins: every living unit's current
-/// cell and every cell of each completed building's footprint; construction
+/// cell and the boundary (edge) cells of each completed building's
+/// footprint — an interior cell's circle is always subsumed by the edge
+/// cells' circles, so the revealed union is identical for a fraction of
+/// the origins; construction
 /// sites reveal nothing. Never inserts a `VisibilityMap` — the caller opts in
 /// by inserting one (normal runtime does this in `setup_fixture`, then calls
 /// this once so the Start screen already has correct fog).
@@ -169,7 +172,7 @@ pub fn refresh_visibility(world: &mut World, map: &GridMap) {
             origins
                 .entry(building.team)
                 .or_default()
-                .extend(footprint.cells());
+                .extend(footprint.edge_cells());
         }
     }
 
@@ -193,11 +196,14 @@ pub fn refresh_visibility(world: &mut World, map: &GridMap) {
         let vision = visibility.teams.entry(team).or_default();
         if vision.visible != visible {
             changed = true;
-            vision.visible = visible.clone();
         }
         let explored_before = vision.explored.len();
-        vision.explored.extend(visible);
+        vision.explored.extend(visible.iter().copied());
         changed |= vision.explored.len() != explored_before;
+        // Move the fresh set in — never clone it back. Units march every
+        // tick, so the visible set churns each refresh and a clone would
+        // copy the whole set per team per tick.
+        vision.visible = visible;
     }
     if changed {
         visibility.revision = visibility.revision.wrapping_add(1);

@@ -45,6 +45,26 @@ impl Footprint {
         cells
     }
 
+    /// The boundary cells of the footprint (at least one face on the
+    /// rectangle edge), row-major. For any per-cell radius ≥ 1, revealing
+    /// from edge cells covers exactly the same union as revealing from
+    /// every cell: an interior origin's circle is always subsumed by the
+    /// edge origins' circles, so dilating from a solid rectangle only needs
+    /// its boundary.
+    pub fn edge_cells(&self) -> Vec<GridPos> {
+        let mut cells = Vec::new();
+        let last_x = i32::from(self.width) - 1;
+        let last_y = i32::from(self.height) - 1;
+        for dy in 0..=last_y {
+            for dx in 0..=last_x {
+                if dx == 0 || dy == 0 || dx == last_x || dy == last_y {
+                    cells.push(GridPos::new(self.anchor.x + dx, self.anchor.y + dy));
+                }
+            }
+        }
+        cells
+    }
+
     /// Geometric center in world coordinates: `anchor + half the footprint`
     /// in each axis. For 1×1 footprints this equals the anchor's cell center.
     pub fn center(&self) -> Vec2 {

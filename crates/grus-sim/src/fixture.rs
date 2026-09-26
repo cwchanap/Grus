@@ -183,18 +183,33 @@ impl MapFixture {
             return plan;
         }
         AiMapPlan {
-            town_center_anchor: mirror_anchor(plan.town_center_anchor, 4),
-            house_slots: mirrored(&plan.house_slots, 2),
-            farm_slots: mirrored(&plan.farm_slots, 2),
-            safe_storehouse_slots: mirrored(&plan.safe_storehouse_slots, 2),
+            town_center_anchor: mirror_anchor(
+                plan.town_center_anchor,
+                building_spec(BuildingKind::TownCenter).width,
+            ),
+            house_slots: mirrored(&plan.house_slots, building_spec(BuildingKind::House).width),
+            farm_slots: mirrored(&plan.farm_slots, building_spec(BuildingKind::Farm).width),
+            safe_storehouse_slots: mirrored(
+                &plan.safe_storehouse_slots,
+                building_spec(BuildingKind::Storehouse).width,
+            ),
             expansion_storehouse_slots: plan
                 .expansion_storehouse_slots
                 .iter()
-                .map(|slot| point_reflect(*slot))
+                .map(|slot| point_reflect_anchor(*slot, BuildingKind::Storehouse))
                 .collect(),
-            barracks_anchor: mirror_anchor(plan.barracks_anchor, 3),
-            archery_range_anchor: mirror_anchor(plan.archery_range_anchor, 3),
-            stable_anchor: mirror_anchor(plan.stable_anchor, 3),
+            barracks_anchor: mirror_anchor(
+                plan.barracks_anchor,
+                building_spec(BuildingKind::Barracks).width,
+            ),
+            archery_range_anchor: mirror_anchor(
+                plan.archery_range_anchor,
+                building_spec(BuildingKind::ArcheryRange).width,
+            ),
+            stable_anchor: mirror_anchor(
+                plan.stable_anchor,
+                building_spec(BuildingKind::Stable).width,
+            ),
             scout_route: plan
                 .scout_route
                 .iter()
@@ -337,6 +352,18 @@ fn mirror_anchor(anchor: GridPos, width: u8) -> GridPos {
 /// blockers and the expansion resources are symmetric under.
 fn point_reflect(cell: GridPos) -> GridPos {
     GridPos::new(127 - cell.x, 95 - cell.y)
+}
+
+/// Point reflection of a footprint *anchor*, footprint-size aware on both
+/// axes: reflecting only the anchor point would shift a w×h footprint by
+/// (w-1, h-1) cells and break the authored symmetry (the team-2 expansion
+/// Storehouse landed on a tree's gathering cells before this).
+fn point_reflect_anchor(anchor: GridPos, kind: BuildingKind) -> GridPos {
+    let spec = building_spec(kind);
+    GridPos::new(
+        127 - anchor.x - i32::from(spec.width) + 1,
+        95 - anchor.y - i32::from(spec.height) + 1,
+    )
 }
 
 fn mirrored(anchors: &[GridPos], width: u8) -> Vec<GridPos> {

@@ -327,14 +327,20 @@ pub fn gather_rate_for_age(age: Age) -> f32 {
     }
 }
 
-/// Applies an accepted `Gather`: validates source knowledge (explored
-/// standalone source or own completed Farm) then source ownership — a
-/// foreign Farm, even while currently visible, is never an own economic
-/// source — plus owned villagers, Farm availability, and shared
-/// reservation state; then assigns unique immediate-perimeter slots. A worker carrying resources
-/// routes to a reachable same-team Dropoff first (depositing) and only then
-/// to the requested source, so Carry never mixes kinds. Validation precedes
-/// any cancellation: a rejected worker keeps its old task and order.
+/// Applies an accepted `Gather`: validates source knowledge, then source
+/// ownership — a foreign Farm, even while currently visible, is never an
+/// own economic source — plus owned villagers, Farm availability, and
+/// shared reservation state; then assigns unique immediate-perimeter slots.
+/// A worker carrying resources routes to a reachable same-team Dropoff
+/// first (depositing) and only then to the requested source, so Carry never
+/// mixes kinds. Validation precedes any cancellation: a rejected worker
+/// keeps its old task and order.
+///
+/// Fog privacy: an id the issuer does not know — an unexplored standalone
+/// source or a hidden enemy Farm — answers `SourceMissing` exactly like an
+/// absent id, so probing ids can never enumerate enemy Farms or watch a
+/// hidden source deplete. A *visible* enemy Farm stays honest (`NotOwned`)
+/// because current vision already reveals it.
 pub(crate) fn apply_gather(
     world: &mut World,
     map: &mut GridMap,
@@ -374,10 +380,12 @@ pub(crate) fn apply_gather(
         explored_by(world, issuer, footprint)
     };
     if !source_known {
-        outcome.reject = Some(RejectReason::Unexplored);
+        // Unknown and absent ids share one reject: distinct codes would let
+        // a caller probe ids to count hidden enemy Farms.
+        outcome.reject = Some(RejectReason::SourceMissing);
         return outcome;
     }
-    // Ownership: a foreign Farm stays `Unexplored` while hidden (fog
+    // Ownership: a foreign Farm stayed `SourceMissing` while hidden (fog
     // privacy), but once visible the command authority refuses it — the
     // Godot picker never offers enemy Farm views, and the Rust rule is the
     // same: an enemy Farm is never gathered as an own economic source.
@@ -687,6 +695,43 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             leave_gathering(world, map, entity, source, carry);
             continue;
         };
+
+        // Adjacency gate: gathering advances only while the worker stands
+        // on the source's immediate perimeter. A worker teleported off by a
+        // later building placement (or any other position jump) must walk
+        // back instead of gathering from afar; partial progress is not
+        // banked across the re-route.
+        let adjacent = |world: &World| {
+            world
+                .get::<Footprint>(source_entity)
+                .zip(world.get::<SimPosition>(entity))
+                .is_some_and(|(footprint, position)| {
+                    footprint.is_immediately_adjacent(map.world_to_cell(position.current))
+                })
+        };
+        if !adjacent(world) {
+            world.entity_mut(entity).insert(GatherProgress::default());
+            match route_back_to_source(world, map, entity, source) {
+                Ok((slot, route)) => {
+                    world
+                        .entity_mut(entity)
+                        .insert(WorkerTask::ToSource { source, slot });
+                    if !route.is_empty() {
+                        world.entity_mut(entity).insert(MoveOrder {
+                            waypoints: route,
+                            next: 0,
+                            goal: slot,
+                            map_revision: map.revision(),
+                            last_failed_replan: None,
+                        });
+                    }
+                }
+                Err(reason) => {
+                    idle_worker_on_route_failure(world, entity, reason);
+                }
+            }
+            continue;
+        }
 
         // Read phase: current progress, carry, and source state.
         let (progress, remaining, kind) = match (

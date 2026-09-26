@@ -1213,3 +1213,64 @@ fn production_respects_a_reduced_cap_and_completes_sequentially() {
     assert_eq!(queue_of(&world, barracks).blocked, None);
     assert_eq!(stockpile(&world, TEAM).food, 1000 - 60);
 }
+
+/// Review item: train/age-up/rally on a hidden enemy building must answer
+/// `BuildingMissing` exactly like an absent id — distinct rejects would let
+/// a caller probe ids to count enemy producers. Visible enemy buildings
+/// stay `NotOwned`.
+#[test]
+fn building_commands_on_a_hidden_enemy_building_answer_building_missing() {
+    use crate::visibility::{VisibilityMap, refresh_visibility};
+
+    let (mut world, mut map) = open_world();
+    world.insert_resource(VisibilityMap::default());
+    let enemy = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(150),
+        BuildingKind::Barracks,
+        GridPos::new(40, 40),
+        ENEMY,
+    );
+    refresh_visibility(&mut world, &map);
+    assert!(
+        !crate::visibility::visible_to(&world, TEAM, GridPos::new(40, 40)),
+        "premise: the enemy barracks starts hidden"
+    );
+
+    let hidden_enqueue = enqueue(&mut world, &mut map, BuildingId(150), UnitKind::Spearman);
+    assert_eq!(hidden_enqueue.reject, Some(RejectReason::BuildingMissing));
+
+    let age_up = enqueue_age_up(&mut world, &mut map, BuildingId(150));
+    assert_eq!(age_up.reject, Some(RejectReason::BuildingMissing));
+
+    let rally = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::SetRally {
+            issuer: TEAM,
+            building: BuildingId(150),
+            target: GridPos::new(10, 10),
+        },
+    );
+    assert_eq!(rally.reject, Some(RejectReason::BuildingMissing));
+    assert_eq!(world.get::<RallyPoint>(enemy), None);
+
+    // Once genuinely seen, the honest answer returns.
+    crate::commands::spawn_unit(
+        &mut world,
+        UnitId(200),
+        TEAM,
+        bevy::math::Vec2::new(41.5, 43.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    refresh_visibility(&mut world, &map);
+    assert!(crate::visibility::visible_to(
+        &world,
+        TEAM,
+        GridPos::new(40, 40)
+    ));
+    let visible = enqueue(&mut world, &mut map, BuildingId(150), UnitKind::Spearman);
+    assert_eq!(visible.reject, Some(RejectReason::NotOwned));
+}
