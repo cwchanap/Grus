@@ -7,7 +7,7 @@ use std::collections::{HashSet, VecDeque};
 
 use bevy::prelude::{Component, Entity, World};
 
-use crate::buildings::{Building, BuildingIndex};
+use crate::buildings::{Building, BuildingIndex, commandable_building_entity};
 use crate::catalog::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, BuildingKind, Cost, MAX_POPULATION, UnitKind,
     building_spec, unit_spec,
@@ -233,18 +233,16 @@ pub(crate) fn apply_enqueue_age_up(
     result
 }
 
-/// Shared enqueue chain: building exists → owned → completed → producer
-/// compatibility → unit unlock (age jobs lock in `apply_enqueue_age_up`).
+/// Shared enqueue chain: building exists (hidden enemy indistinguishable
+/// from absent, fog privacy) → owned → completed → producer compatibility →
+/// unit unlock (age jobs lock in `apply_enqueue_age_up`).
 fn validate_enqueue(
     world: &World,
     issuer: TeamId,
     building: BuildingId,
     job: ProductionKind,
 ) -> Result<Entity, RejectReason> {
-    let building_entity = world
-        .get_resource::<BuildingIndex>()
-        .and_then(|index| index.entity(building))
-        .ok_or(RejectReason::BuildingMissing)?;
+    let building_entity = commandable_building_entity(world, issuer, building)?;
     let state = world
         .get::<Building>(building_entity)
         .ok_or(RejectReason::BuildingMissing)?;
@@ -278,11 +276,10 @@ pub(crate) fn apply_set_rally(
     target: GridPos,
 ) -> CommandResult {
     let mut result = CommandResult::default();
-    let building_entity = world
-        .get_resource::<BuildingIndex>()
-        .and_then(|index| index.entity(building))
-        .ok_or(RejectReason::BuildingMissing);
-    let building_entity = match building_entity {
+    // A hidden enemy building answers `BuildingMissing` like an absent id:
+    // distinct rejects would let a caller probe ids to count enemy
+    // producers.
+    let building_entity = match commandable_building_entity(world, issuer, building) {
         Ok(entity) => entity,
         Err(reason) => {
             result.reject = Some(reason);

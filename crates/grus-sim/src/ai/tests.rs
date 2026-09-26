@@ -91,7 +91,7 @@ fn decide_and_apply(world: &mut World, map: &mut GridMap) -> Vec<PlayerCommand> 
         .collect();
     for planned in planned {
         let result = apply_player_command(world, map, planned.command);
-        commit_outcome(&mut controller, planned.commit, &result);
+        commit_outcome(&mut controller, planned.commit, &result, map);
     }
     world.insert_resource(controller);
     commands
@@ -1722,9 +1722,10 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
         assert!(decide(&mut world, &map).iter().all(|command| !matches!(command,
             PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. }))));
 
-        // Six military with one already engaged: the grouped attack carries
-        // the five available ones and marches at the far end of the authored
-        // route — no sighting yet.
+        // A sixth military unit already engaged (e.g. the previous wave's
+        // survivor): six live but only five available — still no attack.
+        // Counting the live force here is the old bug: every replacement
+        // after the first wave trickled into the enemy base alone.
         let sixth = spawn_military(
             &mut world,
             &map,
@@ -1740,6 +1741,24 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
             target: CombatTarget::Unit(UnitId(1)),
             last_target_cell: None,
         });
+        assert!(decide(&mut world, &map).iter().all(|command| !matches!(command,
+            PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. }))),
+            "team {team:?}: an engaged unit must not count toward the threshold");
+
+        // A seventh idle unit completes the available group: the grouped
+        // attack carries the six idle ones, skips the engaged one, and
+        // marches at the far end of the authored route — no sighting yet.
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(31),
+            team,
+            GridPos::new(
+                plan.town_center_anchor.x - 2,
+                plan.town_center_anchor.y + 15,
+            ),
+            UnitKind::Spearman,
+        );
         let attack = decide(&mut world, &map).into_iter().find(|command| {
             matches!(command, PlayerCommand::Units(units)
                 if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
@@ -1749,7 +1768,14 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
         };
         assert_eq!(
             units.units,
-            vec![UnitId(20), UnitId(21), UnitId(22), UnitId(23), UnitId(24)],
+            vec![
+                UnitId(20),
+                UnitId(21),
+                UnitId(22),
+                UnitId(23),
+                UnitId(24),
+                UnitId(31)
+            ],
             "team {team:?}: the engaged unit is skipped, the idle ones march"
         );
         let far_route_cell = *plan.scout_route.last().unwrap();
@@ -1764,7 +1790,7 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
         // Once the enemy Town Center has genuinely been seen, the attack
         // aims at the nearest walkable ground cell beside the remembered
         // anchor (the anchor itself is blocked footprint). decide is pure,
-        // so the same five are still available for this second decision.
+        // so the same six are still available for this second decision.
         world
             .resource_mut::<AiController>()
             .remembered_enemy_town_center =
@@ -1774,7 +1800,7 @@ fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
                 if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
         });
         let remembered = MapFixture::team_plan(other(team)).town_center_anchor;
-        let ground = nearest_walkable_cell(&map, remembered).unwrap();
+        let ground = nearest_open_cell(&map, remembered, &HashSet::new()).unwrap();
         assert!(
             matches!(
                 attack,
@@ -2336,5 +2362,179 @@ fn population_stall_builds_a_house_and_recovers() {
         &mut map,
         "production past the old cap",
         |world| crate::production::population_used(world, team) > 10,
+    );
+}
+
+/// Review item: an apply-time `Occupied` only blocks an anchor forever when
+/// the anchor's cells are genuinely blocked on the shared map (a hidden
+/// enemy building). A transient reject — an own worker's goal from an
+/// earlier command in the same decision — leaves the anchor retryable.
+#[test]
+fn place_anchor_commit_blocks_only_genuinely_blocked_ground() {
+    let mut controller = AiController::new(TeamId(2));
+    let mut map = GridMap::new(64, 64);
+    let anchor = GridPos::new(10, 10);
+
+    let transient = CommandResult {
+        reject: Some(RejectReason::Occupied),
+        ..CommandResult::default()
+    };
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::PlaceAnchor {
+            anchor,
+            kind: BuildingKind::House,
+        }),
+        &transient,
+        &map,
+    );
+    assert!(
+        controller.blocked_anchors.is_empty(),
+        "a transient occupancy reject must not block the anchor forever"
+    );
+
+    for cell in Footprint::new(anchor, 2, 2).cells() {
+        map.set_blocked(cell, true);
+    }
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::PlaceAnchor {
+            anchor,
+            kind: BuildingKind::House,
+        }),
+        &transient,
+        &map,
+    );
+    assert_eq!(
+        controller.blocked_anchors,
+        vec![anchor],
+        "a really blocked anchor is remembered"
+    );
+}
+
+/// Review item: only completed Houses raise the population cap, so the
+/// house step must not stack a second placement while one is under
+/// construction — same for Farms and food capacity.
+#[test]
+fn house_and_farm_place_one_at_a_time_while_under_construction() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 2000, 2000, 2000);
+
+    // Population pressure: 6 extra villagers press the cap of 10.
+    for index in 0..6_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(100 + index),
+            TeamId(2),
+            Vec2::new(110.5, 40.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+    // Food pressure: 9 total villagers target 5 food workers, above the two
+    // berry sources' capacity of 4.
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::House,
+                ..
+            }
+        )),
+        "premise: the pressured House fires"
+    );
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Farm,
+                ..
+            }
+        )),
+        "premise: the food-deficit Farm fires"
+    );
+
+    // Neither may re-fire while the first of each is still building: a
+    // per-decision placement would stack duplicates on every free slot.
+    for _ in 0..3 {
+        let commands = decide(&mut world, &map);
+        assert!(
+            commands.iter().all(|command| !matches!(
+                command,
+                PlayerCommand::PlaceBuilding {
+                    kind: BuildingKind::House | BuildingKind::Farm,
+                    ..
+                }
+            )),
+            "no second House/Farm while one is under construction: {commands:?}"
+        );
+    }
+}
+
+/// Review item: a gather source whose command keeps rejecting is dropped
+/// after bounded retries, and the allocation falls back to the next-best
+/// source instead of re-firing the same doomed assignment every second.
+#[test]
+fn rejected_gather_falls_back_to_the_next_source_after_bounded_retries() {
+    let (mut world, map) = ai_world(TeamId(2));
+
+    // The allocation's normal pick: nearest food source to the Town Center.
+    let normal = decide(&mut world, &map)
+        .into_iter()
+        .find_map(|command| match command {
+            PlayerCommand::Gather { source, .. } => Some(source),
+            _ => None,
+        })
+        .expect("a gather assignment fires");
+
+    // Mark that source as having rejected MAX_GATHER_FAILURES times.
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    controller
+        .gather_failures
+        .entry(normal)
+        .or_insert(MAX_GATHER_FAILURES);
+    world.insert_resource(controller);
+
+    let fallback = decide(&mut world, &map)
+        .into_iter()
+        .find_map(|command| match command {
+            PlayerCommand::Gather { source, .. } => Some(source),
+            _ => None,
+        })
+        .expect("a fallback gather assignment fires");
+    assert_ne!(
+        fallback, normal,
+        "the persistently rejecting source is skipped for its fallback"
+    );
+
+    // And the failure count itself is exactly what commits track: a rejected
+    // gather increments, an accepted one clears.
+    let mut controller = AiController::new(TeamId(2));
+    let rejected = CommandResult::default();
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::GatherSource {
+            worker: UnitId(1),
+            source: normal,
+        }),
+        &rejected,
+        &map,
+    );
+    assert_eq!(controller.gather_failures.get(&normal), Some(&1));
+    let mut accepted = CommandResult::default();
+    accepted.accepted_units.push(UnitId(1));
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::GatherSource {
+            worker: UnitId(1),
+            source: normal,
+        }),
+        &accepted,
+        &map,
+    );
+    assert!(
+        !controller.gather_failures.contains_key(&normal),
+        "an accepted gather clears the failure count"
     );
 }

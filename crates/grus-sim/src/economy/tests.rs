@@ -939,8 +939,9 @@ fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
     }
 }
 
-/// Fog knowledge gate: a guessed ResourceId on unexplored ground rejects —
-/// standalone sources are gatherable only once their cell was explored.
+/// Fog knowledge gate: a guessed ResourceId on unexplored ground answers
+/// exactly like an absent id — distinct rejects would let a caller probe
+/// ids to discover unexplored sources.
 #[test]
 fn gather_rejects_an_unexplored_standalone_source() {
     let (mut world, mut map) = skirmish_world();
@@ -956,7 +957,7 @@ fn gather_rejects_an_unexplored_standalone_source() {
         gather_command(TeamId(1), vec![UnitId(1)], ResourceId(13)),
     );
 
-    assert_eq!(outcome.reject, Some(RejectReason::Unexplored));
+    assert_eq!(outcome.reject, Some(RejectReason::SourceMissing));
     assert!(outcome.accepted_units.is_empty());
 }
 
@@ -1059,8 +1060,8 @@ fn enemy_farm_is_never_an_own_gather_source_through_fog() {
 
     assert_eq!(
         outcome.reject,
-        Some(RejectReason::Unexplored),
-        "an enemy farm is not admitted as a last-seen ghost"
+        Some(RejectReason::SourceMissing),
+        "an enemy farm is not admitted as a last-seen ghost — and a hidden one is indistinguishable from a missing id"
     );
 }
 
@@ -1453,5 +1454,85 @@ fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
             kind: ResourceKind::Wood,
             amount: NonZeroU32::new(5).unwrap(),
         })
+    );
+}
+
+/// Review item: a gatherer pushed away from its source (e.g. teleported by
+/// a later building placement) must walk back instead of gathering from up
+/// to seven cells away; nothing transfers while it is away.
+#[test]
+fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
+    let (mut world, mut map) = skirmish_world();
+    let villager = world
+        .resource::<UnitIndex>()
+        .entity(UnitId(1))
+        .expect("seeded villager");
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], ResourceId(1)),
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    for _ in 0..600 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+        if matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::Gathering { .. })
+        ) {
+            break;
+        }
+    }
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::Gathering {
+                source: ResourceId(1)
+            })
+        ),
+        "premise: the villager reached Gathering"
+    );
+
+    // Teleport it six cells off the source's perimeter.
+    let away = map.cell_center(GridPos::new(30, 48));
+    world.entity_mut(villager).insert(SimPosition::new(away));
+    step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::ToSource {
+                source: ResourceId(1),
+                ..
+            })
+        ),
+        "a non-adjacent gatherer must be walking back, not gathering: {:?}",
+        world.get::<WorkerTask>(villager)
+    );
+    assert_eq!(
+        world.get::<Carry>(villager),
+        Some(&Carry::Empty),
+        "nothing transfers while away from the source"
+    );
+    assert!(
+        world.get::<MoveOrder>(villager).is_some(),
+        "the walk back installs a real route"
+    );
+
+    // The loop still completes: it walks back and gathers again.
+    for _ in 0..600 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world
+            .get::<Carry>(villager)
+            .map_or(0, |carry| carry.amount_or_zero())
+            > 0
+        {
+            break;
+        }
+    }
+    assert!(
+        matches!(world.get::<Carry>(villager), Some(Carry::Holding { .. })),
+        "the gatherer resumes gathering after walking back"
     );
 }
