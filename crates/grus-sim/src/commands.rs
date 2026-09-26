@@ -14,7 +14,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
 use crate::session::gameplay_active;
-use crate::visibility::VisibilityMap;
+use crate::visibility::{VisibilityMap, unit_counts_as_occupancy};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UnitCommandKind {
@@ -369,13 +369,17 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
             let target_is_walkable = map.is_walkable(target_cell);
             let command_units: HashSet<UnitId> = units.iter().copied().collect();
 
-            // Reference-counted reservations seeded from EVERY live unit's
-            // current cell and existing MoveOrder goal, including units in this
-            // command. A commanded unit that is later rejected keeps its
-            // reservation so an accepted sibling cannot be assigned the cell it
-            // is standing on or already moving to; a commanded unit's old
-            // reservation is released only when an accepted replacement is
-            // assigned (and restored if assignment fails).
+            // Reference-counted reservations seeded from every live unit
+            // the issuer owns or can see — current cell and existing
+            // MoveOrder goal, including units in this command. A unit the
+            // issuer cannot see never reserves (that would turn its hidden
+            // position into a `Crowded`/`Unreachable` reject); the collision
+            // is resolved physically on arrival instead. A commanded unit
+            // that is later rejected keeps its reservation so an accepted
+            // sibling cannot be assigned the cell it is standing on or
+            // already moving to; a commanded unit's old reservation is
+            // released only when an accepted replacement is assigned (and
+            // restored if assignment fails).
             let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
             // Candidate slot generation excludes only non-commanded
             // reservations, so a commanded unit's own current cell (e.g. a unit
@@ -387,18 +391,23 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                 .map(|index| index.iter().map(|(_, entity)| *entity).collect())
                 .unwrap_or_default();
             for entity in &all_entities {
+                let unit_team = world.get::<Unit>(*entity).map(|unit| unit.team);
                 let is_commanded = world
                     .get::<Unit>(*entity)
                     .map(|unit| command_units.contains(&unit.id))
                     .unwrap_or(false);
                 if let Some(position) = world.get::<SimPosition>(*entity) {
                     let cell = map.world_to_cell(position.current);
-                    reserve_slot(&mut used_slots, cell);
-                    if !is_commanded {
-                        non_commanded_used.insert(cell);
+                    if unit_counts_as_occupancy(world, issuer, unit_team, cell) {
+                        reserve_slot(&mut used_slots, cell);
+                        if !is_commanded {
+                            non_commanded_used.insert(cell);
+                        }
                     }
                 }
-                if let Some(order) = world.get::<MoveOrder>(*entity) {
+                if let Some(order) = world.get::<MoveOrder>(*entity)
+                    && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+                {
                     reserve_slot(&mut used_slots, order.goal);
                     if !is_commanded {
                         non_commanded_used.insert(order.goal);
@@ -553,6 +562,10 @@ fn plan_move_route(
     if !map.is_walkable(target) {
         return None;
     }
+    // Same privacy rule as the batch Move: only units the moving unit's
+    // team owns or can see reserve cells, so hidden units never decide the
+    // reachable-slot probe.
+    let issuer = world.get::<Unit>(entity)?.team;
     let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
     let entities: Vec<Entity> = world
         .get_resource::<UnitIndex>()
@@ -562,10 +575,16 @@ fn plan_move_route(
         if other == entity {
             continue;
         }
+        let unit_team = world.get::<Unit>(other).map(|unit| unit.team);
         if let Some(position) = world.get::<SimPosition>(other) {
-            reserve_slot(&mut used_slots, map.world_to_cell(position.current));
+            let cell = map.world_to_cell(position.current);
+            if unit_counts_as_occupancy(world, issuer, unit_team, cell) {
+                reserve_slot(&mut used_slots, cell);
+            }
         }
-        if let Some(order) = world.get::<MoveOrder>(other) {
+        if let Some(order) = world.get::<MoveOrder>(other)
+            && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+        {
             reserve_slot(&mut used_slots, order.goal);
         }
     }

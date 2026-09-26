@@ -18,7 +18,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
 use crate::session::gameplay_active;
-use crate::visibility::{explored_by, visible_to};
+use crate::visibility::{explored_by, unit_counts_as_occupancy, visible_to};
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -145,13 +145,13 @@ pub fn validate_placement(
             let unit_team = world.get::<Unit>(*unit_entity).map(|unit| unit.team);
             if let Some(position) = world.get::<SimPosition>(*unit_entity) {
                 let cell = map.world_to_cell(position.current);
-                if unit_team == Some(issuer) || visible_to(world, issuer, cell) {
+                if unit_counts_as_occupancy(world, issuer, unit_team, cell) {
                     unit_cells.insert(cell);
                 }
             }
             if *unit_entity != entity
                 && let Some(order) = world.get::<MoveOrder>(*unit_entity)
-                && (unit_team == Some(issuer) || visible_to(world, issuer, order.goal))
+                && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
             {
                 unit_cells.insert(order.goal);
             }
@@ -504,18 +504,16 @@ fn reachable_builder_slot(
         if entity == builder {
             continue;
         }
-        let observable = world
-            .get::<Unit>(entity)
-            .is_some_and(|unit| unit.team == issuer);
+        let unit_team = world.get::<Unit>(entity).map(|unit| unit.team);
         if let Some(position) = world.get::<SimPosition>(entity) {
             let cell = map.world_to_cell(position.current);
-            if observable || visible_to(world, issuer, cell) {
+            if unit_counts_as_occupancy(world, issuer, unit_team, cell) {
                 used.insert(cell);
             }
         }
         if Some(entity) != goal_released
             && let Some(order) = world.get::<MoveOrder>(entity)
-            && (observable || visible_to(world, issuer, order.goal))
+            && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
         {
             used.insert(order.goal);
         }
@@ -686,6 +684,9 @@ fn first_open_perimeter_cell(
 /// The nearest walkable cell outside `excluded`, searched by expanding
 /// Chebyshev rings row-major — same ring order as the AI target picker.
 /// Radius 0 first, so callers may ask about the cell itself.
+/// ponytail: capped at ring 7; a fully blocked 15×15 pocket around the
+/// cell returns None (displacement then leaves the unit in place) — a
+/// full-map scan if an authored map ever produces such a pocket.
 pub(crate) fn nearest_open_cell(
     map: &GridMap,
     cell: GridPos,

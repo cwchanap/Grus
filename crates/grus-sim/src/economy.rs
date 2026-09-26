@@ -21,7 +21,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
-use crate::visibility::{explored_by, visible_to};
+use crate::visibility::{explored_by, unit_counts_as_occupancy, visible_to};
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
@@ -399,20 +399,28 @@ pub(crate) fn apply_gather(
     }
 
     // Same reservation seam as Move and building placement: seed every live
-    // unit's current cell and MoveOrder goal. A commanded worker's own current
-    // cell and old goal are released only while it is being reassigned and
-    // restored if the reassignment fails, so rejected siblings never free a
-    // cell they still hold.
+    // unit the issuer owns or can see — current cell and MoveOrder goal. A
+    // commanded worker's own current cell and old goal are released only
+    // while it is being reassigned and restored if the reassignment fails,
+    // so rejected siblings never free a cell they still hold. A hidden unit
+    // reserves nothing: its position must not leak through a gather reject,
+    // the collision is resolved physically instead.
     let mut used: HashMap<GridPos, usize> = HashMap::new();
     let entities: Vec<Entity> = world
         .get_resource::<UnitIndex>()
         .map(|index| index.iter().map(|(_, entity)| *entity).collect())
         .unwrap_or_default();
     for entity in entities {
+        let unit_team = world.get::<Unit>(entity).map(|unit| unit.team);
         if let Some(position) = world.get::<SimPosition>(entity) {
-            reserve_slot(&mut used, map.world_to_cell(position.current));
+            let cell = map.world_to_cell(position.current);
+            if unit_counts_as_occupancy(world, issuer, unit_team, cell) {
+                reserve_slot(&mut used, cell);
+            }
         }
-        if let Some(order) = world.get::<MoveOrder>(entity) {
+        if let Some(order) = world.get::<MoveOrder>(entity)
+            && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+        {
             reserve_slot(&mut used, order.goal);
         }
     }

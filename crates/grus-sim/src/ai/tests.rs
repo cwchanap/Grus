@@ -421,12 +421,12 @@ fn scout_traverses_the_authored_route_once_and_discovers_the_expansion() {
     );
 }
 
-/// A rejected scout leg must not consume the cursor: the same leg is
-/// re-emitted until it accepts, and only a leg that keeps rejecting past
-/// the failure budget is skipped — a transient blocker retries, a
-/// permanent one cannot stall the whole route.
+/// A rejected scout leg must not consume the cursor: transient rejects
+/// (crowding, a busy scout) retry the same leg forever, and only a leg
+/// whose cell is truly unwalkable on the shared map — a blocker no retry
+/// can ever clear — is skipped.
 #[test]
-fn scout_leg_retries_rejects_and_skips_a_permanent_blocker() {
+fn scout_leg_retries_transient_rejects_and_skips_only_a_map_blocked_cell() {
     let (mut world, mut map) = ai_world(TeamId(2));
     let plan = MapFixture::team_plan(TeamId(2));
     spawn_military(
@@ -437,28 +437,47 @@ fn scout_leg_retries_rejects_and_skips_a_permanent_blocker() {
         GridPos::new(112, 44),
         UnitKind::Spearman,
     );
+    let leg = plan.scout_route[0];
 
-    // Permanently block the first route leg: every emitted Move rejects
-    // `Unreachable` at apply time.
-    map.set_blocked(plan.scout_route[0], true);
-    for attempt in 1..MAX_SCOUT_LEG_FAILURES {
-        decide_and_apply(&mut world, &mut map);
-        assert_eq!(
-            world.resource::<AiController>().scout_route_index,
-            0,
-            "attempt {attempt}: a rejected leg must not consume the cursor"
+    // Three transient `Unreachable` rejects (the cell itself walkable —
+    // e.g. every destination slot crowded) leave the same leg issued.
+    let mut controller = AiController::new(TeamId(2));
+    let rejected = crate::commands::CommandResult::default();
+    for attempt in 1..=3 {
+        commit_outcome(
+            &mut controller,
+            Some(AiCommit::ScoutLeg {
+                unit: UnitId(20),
+                cell: leg,
+            }),
+            &rejected,
+            &map,
         );
-        assert_eq!(world.resource::<AiController>().scout_leg_failures, attempt);
+        assert_eq!(
+            controller.scout_route_index, 0,
+            "attempt {attempt}: a transient reject must not consume the cursor"
+        );
     }
-    decide_and_apply(&mut world, &mut map);
-    assert_eq!(
-        world.resource::<AiController>().scout_route_index,
-        1,
-        "a permanently blocked leg is skipped once the failure budget is spent"
+
+    // A genuinely map-blocked leg is skipped on the first reject: no retry
+    // can ever clear a blocked cell.
+    map.set_blocked(leg, true);
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::ScoutLeg {
+            unit: UnitId(20),
+            cell: leg,
+        }),
+        &rejected,
+        &map,
     );
-    assert_eq!(world.resource::<AiController>().scout_leg_failures, 0);
+    assert_eq!(
+        controller.scout_route_index, 1,
+        "a map-blocked leg is skipped immediately"
+    );
 
     // The next leg is open: one accepted Move advances the cursor normally.
+    world.insert_resource(controller);
     decide_and_apply(&mut world, &mut map);
     assert_eq!(world.resource::<AiController>().scout_route_index, 2);
 }
@@ -1370,7 +1389,10 @@ fn stable_places_on_the_authored_slot_once_age_two_lands() {
 
 /// Two worlds whose AI own/observed state is identical but whose hidden
 /// enemies sit at different unseen cells must decide identical command
-/// lists — from both authored starts. Making a threat visible is then
+/// lists — from both authored starts. The AI team holds an idle spearman
+/// in both worlds so the defense step is actually capable of emitting a
+/// command: a leak through hidden spearmen would flip the second world's
+/// output instead of passing vacuously. Making a threat visible is then
 /// allowed to change the output (see the defense regressions below).
 #[test]
 fn decisions_are_invariant_to_hidden_enemy_positions() {
@@ -1379,6 +1401,16 @@ fn decisions_are_invariant_to_hidden_enemy_positions() {
         for (enemy_cell, extra_enemy) in [(GridPos::new(5, 5), false), (GridPos::new(60, 60), true)]
         {
             let (mut world, map) = ai_world(team);
+            // An available defender in both worlds, standing on home ground.
+            let home = MapFixture::team_plan(team).scout_route[0];
+            spawn_military(
+                &mut world,
+                &map,
+                UnitId(700),
+                team,
+                home,
+                UnitKind::Spearman,
+            );
             spawn_military(
                 &mut world,
                 &map,
@@ -2472,12 +2504,14 @@ fn house_and_farm_place_one_at_a_time_while_under_construction() {
     }
 }
 
-/// Review item: a gather source whose command keeps rejecting is dropped
-/// after bounded retries, and the allocation falls back to the next-best
-/// source instead of re-firing the same doomed assignment every second.
+/// Review item: a gather source is never failure-blacklisted. Rejected
+/// gathers leave no controller state — a source that keeps rejecting (here:
+/// its whole approach perimeter is walled, so every gather rejects
+/// `Crowded`) is still offered by later decisions, because only a source
+/// that no longer exists leaves the candidate enumeration, never a reject.
 #[test]
-fn rejected_gather_falls_back_to_the_next_source_after_bounded_retries() {
-    let (mut world, map) = ai_world(TeamId(2));
+fn rejected_gathers_never_blacklist_the_source() {
+    let (mut world, mut map) = ai_world(TeamId(2));
 
     // The allocation's normal pick: nearest food source to the Town Center.
     let normal = decide(&mut world, &map)
@@ -2488,53 +2522,24 @@ fn rejected_gather_falls_back_to_the_next_source_after_bounded_retries() {
         })
         .expect("a gather assignment fires");
 
-    // Mark that source as having rejected MAX_GATHER_FAILURES times.
-    let mut controller = world.remove_resource::<AiController>().unwrap();
-    controller
-        .gather_failures
-        .entry(normal)
-        .or_insert(MAX_GATHER_FAILURES);
-    world.insert_resource(controller);
+    // Wall the source's whole approach perimeter: every gather toward it
+    // rejects at apply time, forever.
+    let entity = world
+        .resource::<ResourceIndex>()
+        .entity(normal)
+        .expect("the picked source is live");
+    let footprint = *world.get::<Footprint>(entity).unwrap();
+    for cell in footprint.perimeter_cells() {
+        map.set_blocked(cell, true);
+    }
 
-    let fallback = decide(&mut world, &map)
-        .into_iter()
-        .find_map(|command| match command {
-            PlayerCommand::Gather { source, .. } => Some(source),
-            _ => None,
-        })
-        .expect("a fallback gather assignment fires");
-    assert_ne!(
-        fallback, normal,
-        "the persistently rejecting source is skipped for its fallback"
-    );
-
-    // And the failure count itself is exactly what commits track: a rejected
-    // gather increments, an accepted one clears.
-    let mut controller = AiController::new(TeamId(2));
-    let rejected = CommandResult::default();
-    commit_outcome(
-        &mut controller,
-        Some(AiCommit::GatherSource {
-            worker: UnitId(1),
-            source: normal,
-        }),
-        &rejected,
-        &map,
-    );
-    assert_eq!(controller.gather_failures.get(&normal), Some(&1));
-    let mut accepted = CommandResult::default();
-    accepted.accepted_units.push(UnitId(1));
-    commit_outcome(
-        &mut controller,
-        Some(AiCommit::GatherSource {
-            worker: UnitId(1),
-            source: normal,
-        }),
-        &accepted,
-        &map,
-    );
-    assert!(
-        !controller.gather_failures.contains_key(&normal),
-        "an accepted gather clears the failure count"
-    );
+    // Three rejected gathers (one per decision) must not blacklist it.
+    for rejection in 1..=3 {
+        let commands = decide_and_apply(&mut world, &mut map);
+        assert!(
+            commands.iter().any(|command| matches!(command,
+                PlayerCommand::Gather { source, .. } if *source == normal)),
+            "decision {rejection}: the rejecting source is still offered"
+        );
+    }
 }

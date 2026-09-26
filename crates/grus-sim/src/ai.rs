@@ -58,15 +58,6 @@ const DEFENSE_RADIUS: f32 = 12.0;
 /// but marching, and counting it let every post-wave replacement trickle
 /// into the enemy base alone.
 const ATTACK_THRESHOLD: u32 = 6;
-/// A gather candidate whose command keeps rejecting is skipped after this
-/// many consecutive failures, the same bounded-retry contract as scout
-/// legs — a permanently unusable source must never stall a villager or
-/// starve the fallback sources of retries.
-const MAX_GATHER_FAILURES: u32 = 3;
-/// Rejected scout legs retry at later decisions, but a leg that keeps
-/// rejecting is skipped so a permanent blocker cannot stall the rest of the
-/// route.
-const MAX_SCOUT_LEG_FAILURES: u32 = 3;
 /// Round-robin army composition cursor order.
 const ARMY_ROTATION: [UnitKind; 3] = [UnitKind::Spearman, UnitKind::Archer, UnitKind::Cavalry];
 
@@ -79,9 +70,6 @@ pub struct AiController {
     pub team: TeamId,
     decision_accumulator: f32,
     scout_route_index: usize,
-    /// Rejections of the currently issued scout leg; reaching
-    /// `MAX_SCOUT_LEG_FAILURES` skips the leg instead of stalling the route.
-    scout_leg_failures: u32,
     /// The only retained enemy memory: the last cell of an enemy Town Center
     /// genuinely seen by this team. Written only while one is visible;
     /// restart removes the controller wholesale, which drops it.
@@ -96,11 +84,6 @@ pub struct AiController {
     /// unseen building cannot stall AI growth forever; restart drops the
     /// controller and this with it.
     blocked_anchors: Vec<GridPos>,
-    /// Consecutive rejects of each gather candidate the allocation step
-    /// offered; at `MAX_GATHER_FAILURES` the source is skipped so the next
-    /// decision falls back to another source instead of re-firing the same
-    /// doomed command every second.
-    gather_failures: HashMap<ResourceId, u32>,
     next_army_kind: usize,
 }
 
@@ -110,19 +93,18 @@ impl AiController {
             team,
             decision_accumulator: 0.0,
             scout_route_index: 0,
-            scout_leg_failures: 0,
             remembered_enemy_town_center: None,
             blocked_anchors: Vec::new(),
-            gather_failures: HashMap::new(),
             next_army_kind: 0,
         }
     }
 }
 
 /// One decided command plus the controller transition it commits only when
-/// its `CommandResult` accepts it: a rejected command must never consume
-/// persistent progress (a scout leg skipped forever without being walked, an
-/// army kind rotated past without being trained).
+/// its `CommandResult` accepts it: persistent progress (the army-kind
+/// cursor) must never be consumed by a rejected command, and the scout
+/// cursor consumes a leg only when the leg was actually accepted or can
+/// never be walked at all (a map-blocked cell).
 #[derive(Debug)]
 pub struct PlannedCommand {
     /// The ordinary player command to apply.
@@ -133,10 +115,14 @@ pub struct PlannedCommand {
 /// A controller transition deferred until its paired command is accepted.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum AiCommit {
-    /// A scout Move was issued to `unit`: advance the route cursor on
-    /// acceptance; on rejection count a leg failure and skip the leg after
-    /// `MAX_SCOUT_LEG_FAILURES` so a permanent blocker cannot stall the route.
-    ScoutLeg { unit: UnitId },
+    /// A scout Move was issued to `unit` toward `cell`: advance the route
+    /// cursor on acceptance; on rejection advance past the leg only when
+    /// `cell` is truly unwalkable on the shared map (a permanent blocker —
+    /// authored terrain or a real building — that no retry can ever clear).
+    /// Every other reject — a transient `Unreachable`/`Crowded` from slot
+    /// crowding — leaves the cursor alone so the same leg retries later;
+    /// a transient blocker must never permanently skip a waypoint.
+    ScoutLeg { unit: UnitId, cell: GridPos },
     /// An army enqueue was issued: on acceptance store the next rotation
     /// cursor.
     ArmyCursor(usize),
@@ -146,10 +132,6 @@ pub(crate) enum AiCommit {
     /// stops offering it every decision. Any other `Occupied` (an own
     /// unit's fresh goal) is transient and merely retried later.
     PlaceAnchor { anchor: GridPos, kind: BuildingKind },
-    /// A gather assignment was issued to `worker` at `source`: on reject
-    /// the failure count rises, and at `MAX_GATHER_FAILURES` the source is
-    /// skipped so the fallback sources take over.
-    GatherSource { worker: UnitId, source: ResourceId },
 }
 
 impl PlannedCommand {
@@ -196,11 +178,14 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
 }
 
 /// Commits one deferred controller transition for an applied command: the
-/// scout cursor and army rotation move only on acceptance, a scout leg
-/// that keeps rejecting is skipped so a permanent blocker cannot stall the
-/// route, a gather source that keeps rejecting is dropped for its
-/// fallbacks, and only a genuinely map-blocked anchor is remembered as a
-/// hidden enemy building. `step_ai` and the test harness share this seam.
+/// scout cursor and army rotation move only on acceptance, a scout leg is
+/// skipped only when its cell is genuinely unwalkable on the shared map (a
+/// permanent blocker no retry can clear — transient rejects retry the same
+/// leg forever), gather assignments carry no transition at all (a rejected
+/// source simply re-offers next decision; a source that is truly gone
+/// leaves the `ResourceIndex` and is never a candidate again), and only a
+/// genuinely map-blocked anchor is remembered as a hidden enemy building.
+/// `step_ai` and the test harness share this seam.
 fn commit_outcome(
     controller: &mut AiController,
     commit: Option<AiCommit>,
@@ -208,24 +193,10 @@ fn commit_outcome(
     map: &GridMap,
 ) {
     match commit {
-        Some(AiCommit::ScoutLeg { unit }) => {
-            if result.accepted_units.contains(&unit) {
-                controller.scout_route_index += 1;
-                controller.scout_leg_failures = 0;
-            } else {
-                controller.scout_leg_failures += 1;
-                if controller.scout_leg_failures >= MAX_SCOUT_LEG_FAILURES {
-                    controller.scout_route_index += 1;
-                    controller.scout_leg_failures = 0;
-                }
-            }
-        }
-        Some(AiCommit::GatherSource { worker, source }) => {
-            if result.accepted_units.contains(&worker) {
-                controller.gather_failures.remove(&source);
-            } else {
-                *controller.gather_failures.entry(source).or_default() += 1;
-            }
+        Some(AiCommit::ScoutLeg { unit, cell })
+            if (result.accepted_units.contains(&unit) || !map.is_walkable(cell)) =>
+        {
+            controller.scout_route_index += 1;
         }
         Some(AiCommit::ArmyCursor(next)) if result.reject.is_none() => {
             controller.next_army_kind = next;
@@ -424,7 +395,10 @@ fn scout(
             units: vec![scout_id],
             kind: UnitCommandKind::Move { target },
         }),
-        AiCommit::ScoutLeg { unit: scout_id },
+        AiCommit::ScoutLeg {
+            unit: scout_id,
+            cell,
+        },
     ))
 }
 
@@ -446,7 +420,9 @@ fn villager_scout_id(world: &World, team: TeamId, claimed: &[UnitId]) -> Option<
 /// candidates are explored standalone sources and own completed Farms, and
 /// the kind's nearest known source to the own Town Center wins (ties by
 /// stable ID) — an explored enemy-base fringe source never outranks a home
-/// source just because it has a lower ID.
+/// source just because it has a lower ID. A rejected gather command leaves
+/// no controller state: the same source re-offers next decision, and a
+/// source that no longer exists stops being a candidate on its own.
 fn allocate_idle_worker(
     world: &World,
     controller: &mut AiController,
@@ -471,17 +447,6 @@ fn allocate_idle_worker(
             .iter()
             .filter(|source| source.kind == kind)
             .filter(|source| source_has_capacity(world, controller.team, source))
-            // A source whose gather command keeps rejecting is skipped so
-            // the next-best source takes over instead of the same doomed
-            // assignment re-firing every decision.
-            .filter(|source| {
-                controller
-                    .gather_failures
-                    .get(&source.id)
-                    .copied()
-                    .unwrap_or(0)
-                    < MAX_GATHER_FAILURES
-            })
             .min_by(|a, b| {
                 source_distance(a, home)
                     .total_cmp(&source_distance(b, home))
@@ -491,17 +456,15 @@ fn allocate_idle_worker(
             continue;
         };
         claimed.push(idle);
-        return Some(PlannedCommand::on_accept(
-            PlayerCommand::Gather {
-                issuer: controller.team,
-                workers: vec![idle],
-                source: source.id,
-            },
-            AiCommit::GatherSource {
-                worker: idle,
-                source: source.id,
-            },
-        ));
+        // No deferred commit: a rejected gather simply re-offers the same
+        // source next decision (a source that no longer exists is never a
+        // candidate again), so transient crowding can never permanently
+        // blacklist a food source.
+        return Some(PlannedCommand::plain(PlayerCommand::Gather {
+            issuer: controller.team,
+            workers: vec![idle],
+            source: source.id,
+        }));
     }
     None
 }

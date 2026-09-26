@@ -10,12 +10,12 @@ use bevy::math::Vec2;
 use bevy::prelude::{Entity, World};
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
-    Age, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget,
-    Dropoff, Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, PlayerCommand,
-    ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId,
-    UnitIndex, UnitKind, VisibilityMap, WorkerTask, apply_player_command, explored_by,
-    refresh_visibility, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
-    step_movement, step_production, visible_to,
+    Age, AiController, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder,
+    CombatTarget, Dropoff, Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture,
+    PlayerCommand, ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    UnitId, UnitIndex, UnitKind, VisibilityMap, WorkerTask, apply_player_command,
+    decide_ai_commands, explored_by, refresh_visibility, seed_skirmish, spawn_unit, step_combat,
+    step_construction, step_economy, step_movement, step_production, visible_to,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -348,5 +348,50 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
     assert!(
         visible_to(&world, TEAM, site),
         "construction completion grants vision"
+    );
+}
+
+/// The chain tail is visibility → AI: a decision must consume the fog
+/// computed by this tick's refresh, not the previous tick's. The
+/// consequence probe is the fog-gated expansion Storehouse: on stale fog
+/// (the expansion not yet explored) no decision may place it; immediately
+/// after the refresh the placement appears. An AI step that ran before the
+/// visibility step would produce the stale decision list.
+#[test]
+fn ai_decisions_consume_the_same_ticks_fresh_fog() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    let mut controller = AiController::new(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    let expansion = plan.expansion_storehouse_slots[0];
+
+    // A team-2 villager stands within vision of the expansion slot, but the
+    // fog has not been refreshed: the slot is still unexplored.
+    let villager = world.resource::<UnitIndex>().entity(UnitId(5)).unwrap();
+    world.entity_mut(villager).insert(SimPosition::new(
+        map.cell_center(GridPos::new(expansion.x, expansion.y + 3)),
+    ));
+    assert!(!explored_by(&world, TeamId(2), expansion));
+
+    let stale = decide_ai_commands(&world, &mut controller, &plan, &map);
+    assert!(
+        stale.iter().all(|planned| !matches!(planned.command,
+            PlayerCommand::PlaceBuilding { kind: BuildingKind::Storehouse, anchor, .. }
+                if anchor == expansion)),
+        "stale fog cannot reference the unexplored expansion"
+    );
+
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(2), expansion));
+    let fresh = decide_ai_commands(&world, &mut controller, &plan, &map);
+    assert!(
+        fresh.iter().any(|planned| matches!(planned.command,
+            PlayerCommand::PlaceBuilding { kind: BuildingKind::Storehouse, anchor, .. }
+                if anchor == expansion)),
+        "the fresh fog's expansion Storehouse placement fires"
     );
 }
