@@ -21,6 +21,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
+use crate::visibility::{explored_by, visible_to};
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
@@ -216,11 +217,12 @@ pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).remove::<CombatOrder>();
 }
 
-/// Most recent route-failure reject, drained by the bridge into its feedback
-/// channel. Single slot — the latest failure in a tick wins. Lives in the sim
-/// so the cleanup helper stays Godot-free.
+/// Most recent route-failure reject per team, drained by the bridge into its
+/// feedback channel (Team 1 only — a Team-2 AI worker's failure can never
+/// surface as, or overwrite, the human player's feedback). One latest slot
+/// per team. Lives in the sim so the cleanup helper stays Godot-free.
 #[derive(Debug, Default, Resource)]
-pub struct LastRouteReject(pub Option<RejectReason>);
+pub struct LastRouteReject(pub HashMap<TeamId, RejectReason>);
 
 /// Terminal cleanup when a worker's required route becomes impossible: the
 /// full `cancel_unit_activity` semantics (Farm assignment released,
@@ -232,8 +234,15 @@ pub(crate) fn idle_worker_on_route_failure(
     entity: Entity,
     reason: RejectReason,
 ) {
+    // Capture the worker's team before cancellation touches the entity.
+    let team = world.get::<Unit>(entity).map(|unit| unit.team);
     cancel_unit_activity(world, entity);
-    world.insert_resource(LastRouteReject(Some(reason)));
+    if let Some(team) = team {
+        world
+            .get_resource_or_insert_with(LastRouteReject::default)
+            .0
+            .insert(team, reason);
+    }
 }
 
 /// Narrow combat-destruction seam over the existing drop-off routing: a
@@ -281,6 +290,36 @@ pub(crate) fn reroute_dropoff_worker(
     }
 }
 
+/// The one idle-villager definition: Villager + `WorkerTask::Idle` + no
+/// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count and the AI
+/// worker pool read the same truth.
+pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
+    world
+        .get::<Unit>(entity)
+        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        && world.get::<WorkerTask>(entity) == Some(&WorkerTask::Idle)
+        && world.get::<MoveOrder>(entity).is_none()
+}
+
+/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD
+/// and the AI alike.
+pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    (world.get::<Unit>(*entity)?.team == team && is_idle_worker(world, *entity))
+                        .then_some(*id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
+}
+
 pub fn gather_rate_for_age(age: Age) -> f32 {
     match age {
         Age::Age1 => BASE_GATHER_RATE,
@@ -288,12 +327,20 @@ pub fn gather_rate_for_age(age: Age) -> f32 {
     }
 }
 
-/// Applies an accepted `Gather`: validates source, owned villagers, Farm
-/// availability, and shared reservation state; then assigns unique
-/// immediate-perimeter slots. A worker carrying resources routes to a
-/// reachable same-team Dropoff first (depositing) and only then to the
-/// requested source, so Carry never mixes kinds. Validation precedes any
-/// cancellation: a rejected worker keeps its old task and order.
+/// Applies an accepted `Gather`: validates source knowledge, then source
+/// ownership — a foreign Farm, even while currently visible, is never an
+/// own economic source — plus owned villagers, Farm availability, and
+/// shared reservation state; then assigns unique immediate-perimeter slots.
+/// A worker carrying resources routes to a reachable same-team Dropoff
+/// first (depositing) and only then to the requested source, so Carry never
+/// mixes kinds. Validation precedes any cancellation: a rejected worker
+/// keeps its old task and order.
+///
+/// Fog privacy: an id the issuer does not know — an unexplored standalone
+/// source or a hidden enemy Farm — answers `SourceMissing` exactly like an
+/// absent id, so probing ids can never enumerate enemy Farms or watch a
+/// hidden source deplete. A *visible* enemy Farm stays honest (`NotOwned`)
+/// because current vision already reveals it.
 pub(crate) fn apply_gather(
     world: &mut World,
     map: &mut GridMap,
@@ -317,6 +364,39 @@ pub(crate) fn apply_gather(
         .copied()
         .expect("registered resource source footprint");
     let is_farm = world.get::<Building>(source_entity).is_some();
+    // Knowledge gate, called unconditionally (both predicates pass through
+    // when no VisibilityMap exists, so pure-sim full information is kept):
+    // standalone sources are known once their cell was explored and stay
+    // known after vision is lost; own completed Farms are always valid
+    // knowledge; an enemy Farm is an enemy building and needs current
+    // visibility merely to be *known* — it is never admitted merely by
+    // sitting in the `ResourceIndex`.
+    let source_known = if is_farm {
+        world
+            .get::<Building>(source_entity)
+            .is_some_and(|building| building.team == issuer)
+            || visible_to(world, issuer, footprint)
+    } else {
+        explored_by(world, issuer, footprint)
+    };
+    if !source_known {
+        // Unknown and absent ids share one reject: distinct codes would let
+        // a caller probe ids to count hidden enemy Farms.
+        outcome.reject = Some(RejectReason::SourceMissing);
+        return outcome;
+    }
+    // Ownership: a foreign Farm stayed `SourceMissing` while hidden (fog
+    // privacy), but once visible the command authority refuses it — the
+    // Godot picker never offers enemy Farm views, and the Rust rule is the
+    // same: an enemy Farm is never gathered as an own economic source.
+    if is_farm
+        && !world
+            .get::<Building>(source_entity)
+            .is_some_and(|building| building.team == issuer)
+    {
+        outcome.reject = Some(RejectReason::NotOwned);
+        return outcome;
+    }
 
     // Same reservation seam as Move and building placement: seed every live
     // unit's current cell and MoveOrder goal. A commanded worker's own current
@@ -615,6 +695,43 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             leave_gathering(world, map, entity, source, carry);
             continue;
         };
+
+        // Adjacency gate: gathering advances only while the worker stands
+        // on the source's immediate perimeter. A worker teleported off by a
+        // later building placement (or any other position jump) must walk
+        // back instead of gathering from afar; partial progress is not
+        // banked across the re-route.
+        let adjacent = |world: &World| {
+            world
+                .get::<Footprint>(source_entity)
+                .zip(world.get::<SimPosition>(entity))
+                .is_some_and(|(footprint, position)| {
+                    footprint.is_immediately_adjacent(map.world_to_cell(position.current))
+                })
+        };
+        if !adjacent(world) {
+            world.entity_mut(entity).insert(GatherProgress::default());
+            match route_back_to_source(world, map, entity, source) {
+                Ok((slot, route)) => {
+                    world
+                        .entity_mut(entity)
+                        .insert(WorkerTask::ToSource { source, slot });
+                    if !route.is_empty() {
+                        world.entity_mut(entity).insert(MoveOrder {
+                            waypoints: route,
+                            next: 0,
+                            goal: slot,
+                            map_revision: map.revision(),
+                            last_failed_replan: None,
+                        });
+                    }
+                }
+                Err(reason) => {
+                    idle_worker_on_route_failure(world, entity, reason);
+                }
+            }
+            continue;
+        }
 
         // Read phase: current progress, carry, and source state.
         let (progress, remaining, kind) = match (

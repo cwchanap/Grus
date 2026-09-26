@@ -8,6 +8,7 @@ use crate::economy::{
 };
 use crate::ids::{IdAllocator, ResourceId};
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
 
 fn setup_build_test() -> (World, GridMap, Entity) {
     let mut world = World::new();
@@ -37,6 +38,12 @@ fn setup_build_test() -> (World, GridMap, Entity) {
         .entity_mut(villager)
         .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
     (world, map, villager)
+}
+
+/// Opts the world into runtime fog and stamps the initial reveal.
+fn reveal(world: &mut World, map: &GridMap) {
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(world, map);
 }
 
 /// Places a House next to the test villager and drives the production API
@@ -743,6 +750,324 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
     );
 }
 
+/// An unexplored footprint that overlaps a hidden enemy unit and its move
+/// goal must reject `Unexplored` before the occupancy scan runs — never
+/// `Occupied`, which would leak the hidden unit/goal through the preview.
+#[test]
+fn unexplored_footprint_rejects_unexplored_never_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let scout = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(24.5, 10.5),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(scout).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(25, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    reveal(&mut world, &map);
+    assert!(
+        !explored_by(&world, TeamId(1), GridPos::new(24, 10)),
+        "the planned footprint is unexplored ground"
+    );
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(24, 10),
+        },
+    );
+
+    assert_eq!(
+        result.reject,
+        Some(RejectReason::Unexplored),
+        "unexplored ground rejects before the occupancy scan can leak the hidden unit or goal"
+    );
+}
+
+/// Explored-but-not-visible ground must not leak a hidden enemy occupant
+/// through `Occupied` either: the preview/validation scan skips occupants
+/// the issuer cannot see, and acceptance displaces the unit clear of the
+/// footprint instead of entombing it under blocked cells.
+#[test]
+fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), anchor));
+
+    // Vision withdraws: the footprint stays explored but leaves current
+    // visibility, so an enemy standing on it is genuinely hidden.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), anchor) && !visible_to(&world, TeamId(1), anchor),
+        "the footprint is explored fog, not current vision"
+    );
+
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(14, 11)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok(),
+        "a hidden occupant must not surface as `Occupied` through the preview seam"
+    );
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    // The hidden unit survives — displaced to open ground, not entombed.
+    let cell = map.world_to_cell(world.get::<SimPosition>(enemy).unwrap().current);
+    assert!(
+        !Footprint::new(anchor, 2, 2).cells().contains(&cell) && map.is_walkable(cell),
+        "the displaced unit stands on open ground outside the footprint: {cell:?}"
+    );
+}
+
+/// A hidden enemy move goal inside the footprint is likewise invisible to
+/// the preview seam; acceptance retargets the order to open ground so the
+/// preserved route can never strand on blocked cells.
+#[test]
+fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), anchor));
+
+    // The hidden enemy walks toward a cell the footprint will cover.
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(40, 40)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(enemy).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(14, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok()
+    );
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    let order = world.get::<MoveOrder>(enemy).expect("order preserved");
+    assert_ne!(
+        order.goal,
+        GridPos::new(14, 11),
+        "the covered goal is retargeted off the footprint"
+    );
+    assert!(
+        map.is_walkable(order.goal) && !Footprint::new(anchor, 2, 2).cells().contains(&order.goal),
+        "the new goal {goal:?} is open ground outside the footprint",
+        goal = order.goal
+    );
+}
+
+/// Current vision restores the honest rejection: a *visible* enemy unit
+/// inside the footprint still surfaces `Occupied` — the seam only hides
+/// what the issuer genuinely cannot see.
+#[test]
+fn visible_enemy_inside_footprint_still_rejects_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(14, 11)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    reveal(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(14, 11)));
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+}
+
+/// A completed 2×2 House of `team` standing on `anchor`, fully registered
+/// (cells blocked, index updated) — the manual shape of an applied
+/// placement, for knowledge-gate tests.
+fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anchor: GridPos) {
+    let footprint = Footprint::new(anchor, 2, 2);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+}
+
+/// A previously scouted, now hidden enemy building footprint must answer
+/// the preview exactly like identical empty explored ground — `Occupied`
+/// from walkability would map the hidden building directly. The committed
+/// command stays honest: two real buildings can never overlap.
+#[test]
+fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+
+    // Team 1 scouts the enemy building standing on the anchor.
+    spawn_enemy_building(&mut world, &mut map, TeamId(2), anchor);
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), anchor));
+
+    // Vision withdraws: the footprint stays explored but leaves current
+    // visibility, so the building is genuinely hidden.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), anchor) && !visible_to(&world, TeamId(1), anchor),
+        "the footprint is explored fog, not current vision"
+    );
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok(),
+        "a hidden enemy building must not surface as `Occupied` through the preview seam"
+    );
+
+    // The committed command re-checks real occupancy: no overlap, no charge.
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        500
+    );
+}
+
+/// Current vision keeps the honest rejection: a *visible* enemy building
+/// footprint still surfaces `Occupied` — the seam only hides what the
+/// issuer genuinely cannot see.
+#[test]
+fn visible_enemy_building_footprint_still_rejects_occupied() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    spawn_enemy_building(&mut world, &mut map, TeamId(2), anchor);
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), anchor));
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+}
+
 /// A sibling already moving to a cell inside the footprint has that goal
 /// reserved: accepting the placement would block the goal and strand the
 /// unit on a preserved order that can never replan onto blocked cells.
@@ -1168,4 +1493,301 @@ fn placed_buildings_start_at_full_catalogue_health() {
             max: 250
         }
     );
+}
+
+/// Spawns a hidden enemy worker (no team-1 vision where it stands) with an
+/// optional initial task/order, plus its own incomplete site at `anchor`.
+fn hidden_enemy_worker_with_site(
+    world: &mut World,
+    _map: &mut GridMap,
+    site_anchor: GridPos,
+    task: WorkerTask,
+    order: Option<MoveOrder>,
+) -> Entity {
+    let worker = spawn_unit(
+        world,
+        UnitId(5),
+        TeamId(2),
+        Vec2::new(30.5, 30.5),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    let site_footprint = Footprint::new(site_anchor, 2, 2);
+    let site = world
+        .spawn((
+            Building {
+                id: BuildingId(50),
+                team: TeamId(2),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: false,
+                    active_builder: Some(UnitId(5)),
+                },
+            },
+            site_footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(50), site);
+    world
+        .entity_mut(worker)
+        .insert((Carry::Empty, GatherProgress::default(), task));
+    if let Some(order) = order {
+        world.entity_mut(worker).insert(order);
+    }
+    worker
+}
+
+/// Review item: a hidden enemy worker whose route ends inside an accepted
+/// footprint must not be lost forever. The paired task slot retargets with
+/// the goal onto the site's perimeter, so arrival can fire again and the
+/// worker reaches `Constructing`.
+#[test]
+fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
+    let (mut world, mut map, villager) = setup_build_test();
+    // Walk the builder over the future anchor first so the ground is
+    // explored, then park it far away: the anchor must be explored fog, not
+    // current vision, or the placement would honestly see the enemy goal.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(13.5, 10.5)));
+    reveal(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(4.5, 40.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), GridPos::new(13, 10)));
+    assert!(!crate::visibility::visible_to(
+        &world,
+        TeamId(1),
+        GridPos::new(14, 11)
+    ));
+
+    // The enemy site at (15,10) has its 2x2 footprint beside the placement;
+    // the worker's approach slot (14,10) is on that site's perimeter AND
+    // inside the House footprint about to block (13..14, 10..11).
+    let site_footprint = Footprint::new(GridPos::new(15, 10), 2, 2);
+    let slot = GridPos::new(14, 10);
+    let revision = map.revision();
+    let route = vec![map.cell_center(slot)];
+    let worker = hidden_enemy_worker_with_site(
+        &mut world,
+        &mut map,
+        GridPos::new(15, 10),
+        WorkerTask::ToConstruction {
+            building: BuildingId(50),
+            slot,
+        },
+        Some(MoveOrder {
+            waypoints: route,
+            next: 0,
+            goal: slot,
+            map_revision: revision,
+            last_failed_replan: None,
+        }),
+    );
+    assert!(site_footprint.is_immediately_adjacent(slot));
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert!(result.reject.is_none(), "placement rejected: {result:?}");
+
+    let house_cells = Footprint::new(GridPos::new(13, 10), 2, 2).cells();
+    let WorkerTask::ToConstruction { slot: new_slot, .. } =
+        world.get::<WorkerTask>(worker).unwrap().clone()
+    else {
+        panic!("the hidden worker must stay tasked toward its site");
+    };
+    let goal = world.get::<MoveOrder>(worker).unwrap().goal;
+    assert_eq!(
+        goal, new_slot,
+        "the retargeted goal and task slot must stay in lockstep"
+    );
+    assert!(
+        !house_cells.contains(&new_slot),
+        "the task slot must leave the blocked footprint"
+    );
+    assert!(
+        site_footprint.is_immediately_adjacent(new_slot),
+        "the retargeted slot stays on the site's perimeter: {new_slot:?}"
+    );
+
+    // The worker walks and counts as arrived again — no more lost-for-the-
+    // match worker or stalled site.
+    for _ in 0..600 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_construction(&mut world, SIM_STEP_SECONDS);
+        if matches!(
+            world.get::<WorkerTask>(worker),
+            Some(WorkerTask::Constructing { .. })
+        ) {
+            break;
+        }
+    }
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(worker),
+            Some(WorkerTask::Constructing {
+                building: BuildingId(50)
+            })
+        ),
+        "the retargeted worker must reach Constructing again"
+    );
+}
+
+/// Review item: a hidden worker teleported off its construction site by a
+/// later placement is rerouted to a fresh adjacent slot instead of building
+/// from up to seven cells away.
+#[test]
+fn displacement_reroutes_a_constructing_worker_to_an_adjacent_slot() {
+    let (mut world, mut map, villager) = setup_build_test();
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(13.5, 10.5)));
+    reveal(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(4.5, 40.5)));
+    refresh_visibility(&mut world, &map);
+
+    // The enemy worker is mid-build, standing on its site's perimeter cell
+    // (14,10) — inside the footprint about to block.
+    let worker = hidden_enemy_worker_with_site(
+        &mut world,
+        &mut map,
+        GridPos::new(15, 10),
+        WorkerTask::Constructing {
+            building: BuildingId(50),
+        },
+        None,
+    );
+    world
+        .entity_mut(worker)
+        .insert(SimPosition::new(Vec2::new(14.5, 10.5)));
+    let site_entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(50))
+        .unwrap();
+    world
+        .get_mut::<Building>(site_entity)
+        .unwrap()
+        .construction
+        .progress_seconds = 3.0;
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert!(result.reject.is_none(), "placement rejected: {result:?}");
+
+    let WorkerTask::ToConstruction { slot, .. } = world.get::<WorkerTask>(worker).unwrap().clone()
+    else {
+        panic!(
+            "a displaced builder must walk back, not keep Constructing from afar: {:?}",
+            world.get::<WorkerTask>(worker)
+        );
+    };
+    let site_footprint = Footprint::new(GridPos::new(15, 10), 2, 2);
+    assert!(
+        site_footprint.is_immediately_adjacent(slot),
+        "the fresh slot is on the site's perimeter: {slot:?}"
+    );
+    assert!(
+        world.get::<MoveOrder>(worker).is_some(),
+        "the reroute installs a real route"
+    );
+
+    // While walking back, construction does not advance.
+    let before = world
+        .get::<Building>(site_entity)
+        .unwrap()
+        .construction
+        .progress_seconds;
+    step_construction(&mut world, SIM_STEP_SECONDS);
+    let after = world
+        .get::<Building>(site_entity)
+        .unwrap()
+        .construction
+        .progress_seconds;
+    assert_eq!(before, after, "no building from a distance");
+}
+
+/// Review item: resume on a hidden enemy building must answer
+/// `BuildingMissing` exactly like an absent id, so probing ids cannot map
+/// hidden enemy construction; a *visible* enemy site stays `NotOwned`.
+#[test]
+fn resume_on_a_hidden_enemy_building_answers_building_missing() {
+    let (mut world, mut map, _) = setup_build_test();
+    reveal(&mut world, &map);
+    let enemy_site = world
+        .spawn((
+            Building {
+                id: BuildingId(60),
+                team: TeamId(2),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: false,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(GridPos::new(40, 40), 2, 2),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(60), enemy_site);
+    refresh_visibility(&mut world, &map);
+    assert!(
+        !crate::visibility::visible_to(&world, TeamId(1), GridPos::new(40, 40)),
+        "premise: the enemy site starts hidden"
+    );
+
+    let hidden = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::ResumeConstruction {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            building: BuildingId(60),
+        },
+    );
+    assert_eq!(hidden.reject, Some(RejectReason::BuildingMissing));
+
+    // A genuinely seen enemy site stays honest.
+    world
+        .entity_mut(world.resource::<UnitIndex>().entity(UnitId(1)).unwrap())
+        .insert(SimPosition::new(Vec2::new(40.5, 43.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(crate::visibility::visible_to(
+        &world,
+        TeamId(1),
+        GridPos::new(40, 40)
+    ));
+    let visible = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::ResumeConstruction {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            building: BuildingId(60),
+        },
+    );
+    assert_eq!(visible.reject, Some(RejectReason::NotOwned));
 }

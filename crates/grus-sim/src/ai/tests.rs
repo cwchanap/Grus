@@ -1,0 +1,2540 @@
+//! Focused AI tests: every policy step is exercised as a pure decision, plus
+//! bounded headless journeys (grant-free economy, worker raids, population
+//! stalls) that run the real fixed-step chain with the real 1 Hz cadence.
+
+use bevy::math::Vec2;
+use bevy::prelude::World;
+
+use super::*;
+use crate::buildings::ConstructionState;
+use crate::combat::{CombatOrder, CombatTarget};
+use crate::commands::spawn_unit;
+use crate::economy::{Carry, GatherProgress, ResourceStockpile};
+use crate::movement::SimPosition;
+use crate::session::{MatchPhase, MatchSession, active_phase};
+use crate::visibility::{VisibilityMap, refresh_visibility};
+use crate::{
+    SIM_STEP_SECONDS, seed_skirmish, step_combat, step_construction, step_economy, step_movement,
+    step_production,
+};
+
+/// Tick budget for every bounded journey loop; a correct AI settles far
+/// inside it, only a broken policy runs out.
+const JOURNEY_BUDGET: u32 = 40_000;
+
+/// A fogged, playing world with a Team-2 controller over the authored
+/// skirmish — the normal runtime shape, minus Godot.
+fn ai_world(team: TeamId) -> (World, GridMap) {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    world.insert_resource(AiController::new(team));
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    (world, map)
+}
+
+/// One canonical fixed-step match tick in the production order: combat,
+/// movement, economy, construction, production, visibility, AI.
+fn step_tick(world: &mut World, map: &mut GridMap) {
+    step_combat(world, map, SIM_STEP_SECONDS);
+    step_movement(world, map, SIM_STEP_SECONDS);
+    step_economy(world, map, SIM_STEP_SECONDS);
+    step_construction(world, SIM_STEP_SECONDS);
+    step_production(world, map, SIM_STEP_SECONDS);
+    refresh_visibility(world, map);
+    step_ai(world, map, SIM_STEP_SECONDS);
+}
+
+/// Returns the ticks stepped so journeys can report their budget use.
+fn run_until(
+    world: &mut World,
+    map: &mut GridMap,
+    what: &str,
+    condition: impl Fn(&World) -> bool,
+) -> u32 {
+    for ticks in 0..JOURNEY_BUDGET {
+        if condition(world) {
+            return ticks;
+        }
+        step_tick(world, map);
+    }
+    panic!("{what} did not happen inside {JOURNEY_BUDGET} ticks");
+}
+
+/// Pure decision pass: takes the controller out (its private state is
+/// module-local), composes the ordered commands, puts it back. Deferred
+/// commits are dropped — nothing applies, so no controller transition can
+/// fire.
+fn decide(world: &mut World, map: &GridMap) -> Vec<PlayerCommand> {
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    let plan = MapFixture::team_plan(controller.team);
+    let planned = decide_ai_commands(world, &mut controller, &plan, map);
+    world.insert_resource(controller);
+    planned.into_iter().map(|planned| planned.command).collect()
+}
+
+/// Decision pass plus the same apply/commit seam `step_ai` runs: commands
+/// apply through the one dispatcher and their deferred controller
+/// transitions commit only on acceptance.
+fn decide_and_apply(world: &mut World, map: &mut GridMap) -> Vec<PlayerCommand> {
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    let plan = MapFixture::team_plan(controller.team);
+    let planned = decide_ai_commands(world, &mut controller, &plan, map);
+    let commands: Vec<PlayerCommand> = planned
+        .iter()
+        .map(|planned| planned.command.clone())
+        .collect();
+    for planned in planned {
+        let result = apply_player_command(world, map, planned.command);
+        commit_outcome(&mut controller, planned.commit, &result, map);
+    }
+    world.insert_resource(controller);
+    commands
+}
+
+/// The opposing team — policy tests run from both authored starts.
+fn other(team: TeamId) -> TeamId {
+    TeamId(match team.0 {
+        1 => 2,
+        _ => 1,
+    })
+}
+
+fn spawn_villager(
+    world: &mut World,
+    map: &GridMap,
+    id: UnitId,
+    team: TeamId,
+    cell: GridPos,
+) -> Entity {
+    let entity = spawn_unit(
+        world,
+        id,
+        team,
+        map.cell_center(cell),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world
+        .entity_mut(entity)
+        .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
+    entity
+}
+
+fn spawn_military(
+    world: &mut World,
+    map: &GridMap,
+    id: UnitId,
+    team: TeamId,
+    cell: GridPos,
+    kind: UnitKind,
+) -> Entity {
+    spawn_unit(
+        world,
+        id,
+        team,
+        map.cell_center(cell),
+        kind,
+        unit_spec(kind).speed,
+    )
+}
+
+fn grant(world: &mut World, team: TeamId, food: u32, wood: u32, gold: u32) {
+    let mut economy = world.get_resource_mut::<TeamEconomy>().unwrap();
+    let state = economy.0.get_mut(&team).unwrap();
+    state.stockpile = ResourceStockpile {
+        food: state.stockpile.food + food,
+        wood: state.stockpile.wood + wood,
+        gold: state.stockpile.gold + gold,
+    };
+}
+
+fn villagers_of(world: &World, team: TeamId) -> Vec<UnitId> {
+    villager_ids(world, team)
+}
+
+fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .is_some_and(|unit| unit.team == team && unit.kind == kind)
+                .then_some(*id)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn own_buildings_of(world: &World, team: TeamId, kind: BuildingKind) -> Vec<BuildingId> {
+    let mut ids: Vec<BuildingId> = world
+        .resource::<BuildingIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Building>(*entity)
+                .is_some_and(|building| building.team == team && building.kind == kind)
+                .then_some(*id)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn stockpile(world: &World, team: TeamId) -> ResourceStockpile {
+    world.resource::<TeamEconomy>().0[&team].stockpile
+}
+
+fn age_of(world: &World, team: TeamId) -> Age {
+    world.resource::<TeamEconomy>().0[&team].age
+}
+
+// ---- Cadence / gate ---------------------------------------------------------
+
+#[test]
+fn frozen_phases_never_accumulate_decisions() {
+    for phase in [
+        MatchPhase::Start,
+        MatchPhase::Paused,
+        MatchPhase::Result(crate::session::MatchResult(TeamId(1))),
+    ] {
+        let (mut world, mut map) = ai_world(TeamId(2));
+        world.insert_resource(MatchSession { phase });
+
+        // Far more than one decision's worth of frozen time.
+        for _ in 0..40 {
+            step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+        }
+        let controller = world.resource::<AiController>();
+        assert_eq!(
+            controller.decision_accumulator, 0.0,
+            "phase {phase:?}: frozen time must not bank into the accumulator"
+        );
+        // And nothing happened: the seed stockpiles are untouched.
+        let stockpile = stockpile(&world, TeamId(2));
+        assert_eq!(
+            (stockpile.food, stockpile.wood, stockpile.gold),
+            (200, 300, 100)
+        );
+    }
+}
+
+#[test]
+fn step_ai_without_a_controller_is_a_no_op() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(stockpile(&world, TeamId(2)).food, 200);
+}
+
+#[test]
+fn playing_ticks_fire_one_decision_per_second() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+
+    // 19 ticks = 0.95 s: under cadence, no decision yet.
+    for _ in 0..19 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    assert!(
+        world.resource::<AiController>().decision_accumulator > 0.0,
+        "Playing time banks into the accumulator"
+    );
+    assert_eq!(stockpile(&world, TeamId(2)).food, 200, "no decision yet");
+
+    // The 20th tick crosses 1.0 s: the first decision fires (the paid
+    // replacement villager charges 50 food).
+    step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(stockpile(&world, TeamId(2)).food, 150);
+    assert!(
+        world.resource::<AiController>().decision_accumulator < AI_DECISION_SECONDS,
+        "cadence resets after firing"
+    );
+}
+
+// ---- Scouting ---------------------------------------------------------------
+
+#[test]
+fn scout_uses_the_lowest_idle_military_unit() {
+    for team in [TeamId(1), TeamId(2)] {
+        let (mut world, map) = ai_world(team);
+        let leg = MapFixture::team_plan(team).scout_route[0];
+        let spearman = spawn_military(&mut world, &map, UnitId(20), team, leg, UnitKind::Spearman);
+
+        let commands = decide(&mut world, &map);
+        let scout = commands.iter().find_map(|command| match command {
+            PlayerCommand::Units(units) => Some(units),
+            _ => None,
+        });
+        assert_eq!(
+            scout.map(|units| (&units.units[..], units.kind.clone())),
+            Some((
+                &[UnitId(20)][..],
+                UnitCommandKind::Move {
+                    target: map.cell_center(leg)
+                }
+            )),
+            "team {team:?}: the lowest stable-ID idle military unit scouts the next route leg"
+        );
+        assert!(
+            world.get::<MoveOrder>(spearman).is_none(),
+            "pure decide mutates nothing"
+        );
+    }
+}
+
+#[test]
+fn scout_falls_back_to_a_surplus_idle_villager_with_plain_move() {
+    // Per-team staffing that satisfies the whole Food/Wood/Gold split of the
+    // four seeded villagers, freeing a fifth idle villager as genuinely
+    // surplus.
+    for (team, staffing) in [
+        (
+            TeamId(2),
+            [
+                (UnitId(5), ResourceId(7)),
+                (UnitId(6), ResourceId(7)),
+                (UnitId(7), ResourceId(9)),
+                (UnitId(8), ResourceId(12)),
+            ],
+        ),
+        (
+            TeamId(1),
+            [
+                (UnitId(1), ResourceId(1)),
+                (UnitId(2), ResourceId(2)),
+                (UnitId(3), ResourceId(3)),
+                (UnitId(4), ResourceId(6)),
+            ],
+        ),
+    ] {
+        let (mut world, map) = ai_world(team);
+        let anchor = MapFixture::team_plan(team).town_center_anchor;
+        spawn_villager(
+            &mut world,
+            &map,
+            UnitId(20),
+            team,
+            GridPos::new(anchor.x - 2, anchor.y + 6),
+        );
+        for (id, source) in staffing {
+            let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+            world
+                .entity_mut(entity)
+                .insert(WorkerTask::Gathering { source });
+        }
+
+        let commands = decide(&mut world, &map);
+        let scout = commands.iter().find_map(|command| match command {
+            PlayerCommand::Units(units) => Some((units.units[0], units.kind.clone())),
+            _ => None,
+        });
+        let (id, kind) = scout.expect("a surplus idle villager scouts once staffed");
+        assert_eq!(
+            id,
+            UnitId(20),
+            "team {team:?}: the lowest stable-ID idle villager scouts"
+        );
+        assert!(
+            matches!(kind, UnitCommandKind::Move { .. }),
+            "villagers scout with plain Move, got {kind:?}"
+        );
+    }
+}
+
+#[test]
+fn scout_never_fires_below_the_worker_floor_or_with_an_allocation_deficit() {
+    for team in [TeamId(1), TeamId(2)] {
+        let (mut world, map) = ai_world(team);
+        // Four seeded villagers, all idle: below the floor AND with a deficit.
+        let commands = decide(&mut world, &map);
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, PlayerCommand::Units(_))),
+            "team {team:?}: no unit scouts at or below the worker floor: {commands:?}"
+        );
+    }
+}
+
+#[test]
+fn scout_traverses_the_authored_route_once_and_discovers_the_expansion() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    assert_eq!(plan.scout_route.len(), 5);
+
+    // A dedicated military scout walks the full route, one leg per decision.
+    spawn_military(
+        &mut world,
+        &map,
+        UnitId(20),
+        TeamId(2),
+        GridPos::new(112, 44),
+        UnitKind::Spearman,
+    );
+    for (leg, expected) in plan.scout_route.iter().enumerate() {
+        let commands = decide_and_apply(&mut world, &mut map);
+        let moved = commands.iter().any(
+            |command| matches!(command, PlayerCommand::Units(units) if units.units == [UnitId(20)]),
+        );
+        assert!(moved, "leg {leg}: the scout did not advance");
+        // March the scout to the leg cell by hand (bounded, no walking wait):
+        // teleport and drop the delivered leg's route so the unit is idle
+        // again for the next decision.
+        let entity = world.resource::<UnitIndex>().entity(UnitId(20)).unwrap();
+        world
+            .entity_mut(entity)
+            .insert(SimPosition::new(map.cell_center(*expected)))
+            .remove::<MoveOrder>();
+        refresh_visibility(&mut world, &map);
+    }
+
+    // Route exhausted: no more scout commands, ever.
+    let entity = world.resource::<UnitIndex>().entity(UnitId(20)).unwrap();
+    world.entity_mut(entity).remove::<CombatOrder>();
+    for _ in 0..3 {
+        let commands = decide_and_apply(&mut world, &mut map);
+        assert!(
+            commands
+                .iter()
+                .all(|command| !matches!(command, PlayerCommand::Units(_))),
+            "the route must not wrap into an endless patrol"
+        );
+    }
+
+    // And the walk actually discovered the mirrored expansion.
+    let expansion = MapFixture::expansion_resources()
+        .into_iter()
+        .find(|spawn| spawn.cell.x > 64)
+        .unwrap();
+    assert!(
+        crate::visibility::explored_by(&world, TeamId(2), expansion.cell),
+        "the scout route must discover the team's expansion resources"
+    );
+}
+
+/// A rejected scout leg must not consume the cursor: the same leg is
+/// re-emitted until it accepts, and only a leg that keeps rejecting past
+/// the failure budget is skipped — a transient blocker retries, a
+/// permanent one cannot stall the whole route.
+#[test]
+fn scout_leg_retries_rejects_and_skips_a_permanent_blocker() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    spawn_military(
+        &mut world,
+        &map,
+        UnitId(20),
+        TeamId(2),
+        GridPos::new(112, 44),
+        UnitKind::Spearman,
+    );
+
+    // Permanently block the first route leg: every emitted Move rejects
+    // `Unreachable` at apply time.
+    map.set_blocked(plan.scout_route[0], true);
+    for attempt in 1..MAX_SCOUT_LEG_FAILURES {
+        decide_and_apply(&mut world, &mut map);
+        assert_eq!(
+            world.resource::<AiController>().scout_route_index,
+            0,
+            "attempt {attempt}: a rejected leg must not consume the cursor"
+        );
+        assert_eq!(world.resource::<AiController>().scout_leg_failures, attempt);
+    }
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        world.resource::<AiController>().scout_route_index,
+        1,
+        "a permanently blocked leg is skipped once the failure budget is spent"
+    );
+    assert_eq!(world.resource::<AiController>().scout_leg_failures, 0);
+
+    // The next leg is open: one accepted Move advances the cursor normally.
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(world.resource::<AiController>().scout_route_index, 2);
+}
+
+// ---- Allocation -------------------------------------------------------------
+
+#[test]
+fn allocation_assigns_the_lowest_idle_villager_to_the_nearest_known_source() {
+    for (team, first_villager, first_food, barracks_anchor, range_anchor) in [
+        (
+            TeamId(1),
+            UnitId(1),
+            ResourceId(1),
+            GridPos::new(17, 51),
+            GridPos::new(17, 38),
+        ),
+        (
+            TeamId(2),
+            UnitId(5),
+            ResourceId(7),
+            GridPos::new(108, 51),
+            GridPos::new(108, 38),
+        ),
+    ] {
+        let (mut world, map) = ai_world(team);
+        let commands = decide(&mut world, &map);
+
+        // The gather assignment: lowest villager to the team's lowest-ID
+        // known food source (Food is the first deficit in the split).
+        let gather = commands.iter().find_map(|command| match command {
+            PlayerCommand::Gather {
+                workers, source, ..
+            } => Some((workers[0], *source)),
+            _ => None,
+        });
+        assert_eq!(
+            gather,
+            Some((first_villager, first_food)),
+            "team {team:?}: lowest idle villager gathers the nearest known food source"
+        );
+
+        // The mirrored growth slots come from the one authored table.
+        let barracks = commands.iter().find_map(|command| match command {
+            PlayerCommand::PlaceBuilding { kind, anchor, .. }
+                if *kind == BuildingKind::Barracks =>
+            {
+                Some(*anchor)
+            }
+            _ => None,
+        });
+        assert_eq!(
+            barracks,
+            Some(barracks_anchor),
+            "team {team:?} barracks slot"
+        );
+        let range = commands.iter().find_map(|command| match command {
+            PlayerCommand::PlaceBuilding { kind, anchor, .. }
+                if *kind == BuildingKind::ArcheryRange =>
+            {
+                Some(*anchor)
+            }
+            _ => None,
+        });
+        assert_eq!(
+            range,
+            Some(range_anchor),
+            "team {team:?} archery range slot"
+        );
+    }
+}
+
+#[test]
+fn allocation_never_offers_unexplored_or_enemy_farm_sources() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    // Runtime fog with the initial reveal only: the expansions stay unknown.
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    world.insert_resource(AiController::new(TeamId(2)));
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // An enemy Farm sitting in the ResourceIndex must never surface as a
+    // candidate either — build one for Team 1 with a food source attached.
+    let farm_entity = world
+        .spawn((
+            Building {
+                id: BuildingId(90),
+                team: TeamId(1),
+                kind: BuildingKind::Farm,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(GridPos::new(40, 40), 2, 2),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(crate::economy::ResourceIndex::default)
+        .insert(ResourceId(90), farm_entity);
+    world.entity_mut(farm_entity).insert(ResourceSource {
+        id: ResourceId(90),
+        kind: ResourceKind::Food,
+        remaining: None,
+        assigned_worker: None,
+    });
+
+    let sources = known_sources(&world, TeamId(2));
+    assert!(
+        sources.iter().all(|source| source.id != ResourceId(90)),
+        "an enemy Farm must never be a gather candidate"
+    );
+    assert!(
+        sources
+            .iter()
+            .all(|source| source.id.0 <= 12 || source.farm),
+        "unexplored expansion sources must not be known: {:?}",
+        sources.iter().map(|source| source.id).collect::<Vec<_>>()
+    );
+    assert!(
+        sources.iter().any(|source| source.id == ResourceId(7)),
+        "own explored safe sources stay candidates"
+    );
+
+    // Every issued gather targets a known source only.
+    let commands = decide(&mut world, &map);
+    for command in &commands {
+        if let PlayerCommand::Gather { source, .. } = command {
+            assert!(
+                sources.iter().any(|known| known.id == *source),
+                "gather target {source:?} is not a known source"
+            );
+        }
+    }
+}
+
+// ---- Growth -----------------------------------------------------------------
+
+#[test]
+fn growth_places_barracks_range_and_discovered_storehouse_on_authored_slots() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 2000, 0);
+
+    // Unknown expansion (fog on, no scouting yet) and no production core:
+    // the storehouse step must stay quiet while Barracks/Range fire.
+    let commands = decide(&mut world, &map);
+    assert!(
+        commands.iter().all(|command| !matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Storehouse,
+                ..
+            }
+        )),
+        "no storehouse before discovery/core: {commands:?}"
+    );
+    for command in commands.clone() {
+        apply_player_command(&mut world, &mut map, command);
+    }
+    assert_eq!(
+        own_buildings_of(&world, TeamId(2), BuildingKind::Barracks).len(),
+        1,
+        "one Barracks placed on the authored slot"
+    );
+
+    // Full-information world (no VisibilityMap): the expansion counts as
+    // discovered, and the core stands — the expansion storehouse fires first.
+    // An extra idle villager is its builder: the seeded four are busy
+    // building and gathering after the first decision applied.
+    world.remove_resource::<VisibilityMap>();
+    spawn_villager(
+        &mut world,
+        &map,
+        UnitId(30),
+        TeamId(2),
+        GridPos::new(110, 58),
+    );
+    let commands = decide(&mut world, &map);
+    let storehouses: Vec<GridPos> = commands
+        .iter()
+        .filter_map(|command| match command {
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Storehouse,
+                anchor,
+                ..
+            } => Some(*anchor),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        storehouses,
+        vec![plan.expansion_storehouse_slots[0]],
+        "the discovered expansion storehouse is placed first"
+    );
+
+    // With the expansion slot satisfied, the safe storehouse opens once the
+    // production core exists — verified at the step level so the shared
+    // builder pool is not consumed by the allocation step first.
+    spawn_villager(
+        &mut world,
+        &map,
+        UnitId(31),
+        TeamId(2),
+        GridPos::new(105, 58),
+    );
+    for command in commands {
+        apply_player_command(&mut world, &mut map, command);
+    }
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    let mut claimed = Vec::new();
+    let command = place_storehouse(&world, &mut controller, &plan, &map, &mut claimed)
+        .map(|planned| planned.command);
+    world.insert_resource(controller);
+    assert!(
+        matches!(command,
+        Some(PlayerCommand::PlaceBuilding { kind: BuildingKind::Storehouse, anchor, .. })
+            if anchor == plan.safe_storehouse_slots[0]),
+        "the safe storehouse opens once the production core exists: {command:?}"
+    );
+}
+
+#[test]
+fn growth_skips_satisfied_or_incomplete_authored_slots() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 2000, 0);
+    // The Barracks site now exists (incomplete). A fresh decision must not
+    // place a second one.
+    decide_and_apply(&mut world, &mut map);
+    let commands = decide(&mut world, &map);
+    assert!(
+        commands.iter().all(|command| !matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Barracks,
+                ..
+            }
+        )),
+        "an incomplete authored Barracks must not be re-placed: {commands:?}"
+    );
+}
+
+#[test]
+fn house_fires_on_population_pressure_and_stops_at_satisfied_slots() {
+    let (mut world, map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    // Free capacity is 6 of 10: no house yet.
+    let commands = decide(&mut world, &map);
+    assert!(commands.iter().all(|command| !matches!(
+        command,
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::House,
+            ..
+        }
+    )));
+
+    // Manufacture pressure: fill the population to its cap.
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    for index in 0..6_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(100 + index),
+            TeamId(2),
+            Vec2::new(110.5, 40.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+    let commands = decide(&mut world, &map);
+    let house = commands.iter().find_map(|command| match command {
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::House,
+            anchor,
+            builder,
+            ..
+        } => Some((*anchor, *builder)),
+        _ => None,
+    });
+    let (anchor, builder) = house.expect("population pressure must place a House");
+    assert_eq!(
+        anchor, plan.house_slots[0],
+        "the first authored slot is used"
+    );
+    assert!(
+        villagers_of(&world, TeamId(2)).contains(&builder)
+            && idle_worker_ids(&world, TeamId(2)).contains(&builder),
+        "the builder is a truly idle villager"
+    );
+
+    // Once a House stands at every authored slot, no more are placed.
+    for (index, slot) in plan.house_slots.iter().enumerate() {
+        let id = BuildingId(50 + index as u32);
+        let entity = world
+            .spawn((
+                Building {
+                    id,
+                    team: TeamId(2),
+                    kind: BuildingKind::House,
+                    construction: ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(*slot, 2, 2),
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(id, entity);
+    }
+    let commands = decide(&mut world, &map);
+    assert!(commands.iter().all(|command| !matches!(
+        command,
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::House,
+            ..
+        }
+    )));
+}
+
+/// An authored slot whose footprint is blocked — by anything already on
+/// the shared occupancy map — must not stall growth: the policy walks the
+/// remaining candidates and takes the first one the real placement
+/// validator accepts, instead of re-firing the same doomed slot forever.
+#[test]
+fn blocked_house_slot_falls_back_to_the_next_candidate() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+
+    // Manufacture the same population pressure as the satisfied-slots test.
+    for index in 0..6_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(100 + index),
+            TeamId(2),
+            Vec2::new(110.5, 40.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+
+    // Occupy the whole first authored slot; the second must now win.
+    for cell in Footprint::new(plan.house_slots[0], 2, 2).cells() {
+        map.set_blocked(cell, true);
+    }
+
+    let commands = decide(&mut world, &map);
+    let anchor = commands.iter().find_map(|command| match command {
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::House,
+            anchor,
+            ..
+        } => Some(*anchor),
+        _ => None,
+    });
+    assert_eq!(
+        anchor,
+        Some(plan.house_slots[1]),
+        "the blocked first slot is skipped for the next viable candidate"
+    );
+}
+
+/// A hidden enemy building on an authored slot passes the knowledge-aware
+/// validator, so the apply path rejects `Occupied` — and the AI must
+/// remember the anchor instead of re-firing the same doomed command every
+/// decision. Base slots are permanently self-visible through the Town
+/// Center's reveal, so the real case is an expansion Storehouse slot.
+#[test]
+fn hidden_blocker_on_an_authored_slot_is_remembered_after_apply_reject() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    let blocked_slot = plan.expansion_storehouse_slots[0];
+
+    let move_team_eyes = |world: &mut World, at: Vec2| {
+        let eyes: Vec<_> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Unit>(**entity)
+                    .is_some_and(|unit| unit.team == TeamId(2))
+            })
+            .map(|(_, entity)| *entity)
+            .collect();
+        for entity in eyes {
+            world.entity_mut(entity).insert(SimPosition::new(at));
+        }
+    };
+
+    // Scout the expansion slot, then walk every Team-2 eye well away: the
+    // slot stays explored but leaves current vision.
+    move_team_eyes(&mut world, map.cell_center(blocked_slot));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(2), blocked_slot));
+    move_team_eyes(&mut world, Vec2::new(98.5, 46.5));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(2), blocked_slot)
+            && !visible_to(&world, TeamId(2), blocked_slot),
+        "the expansion slot is explored fog, not current vision"
+    );
+
+    // A hidden Team-1 House stands on the expansion slot.
+    let footprint = Footprint::new(blocked_slot, 2, 2);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team: TeamId(1),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    refresh_visibility(&mut world, &map);
+
+    let storehouse_anchor = |commands: &[PlayerCommand]| {
+        commands.iter().find_map(|command| match command {
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Storehouse,
+                anchor,
+                ..
+            } => Some(*anchor),
+            _ => None,
+        })
+    };
+
+    // The knowledge-aware validator passes the hidden footprint, the apply
+    // path rejects `Occupied`, and the deferred commit remembers the anchor.
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        storehouse_anchor(&commands),
+        Some(blocked_slot),
+        "the hidden-blocked slot passes the preview-level validator: {commands:?}"
+    );
+    assert_eq!(
+        world.resource::<AiController>().blocked_anchors,
+        vec![blocked_slot],
+        "the apply-time Occupied reject is remembered"
+    );
+
+    // Later decisions never re-offer the remembered anchor, whatever else
+    // the economy does with its workers.
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    for _ in 0..3 {
+        let commands = decide_and_apply(&mut world, &mut map);
+        assert_ne!(
+            storehouse_anchor(&commands),
+            Some(blocked_slot),
+            "a remembered anchor is never re-offered"
+        );
+    }
+    assert_eq!(
+        world.resource::<AiController>().blocked_anchors,
+        vec![blocked_slot]
+    );
+}
+
+/// Regression: destruction can drive the population cap below the live
+/// population (Houses fall, units live on). `place_house` must saturate
+/// instead of underflowing — and still place the rebuild House.
+#[test]
+fn house_survives_population_cap_below_usage() {
+    let (mut world, map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    // Seed cap is 10 (Town Center) with 4 villagers; push usage past the cap
+    // as if Houses were destroyed while the units lived on.
+    for index in 0..7_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(200 + index),
+            TeamId(2),
+            Vec2::new(110.5, 60.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+    assert!(population_cap(&world, TeamId(2)) < population_used(&world, TeamId(2)));
+    let commands = decide(&mut world, &map);
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::House,
+                ..
+            }
+        )),
+        "used > cap must still rebuild a House: {commands:?}"
+    );
+}
+
+#[test]
+fn farm_fires_only_when_food_capacity_drops_below_target() {
+    let (mut world, map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+
+    // Both safe food sources known: 2 standalone x 2 workers = 4 capacity,
+    // at or above every seed-level split target — no farm.
+    let food_sources = known_sources(&world, TeamId(2))
+        .iter()
+        .filter(|source| source.kind == ResourceKind::Food)
+        .count();
+    assert_eq!(food_sources, 2, "both safe food sources are known");
+
+    // Deplete both food sources: capacity 0 drops below the target.
+    for source_id in [ResourceId(7), ResourceId(8)] {
+        let entity = world
+            .resource::<crate::economy::ResourceIndex>()
+            .entity(source_id)
+            .unwrap();
+        world.despawn(entity);
+        world
+            .get_resource_mut::<crate::economy::ResourceIndex>()
+            .unwrap()
+            .remove(source_id);
+    }
+
+    let commands = decide(&mut world, &map);
+    let farm = commands.iter().find_map(|command| match command {
+        PlayerCommand::PlaceBuilding {
+            kind: BuildingKind::Farm,
+            anchor,
+            ..
+        } => Some(*anchor),
+        _ => None,
+    });
+    assert_eq!(
+        farm,
+        Some(plan.farm_slots[0]),
+        "insufficient known food supply places the first authored Farm"
+    );
+}
+
+// ---- Age 2 / army -----------------------------------------------------------
+
+#[test]
+fn age_two_requires_workers_core_and_affordability() {
+    let (mut world, map) = ai_world(TeamId(2));
+    // Seed: 4 villagers, no core -> no age attempt.
+    assert!(
+        decide(&mut world, &map)
+            .iter()
+            .all(|command| !matches!(command, PlayerCommand::EnqueueAgeUp { .. }))
+    );
+
+    // Workers + Barracks, affordable -> still no attempt: only the Archery Range
+    // is missing, so this checkpoint isolates the core prerequisite.
+    for index in 0..4_u32 {
+        spawn_villager(
+            &mut world,
+            &map,
+            UnitId(20 + index),
+            TeamId(2),
+            GridPos::new(110, 52 + index as i32),
+        );
+    }
+    let entity = world.spawn((
+        Building {
+            id: BuildingId(10),
+            team: TeamId(2),
+            kind: BuildingKind::Barracks,
+            construction: ConstructionState {
+                progress_seconds: 0.0,
+                complete: true,
+                active_builder: None,
+            },
+        },
+        Footprint::new(GridPos::new(108, 51), 3, 3),
+    ));
+    let barracks_entity = entity.id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(10), barracks_entity);
+    grant(&mut world, TeamId(2), 300, 0, 200);
+    assert!(
+        decide(&mut world, &map)
+            .iter()
+            .all(|command| !matches!(command, PlayerCommand::EnqueueAgeUp { .. })),
+        "the Age-1 core is Barracks AND Archery Range: Barracks alone must not fire"
+    );
+
+    // Complete the Archery Range on its authored slot: the core now stands.
+    let plan = MapFixture::team_plan(TeamId(2));
+    let entity = world.spawn((
+        Building {
+            id: BuildingId(11),
+            team: TeamId(2),
+            kind: BuildingKind::ArcheryRange,
+            construction: ConstructionState {
+                progress_seconds: 0.0,
+                complete: true,
+                active_builder: None,
+            },
+        },
+        Footprint::new(plan.archery_range_anchor, 3, 3),
+    ));
+    let range_entity = entity.id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(11), range_entity);
+
+    // Cored (and still affordable) -> the attempt fires against the Town Center.
+    let age = decide(&mut world, &map)
+        .into_iter()
+        .find(|command| matches!(command, PlayerCommand::EnqueueAgeUp { .. }));
+    assert!(
+        age.is_some(),
+        "affordable, staffed, cored: the age attempt fires"
+    );
+}
+
+#[test]
+fn round_robin_rotates_and_respects_queues_and_ages() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 3000, 3000, 2000);
+
+    // Two completed producers with empty queues (no Stable yet).
+    let plan = MapFixture::team_plan(TeamId(2));
+    for (index, (kind, anchor)) in [
+        (BuildingKind::Barracks, plan.barracks_anchor),
+        (BuildingKind::ArcheryRange, plan.archery_range_anchor),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = BuildingId(10 + index as u32);
+        let entity = world
+            .spawn((
+                Building {
+                    id,
+                    team: TeamId(2),
+                    kind,
+                    construction: ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(anchor, 3, 3),
+            ))
+            .id();
+        world
+            .get_resource_or_insert_with(BuildingIndex::default)
+            .insert(id, entity);
+    }
+
+    // Age 1: the rotation starts at the Spearman...
+    let first = decide_and_apply(&mut world, &mut map);
+    assert!(first.iter().any(|command| matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+    // ...and a decision whose Barracks queue is no longer empty skips to the
+    // Archer through the Archery Range.
+    let second = decide(&mut world, &map);
+    assert!(second.iter().any(|command| matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Archer,
+            ..
+        }
+    )));
+    assert!(second.iter().all(|command| !matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+
+    // The Cavalry leg stays locked until Age 2 even with the cursor upon it
+    // and a Stable standing: point the cursor at the Cavalry leg directly.
+    let entity = world
+        .spawn((
+            Building {
+                id: BuildingId(12),
+                team: TeamId(2),
+                kind: BuildingKind::Stable,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.stable_anchor, 3, 3),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(12), entity);
+    // Drain the Barracks/Range queues so only the age gate can block.
+    for producer in [BuildingId(10), BuildingId(11)] {
+        let producer_entity = world.resource::<BuildingIndex>().entity(producer).unwrap();
+        if let Some(mut queue) = world.get_mut::<ProductionQueue>(producer_entity) {
+            queue.jobs.clear();
+        }
+    }
+    world.resource_mut::<AiController>().next_army_kind = 2;
+    assert!(decide(&mut world, &map).iter().all(|command| !matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Cavalry,
+            ..
+        }
+    )));
+    // The locked decision's rotation falls through to the unlocked legs and
+    // carries a deferred cursor commit; pin it back to the Cavalry leg for
+    // the unlock proof.
+    world.resource_mut::<AiController>().next_army_kind = 2;
+    world
+        .get_resource_mut::<TeamEconomy>()
+        .unwrap()
+        .0
+        .get_mut(&TeamId(2))
+        .unwrap()
+        .age = Age::Age2;
+    assert!(decide(&mut world, &map).iter().any(|command| matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Cavalry,
+            ..
+        }
+    )));
+}
+
+/// A rejected enqueue must not advance the army rotation: the cursor moves
+/// only when the order actually lands, so the same leg is re-offered until
+/// acceptance instead of silently skipping a unit kind.
+#[test]
+fn rejected_enqueue_keeps_the_army_cursor_on_the_leg() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+
+    // One completed Barracks with an empty queue.
+    let barracks = world
+        .spawn((
+            Building {
+                id: BuildingId(10),
+                team: TeamId(2),
+                kind: BuildingKind::Barracks,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.barracks_anchor, 3, 3),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(10), barracks);
+
+    // Stockpile sized so the Villager enqueue (50f) passes its decide-time
+    // check alongside the Spearman (60f) but leaves 59f once it applies —
+    // the Spearman enqueue rejects `InsufficientResources` mid-batch.
+    world
+        .get_resource_mut::<TeamEconomy>()
+        .unwrap()
+        .0
+        .get_mut(&TeamId(2))
+        .unwrap()
+        .stockpile = ResourceStockpile {
+        food: 109,
+        wood: 0,
+        gold: 0,
+    };
+
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        world.resource::<AiController>().next_army_kind,
+        0,
+        "a rejected enqueue must not advance the rotation"
+    );
+
+    // With food restored, the re-offered Spearman leg lands and the cursor
+    // moves exactly once.
+    grant(&mut world, TeamId(2), 60, 0, 0);
+    decide_and_apply(&mut world, &mut map);
+    assert_eq!(world.resource::<AiController>().next_army_kind, 1);
+}
+
+#[test]
+fn round_robin_needs_population_headroom_to_train() {
+    let (mut world, map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 3000, 3000, 2000);
+    let plan = MapFixture::team_plan(TeamId(2));
+
+    // One completed Barracks with an empty queue: population is the only
+    // limiter under test.
+    let entity = world
+        .spawn((
+            Building {
+                id: BuildingId(10),
+                team: TeamId(2),
+                kind: BuildingKind::Barracks,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.barracks_anchor, 3, 3),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(10), entity);
+
+    // Fill every free slot: at zero headroom no army Train command may
+    // fire (the decision-side population gate), while non-production
+    // decisions keep working.
+    while crate::production::population_used(&world, TeamId(2))
+        < crate::production::population_cap(&world, TeamId(2))
+    {
+        let index = crate::production::population_used(&world, TeamId(2));
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(800 + index),
+            TeamId(2),
+            GridPos::new(108, 60 + index as i32),
+            UnitKind::Spearman,
+        );
+    }
+    assert!(decide(&mut world, &map).iter().all(|command| !matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+
+    // A completed House reopens headroom and training resumes.
+    let house = world
+        .spawn((
+            Building {
+                id: BuildingId(11),
+                team: TeamId(2),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(plan.house_slots[0], 2, 2),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(11), house);
+    assert!(decide(&mut world, &map).iter().any(|command| matches!(
+        command,
+        PlayerCommand::EnqueueUnit {
+            kind: UnitKind::Spearman,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn stable_places_on_the_authored_slot_once_age_two_lands() {
+    let (mut world, map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 1000, 0);
+    world
+        .get_resource_mut::<TeamEconomy>()
+        .unwrap()
+        .0
+        .get_mut(&TeamId(2))
+        .unwrap()
+        .age = Age::Age2;
+
+    let commands = decide(&mut world, &map);
+    assert!(
+        commands.iter().any(|command| matches!(command,
+        PlayerCommand::PlaceBuilding { kind: BuildingKind::Stable, anchor, .. }
+            if *anchor == plan.stable_anchor)),
+        "Age 2 unlocks the authored Stable slot: {commands:?}"
+    );
+}
+
+// ---- Defense / memory / attack ----------------------------------------------
+
+/// Two worlds whose AI own/observed state is identical but whose hidden
+/// enemies sit at different unseen cells must decide identical command
+/// lists — from both authored starts. Making a threat visible is then
+/// allowed to change the output (see the defense regressions below).
+#[test]
+fn decisions_are_invariant_to_hidden_enemy_positions() {
+    for team in [TeamId(1), TeamId(2)] {
+        let mut command_lists = Vec::new();
+        for (enemy_cell, extra_enemy) in [(GridPos::new(5, 5), false), (GridPos::new(60, 60), true)]
+        {
+            let (mut world, map) = ai_world(team);
+            spawn_military(
+                &mut world,
+                &map,
+                UnitId(50),
+                other(team),
+                enemy_cell,
+                UnitKind::Spearman,
+            );
+            if extra_enemy {
+                spawn_military(
+                    &mut world,
+                    &map,
+                    UnitId(51),
+                    other(team),
+                    GridPos::new(3, 90),
+                    UnitKind::Archer,
+                );
+            }
+            assert!(
+                !crate::visibility::explored_by(&world, team, enemy_cell),
+                "the enemy cell must be hidden for the invariance premise"
+            );
+            command_lists.push(decide(&mut world, &map));
+        }
+        assert_eq!(
+            command_lists[0], command_lists[1],
+            "team {team:?}: hidden enemy positions must not influence the decision"
+        );
+    }
+}
+
+/// Hidden enemy workers on a shared neutral source must not consume gather
+/// capacity in the AI's eyes: their task state is hidden enemy state, so two
+/// hidden enemy villagers tasked to the team's lowest known food source must
+/// leave the decision unchanged.
+#[test]
+fn decisions_are_invariant_to_hidden_enemy_workers_on_shared_sources() {
+    for (team, shared_food) in [(TeamId(2), ResourceId(7)), (TeamId(1), ResourceId(1))] {
+        let mut command_lists = Vec::new();
+        for hidden_food_workers in [0_u32, 2] {
+            let (mut world, map) = ai_world(team);
+            if hidden_food_workers == 0 {
+                // Premise: the shared source must be this team's lowest-ID
+                // explored standalone food source, so the hidden gatherers
+                // sit on a source the AI actually uses — otherwise the
+                // invariance proof below passes vacuously.
+                let lowest_food = known_sources(&world, team)
+                    .into_iter()
+                    .filter(|source| !source.farm && source.kind == ResourceKind::Food)
+                    .map(|source| source.id)
+                    .min();
+                assert_eq!(
+                    lowest_food,
+                    Some(shared_food),
+                    "team {team:?}: shared source must be the lowest-ID explored standalone food source"
+                );
+            }
+            for index in 0..hidden_food_workers {
+                let entity = spawn_villager(
+                    &mut world,
+                    &map,
+                    UnitId(60 + index),
+                    other(team),
+                    GridPos::new(60, 60),
+                );
+                world.entity_mut(entity).insert(WorkerTask::Gathering {
+                    source: shared_food,
+                });
+            }
+            assert!(
+                !crate::visibility::explored_by(&world, team, GridPos::new(60, 60)),
+                "the enemy villagers must be hidden for the invariance premise"
+            );
+            command_lists.push(decide(&mut world, &map));
+        }
+        assert_eq!(
+            command_lists[0], command_lists[1],
+            "team {team:?}: hidden enemy worker tasks on a shared source must not influence the decision"
+        );
+    }
+}
+
+/// A visible threat near the own Town Center (either start) pulls the idle
+/// military into one direct Attack on the nearest threat — distance to the
+/// Town Center wins over stable ID — and never drafts villagers.
+#[test]
+fn visible_base_threat_pulls_idle_military_into_a_direct_attack() {
+    for (team, defender_cell, bystander_cell, near_cell, far_cell) in [
+        (
+            TeamId(2),
+            GridPos::new(108, 44),
+            GridPos::new(110, 48),
+            GridPos::new(108, 48),
+            GridPos::new(108, 50),
+        ),
+        (
+            TeamId(1),
+            GridPos::new(19, 51),
+            GridPos::new(17, 47),
+            GridPos::new(19, 47),
+            GridPos::new(19, 45),
+        ),
+    ] {
+        let (mut world, map) = ai_world(team);
+        let bystander = spawn_villager(&mut world, &map, UnitId(21), team, bystander_cell);
+
+        // No threat: no defense command.
+        assert!(
+            decide(&mut world, &map)
+                .iter()
+                .all(|command| !matches!(command, PlayerCommand::Attack { .. })),
+            "team {team:?}: no defense without a threat"
+        );
+
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(20),
+            team,
+            defender_cell,
+            UnitKind::Spearman,
+        );
+        // Two visible threats inside the base radius: UnitId(31) stands
+        // nearer to the Town Center than UnitId(30) (mirrored cells), so
+        // distance — not the lower stable ID — picks the target.
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(30),
+            other(team),
+            far_cell,
+            UnitKind::Spearman,
+        );
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(31),
+            other(team),
+            near_cell,
+            UnitKind::Spearman,
+        );
+        refresh_visibility(&mut world, &map);
+        let defense = decide(&mut world, &map)
+            .into_iter()
+            .find(|command| matches!(command, PlayerCommand::Attack { .. }));
+        let Some(PlayerCommand::Attack {
+            issuer,
+            units,
+            target,
+        }) = defense
+        else {
+            panic!("team {team:?}: a visible base threat must trigger the defense step");
+        };
+        assert_eq!(issuer, team);
+        assert_eq!(
+            units,
+            vec![UnitId(20)],
+            "team {team:?}: only the idle military defends"
+        );
+        assert_eq!(
+            target,
+            CombatTarget::Unit(UnitId(31)),
+            "team {team:?}: the defense direct-attacks the nearest visible threat"
+        );
+        assert!(
+            world.get::<MoveOrder>(bystander).is_none()
+                && world.get::<CombatOrder>(bystander).is_none(),
+            "villagers are never drafted into defense by decide"
+        );
+    }
+}
+
+/// A hidden threat must never change the decision; once that same threat
+/// stands visibly inside the base, the very next decision may defend.
+#[test]
+fn a_hidden_threat_defends_only_once_visible() {
+    for (team, defender_cell, threat_cell) in [
+        (TeamId(2), GridPos::new(108, 44), GridPos::new(108, 50)),
+        (TeamId(1), GridPos::new(19, 51), GridPos::new(19, 45)),
+    ] {
+        let (mut world, map) = ai_world(team);
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(20),
+            team,
+            defender_cell,
+            UnitKind::Spearman,
+        );
+        let hidden_cell = GridPos::new(60, 60);
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(30),
+            other(team),
+            hidden_cell,
+            UnitKind::Spearman,
+        );
+        refresh_visibility(&mut world, &map);
+        assert!(
+            !crate::visibility::visible_to(&world, team, hidden_cell),
+            "premise: the threat starts hidden"
+        );
+        assert!(
+            decide(&mut world, &map)
+                .iter()
+                .all(|command| !matches!(command, PlayerCommand::Attack { .. })),
+            "team {team:?}: a hidden threat must not trigger defense"
+        );
+
+        // The threat marches into the lit base: now genuinely visible, and
+        // the next decision turns to defense against it.
+        let entity = world.resource::<UnitIndex>().entity(UnitId(30)).unwrap();
+        world
+            .entity_mut(entity)
+            .insert(SimPosition::new(map.cell_center(threat_cell)));
+        refresh_visibility(&mut world, &map);
+        assert!(
+            decide(&mut world, &map).iter().any(|command| matches!(
+                command,
+                PlayerCommand::Attack {
+                    target: CombatTarget::Unit(UnitId(30)),
+                    ..
+                }
+            )),
+            "team {team:?}: once visible inside the base, the threat is engaged"
+        );
+    }
+}
+
+#[test]
+fn remembered_town_center_is_written_only_while_visible_and_retained() {
+    for team in [TeamId(1), TeamId(2)] {
+        let enemy = other(team);
+        let enemy_anchor = MapFixture::team_plan(enemy).town_center_anchor;
+        // A scout vantage beside the enemy Town Center (mirrored per team).
+        let vantage = GridPos::new(enemy_anchor.x + 4, enemy_anchor.y - 2);
+        let away = MapFixture::team_plan(team).scout_route[0];
+        let (mut world, map) = ai_world(team);
+
+        // Before any observation: no memory.
+        decide(&mut world, &map);
+        assert!(
+            world
+                .resource::<AiController>()
+                .remembered_enemy_town_center
+                .is_none(),
+            "team {team:?}: no memory before observation"
+        );
+
+        // The vantage reveals the enemy footprint: the sighting writes the
+        // anchor cell.
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(20),
+            team,
+            vantage,
+            UnitKind::Spearman,
+        );
+        refresh_visibility(&mut world, &map);
+        decide(&mut world, &map);
+        assert_eq!(
+            world
+                .resource::<AiController>()
+                .remembered_enemy_town_center,
+            Some(enemy_anchor),
+            "team {team:?}: a genuinely visible enemy Town Center is remembered at its anchor"
+        );
+
+        // Vision lost: the memory is retained (it is the only enemy memory).
+        let scout_entity = world.resource::<UnitIndex>().entity(UnitId(20)).unwrap();
+        world
+            .entity_mut(scout_entity)
+            .insert(SimPosition::new(map.cell_center(away)))
+            .remove::<MoveOrder>();
+        refresh_visibility(&mut world, &map);
+        decide(&mut world, &map);
+        assert_eq!(
+            world
+                .resource::<AiController>()
+                .remembered_enemy_town_center,
+            Some(enemy_anchor),
+            "team {team:?}: the remembered cell survives the loss of current vision"
+        );
+
+        // The memory holds only the observed cell: even with the observed
+        // building despawned outright, the retained cell is unchanged — no
+        // live health/position read ever feeds it.
+        let (enemy_center_id, enemy_center_entity) = world
+            .resource::<BuildingIndex>()
+            .iter()
+            .find_map(|(id, entity)| {
+                world
+                    .get::<Building>(*entity)
+                    .is_some_and(|building| {
+                        building.team == enemy && building.kind == BuildingKind::TownCenter
+                    })
+                    .then_some((*id, *entity))
+            })
+            .unwrap();
+        world.despawn(enemy_center_entity);
+        world
+            .resource_mut::<BuildingIndex>()
+            .remove(enemy_center_id);
+        refresh_visibility(&mut world, &map);
+        decide(&mut world, &map);
+        assert_eq!(
+            world
+                .resource::<AiController>()
+                .remembered_enemy_town_center,
+            Some(enemy_anchor),
+            "team {team:?}: the memory is the observed cell, never a live read"
+        );
+    }
+}
+
+#[test]
+fn attack_fires_grouped_at_threshold_and_skips_engaged_units() {
+    for team in [TeamId(1), TeamId(2)] {
+        let (mut world, map) = ai_world(team);
+        let plan = MapFixture::team_plan(team);
+        // Route exhausted up front: the scout step stays out of the army's
+        // way, so the attack assembles every idle unit itself.
+        world.resource_mut::<AiController>().scout_route_index = plan.scout_route.len();
+
+        // Five military: below the threshold, no attack.
+        for index in 0..5_u32 {
+            spawn_military(
+                &mut world,
+                &map,
+                UnitId(20 + index),
+                team,
+                GridPos::new(
+                    plan.town_center_anchor.x - 4,
+                    plan.town_center_anchor.y + 6 + index as i32,
+                ),
+                UnitKind::Spearman,
+            );
+        }
+        assert!(decide(&mut world, &map).iter().all(|command| !matches!(command,
+            PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. }))));
+
+        // A sixth military unit already engaged (e.g. the previous wave's
+        // survivor): six live but only five available — still no attack.
+        // Counting the live force here is the old bug: every replacement
+        // after the first wave trickled into the enemy base alone.
+        let sixth = spawn_military(
+            &mut world,
+            &map,
+            UnitId(30),
+            team,
+            GridPos::new(
+                plan.town_center_anchor.x - 2,
+                plan.town_center_anchor.y + 14,
+            ),
+            UnitKind::Spearman,
+        );
+        world.entity_mut(sixth).insert(CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(1)),
+            last_target_cell: None,
+        });
+        assert!(decide(&mut world, &map).iter().all(|command| !matches!(command,
+            PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. }))),
+            "team {team:?}: an engaged unit must not count toward the threshold");
+
+        // A seventh idle unit completes the available group: the grouped
+        // attack carries the six idle ones, skips the engaged one, and
+        // marches at the far end of the authored route — no sighting yet.
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(31),
+            team,
+            GridPos::new(
+                plan.town_center_anchor.x - 2,
+                plan.town_center_anchor.y + 15,
+            ),
+            UnitKind::Spearman,
+        );
+        let attack = decide(&mut world, &map).into_iter().find(|command| {
+            matches!(command, PlayerCommand::Units(units)
+                if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
+        });
+        let Some(PlayerCommand::Units(units)) = attack else {
+            panic!("team {team:?}: the threshold army must issue one grouped AttackMove");
+        };
+        assert_eq!(
+            units.units,
+            vec![
+                UnitId(20),
+                UnitId(21),
+                UnitId(22),
+                UnitId(23),
+                UnitId(24),
+                UnitId(31)
+            ],
+            "team {team:?}: the engaged unit is skipped, the idle ones march"
+        );
+        let far_route_cell = *plan.scout_route.last().unwrap();
+        assert_eq!(
+            units.kind,
+            UnitCommandKind::AttackMove {
+                target: map.cell_center(far_route_cell)
+            },
+            "team {team:?}: without a sighting the attack advances along the authored route"
+        );
+
+        // Once the enemy Town Center has genuinely been seen, the attack
+        // aims at the nearest walkable ground cell beside the remembered
+        // anchor (the anchor itself is blocked footprint). decide is pure,
+        // so the same six are still available for this second decision.
+        world
+            .resource_mut::<AiController>()
+            .remembered_enemy_town_center =
+            Some(MapFixture::team_plan(other(team)).town_center_anchor);
+        let attack = decide(&mut world, &map).into_iter().find(|command| {
+            matches!(command, PlayerCommand::Units(units)
+                if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
+        });
+        let remembered = MapFixture::team_plan(other(team)).town_center_anchor;
+        let ground = nearest_open_cell(&map, remembered, &HashSet::new()).unwrap();
+        assert!(
+            matches!(
+                attack,
+                Some(PlayerCommand::Units(units))
+                    if units.kind == UnitCommandKind::AttackMove { target: map.cell_center(ground) }
+            ),
+            "team {team:?}: the remembered Town Center cell is the attack target"
+        );
+        // The ground cell really is walkable, so the applied order would not
+        // bounce off the blocked footprint.
+        assert!(
+            map.is_walkable(ground) && ground != remembered,
+            "team {team:?}: the attack target must be walkable ground, not the blocked anchor"
+        );
+    }
+}
+
+/// Attack assembly, loss, rebuild, regroup: losses drop the live count below
+/// the threshold so no new attack fires; once ordinary production has
+/// rebuilt the force (and the march resolved), a later decision regroups
+/// survivors and replacements into one fresh group — no squad state.
+#[test]
+fn attack_regroups_after_losses_and_rebuild() {
+    for team in [TeamId(1), TeamId(2)] {
+        let (mut world, mut map) = ai_world(team);
+        let plan = MapFixture::team_plan(team);
+        world.resource_mut::<AiController>().scout_route_index = plan.scout_route.len();
+
+        // Assembly: six live military march as one grouped AttackMove.
+        for index in 0..6_u32 {
+            spawn_military(
+                &mut world,
+                &map,
+                UnitId(20 + index),
+                team,
+                GridPos::new(108, 52 + index as i32),
+                UnitKind::Spearman,
+            );
+        }
+        let assembled = decide_and_apply(&mut world, &mut map)
+            .into_iter()
+            .find(|command| {
+                matches!(command, PlayerCommand::Units(units)
+                    if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
+            });
+        let Some(PlayerCommand::Units(units)) = assembled else {
+            panic!("six live military must assemble one grouped attack");
+        };
+        assert_eq!(
+            units.units,
+            vec![
+                UnitId(20),
+                UnitId(21),
+                UnitId(22),
+                UnitId(23),
+                UnitId(24),
+                UnitId(25)
+            ],
+            "the whole idle army marches as one group"
+        );
+
+        // Losses: two die mid-march; the live count drops below the threshold
+        // and no further attack fires while production must rebuild.
+        for id in [UnitId(21), UnitId(22)] {
+            let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+            world.despawn(entity);
+            world.resource_mut::<UnitIndex>().remove(id);
+        }
+        assert!(
+            decide(&mut world, &map)
+                .iter()
+                .all(|command| !matches!(command,
+            PlayerCommand::Units(units) if matches!(units.kind, UnitCommandKind::AttackMove { .. })))
+        );
+
+        // Production rebuilt two replacements and the march has resolved (the
+        // survivors are idle again): the next decision regroups all six.
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(40),
+            team,
+            GridPos::new(108, 60),
+            UnitKind::Spearman,
+        );
+        spawn_military(
+            &mut world,
+            &map,
+            UnitId(41),
+            team,
+            GridPos::new(108, 61),
+            UnitKind::Spearman,
+        );
+        for id in [UnitId(20), UnitId(23), UnitId(24), UnitId(25)] {
+            let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+            world
+                .entity_mut(entity)
+                .remove::<MoveOrder>()
+                .remove::<CombatOrder>();
+        }
+        let regrouped = decide(&mut world, &map).into_iter().find(|command| {
+            matches!(command, PlayerCommand::Units(units)
+                if matches!(units.kind, UnitCommandKind::AttackMove { .. }))
+        });
+        let Some(PlayerCommand::Units(units)) = regrouped else {
+            panic!("the rebuilt army must regroup into one fresh attack");
+        };
+        assert_eq!(
+            units.units,
+            vec![
+                UnitId(20),
+                UnitId(23),
+                UnitId(24),
+                UnitId(25),
+                UnitId(40),
+                UnitId(41)
+            ],
+            "survivors and replacements march together as one group"
+        );
+    }
+}
+
+// ---- Idempotence ------------------------------------------------------------
+
+#[test]
+fn decisions_never_recommand_busy_villagers() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 2000, 0);
+
+    // First decision applies real commands; run a few ticks so tasks land.
+    decide_and_apply(&mut world, &mut map);
+    for _ in 0..10 {
+        step_tick(&mut world, &mut map);
+    }
+
+    let busy: Vec<UnitId> = villagers_of(&world, TeamId(2))
+        .into_iter()
+        .filter(|id| {
+            let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+            world.get::<WorkerTask>(entity) != Some(&WorkerTask::Idle)
+                || world.get::<MoveOrder>(entity).is_some()
+        })
+        .collect();
+
+    let commands = decide(&mut world, &map);
+    for command in &commands {
+        match command {
+            PlayerCommand::Gather { workers, .. } => {
+                for worker in workers {
+                    assert!(
+                        !busy.contains(worker),
+                        "a busy villager was re-gathered: {worker:?}"
+                    );
+                }
+            }
+            PlayerCommand::PlaceBuilding { builder, .. } => {
+                assert!(
+                    !busy.contains(builder),
+                    "a busy villager was re-tasked to build"
+                );
+            }
+            PlayerCommand::Units(units) => {
+                for unit in &units.units {
+                    assert!(!busy.contains(unit), "a busy unit was re-ordered");
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// ---- Bounded journeys -------------------------------------------------------
+
+/// The grant-free proof: gather -> deposit -> build -> train -> Age 2, all
+/// through ordinary AI commands from the authored 200/300/100 seed.
+#[test]
+fn economy_journey_reaches_age_two_without_grants() {
+    let team = TeamId(2);
+    let (mut world, mut map) = ai_world(team);
+    let plan = MapFixture::team_plan(team);
+    // This world has no match lifecycle: the AI's (contracted) grouped
+    // attack razes the passive opponent's Town Center long before Age 2,
+    // and a session resource would settle the match and freeze the sim.
+    // Session-free means Playing forever — only the economy is on trial.
+    world.remove_resource::<MatchSession>();
+
+    // Gather + deposit: food climbs back above the seed after the first paid
+    // villager, which only real deposits can do.
+    run_until(&mut world, &mut map, "food deposits", |world| {
+        stockpile(world, team).food > 260
+    });
+    // Worker replacement runs (paid villager training).
+    run_until(&mut world, &mut map, "worker replacement", |world| {
+        villagers_of(world, team).len() >= 6
+    });
+    // Base growth on the authored slots.
+    run_until(&mut world, &mut map, "the Barracks build", |world| {
+        own_buildings_of(world, team, BuildingKind::Barracks)
+            .iter()
+            .any(|id| {
+                world
+                    .resource::<BuildingIndex>()
+                    .entity(*id)
+                    .is_some_and(|entity| {
+                        world.get::<Building>(entity).unwrap().construction.complete
+                    })
+            })
+    });
+    // Army training through the real queue.
+    run_until(&mut world, &mut map, "army training", |world| {
+        !units_of_kind(world, team, UnitKind::Spearman).is_empty()
+    });
+    // Scouting actually discovered the expansion (route leg 2 sits on it).
+    assert!(
+        crate::visibility::explored_by(&world, team, plan.expansion_storehouse_slots[0]),
+        "the AI must scout its expansion before depending on it"
+    );
+    run_until(&mut world, &mut map, "the expansion storehouse", |world| {
+        !own_buildings_of(world, team, BuildingKind::Storehouse).is_empty()
+    });
+    // Age 2, still with zero grants anywhere in this journey.
+    run_until(&mut world, &mut map, "Age 2", |world| {
+        age_of(world, team) == Age::Age2
+    });
+}
+
+/// The Task-6 full-match proof, parameterized over the authored start: the
+/// one authored AI policy drives a real sessioned match — economy ->
+/// scouting -> army -> combat -> Result — entirely through ordinary commands
+/// and the real fixed steps, with zero grants. The opponent is passive (no
+/// controller); the AI must conquer it and settle a genuine
+/// `MatchPhase::Result` through `resolve_result`. Returns the ticks used so
+/// both starts' budgets stay visible in failures and reports.
+fn full_match_journey(side: TeamId) -> u32 {
+    let (mut world, mut map) = ai_world(side);
+    let plan = MapFixture::team_plan(side);
+    let enemy_town_center = town_center_of(&world, other(side));
+    let mut ticks = 0;
+
+    // Economy: workers grow past the authored four through paid production.
+    ticks += run_until(&mut world, &mut map, "worker growth", |world| {
+        villagers_of(world, side).len() >= 6
+    });
+
+    // Scouting: the authored expansion nearest this start is genuinely
+    // discovered — the same gate the expansion Storehouse depends on.
+    let expansion_gold = MapFixture::expansion_resources()
+        .into_iter()
+        .min_by_key(|spawn| {
+            let anchor = plan.town_center_anchor;
+            (spawn.cell.x - anchor.x).pow(2) + (spawn.cell.y - anchor.y).pow(2)
+        })
+        .expect("an authored expansion resource");
+    ticks += run_until(&mut world, &mut map, "expansion discovery", |world| {
+        world
+            .resource::<ResourceIndex>()
+            .entity(expansion_gold.id)
+            .and_then(|entity| world.get::<Footprint>(entity))
+            .is_some_and(|footprint| explored_by(world, side, *footprint))
+    });
+
+    // Army: military production through the real queues.
+    ticks += run_until(&mut world, &mut map, "army training", |world| {
+        world.resource::<UnitIndex>().iter().any(|(_, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .is_some_and(|unit| unit.team == side && unit_spec(unit.kind).combat.is_some())
+        })
+    });
+
+    // Combat -> Result: at the attack threshold the army marches and razes
+    // the passive enemy Town Center; the session settles the winner.
+    ticks += run_until(&mut world, &mut map, "the full match", |world| {
+        matches!(active_phase(world), MatchPhase::Result(_))
+    });
+    assert_eq!(
+        active_phase(&world),
+        MatchPhase::Result(crate::session::MatchResult(side)),
+        "the AI side must win its own match from {side:?}'s authored start"
+    );
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(enemy_town_center)
+            .is_none(),
+        "the Result must come from the enemy Town Center's destruction"
+    );
+    ticks
+}
+
+#[test]
+fn full_match_journey_team_one_wins_from_the_left_start() {
+    let ticks = full_match_journey(TeamId(1));
+    println!("team 1 full match settled in {ticks} ticks");
+}
+
+#[test]
+fn full_match_journey_team_two_wins_from_the_right_start() {
+    let ticks = full_match_journey(TeamId(2));
+    println!("team 2 full match settled in {ticks} ticks");
+}
+
+fn town_center_of(world: &World, team: TeamId) -> BuildingId {
+    world
+        .resource::<BuildingIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Building>(*entity)
+                .is_some_and(|building| {
+                    building.team == team && building.kind == BuildingKind::TownCenter
+                })
+                .then_some(*id)
+        })
+        .min()
+        .expect("the passive opponent keeps its Town Center until the razement")
+}
+
+/// The deep restart regression: explored fog, the remembered enemy Town
+/// Center, the scout-route cursor and the cadence accumulator all bank match
+/// progress — and the bridge reset's fresh reseed (the exact resource
+/// operations `reset_fixture_world` performs: drop + `VisibilityMap::default()`
+/// plus drop + `AiController::new`) returns every one of them to boot values
+/// so the next decision scouts route leg 0 again.
+#[test]
+fn restart_returns_explored_fog_and_ai_state_to_boot_values() {
+    let team = TeamId(2);
+    let (mut world, mut map) = ai_world(team);
+    let plan = MapFixture::team_plan(team);
+
+    // Bank progress: an idle Spearman scouts on the first decision; a
+    // villager walked to the enemy start puts its Town Center on camera.
+    let _spearman = spawn_military(
+        &mut world,
+        &map,
+        UnitId(900),
+        team,
+        GridPos::new(108, 52),
+        UnitKind::Spearman,
+    );
+    let tourist = world.resource::<UnitIndex>().entity(UnitId(5)).unwrap();
+    world
+        .entity_mut(tourist)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 44))));
+    refresh_visibility(&mut world, &map);
+    let enemy_town_center_entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(1))
+        .unwrap();
+    let enemy_town_center_footprint = *world.get::<Footprint>(enemy_town_center_entity).unwrap();
+    assert!(explored_by(&world, team, enemy_town_center_footprint));
+
+    // 25 Playing ticks: the first decision fires (scout takes route[0], the
+    // memory is written) and the next cadence cycle is part-banked.
+    for _ in 0..25 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    let scout_entity = world.resource::<UnitIndex>().entity(UnitId(900)).unwrap();
+    assert_eq!(
+        world.get::<MoveOrder>(scout_entity).unwrap().goal,
+        plan.scout_route[0],
+        "the used match's scout took route leg 0"
+    );
+    {
+        let controller = world.resource::<AiController>();
+        assert_eq!(controller.scout_route_index, 1);
+        assert_eq!(
+            controller.remembered_enemy_town_center,
+            Some(GridPos::new(12, 46))
+        );
+        assert!(controller.decision_accumulator > 0.0);
+    }
+
+    // The restart seam, exactly as `reset_fixture_world` performs it: the
+    // bridge also reseeds entities (stale routes die with them), so the
+    // tourist and the pre-reset scout return home un-ordered before the
+    // fresh fog is inserted.
+    world
+        .entity_mut(tourist)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(116, 50))));
+    world.entity_mut(scout_entity).remove::<MoveOrder>();
+    world
+        .entity_mut(scout_entity)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(111, 50))));
+    world.remove_resource::<VisibilityMap>();
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    world.remove_resource::<AiController>();
+    world.insert_resource(AiController::new(team));
+
+    assert!(
+        !explored_by(&world, team, enemy_town_center_footprint),
+        "restart must wipe explored state back to Unexplored"
+    );
+    let controller = world.resource::<AiController>();
+    assert_eq!(controller.team, team);
+    assert_eq!(controller.decision_accumulator, 0.0);
+    assert_eq!(controller.scout_route_index, 0);
+    assert_eq!(controller.remembered_enemy_town_center, None);
+    assert_eq!(controller.next_army_kind, 0);
+
+    // And the fresh controller behaves boot-fresh: its first decision sends
+    // the (again lowest-idle) scout to route leg 0, not leg 1.
+    for _ in 0..20 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    assert_eq!(
+        world.get::<MoveOrder>(scout_entity).unwrap().goal,
+        plan.scout_route[0],
+        "restart must return the scout cursor to route leg 0"
+    );
+}
+
+/// A real raid: enemy combat kills the AI's food gatherers; gross food
+/// deposits drop until paid replacements land — nothing is replenished free.
+#[test]
+fn raid_reduces_income_until_paid_replacement_lands() {
+    let team = TeamId(2);
+    let (mut world, mut map) = ai_world(team);
+    // Session-free like the economy journey: the AI's contracted conquest
+    // can settle a Result mid-journey, and a settled session would freeze
+    // the sim before the scenario finishes.
+    world.remove_resource::<MatchSession>();
+
+    run_until(&mut world, &mut map, "worker growth", |world| {
+        villagers_of(world, team).len() >= 6
+    });
+
+    // Gross food deposits over a window (positive deltas only — spending
+    // noise excluded) is the honest income measure for this economy.
+    fn food_deposits(world: &mut World, map: &mut GridMap, team: TeamId, ticks: u32) -> u32 {
+        let mut last = stockpile(world, team).food;
+        let mut gained = 0;
+        for _ in 0..ticks {
+            step_tick(world, map);
+            let now = stockpile(world, team).food;
+            gained += now.saturating_sub(last);
+            last = now;
+        }
+        gained
+    }
+
+    // Baseline window before the raid.
+    let income_before = food_deposits(&mut world, &mut map, team, 300);
+
+    // The raid: enemy spearmen kill every AI food gatherer up close.
+    let food_workers: Vec<UnitId> = villagers_of(&world, team)
+        .into_iter()
+        .filter(|id| {
+            let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+            task_source(&world, entity)
+                .and_then(|source| {
+                    let source_entity = world
+                        .resource::<crate::economy::ResourceIndex>()
+                        .entity(source)?;
+                    world
+                        .get::<ResourceSource>(source_entity)
+                        .map(|state| state.kind)
+                })
+                .is_some_and(|kind| kind == ResourceKind::Food)
+        })
+        .collect();
+    assert!(
+        !food_workers.is_empty(),
+        "the raid scenario needs food gatherers to raid"
+    );
+    let victims = villagers_of(&world, team);
+    let mut raiders = Vec::new();
+    for (index, victim) in food_workers.clone().into_iter().enumerate() {
+        let victim_entity = world.resource::<UnitIndex>().entity(victim).unwrap();
+        let position = world.get::<SimPosition>(victim_entity).unwrap().current;
+        let raider = spawn_military(
+            &mut world,
+            &map,
+            UnitId(900 + index as u32),
+            TeamId(1),
+            map.world_to_cell(position),
+            UnitKind::Spearman,
+        );
+        world.entity_mut(raider).insert(CombatOrder::Attack {
+            target: CombatTarget::Unit(victim),
+            last_target_cell: None,
+        });
+        raiders.push(raider);
+    }
+    // The raiders' own sight: one refresh so their targets are visible to
+    // team 1 before the first combat step (a stale map would clear the fresh
+    // orders as hidden-target attacks).
+    refresh_visibility(&mut world, &map);
+    run_until(&mut world, &mut map, "the raid kills", |world| {
+        villagers_of(world, team).len() <= victims.len() - food_workers.len()
+    });
+    // Pull the raiders out so replacements are not slaughtered too.
+    for (index, raider) in raiders.iter().enumerate() {
+        world
+            .entity_mut(*raider)
+            .insert(SimPosition::new(Vec2::new(5.5, 5.5 + index as f32)));
+    }
+
+    // Deposits crater while the gatherers are dead: the window is shorter
+    // than one training-plus-walk cycle, so no replacement has landed yet.
+    let income_after = food_deposits(&mut world, &mut map, team, 250);
+    assert!(
+        income_before > 0 && income_after * 4 < income_before,
+        "the raid must crater food income: before {income_before}, after {income_after}"
+    );
+
+    // Replacement is paid, never free: some recovery tick charges exactly 50
+    // food (the villager cost — nothing else costs exactly 50 food), and the
+    // worker count recovers.
+    let mut saw_paid_replacement = false;
+    let mut recovered = false;
+    for _ in 0..JOURNEY_BUDGET {
+        let before_tick = stockpile(&world, team).food;
+        step_tick(&mut world, &mut map);
+        let delta = before_tick as i64 - stockpile(&world, team).food as i64;
+        if delta == 50 {
+            saw_paid_replacement = true;
+        }
+        if villagers_of(&world, team).len() >= victims.len() {
+            recovered = true;
+            break;
+        }
+    }
+    assert!(recovered, "the AI must replace its lost workers");
+    assert!(
+        saw_paid_replacement,
+        "worker replacement must go through paid production"
+    );
+}
+
+/// Population stall: with the cap full the AI places the next authored House
+/// and production resumes past the old cap.
+#[test]
+fn population_stall_builds_a_house_and_recovers() {
+    let team = TeamId(2);
+    let (mut world, mut map) = ai_world(team);
+    // Session-free like the economy journey: the AI's contracted conquest
+    // can settle a Result mid-journey, and a settled session would freeze
+    // the sim before the scenario finishes.
+    world.remove_resource::<MatchSession>();
+    // Grants are fine here — the stall is the scenario under test.
+    grant(&mut world, team, 3000, 3000, 2000);
+
+    run_until(&mut world, &mut map, "the population stall", |world| {
+        population_cap(world, team) > 10
+            || (crate::production::population_used(world, team)
+                >= crate::production::population_cap(world, team))
+    });
+    run_until(&mut world, &mut map, "the stall recovery House", |world| {
+        crate::production::population_cap(world, team) >= 20
+    });
+    assert!(
+        !own_buildings_of(&world, team, BuildingKind::House).is_empty(),
+        "the recovery must come from a real AI-placed House"
+    );
+    run_until(
+        &mut world,
+        &mut map,
+        "production past the old cap",
+        |world| crate::production::population_used(world, team) > 10,
+    );
+}
+
+/// Review item: an apply-time `Occupied` only blocks an anchor forever when
+/// the anchor's cells are genuinely blocked on the shared map (a hidden
+/// enemy building). A transient reject — an own worker's goal from an
+/// earlier command in the same decision — leaves the anchor retryable.
+#[test]
+fn place_anchor_commit_blocks_only_genuinely_blocked_ground() {
+    let mut controller = AiController::new(TeamId(2));
+    let mut map = GridMap::new(64, 64);
+    let anchor = GridPos::new(10, 10);
+
+    let transient = CommandResult {
+        reject: Some(RejectReason::Occupied),
+        ..CommandResult::default()
+    };
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::PlaceAnchor {
+            anchor,
+            kind: BuildingKind::House,
+        }),
+        &transient,
+        &map,
+    );
+    assert!(
+        controller.blocked_anchors.is_empty(),
+        "a transient occupancy reject must not block the anchor forever"
+    );
+
+    for cell in Footprint::new(anchor, 2, 2).cells() {
+        map.set_blocked(cell, true);
+    }
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::PlaceAnchor {
+            anchor,
+            kind: BuildingKind::House,
+        }),
+        &transient,
+        &map,
+    );
+    assert_eq!(
+        controller.blocked_anchors,
+        vec![anchor],
+        "a really blocked anchor is remembered"
+    );
+}
+
+/// Review item: only completed Houses raise the population cap, so the
+/// house step must not stack a second placement while one is under
+/// construction — same for Farms and food capacity.
+#[test]
+fn house_and_farm_place_one_at_a_time_while_under_construction() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    grant(&mut world, TeamId(2), 2000, 2000, 2000);
+
+    // Population pressure: 6 extra villagers press the cap of 10.
+    for index in 0..6_u32 {
+        spawn_unit(
+            &mut world,
+            UnitId(100 + index),
+            TeamId(2),
+            Vec2::new(110.5, 40.5 + index as f32),
+            UnitKind::Villager,
+            6.0,
+        );
+    }
+    // Food pressure: 9 total villagers target 5 food workers, above the two
+    // berry sources' capacity of 4.
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::House,
+                ..
+            }
+        )),
+        "premise: the pressured House fires"
+    );
+    assert!(
+        commands.iter().any(|command| matches!(
+            command,
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Farm,
+                ..
+            }
+        )),
+        "premise: the food-deficit Farm fires"
+    );
+
+    // Neither may re-fire while the first of each is still building: a
+    // per-decision placement would stack duplicates on every free slot.
+    for _ in 0..3 {
+        let commands = decide(&mut world, &map);
+        assert!(
+            commands.iter().all(|command| !matches!(
+                command,
+                PlayerCommand::PlaceBuilding {
+                    kind: BuildingKind::House | BuildingKind::Farm,
+                    ..
+                }
+            )),
+            "no second House/Farm while one is under construction: {commands:?}"
+        );
+    }
+}
+
+/// Review item: a gather source whose command keeps rejecting is dropped
+/// after bounded retries, and the allocation falls back to the next-best
+/// source instead of re-firing the same doomed assignment every second.
+#[test]
+fn rejected_gather_falls_back_to_the_next_source_after_bounded_retries() {
+    let (mut world, map) = ai_world(TeamId(2));
+
+    // The allocation's normal pick: nearest food source to the Town Center.
+    let normal = decide(&mut world, &map)
+        .into_iter()
+        .find_map(|command| match command {
+            PlayerCommand::Gather { source, .. } => Some(source),
+            _ => None,
+        })
+        .expect("a gather assignment fires");
+
+    // Mark that source as having rejected MAX_GATHER_FAILURES times.
+    let mut controller = world.remove_resource::<AiController>().unwrap();
+    controller
+        .gather_failures
+        .entry(normal)
+        .or_insert(MAX_GATHER_FAILURES);
+    world.insert_resource(controller);
+
+    let fallback = decide(&mut world, &map)
+        .into_iter()
+        .find_map(|command| match command {
+            PlayerCommand::Gather { source, .. } => Some(source),
+            _ => None,
+        })
+        .expect("a fallback gather assignment fires");
+    assert_ne!(
+        fallback, normal,
+        "the persistently rejecting source is skipped for its fallback"
+    );
+
+    // And the failure count itself is exactly what commits track: a rejected
+    // gather increments, an accepted one clears.
+    let mut controller = AiController::new(TeamId(2));
+    let rejected = CommandResult::default();
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::GatherSource {
+            worker: UnitId(1),
+            source: normal,
+        }),
+        &rejected,
+        &map,
+    );
+    assert_eq!(controller.gather_failures.get(&normal), Some(&1));
+    let mut accepted = CommandResult::default();
+    accepted.accepted_units.push(UnitId(1));
+    commit_outcome(
+        &mut controller,
+        Some(AiCommit::GatherSource {
+            worker: UnitId(1),
+            source: normal,
+        }),
+        &accepted,
+        &map,
+    );
+    assert!(
+        !controller.gather_failures.contains_key(&normal),
+        "an accepted gather clears the failure count"
+    );
+}

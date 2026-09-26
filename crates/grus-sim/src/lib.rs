@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod buildings;
 pub mod catalog;
 pub mod combat;
@@ -9,7 +10,9 @@ pub mod map;
 pub mod movement;
 pub mod production;
 pub mod session;
+pub mod visibility;
 
+pub use ai::{AI_DECISION_SECONDS, AiController, PlannedCommand, decide_ai_commands, step_ai};
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
     validate_placement,
@@ -29,9 +32,10 @@ pub use commands::{
 };
 pub use economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
-    ResourceStockpile, TeamEconomy, TeamState, WorkerTask, gather_rate_for_age, step_economy,
+    ResourceStockpile, TeamEconomy, TeamState, WorkerTask, gather_rate_for_age, idle_worker_ids,
+    is_idle_worker, step_economy,
 };
-pub use fixture::{MapFixture, ResourceSpawn, TeamStart, seed_skirmish};
+pub use fixture::{AiMapPlan, MapFixture, ResourceSpawn, TeamStart, seed_skirmish};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
 pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};
@@ -42,4 +46,7 @@ pub use production::{
 pub use session::{
     MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,
     set_paused, start_match,
+};
+pub use visibility::{
+    CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };

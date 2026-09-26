@@ -7,6 +7,36 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
+## Normal gameplay must actually carry visibility state: a revision >= 1
+## (initial refresh ran), a 128x96 packed payload, the own Town Center cell
+## Visible and the enemy Town Center cell Unexplored. If the runtime ever
+## lost its VisibilityMap, the absent-resource fallback would silently run
+## full-information — these assertions make that a loud failure.
+func _assert_runtime_visibility(where: String) -> void:
+	if not GrusBridge.has_method("visibility_revision") \
+			or not GrusBridge.has_method("visibility_snapshot"):
+		_fail("%s: visibility bridge methods are missing" % where)
+		return
+	var revision := int(GrusBridge.visibility_revision())
+	if revision < 1:
+		_fail("%s: runtime visibility state absent (revision %d) — runtime must not run full-info" % [where, revision])
+		return
+	var snap: Dictionary = GrusBridge.visibility_snapshot()
+	if int(snap.get("revision", -1)) != revision \
+			or int(snap.get("width", -1)) != 128 or int(snap.get("height", -1)) != 96:
+		_fail("%s: visibility snapshot metadata mismatch: %s" % [where, snap.keys()])
+		return
+	var states: PackedInt32Array = snap.get("states", PackedInt32Array())
+	if states.size() != 128 * 96:
+		_fail("%s: visibility snapshot payload is not 128x96: %d" % [where, states.size()])
+		return
+	if states[46 * 128 + 12] != 2:
+		_fail("%s: own Town Center cell (12,46) is not Visible" % where)
+		return
+	if states[46 * 128 + 112] != 0:
+		_fail("%s: enemy Town Center cell (112,46) is not Unexplored" % where)
+		return
+
 func _run() -> void:
 	var units: Array[Node] = []
 	var buildings: Array[Node] = []
@@ -25,9 +55,11 @@ func _run() -> void:
 	if not GrusBridge.has_method("reset_fixture"):
 		_fail("fixture reset bridge is missing")
 		return
+	_assert_runtime_visibility("setup")
 	if not GrusBridge.reset_fixture():
 		_fail("fixture reset bridge rejected reset")
 		return
+	_assert_runtime_visibility("restart")
 
 	var unique_ids: Dictionary = {}
 	var building_ids: Dictionary = {}
@@ -101,5 +133,5 @@ func _run() -> void:
 		_fail("Team 1 population after reset is not 4/10: %s" % [economy])
 		return
 
-	print("GRUS_RESET_SMOKE_OK units=8 buildings=2 resources=18 stockpile=200/300/100 population=4/10")
+	print("GRUS_RESET_SMOKE_OK units=8 buildings=2 resources=18 stockpile=200/300/100 population=4/10 fog=128x96")
 	get_tree().quit(0)

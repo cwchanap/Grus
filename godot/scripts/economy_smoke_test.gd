@@ -84,9 +84,13 @@ func _key_tap(keycode: int) -> void:
 	release.pressed = false
 	Input.parse_input_event(release)
 
-func _click_view(view: Node3D, button: int) -> void:
+func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
 	_mouse_click(_camera.unproject_position(view.global_position), button)
 	await get_tree().process_frame
+	# Extra frame only for fog-gated targets whose view was recently
+	# revealed; plain clicks keep the original single-frame settle.
+	if fog_settle:
+		await get_tree().process_frame
 
 func _click_world(point: Vector2, button: int) -> void:
 	_mouse_click(_camera.unproject_position(Vector3(point.x + 0.25, 0.0, point.y + 0.25)), button)
@@ -352,7 +356,11 @@ func _run() -> void:
 		return
 
 	# Normal skirmish boots into Start; this scenario starts the match before
-	# its first gameplay command.
+	# its first gameplay command. Scripted choreography runs AI-free: the
+	# Start-only test seam must lift the Team-2 controller first.
+	if not GrusBridge.disable_ai_for_test():
+		_fail("disable_ai_for_test did not lift the AI from Start")
+		return
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
 		return
@@ -411,6 +419,19 @@ func _run() -> void:
 		_fail("completed House did not raise the population cap to 20")
 		return
 
+	# Fog retarget (HPA-473): the Storehouse anchor (38,22) and the northeast
+	# expansion tree (43,18) boot Unexplored — placement validates explored
+	# footprints and gather requires explored sources, so scout the corridor
+	# first. The expansion tree's view becoming visible is the explored
+	# proof (views are the presentation projection of the sim fog).
+	await _click_view(builder, MOUSE_BUTTON_LEFT)
+	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
+	if not await _wait_until(
+			func(): return _resource_view(FAR_TREE_ID) != null \
+					and (_resource_view(FAR_TREE_ID) as Node3D).is_visible_in_tree(),
+			60.0, "scout never revealed the far expansion tree"):
+		return
+
 	# Step 5: Storehouse delivery proof. Retask villager 1 to the northeast
 	# expansion tree (~6 cells from the Storehouse, ~40 from the Town Center):
 	# every later Wood deposit must land at the Storehouse.
@@ -427,7 +448,8 @@ func _run() -> void:
 		_fail("wood worker or expansion tree view is missing")
 		return
 	await _click_view(wood_worker, MOUSE_BUTTON_LEFT)
-	await _click_view(far_tree, MOUSE_BUTTON_RIGHT)
+	# The far tree's view is fog-revealed: it pays the fog settle.
+	await _click_view(far_tree, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"wood": int(GrusBridge.economy_snapshot().get("wood", -1))}
 	if not await _wait_until(_wood_deposited_at_storehouse.bind(wood_worker, storehouse.global_position, delivery_box), 45.0,
 			"no wood delivery ever reached the Storehouse"):

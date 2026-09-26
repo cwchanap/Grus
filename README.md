@@ -35,6 +35,30 @@ The match lifecycle is simulated-side: the skirmish boots into **Start** (gamepl
 
 Fog of war and economic AI remain owned by HPA-473.
 
+## HPA-473 scouting, fog of war, and economic AI
+
+### Fog of war
+
+Visibility is simulation-owned: `VisibilityMap` in `grus-sim` tracks three states per cell — **Unexplored**, **Explored** (remembered terrain, no live units), and **Visible**. Every unit projects a circular vision radius of **10 cells (Euclidean)** each tick, and completed buildings reveal from the boundary cells of their footprint (identical union to every cell — an interior cell's circle is always subsumed by the edge cells'). Standalone resource sources stay visible on the map once explored; enemy units and buildings require **current** vision to be shown, targeted, placed against, or gathered near. The boundary is enforced in the sim (combat acquisition, building placement, gather routing reject hidden targets — and unknown ids answer like missing ids so reject codes cannot probe fog) and again in the views: rendering, click picking, building inspection, combat tracers, and the minimap all hide what Team 1 cannot currently see — no hidden-enemy leak through any presentation path.
+
+### Minimap
+
+The minimap is a **128x96 runtime `ImageTexture`** (1 px per cell) redrawn from the Team-1 fog states: friendly markers always, enemy markers only while currently visible, resource markers once explored, plus the camera viewport rectangle. Left-clicking the minimap **recenters the camera only** — it never issues gameplay commands and never reveals anything.
+
+### Economic AI (Team 2)
+
+The opponent is a **Team-2 economic AI** that plays by the ordinary `PlayerCommand` rules: the same economy tick, the same catalogue costs, the same build/train/age-up commands — no stockpile grants, free spawns, or other mutation that a human player could not perform. It makes decisions at **1 Hz** (one decision per simulated second, gated on the Playing phase):
+
+- **Scouts early** — sends the lowest-stable-ID idle military unit, or (above a 4-villager floor) an idle surplus villager, along a route of expansion nodes; never pulls an active economic worker off-task.
+- **Defends only visible threats** — nearby military respond when an enemy is currently visible inside the defense radius; it does not react to hidden positions.
+- **Attacks at 6 military units** — assembles the army and marches on the enemy Town Center; it **remembers only genuinely observed** enemy Town Center cells, so behavior is invariant to hidden enemy positions.
+
+Worker and building losses have real economic consequences for the AI — it gathers, builds, and trains replacements through the same queues and costs as the player.
+
+### Runtime setup
+
+The runtime match is **human Team 1 vs AI Team 2**. Starting the AI from the other side is **automated Rust-test coverage only** (the full-match journeys run the same policy from both authored starts, and both sides settle real conquest wins — roughly 3.3k and 3.2k ticks at 20 Hz; exact figures shift with any balance change), not a user-selectable mode. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, enemies hidden again) and fresh AI memory.
+
 ### Build and launch
 
 Install Godot 4.6.2 with export templates, then from the repository root:
@@ -62,9 +86,10 @@ godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
+godot --headless --path godot res://scenes/scouting_ai_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness. The HPA-473 scouting AI smoke plays the real runtime against the live Team-2 AI under full fog — trains/builds through ordinary AI progress, scouts to reveal the expansion tree and the enemy start, verifies enemy hiding/selection/minimap markers follow current vision, and proves restart restores boot fog and a working fresh AI.
 
 ### Controls
 
@@ -79,6 +104,7 @@ The main Godot smoke exercises real input-derived click/box/additive selection, 
 - `1` through `9`: recall a control group
 - Mouse wheel: zoom
 - Middle drag: pan the camera
+- Minimap (bottom right): left-click recenters the camera on that map cell (view only — no commands, no reveal)
 - Build buttons (bottom panel): arm placement for House/Storehouse/Farm/Barracks/Archery Range/Stable; the ground preview renders green when valid and red when blocked; left-click places, right-click or `Esc` cancels
 - Train buttons: queue Villager/Spearman (Barracks), Archer (Archery Range), Cavalry (Stable) on the selected building
 - Advance Age: research Age 2 on the selected Town Center (300 Food, 200 Gold); gather rates rise to 2.2/s and the Stable unlocks
@@ -103,7 +129,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/scouting-AI smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 

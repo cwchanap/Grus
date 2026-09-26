@@ -6,17 +6,18 @@ use godot::classes::{Engine, INode, Node, Node3D, SceneTree};
 use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
-use grus_sim::catalog::{building_spec, unit_spec};
+use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
-    AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos, Health,
-    IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand,
-    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
-    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, WorkerTask, active_phase,
-    apply_player_command, gather_rate_for_age, population_cap, population_used, produces,
-    seed_skirmish, set_paused, spawn_unit, start_match, step_combat, step_construction,
-    step_economy, step_movement, step_production, validate_placement,
+    AGE_TWO_COST, AGE_TWO_SECONDS, Age, AiController, Building, BuildingId, BuildingIndex,
+    BuildingKind, CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap,
+    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
+    apply_player_command, explored_by, gather_rate_for_age, idle_worker_ids, population_cap,
+    population_used, produces, refresh_visibility, seed_skirmish, set_paused, spawn_unit,
+    start_match, step_ai, step_combat, step_construction, step_economy, step_movement,
+    step_production, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -55,12 +56,21 @@ struct GameplayViewRequested;
 #[class(base=Node)]
 struct GrusBridgeNode {
     base: Base<Node>,
+    /// Last fog payload handed to GDScript, keyed by its visibility
+    /// revision: the fog overlay and the minimap both fetch per revision
+    /// change, and rebuilding the 12k-cell payload twice per revision is
+    /// pure waste. `VarDictionary` is refcounted, so the cache hit clones a
+    /// handle, not the payload.
+    visibility_cache: Option<(i64, VarDictionary)>,
 }
 
 #[godot_api]
 impl INode for GrusBridgeNode {
     fn init(base: Base<Node>) -> Self {
-        Self { base }
+        Self {
+            base,
+            visibility_cache: None,
+        }
     }
 }
 
@@ -296,6 +306,23 @@ impl GrusBridgeNode {
         true
     }
 
+    /// Test-only AI removal for scripted legacy gameplay smokes: succeeds
+    /// only while the session sits in Start (never mid-match) and removes
+    /// only the `AiController` — visibility, entities and session state are
+    /// untouched. The HPA-473 scouting smoke deliberately never calls this:
+    /// it asserts the AI stays present.
+    #[func]
+    fn disable_ai_for_test(&self) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        disable_ai_in_world(app.world_mut())
+    }
+
     /// Pause/Resume. Changes the session phase only — never
     /// `Engine.time_scale`, which stays the headless sim-speed control.
     #[func]
@@ -393,6 +420,57 @@ impl GrusBridgeNode {
         .unwrap_or_default()
     }
 
+    /// Monotonic Team-1 visibility revision for cheap per-frame polling: fog
+    /// and minimap fetch the packed snapshot only when this changes. `-1`
+    /// when no visibility state exists (the visibility-free benchmark).
+    #[func]
+    fn visibility_revision(&self) -> i64 {
+        with_app(|app| {
+            app.world()
+                .get_resource::<VisibilityMap>()
+                .map(|visibility| visibility.revision() as i64)
+                .unwrap_or(-1)
+        })
+        .unwrap_or(-1)
+    }
+
+    /// Packed Team-1 fog payload: map width/height, row-major cell states
+    /// (0 Unexplored / 1 Explored / 2 Visible), and the revision observed
+    /// during the read so a consumer can detect a mid-read change. Empty
+    /// dict when visibility state is absent. Cached per revision: both
+    /// GDScript consumers poll every frame and fetch only on change, so at
+    /// most one rebuild lands per revision change.
+    #[func]
+    fn visibility_snapshot(&mut self) -> VarDictionary {
+        with_app(|app| {
+            let world = app.world();
+            let Some(visibility) = world.get_resource::<VisibilityMap>() else {
+                return VarDictionary::new();
+            };
+            let revision = visibility.revision() as i64;
+            if let Some((cached_revision, cached)) = &self.visibility_cache
+                && *cached_revision == revision
+            {
+                return cached.clone();
+            }
+            let Some(map) = world.get_resource::<GridMap>() else {
+                return VarDictionary::new();
+            };
+            let states = visibility.packed_cell_states(TeamId(1), map.width(), map.height());
+            let mut dict = VarDictionary::new();
+            dict.set("width", i64::from(map.width()));
+            dict.set("height", i64::from(map.height()));
+            dict.set("revision", revision);
+            dict.set(
+                "states",
+                &PackedInt32Array::from_iter(states.into_iter().map(i32::from)),
+            );
+            self.visibility_cache = Some((revision, dict.clone()));
+            dict
+        })
+        .unwrap_or_default()
+    }
+
     #[func]
     fn command_feedback(&self) -> GString {
         with_app(|app| {
@@ -462,7 +540,10 @@ impl GrusBridgeNode {
             );
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
-            dict.set("idle_worker_ids", &PackedInt32Array::from_iter(idle));
+            dict.set(
+                "idle_worker_ids",
+                &PackedInt32Array::from_iter(idle.iter().filter_map(|id| i32::try_from(id.0).ok())),
+            );
             dict.set(
                 "last_reject_code",
                 world
@@ -478,7 +559,9 @@ impl GrusBridgeNode {
 
     /// One building's state by stable id: completion, construction and queue
     /// progress (0..1), queue head label, blocked code (0 = none), and rally
-    /// cell (-1/-1 when unset). Empty dict when the building does not exist.
+    /// cell (-1/-1 when unset). Empty dict when the building does not exist
+    /// or is a hidden enemy — fog must not leak health/queue/construction
+    /// through stale ids.
     #[func]
     fn building_snapshot(&self, building_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -493,6 +576,9 @@ impl GrusBridgeNode {
             else {
                 return dict;
             };
+            if building_hidden_from_local_player(world, entity) {
+                return dict;
+            }
             let Some(building) = world.get::<Building>(entity) else {
                 return dict;
             };
@@ -682,6 +768,7 @@ fn build_app(app: &mut App) {
                 attach_missing_gameplay_views,
                 initialize_view_metadata,
                 stamp_late_resource_metadata,
+                sync_view_visibility,
                 sync_interpolated_unit_transforms,
                 update_health_bars,
             ),
@@ -695,6 +782,8 @@ fn build_app(app: &mut App) {
                 advance_economy,
                 advance_construction,
                 advance_production,
+                advance_visibility,
+                advance_ai,
                 drain_route_reject_feedback,
             )
                 .chain(),
@@ -823,10 +912,64 @@ fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
     if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
         return Vec::new();
     }
-    world
+    let mut events = world
         .get_resource_mut::<CombatEvents>()
         .map(|mut events| std::mem::take(&mut events.0))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Presentation permission is derived here, before dictionaries reach
+    // GDScript: a hidden enemy attacker must not expose its stable id as a
+    // tracer origin (GDScript never re-looks-up live attackers). The event's
+    // position is the target's — always a friendly (always visible) when the
+    // attacker is a hidden enemy — so hit/death feedback stays intact. Id 0
+    // matches every id-reject convention: no live unit carries it.
+    for event in &mut events {
+        if !attacker_presentable(world, event.attacker) {
+            event.attacker = UnitId(0);
+        }
+    }
+    events
+}
+
+/// The attacker's stable id may reach GDScript only when it exists and is
+/// either friendly or currently visible to the local team. A missing attacker
+/// (already despawned) is scrubbed too — dead men leak no positions.
+fn attacker_presentable(world: &World, attacker: UnitId) -> bool {
+    let Some(entity) = world
+        .get_resource::<UnitIndex>()
+        .and_then(|index| index.entity(attacker))
+    else {
+        return false;
+    };
+    let Some(unit) = world.get::<Unit>(entity) else {
+        return false;
+    };
+    if unit.team == TeamId(1) {
+        return true;
+    }
+    let Some(map) = world.get_resource::<GridMap>() else {
+        return true;
+    };
+    let Some(position) = world.get::<SimPosition>(entity) else {
+        return false;
+    };
+    visible_to(world, TeamId(1), map.world_to_cell(position.current))
+}
+
+/// A building is fog-hidden from the local player when it is an enemy whose
+/// footprint is not currently Team-1 visible. Friendly buildings are always
+/// presentable. Drives the `building_snapshot` empty dict and nothing else —
+/// view rendering goes through `sync_view_visibility`.
+fn building_hidden_from_local_player(world: &World, entity: Entity) -> bool {
+    let Some(building) = world.get::<Building>(entity) else {
+        return false;
+    };
+    if building.team == TeamId(1) {
+        return false;
+    }
+    match world.get::<Footprint>(entity) {
+        Some(footprint) => !visible_to(world, TeamId(1), *footprint),
+        None => false,
+    }
 }
 
 fn combat_event_dict(event: CombatEvent) -> VarDictionary {
@@ -874,6 +1017,18 @@ fn setup_fixture(world: &mut World) {
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+    insert_fresh_visibility(world);
+    // The Team-2 economic AI opponent ships with every normal setup; the
+    // benchmark reset never inserts one.
+    world.insert_resource(AiController::new(TeamId(2)));
+}
+
+/// Normal runtime gameplay runs fogged: a fresh `VisibilityMap` beside the
+/// session plus one initial refresh so the Start screen already has correct
+/// fog. The benchmark reset never calls this — it stays visibility-free.
+fn insert_fresh_visibility(world: &mut World) {
+    world.insert_resource(VisibilityMap::default());
+    world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
 
 #[allow(clippy::type_complexity)]
@@ -982,50 +1137,182 @@ fn attach_unit_view(commands: &mut Commands, entity: Entity, transform: Transfor
     ));
 }
 
-fn initialize_view_metadata(
-    mut commands: Commands,
-    units: Query<(Entity, &Unit, &GodotNodeHandle), Without<ViewMetaInitialized>>,
-    buildings: Query<
-        (Entity, &Building, Option<&ResourceSource>, &GodotNodeHandle),
+/// Exclusive (main-thread) because the authoritative-visibility predicates
+/// read the `World` while the pass writes Godot node state — a parametric
+/// `&World` would conflict with `GodotAccess`'s main-thread guard. Stamps
+/// identity metadata AND the initial authoritative visibility in the same
+/// pass, so a newly instantiated view never spends a frame visible before
+/// the sim truth lands (scene roots default hidden).
+fn initialize_view_metadata(world: &mut World) {
+    #[allow(clippy::type_complexity)]
+    let mut units = world.query_filtered::<
+        (Entity, &Unit, &SimPosition, &GodotNodeHandle),
         Without<ViewMetaInitialized>,
-    >,
-    resources: Query<(Entity, &ResourceSource, &GodotNodeHandle), Without<ViewMetaInitialized>>,
-    mut godot: GodotAccess,
-) {
-    for (entity, unit, handle) in &units {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    >();
+    let unit_batch: Vec<(Entity, UnitId, TeamId, UnitKind, Vec2, GodotNodeHandle)> = units
+        .iter(world)
+        .map(|(entity, unit, position, handle)| {
+            (
+                entity,
+                unit.id,
+                unit.team,
+                unit.kind,
+                position.current,
+                *handle,
+            )
+        })
+        .collect();
+    let mut buildings = world.query_filtered::<(
+        Entity,
+        &Building,
+        &Footprint,
+        Option<&ResourceSource>,
+        &GodotNodeHandle,
+    ), Without<ViewMetaInitialized>>();
+    #[allow(clippy::type_complexity)]
+    let building_batch: Vec<(
+        Entity,
+        BuildingId,
+        BuildingKind,
+        TeamId,
+        Footprint,
+        Option<(ResourceId, ResourceKind)>,
+        GodotNodeHandle,
+    )> = buildings
+        .iter(world)
+        .map(|(entity, building, footprint, source, handle)| {
+            (
+                entity,
+                building.id,
+                building.kind,
+                building.team,
+                *footprint,
+                source.map(|source| (source.id, source.kind)),
+                *handle,
+            )
+        })
+        .collect();
+    let mut resources = world.query_filtered::<(
+        Entity,
+        &ResourceSource,
+        &Footprint,
+        &GodotNodeHandle,
+    ), (Without<Building>, Without<ViewMetaInitialized>)>();
+    let resource_batch: Vec<(Entity, ResourceId, ResourceKind, Footprint, GodotNodeHandle)> =
+        resources
+            .iter(world)
+            .map(|(entity, source, footprint, handle)| {
+                (entity, source.id, source.kind, *footprint, *handle)
+            })
+            .collect();
+
+    for (entity, id, team, kind, position, handle) in unit_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("unit_id", &i64::from(unit.id.0).to_variant());
-        node.set_meta("team_id", &i64::from(unit.team.0).to_variant());
-        node.set_meta("unit_kind", &debug_variant(unit.kind));
-        commands.entity(entity).insert(ViewMetaInitialized);
+        node.set_meta("unit_id", &i64::from(id.0).to_variant());
+        node.set_meta("team_id", &i64::from(team.0).to_variant());
+        node.set_meta("unit_kind", &debug_variant(kind));
+        // Borrow, never clone: `world_to_cell` is pure coordinate math, and
+        // the exclusive pass needs the map only while no &mut is held.
+        let cell = world.resource::<GridMap>().world_to_cell(position);
+        let visible = team == TeamId(1) || visible_to(world, TeamId(1), cell);
+        node.set_visible(visible);
+        world.entity_mut(entity).insert(ViewMetaInitialized);
     }
-    for (entity, building, source, handle) in &buildings {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    for (entity, id, kind, team, footprint, source, handle) in building_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("building_id", &i64::from(building.id.0).to_variant());
-        node.set_meta("building_kind", &debug_variant(building.kind));
-        node.set_meta("team_id", &i64::from(building.team.0).to_variant());
+        node.set_meta("building_id", &i64::from(id.0).to_variant());
+        node.set_meta("building_kind", &debug_variant(kind));
+        node.set_meta("team_id", &i64::from(team.0).to_variant());
         // A completed Farm carries both its building identity and its
         // renewable Food source on the same entity.
-        if let Some(source) = source {
-            node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
-            node.set_meta("resource_kind", &debug_variant(source.kind));
-            commands.entity(entity).insert(ResourceMetaInitialized);
+        if let Some((source_id, source_kind)) = source {
+            node.set_meta("resource_id", &i64::from(source_id.0).to_variant());
+            node.set_meta("resource_kind", &debug_variant(source_kind));
+            world.entity_mut(entity).insert(ResourceMetaInitialized);
         }
-        commands.entity(entity).insert(ViewMetaInitialized);
+        // Enemy Farms follow enemy-building visibility: the building branch
+        // owns the stamp, never the resource branch below.
+        let visible = team == TeamId(1) || visible_to(world, TeamId(1), footprint);
+        node.set_visible(visible);
+        world.entity_mut(entity).insert(ViewMetaInitialized);
     }
-    for (entity, source, handle) in &resources {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
+    for (entity, id, kind, footprint, handle) in resource_batch {
+        let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
-        node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
-        node.set_meta("resource_kind", &debug_variant(source.kind));
-        commands
-            .entity(entity)
+        node.set_meta("resource_id", &i64::from(id.0).to_variant());
+        node.set_meta("resource_kind", &debug_variant(kind));
+        // Standalone sources appear on first exploration and persist.
+        let visible = explored_by(world, TeamId(1), footprint);
+        node.set_visible(visible);
+        world
+            .entity_mut(entity)
             .insert((ViewMetaInitialized, ResourceMetaInitialized));
+    }
+}
+
+/// The exclusive pass can't hold a query borrow while mutating entities, so
+/// it batches first; this helper only unwraps node handles.
+fn node_from_handle(handle: GodotNodeHandle) -> Option<Gd<Node3D>> {
+    Gd::<Node3D>::try_from_instance_id(handle.instance_id()).ok()
+}
+
+/// Maintains every gameplay view's `Node3D.visible` from the authoritative
+/// Team-1 visibility each Update: friendly units/buildings always visible,
+/// enemies only while currently visible (enemy Farms included — they ride
+/// the building branch), standalone resources once explored and staying.
+/// Exclusive for the same reason as `initialize_view_metadata`; the initial
+/// stamp happens there, this system only maintains the value.
+fn sync_view_visibility(world: &mut World) {
+    let mut units = world.query::<(&Unit, &SimPosition, &GodotNodeHandle)>();
+    let unit_batch: Vec<(TeamId, Vec2, GodotNodeHandle)> = units
+        .iter(world)
+        .map(|(unit, position, handle)| (unit.team, position.current, *handle))
+        .collect();
+    let mut buildings = world.query::<(&Building, &Footprint, &GodotNodeHandle)>();
+    let building_batch: Vec<(TeamId, Footprint, GodotNodeHandle)> = buildings
+        .iter(world)
+        .map(|(building, footprint, handle)| (building.team, *footprint, *handle))
+        .collect();
+    let mut resources = world.query_filtered::<
+        (&Footprint, &GodotNodeHandle),
+        (With<ResourceSource>, Without<Building>),
+    >();
+    let resource_batch: Vec<(Footprint, GodotNodeHandle)> = resources
+        .iter(world)
+        .map(|(footprint, handle)| (*footprint, *handle))
+        .collect();
+
+    for (team, position, handle) in unit_batch {
+        // Borrow, never clone: `world_to_cell` is pure coordinate math.
+        let cell = world.resource::<GridMap>().world_to_cell(position);
+        set_view_visible(
+            handle,
+            team == TeamId(1) || visible_to(world, TeamId(1), cell),
+        );
+    }
+    for (team, footprint, handle) in building_batch {
+        set_view_visible(
+            handle,
+            team == TeamId(1) || visible_to(world, TeamId(1), footprint),
+        );
+    }
+    for (footprint, handle) in resource_batch {
+        set_view_visible(handle, explored_by(world, TeamId(1), footprint));
+    }
+}
+
+/// Value-gated write: idle views don't re-raise Godot visibility flags.
+fn set_view_visible(handle: GodotNodeHandle, visible: bool) {
+    let Some(mut node) = node_from_handle(handle) else {
+        return;
+    };
+    if node.is_visible() != visible {
+        node.set_visible(visible);
     }
 }
 
@@ -1073,10 +1360,15 @@ fn reset_fixture_world(world: &mut World) {
     let mut map = fixture.map.clone();
     seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
-    // A normal-skirmish restart returns the session to Start.
+    // A normal-skirmish restart returns the session to Start — fogged with a
+    // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+    insert_fresh_visibility(world);
+    // A fresh controller: scout progress, exploration-adjacent decision
+    // state and the remembered enemy Town Center all restart clean.
+    world.insert_resource(AiController::new(TeamId(2)));
     // The clear despawns the selector-bearing gameplay entities; reattach the
     // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
     #[cfg(feature = "e2e")]
@@ -1097,6 +1389,20 @@ fn reset_benchmark_world(world: &mut World) {
             12.0,
         );
     }
+}
+
+/// The narrow test-disable seam behind `disable_ai_for_test`: Start-only and
+/// controller-only.
+fn disable_ai_in_world(world: &mut World) -> bool {
+    if !matches!(
+        world
+            .get_resource::<MatchSession>()
+            .map(|session| &session.phase),
+        Some(MatchPhase::Start)
+    ) {
+        return false;
+    }
+    world.remove_resource::<AiController>().is_some()
 }
 
 fn clear_gameplay_world(world: &mut World) {
@@ -1122,6 +1428,12 @@ fn clear_gameplay_world(world: &mut World) {
     world.remove_resource::<ResourceIndex>();
     world.remove_resource::<TeamEconomy>();
     world.remove_resource::<IdAllocator>();
+    // Visibility dies with the match: the benchmark restart must stay
+    // visibility-free, and a normal reset re-inserts a fresh fogged map.
+    world.remove_resource::<VisibilityMap>();
+    // The AI controller dies with the match: the benchmark stays AI-free and
+    // a normal reset re-inserts a fresh Team-2 controller.
+    world.remove_resource::<AiController>();
     // Combat/session transients die with the match: the benchmark restarts
     // session-free (missing session = Playing), the normal reset re-inserts
     // Start.
@@ -1136,36 +1448,8 @@ fn clear_gameplay_world(world: &mut World) {
         feedback.last_reject_code = None;
     }
     if let Some(mut route_reject) = world.get_resource_mut::<LastRouteReject>() {
-        route_reject.0 = None;
+        route_reject.0.clear();
     }
-}
-
-fn idle_worker_ids(world: &World, team: TeamId) -> Vec<i32> {
-    let mut ids: Vec<i32> = world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter_map(|(id, entity)| {
-                    let unit = world.get::<Unit>(*entity)?;
-                    if unit.team != team || unit.kind != UnitKind::Villager {
-                        return None;
-                    }
-                    if world.get::<WorkerTask>(*entity) != Some(&WorkerTask::Idle) {
-                        return None;
-                    }
-                    // A villager with a route (e.g. just rallied or moved) is
-                    // traveling, not idle.
-                    if world.get::<MoveOrder>(*entity).is_some() {
-                        return None;
-                    }
-                    i32::try_from(id.0).ok()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort_unstable();
-    ids
 }
 
 fn apply_pending_commands(world: &mut World) {
@@ -1296,13 +1580,31 @@ fn advance_production(world: &mut World) {
     });
 }
 
-/// Drains the sim's latest worker route-failure reject into the existing
-/// feedback channel, so mid-step idles surface as typed codes with a
-/// revision bump instead of disappearing silently.
+/// Canonical post-production step: presentation and (later) AI consume the
+/// same freshly computed Team-1 visibility the command validation of the
+/// next tick will enforce.
+fn advance_visibility(world: &mut World) {
+    world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
+}
+
+/// The Team-2 AI fixed step, last mutation before the feedback drain: the
+/// decision reads exactly the fog the presentation received this tick.
+fn advance_ai(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_ai(world, &mut map, seconds);
+    });
+}
+
+/// Drains the sim's latest Team-1 worker route-failure reject into the
+/// existing feedback channel, so mid-step idles surface as typed codes with
+/// a revision bump instead of disappearing silently. Team 2's entries stay
+/// in the sim resource: the AI's private rejects must never surface as — or
+/// overwrite — the human player's feedback.
 fn drain_route_reject_feedback(world: &mut World) {
     let reason = world
         .get_resource_mut::<LastRouteReject>()
-        .and_then(|mut slot| slot.0.take());
+        .and_then(|mut slot| slot.0.remove(&TeamId(1)));
     let Some(reason) = reason else {
         return;
     };
@@ -1361,7 +1663,7 @@ mod tests {
     use bevy::prelude::World;
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
-    use grus_sim::{CombatEvent, CombatTarget, MatchResult};
+    use grus_sim::{CombatEvent, CombatTarget, MatchResult, MoveOrder, WorkerTask};
 
     use super::*;
 
@@ -1409,13 +1711,19 @@ mod tests {
             assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
         }
 
+        // Without a UnitIndex the attacker's existence (and therefore its
+        // presentation permission) cannot be verified: the id is scrubbed
+        // to 0 while the target-position feedback survives.
+        let mut scrubbed = event;
+        scrubbed.attacker = UnitId(0);
+
         // Result releases the settle tick's buffer once — `strike()` records
         // the killing blow and resolves the match in the same fixed tick —
         // and the drained buffer stays empty on later Result frames.
         world.insert_resource(MatchSession {
             phase: MatchPhase::Result(MatchResult(TeamId(2))),
         });
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
         assert!(world.resource::<CombatEvents>().0.is_empty());
         assert!(take_presentable_events(&mut world).is_empty());
 
@@ -1424,12 +1732,184 @@ mod tests {
             phase: MatchPhase::Playing,
         });
         world.insert_resource(CombatEvents(vec![event]));
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
         assert!(world.resource::<CombatEvents>().0.is_empty());
         // A missing session reads as Playing (benchmark contract).
         world.remove_resource::<MatchSession>();
         world.insert_resource(CombatEvents(vec![event]));
-        assert_eq!(take_presentable_events(&mut world), vec![event]);
+        assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
+    }
+
+    /// Runtime setup fog: the fixture boots with a fresh `VisibilityMap`, an
+    /// initial refresh (revision >= 1), the enemy start Unexplored and the
+    /// own start Visible. Restarts re-fog; the benchmark stays free of
+    /// visibility so its full-information contract cannot silently flip.
+    #[test]
+    fn runtime_setup_and_resets_manage_the_visibility_resource() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+
+        let revision = world.resource::<VisibilityMap>().revision();
+        assert!(
+            revision >= 1,
+            "initial refresh must have bumped the revision"
+        );
+        let own_town_center = GridPos::new(12, 46);
+        let enemy_town_center = GridPos::new(112, 46);
+        let states = world
+            .resource::<VisibilityMap>()
+            .packed_cell_states(TeamId(1), 128, 96);
+        assert_eq!(
+            states[(own_town_center.y * 128 + own_town_center.x) as usize],
+            2
+        );
+        assert_eq!(
+            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            0,
+            "the enemy start must boot Unexplored — runtime is not full-info"
+        );
+
+        // A normal restart re-inserts a fresh fogged map.
+        reset_fixture_world(&mut world);
+        assert!(world.get_resource::<VisibilityMap>().is_some());
+        assert!(world.resource::<VisibilityMap>().revision() >= 1);
+
+        // The benchmark reset must remove visibility: seed_skirmish and the
+        // 200-villager benchmark run full-information.
+        reset_benchmark_world(&mut world);
+        assert!(world.get_resource::<VisibilityMap>().is_none());
+    }
+
+    /// Normal setup/reset insert a fresh Team-2 controller; the benchmark
+    /// stays AI-free; the test-disable seam lifts only the controller and
+    /// only from Start.
+    #[test]
+    fn the_team_two_ai_controller_follows_setup_reset_and_test_disable() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "normal setup ships the Team-2 AI opponent"
+        );
+
+        reset_fixture_world(&mut world);
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "a restart re-inserts a fresh controller"
+        );
+
+        reset_benchmark_world(&mut world);
+        assert!(
+            world.get_resource::<AiController>().is_none(),
+            "the benchmark fixture stays AI-free"
+        );
+
+        // The disable seam: no session at all must fail closed, Start must
+        // succeed exactly once, and Playing/Paused must refuse.
+        assert!(!disable_ai_in_world(&mut world), "no session: refuse");
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Start,
+        });
+        world.insert_resource(AiController::new(TeamId(2)));
+        assert!(disable_ai_in_world(&mut world), "Start: disable succeeds");
+        assert!(!disable_ai_in_world(&mut world), "already disabled: refuse");
+        world.insert_resource(AiController::new(TeamId(2)));
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        assert!(!disable_ai_in_world(&mut world), "Playing: refuse");
+        assert!(world.get_resource::<AiController>().is_some());
+    }
+
+    #[test]
+    fn hidden_enemy_attackers_are_scrubbed_but_visible_ones_present() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        // Runtime parity: presentation paths read the GridMap resource.
+        world.insert_resource(map.clone());
+        world.insert_resource(VisibilityMap::default());
+        refresh_visibility(&mut world, &map);
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+
+        let event_from = |attacker: UnitId| CombatEvent {
+            attacker,
+            target: CombatTarget::Unit(UnitId(1)),
+            damage: 2,
+            position: Vec2::new(11.5, 45.5),
+            ranged: true,
+            killed: false,
+        };
+        let enemy_at_home = UnitId(5);
+        let missing = UnitId(999);
+        world.insert_resource(CombatEvents(vec![
+            event_from(UnitId(1)),
+            event_from(enemy_at_home),
+            event_from(missing),
+        ]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(drained[0].attacker, UnitId(1), "friendly attacker stays");
+        assert_eq!(
+            drained[1].attacker,
+            UnitId(0),
+            "hidden enemy attacker must not expose its stable id"
+        );
+        assert_eq!(drained[1].position, event_from(enemy_at_home).position);
+        assert_eq!(
+            drained[2].attacker,
+            UnitId(0),
+            "missing attacker is scrubbed"
+        );
+
+        // March the enemy unit into Team-1 vision; its id becomes presentable.
+        let enemy_entity = world.resource::<UnitIndex>().entity(enemy_at_home).unwrap();
+        world
+            .entity_mut(enemy_entity)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(22, 46))));
+        refresh_visibility(&mut world, &map);
+        world.insert_resource(CombatEvents(vec![event_from(enemy_at_home)]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(
+            drained[0].attacker, enemy_at_home,
+            "a visible enemy attacker may present"
+        );
+    }
+
+    #[test]
+    fn enemy_buildings_are_fog_hidden_and_friendly_ones_are_not() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        world.insert_resource(VisibilityMap::default());
+        refresh_visibility(&mut world, &map);
+
+        let own = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .unwrap();
+        let enemy = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(2))
+            .unwrap();
+        assert!(!building_hidden_from_local_player(&world, own));
+        assert!(
+            building_hidden_from_local_player(&world, enemy),
+            "the far enemy Town Center starts hidden"
+        );
+
+        // A team-1 scout beside the enemy footprint clears it for presentation.
+        let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        world
+            .entity_mut(scout)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
+        refresh_visibility(&mut world, &map);
+        assert!(!building_hidden_from_local_player(&world, enemy));
     }
 
     #[test]
@@ -1489,7 +1969,7 @@ mod tests {
             6.0,
         );
 
-        assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![1]);
+        assert_eq!(idle_worker_ids(&world, TeamId(1)), vec![UnitId(1)]);
     }
 
     #[test]
@@ -1621,6 +2101,70 @@ mod tests {
         assert_fixture_restored(&world);
         reset_fixture_world(&mut world);
         assert_fixture_restored(&world);
+    }
+
+    /// Restart wipes everything a used match banked: pending human commands
+    /// and explored fog. The AI's scout cursor, remembered Town Center and
+    /// cadence accumulator ride the fresh `AiController` reseed — their deep
+    /// reset is proven in grus-sim's `ai::tests`, which can read the private
+    /// fields the bridge cannot.
+    #[test]
+    fn restart_clears_pending_commands_and_used_fog() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        start_match(&mut world);
+
+        // A queued human command that never reached a fixed tick. The raw
+        // test world has no app plugin, so insert the channel first.
+        world.insert_resource(PendingCommands::default());
+        world
+            .resource_mut::<PendingCommands>()
+            .0
+            .push(PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units: vec![UnitId(1)],
+                kind: UnitCommandKind::Move {
+                    target: Vec2::new(60.5, 60.5),
+                },
+            }));
+
+        // Use the fog: a scout beside the enemy start explores its Town
+        // Center footprint.
+        let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        let fixture = MapFixture::battlefield();
+        let map = fixture.map;
+        world
+            .entity_mut(scout)
+            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
+        let enemy_town_center_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(2))
+            .unwrap();
+        let enemy_town_center_footprint =
+            *world.get::<Footprint>(enemy_town_center_entity).unwrap();
+        refresh_visibility(&mut world, &map);
+        assert!(explored_by(&world, TeamId(1), enemy_town_center_footprint));
+
+        reset_fixture_world(&mut world);
+
+        assert!(
+            world.resource::<PendingCommands>().0.is_empty(),
+            "restart must clear pending human commands"
+        );
+        assert!(matches!(
+            world.resource::<MatchSession>().phase,
+            MatchPhase::Start
+        ));
+        assert_eq!(world.resource::<AiController>().team, TeamId(2));
+        let states = world
+            .resource::<VisibilityMap>()
+            .packed_cell_states(TeamId(1), 128, 96);
+        let enemy_town_center = GridPos::new(112, 46);
+        assert_eq!(
+            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            0,
+            "restart must return the used fog to boot Unexplored"
+        );
     }
 
     #[test]

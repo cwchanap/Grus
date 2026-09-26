@@ -13,6 +13,7 @@ albedo_color = Color(0.5, 0.5, 0.5, 1)
 roughness = 0.9
 
 [node name="ResourceView" type="Node3D"]
+visible = false
 script = ExtResource("1_script")
 
 [node name="Body" type="MeshInstance3D" parent="."]

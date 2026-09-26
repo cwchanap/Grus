@@ -19,6 +19,7 @@ use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
 use crate::session::tests as journeys;
 use crate::session::{MatchPhase, MatchSession};
+use crate::visibility::{VisibilityMap, refresh_visibility};
 
 fn open_map() -> GridMap {
     GridMap::new(32, 64)
@@ -94,6 +95,22 @@ fn spawn_building(
 
 fn events(world: &World) -> &[CombatEvent] {
     &world.resource::<CombatEvents>().0
+}
+
+/// Opts the world into runtime fog: inserts the visibility map and stamps
+/// the initial reveal from every live unit. Fog tests re-run
+/// `refresh_visibility` after teleports, exactly like the runtime step.
+fn reveal(world: &mut World, map: &GridMap) {
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(world, map);
+}
+
+/// The `AttackMove` order's current target, if any.
+fn attack_move_target(order: Option<&CombatOrder>) -> Option<CombatTarget> {
+    match order {
+        Some(CombatOrder::AttackMove { target, .. }) => *target,
+        _ => None,
+    }
 }
 
 #[test]
@@ -672,8 +689,8 @@ fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
         "the idle never discards Carry"
     );
     assert_eq!(
-        world.resource::<LastRouteReject>().0,
-        Some(RejectReason::Unreachable),
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable),
         "typed route failure recorded for bridge feedback"
     );
 }
@@ -1612,6 +1629,170 @@ fn direct_attack_ends_when_the_target_dies() {
     assert!(
         world.get::<CombatOrder>(attacker).is_none(),
         "a direct attack ends on its dead target"
+    );
+}
+
+/// A visible enemy accepts a direct attack and pursuit begins; once the
+/// target leaves vision, the order and its pursuit route both end — through
+/// the one `target_eligible` seam, with no second acquisition filter.
+#[test]
+fn direct_attack_clears_when_the_target_leaves_vision() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    let defender = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(8.5, 5.5),
+        UnitKind::Villager,
+    );
+    reveal(&mut world, &map);
+
+    let outcome = issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    assert_eq!(
+        outcome.accepted_units,
+        vec![UnitId(1)],
+        "a visible target accepts the direct attack"
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<CombatOrder>(attacker).is_some());
+    assert!(
+        world.get::<MoveOrder>(attacker).is_some(),
+        "pursuit is under way"
+    );
+
+    // The target leaves vision (open_map is 32×64; (8, 30) is far outside
+    // the attacker's radius-10 reveal): order and pursuit both end.
+    world.get_mut::<SimPosition>(defender).unwrap().current = Vec2::new(8.5, 30.5);
+    refresh_visibility(&mut world, &map);
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<CombatOrder>(attacker).is_none(),
+        "a hidden live target ends the direct attack"
+    );
+    assert!(
+        world.get::<MoveOrder>(attacker).is_none(),
+        "movement and pursuit stop with the order"
+    );
+}
+
+/// AttackMove ignores a target it cannot see, keeps walking its ground
+/// destination, and reacquires the same enemy once it is visible again.
+#[test]
+fn attack_move_ignores_a_hidden_target_and_reacquires_on_reveal() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Archer,
+    );
+    let defender = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(12.5, 5.5),
+        UnitKind::Villager,
+    );
+    reveal(&mut world, &map);
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        Some(CombatTarget::Unit(UnitId(2))),
+        "a visible enemy within the radius is acquired"
+    );
+
+    // The enemy leaves vision: cleared, and the ground destination resumes.
+    world.get_mut::<SimPosition>(defender).unwrap().current = Vec2::new(12.5, 40.5);
+    refresh_visibility(&mut world, &map);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        None,
+        "the hidden target is cleared"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(attacker).map(|order| order.goal),
+        Some(GridPos::new(20, 5)),
+        "the ground destination continues"
+    );
+
+    // Visible again: the same enemy is reacquired.
+    world.get_mut::<SimPosition>(defender).unwrap().current = Vec2::new(12.5, 5.5);
+    refresh_visibility(&mut world, &map);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        Some(CombatTarget::Unit(UnitId(2))),
+        "a later visible target is reacquired"
+    );
+}
+
+/// Under runtime fog, direct Attack must not become an id-enumeration
+/// oracle: a live-but-hidden target and a nonexistent id reject with the
+/// same `InvalidTarget` code. (The VisibilityMap-free seam keeps
+/// `TargetMissing` for nonexistent ids — pinned by
+/// `attack_rejects_missing_friendly_and_dead_targets`.)
+#[test]
+fn runtime_fog_hides_missing_and_hidden_targets_behind_one_reject_code() {
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(25.5, 25.5),
+        UnitKind::Villager,
+    );
+    reveal(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(25, 25)));
+
+    let hidden = issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    let nonexistent = issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(9))),
+    );
+
+    assert_eq!(
+        hidden.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)]
+    );
+    assert_eq!(
+        nonexistent.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)],
+        "GDScript must not distinguish a hidden live target from a nonexistent id"
     );
 }
 

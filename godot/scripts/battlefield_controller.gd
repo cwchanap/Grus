@@ -158,9 +158,13 @@ func _reconcile_selection() -> void:
 			if not live_ids.has(int(ids[i])):
 				ids.remove_at(i)
 				changed = true
-	if selected_building_id > 0 and _building_view(selected_building_id) == null:
-		selected_building_id = -1
-		changed = true
+	if selected_building_id > 0:
+		var view := _building_view(selected_building_id)
+		if view == null or not view.is_visible_in_tree():
+			# A dead OR fog-hidden enemy building is dropped from the
+			# selection the moment it stops being presented.
+			selected_building_id = -1
+			changed = true
 	if changed:
 		_apply_selection()
 
@@ -447,6 +451,10 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0) ->
 	var nearest: Node3D = null
 	var nearest_distance := CLICK_RADIUS
 	for node in get_tree().get_nodes_in_group(group):
+		if not node.is_visible_in_tree():
+			# Fog is a gameplay contract, not a rendering detail: a hidden view
+			# (hidden enemy, unexplored resource) must never be picked.
+			continue
 		if team_filter != 0 and int(node.get_meta("team_id", -1)) != team_filter:
 			continue
 		var view := node as Node3D

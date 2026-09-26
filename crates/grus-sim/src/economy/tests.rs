@@ -3,14 +3,15 @@ use std::collections::HashSet;
 use bevy::math::Vec2;
 
 use super::*;
-use crate::buildings::step_construction;
-use crate::catalog::unit_spec;
+use crate::buildings::{ConstructionState, step_construction};
+use crate::catalog::{BuildingKind, building_spec, unit_spec};
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
 use crate::fixture::{MapFixture, seed_skirmish};
 use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::visibility::{VisibilityMap, explored_by, refresh_visibility, visible_to};
 
 fn test_economy(world: &mut World) {
     let mut economy = TeamEconomy::default();
@@ -55,6 +56,58 @@ fn skirmish_world() -> (World, GridMap) {
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
     (world, map)
+}
+
+/// Opts the skirmish world into runtime fog and stamps the initial reveal.
+fn reveal(world: &mut World, map: &GridMap) {
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(world, map);
+}
+
+/// Spawns a completed Farm with a renewable Food source at `anchor`, fully
+/// registered (footprint blocked, indexes updated) — the manual shape of the
+/// step_construction completion grants, for fog knowledge tests.
+fn spawn_completed_farm(
+    world: &mut World,
+    map: &mut GridMap,
+    team: TeamId,
+    anchor: GridPos,
+) -> (Entity, ResourceId) {
+    let spec = building_spec(BuildingKind::Farm);
+    let footprint = Footprint::new(anchor, spec.width, spec.height);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(50);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind: BuildingKind::Farm,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    let source_id = ResourceId(99);
+    world.entity_mut(entity).insert(ResourceSource {
+        id: source_id,
+        kind: ResourceKind::Food,
+        remaining: None,
+        assigned_worker: None,
+    });
+    world
+        .get_resource_or_insert_with(ResourceIndex::default)
+        .insert(source_id, entity);
+    (entity, source_id)
 }
 
 #[test]
@@ -605,9 +658,42 @@ fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
         "cleanup never discards Carry"
     );
     assert_eq!(
-        world.resource::<LastRouteReject>().0,
-        Some(RejectReason::Unreachable),
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable),
         "typed code recorded for bridge feedback"
+    );
+}
+
+/// The feedback slot is team-aware: a Team-2 worker's route failure records
+/// under Team 2 and never overwrites a pending Team-1 reject (the bridge
+/// drains Team 1 only).
+#[test]
+fn route_reject_feedback_is_team_aware() {
+    let mut world = World::new();
+    let map = GridMap::new(16, 16);
+    test_economy(&mut world);
+
+    let team_one = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(2, 2)));
+    let team_two = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(4, 2)));
+    world.entity_mut(team_two).insert(Unit {
+        id: UnitId(2),
+        team: TeamId(2),
+        kind: UnitKind::Villager,
+        speed: 6.0,
+    });
+
+    idle_worker_on_route_failure(&mut world, team_one, RejectReason::Unreachable);
+    idle_worker_on_route_failure(&mut world, team_two, RejectReason::Crowded);
+
+    let rejects = &world.resource::<LastRouteReject>().0;
+    assert_eq!(rejects.get(&TeamId(1)), Some(&RejectReason::Unreachable));
+    assert_eq!(rejects.get(&TeamId(2)), Some(&RejectReason::Crowded));
+
+    // The latest failure per team wins.
+    idle_worker_on_route_failure(&mut world, team_one, RejectReason::Unreachable);
+    assert_eq!(
+        world.resource::<LastRouteReject>().0.get(&TeamId(1)),
+        Some(&RejectReason::Unreachable)
     );
 }
 
@@ -851,6 +937,183 @@ fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
         WorkerTask::ToSource { source, .. } => assert_eq!(*source, ResourceId(1)),
         other => panic!("expected ToSource, got {other:?}"),
     }
+}
+
+/// Fog knowledge gate: a guessed ResourceId on unexplored ground answers
+/// exactly like an absent id — distinct rejects would let a caller probe
+/// ids to discover unexplored sources.
+#[test]
+fn gather_rejects_an_unexplored_standalone_source() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+    assert!(
+        !explored_by(&world, TeamId(1), GridPos::new(45, 16)),
+        "the northern expansion gold starts unexplored"
+    );
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], ResourceId(13)),
+    );
+
+    assert_eq!(outcome.reject, Some(RejectReason::SourceMissing));
+    assert!(outcome.accepted_units.is_empty());
+}
+
+/// Fog knowledge gate: standalone sources are static map contents — once
+/// explored they stay gatherable even after current vision is lost.
+#[test]
+fn explored_source_stays_gatherable_after_vision_is_lost() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+
+    // Scout the northern expansion gold, then return home: the source stays
+    // known but falls out of current vision.
+    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 19))));
+    refresh_visibility(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 19))));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), GridPos::new(45, 16)));
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(45, 16)));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], ResourceId(13)),
+    );
+
+    assert_eq!(
+        outcome.reject, None,
+        "explored knowledge survives lost vision: {outcome:?}"
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    assert!(matches!(
+        world.get::<WorkerTask>(villager),
+        Some(WorkerTask::ToSource {
+            source: ResourceId(13),
+            ..
+        })
+    ));
+}
+
+/// Fog knowledge gate: own completed Farms are always valid gather
+/// knowledge — the own-farm branch never consults exploration state.
+#[test]
+fn own_completed_farm_is_always_valid_gather_knowledge() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+    // Spawned after the reveal and never refreshed: the farm is in the
+    // ResourceIndex but its ground was never explored.
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(1), GridPos::new(45, 40));
+    assert!(!explored_by(&world, TeamId(1), GridPos::new(45, 40)));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(
+        outcome.reject, None,
+        "own completed farm needs no exploration: {outcome:?}"
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+}
+
+/// Fog knowledge gate: an enemy Farm is an enemy building — it needs
+/// current visibility and is never admitted as a last-seen ghost merely
+/// because it sits in the ResourceIndex.
+#[test]
+fn enemy_farm_is_never_an_own_gather_source_through_fog() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
+
+    // Scout the enemy farm, then fall back home: its ground stays explored
+    // but the building leaves current vision.
+    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 43))));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), GridPos::new(45, 40)));
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 19))));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), GridPos::new(45, 40)));
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(45, 40)));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(
+        outcome.reject,
+        Some(RejectReason::SourceMissing),
+        "an enemy farm is not admitted as a last-seen ghost — and a hidden one is indistinguishable from a missing id"
+    );
+}
+
+/// Ownership: current vision makes an enemy Farm *known*, but it is still
+/// never an own economic source — the command authority rejects it where
+/// the Godot picker never offers it. The same unconditional rule covers
+/// full-information worlds (no `VisibilityMap`).
+#[test]
+fn visible_enemy_farm_is_rejected_not_gathered() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
+
+    // Stand next to the farm: its footprint is currently visible.
+    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 43))));
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(45, 40)));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(
+        outcome.reject,
+        Some(RejectReason::NotOwned),
+        "a visible enemy farm is known but never gatherable: {outcome:?}"
+    );
+    assert!(outcome.accepted_units.is_empty());
+}
+
+/// The same ownership rule without fog: a full-information world refuses
+/// the foreign Farm too — ownership is not a visibility artifact.
+#[test]
+fn full_information_enemy_farm_is_still_not_gatherable() {
+    let (mut world, mut map) = skirmish_world();
+    let (_, farm_source) =
+        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
+    );
+
+    assert_eq!(outcome.reject, Some(RejectReason::NotOwned));
+    assert!(outcome.accepted_units.is_empty());
 }
 
 #[test]
@@ -1191,5 +1454,85 @@ fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
             kind: ResourceKind::Wood,
             amount: NonZeroU32::new(5).unwrap(),
         })
+    );
+}
+
+/// Review item: a gatherer pushed away from its source (e.g. teleported by
+/// a later building placement) must walk back instead of gathering from up
+/// to seven cells away; nothing transfers while it is away.
+#[test]
+fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
+    let (mut world, mut map) = skirmish_world();
+    let villager = world
+        .resource::<UnitIndex>()
+        .entity(UnitId(1))
+        .expect("seeded villager");
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], ResourceId(1)),
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    for _ in 0..600 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+        if matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::Gathering { .. })
+        ) {
+            break;
+        }
+    }
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::Gathering {
+                source: ResourceId(1)
+            })
+        ),
+        "premise: the villager reached Gathering"
+    );
+
+    // Teleport it six cells off the source's perimeter.
+    let away = map.cell_center(GridPos::new(30, 48));
+    world.entity_mut(villager).insert(SimPosition::new(away));
+    step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(villager),
+            Some(WorkerTask::ToSource {
+                source: ResourceId(1),
+                ..
+            })
+        ),
+        "a non-adjacent gatherer must be walking back, not gathering: {:?}",
+        world.get::<WorkerTask>(villager)
+    );
+    assert_eq!(
+        world.get::<Carry>(villager),
+        Some(&Carry::Empty),
+        "nothing transfers while away from the source"
+    );
+    assert!(
+        world.get::<MoveOrder>(villager).is_some(),
+        "the walk back installs a real route"
+    );
+
+    // The loop still completes: it walks back and gathers again.
+    for _ in 0..600 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world
+            .get::<Carry>(villager)
+            .map_or(0, |carry| carry.amount_or_zero())
+            > 0
+        {
+            break;
+        }
+    }
+    assert!(
+        matches!(world.get::<Carry>(villager), Some(Carry::Holding { .. })),
+        "the gatherer resumes gathering after walking back"
     );
 }

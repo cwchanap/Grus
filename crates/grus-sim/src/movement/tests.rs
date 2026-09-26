@@ -398,8 +398,11 @@ fn failed_route_idles_an_active_worker_and_releases_its_farm() {
         "cleanup never discards Carry"
     );
     assert_eq!(
-        world.resource::<crate::economy::LastRouteReject>().0,
-        Some(RejectReason::Unreachable)
+        world
+            .resource::<crate::economy::LastRouteReject>()
+            .0
+            .get(&TeamId(1)),
+        Some(&RejectReason::Unreachable)
     );
 }
 

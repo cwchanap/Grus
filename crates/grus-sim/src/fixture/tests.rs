@@ -137,6 +137,143 @@ fn villager_starts_stay_walkable_after_town_center_blocking() {
 }
 
 #[test]
+fn ai_map_plan_slots_are_buildable_mirrored_and_route_walkable() {
+    let fixture = MapFixture::battlefield();
+    let map = &fixture.map;
+
+    let starts = MapFixture::team_starts();
+    let occupied: HashSet<GridPos> = starts
+        .iter()
+        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
+        .chain(starts.iter().flat_map(|start| start.villagers))
+        .chain(fixture.resources.iter().map(|spawn| spawn.cell))
+        .collect();
+
+    for team in [TeamId(1), TeamId(2)] {
+        let plan = MapFixture::team_plan(team);
+        // The plan's Town Center slot is not a build to place — it restates
+        // the authored start's already-seeded anchor.
+        let start = starts
+            .iter()
+            .find(|start| start.team == team)
+            .expect("an authored start for every planned team");
+        assert_eq!(
+            plan.town_center_anchor, start.town_center_anchor,
+            "team {team:?}: the plan's Town Center slot restates the authored start"
+        );
+        let check_anchor = |name: &str, anchor: GridPos, size: u8| {
+            for cell in Footprint::new(anchor, size, size).cells() {
+                assert!(
+                    map.in_bounds(cell) && map.is_walkable(cell) && !occupied.contains(&cell),
+                    "team {team:?} {name} cell {cell:?} must be in-bounds, walkable and clear"
+                );
+            }
+        };
+        for slot in &plan.house_slots {
+            check_anchor("house", *slot, 2);
+        }
+        for slot in &plan.farm_slots {
+            check_anchor("farm", *slot, 2);
+        }
+        for slot in plan
+            .safe_storehouse_slots
+            .iter()
+            .chain(&plan.expansion_storehouse_slots)
+        {
+            check_anchor("storehouse", *slot, 2);
+        }
+        check_anchor("barracks", plan.barracks_anchor, 3);
+        check_anchor("archery range", plan.archery_range_anchor, 3);
+        check_anchor("stable", plan.stable_anchor, 3);
+
+        // Authored slots never overlap each other.
+        let mut all_slot_cells = Vec::new();
+        for (anchor, size) in plan
+            .house_slots
+            .iter()
+            .chain(&plan.farm_slots)
+            .chain(&plan.safe_storehouse_slots)
+            .chain(&plan.expansion_storehouse_slots)
+            .map(|slot| (*slot, 2_u8))
+            .chain([
+                (plan.barracks_anchor, 3_u8),
+                (plan.archery_range_anchor, 3),
+                (plan.stable_anchor, 3),
+            ])
+        {
+            all_slot_cells.extend(Footprint::new(anchor, size, size).cells());
+        }
+        let unique: HashSet<GridPos> = all_slot_cells.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            all_slot_cells.len(),
+            "team {team:?} authored slots overlap"
+        );
+
+        // The scout route is non-empty and walkable end to end.
+        assert!(!plan.scout_route.is_empty());
+        for cell in &plan.scout_route {
+            assert!(
+                map.is_walkable(*cell),
+                "team {team:?} route cell {cell:?} blocked"
+            );
+        }
+    }
+
+    // Team 2 is the exact mirror of team 1.
+    let one = MapFixture::team_plan(TeamId(1));
+    let two = MapFixture::team_plan(TeamId(2));
+    assert_eq!(
+        two.town_center_anchor,
+        mirror_anchor(one.town_center_anchor, 4)
+    );
+    assert_eq!(two.house_slots, mirrored(&one.house_slots, 2));
+    assert_eq!(two.farm_slots, mirrored(&one.farm_slots, 2));
+    assert_eq!(
+        two.safe_storehouse_slots,
+        mirrored(&one.safe_storehouse_slots, 2)
+    );
+    assert_eq!(
+        two.expansion_storehouse_slots,
+        one.expansion_storehouse_slots
+            .iter()
+            .map(|slot| point_reflect_anchor(*slot, BuildingKind::Storehouse))
+            .collect::<Vec<_>>()
+    );
+    // Footprint-aware reflection keeps the mirrored Storehouse off the
+    // team-2 expansion trees' gathering cells: the raw point reflection of
+    // the anchor (82,75) covered tree 17's (83,76) approach cell.
+    let battlefield = MapFixture::battlefield();
+    let southeast_trees: HashSet<GridPos> = battlefield
+        .resources
+        .iter()
+        .filter(|spawn| spawn.id.0 >= 16)
+        .flat_map(|spawn| Footprint::new(spawn.cell, 1, 1).perimeter_cells())
+        .collect();
+    for slot in &two.expansion_storehouse_slots {
+        for cell in Footprint::new(*slot, 2, 2).cells() {
+            assert!(
+                !southeast_trees.contains(&cell),
+                "mirrored expansion Storehouse covers a team-2 gathering cell {cell:?}"
+            );
+        }
+    }
+    assert_eq!(two.barracks_anchor, mirror_anchor(one.barracks_anchor, 3));
+    assert_eq!(
+        two.archery_range_anchor,
+        mirror_anchor(one.archery_range_anchor, 3)
+    );
+    assert_eq!(two.stable_anchor, mirror_anchor(one.stable_anchor, 3));
+    assert_eq!(
+        two.scout_route,
+        one.scout_route
+            .iter()
+            .map(|cell| point_reflect(*cell))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
