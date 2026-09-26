@@ -4,9 +4,14 @@ use super::*;
 use crate::combat::CombatOrder;
 use crate::economy::WorkerTask;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::visibility::{VisibilityMap, refresh_visibility};
 
 fn open_map() -> GridMap {
     GridMap::new(24, 24)
+}
+
+fn open_map_small() -> GridMap {
+    GridMap::new(6, 6)
 }
 
 fn move_command(issuer: TeamId, units: Vec<UnitId>, target: Vec2) -> PlayerCommand {
@@ -905,4 +910,99 @@ fn accepted_attack_move_installs_destination_and_combat_order() {
         .get::<MoveOrder>(spearman)
         .expect("an accepted attack-move routes toward its destination");
     assert_eq!(order.goal, GridPos::new(18, 18));
+}
+
+/// Fog privacy at the Move reservation seam: a hidden enemy standing on the
+/// only reachable destination cell must not surface as an `Unreachable`
+/// reject — hidden units reserve nothing, the worker is assigned the cell
+/// and the collision resolves physically. Making the enemy visible flips
+/// the outcome, proving the filter (not the map) decided it.
+#[test]
+fn hidden_units_do_not_reserve_move_destinations() {
+    let mut world = World::new();
+    let mut map = open_map_small();
+    // One corridor ending at the target cell: (0,0) → (3,3).
+    for x in 0..6 {
+        for y in 0..6 {
+            map.set_blocked(GridPos::new(x, y), true);
+        }
+    }
+    for cell in [
+        GridPos::new(0, 0),
+        GridPos::new(1, 0),
+        GridPos::new(2, 0),
+        GridPos::new(3, 0),
+        GridPos::new(3, 1),
+        GridPos::new(3, 2),
+        GridPos::new(3, 3),
+    ] {
+        map.set_blocked(cell, false);
+    }
+    spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        map.cell_center(GridPos::new(0, 0)),
+        UnitKind::Villager,
+        6.0,
+    );
+    spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(3, 3)),
+        UnitKind::Villager,
+        6.0,
+    );
+    // Runtime fog with no reveal: cell (3,3) is invisible to Team 1, so the
+    // enemy on it is hidden.
+    world.insert_resource(VisibilityMap::default());
+
+    let target = map.cell_center(GridPos::new(3, 3));
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        move_command(TeamId(1), vec![UnitId(1)], target),
+    );
+
+    assert_eq!(
+        outcome.accepted_units,
+        vec![UnitId(1)],
+        "a hidden occupant never reserves the destination"
+    );
+    assert_eq!(
+        world
+            .get::<MoveOrder>(world.resource::<UnitIndex>().entity(UnitId(1)).unwrap())
+            .unwrap()
+            .goal,
+        GridPos::new(3, 3)
+    );
+
+    // Control: once the corridor is on camera the same enemy reserves its
+    // cell, so a second mover is assigned the neighboring cell instead of
+    // the occupied endpoint.
+    refresh_visibility(&mut world, &map);
+    spawn_unit(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        map.cell_center(GridPos::new(2, 0)),
+        UnitKind::Villager,
+        6.0,
+    );
+    let target = map.cell_center(GridPos::new(3, 3));
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        move_command(TeamId(1), vec![UnitId(3)], target),
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(3)]);
+    assert_eq!(
+        world
+            .get::<MoveOrder>(world.resource::<UnitIndex>().entity(UnitId(3)).unwrap())
+            .unwrap()
+            .goal,
+        GridPos::new(3, 2),
+        "a visible occupant still reserves the destination — the mover spreads to the neighbor"
+    );
 }

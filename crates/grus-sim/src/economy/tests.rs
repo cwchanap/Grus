@@ -1536,3 +1536,99 @@ fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
         "the gatherer resumes gathering after walking back"
     );
 }
+
+/// Fog privacy at the gather reservation seam: a hidden enemy standing on a
+/// source's only free approach cell must not surface as a gather reject —
+/// hidden units reserve nothing, the worker is assigned that slot and the
+/// collision resolves physically on arrival. Making the enemy visible flips
+/// the outcome, proving the filter (not the map) decided it.
+#[test]
+fn hidden_units_do_not_reserve_gather_approach_cells() {
+    let (mut world, mut map) = skirmish_world();
+    reveal(&mut world, &map);
+
+    // The rightmost standalone source: far from Team 1's home vision.
+    let (source, entity) = world
+        .resource::<ResourceIndex>()
+        .iter()
+        .filter(|(_, entity)| world.get::<Building>(**entity).is_none())
+        .max_by_key(|(_, entity)| {
+            let footprint = world.get::<Footprint>(**entity).unwrap();
+            footprint.center().x as i32
+        })
+        .map(|(id, entity)| (*id, *entity))
+        .unwrap();
+    let footprint = *world.get::<Footprint>(entity).unwrap();
+
+    // Wall the whole perimeter except its leftmost cell: exactly one
+    // approach slot survives, and it is the one the hidden enemy takes.
+    let free = footprint
+        .perimeter_cells()
+        .into_iter()
+        .filter(|cell| map.is_walkable(*cell))
+        .min_by_key(|cell| cell.x)
+        .unwrap();
+    for cell in footprint.perimeter_cells() {
+        if cell != free {
+            map.set_blocked(cell, true);
+        }
+    }
+
+    // Explore the source with a scout, then send it home: the ground stays
+    // explored but the approach cell leaves current vision.
+    let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world.entity_mut(scout).insert(SimPosition::new(
+        map.cell_center(GridPos::new(free.x - 5, free.y)),
+    ));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), footprint));
+    world
+        .entity_mut(scout)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 44))));
+    refresh_visibility(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), free));
+
+    // A hidden enemy villager parks on the only approach cell.
+    let enemy = spawn_villager(&mut world, UnitId(80), map.cell_center(free));
+    world.entity_mut(enemy).insert(Unit {
+        id: UnitId(80),
+        team: TeamId(2),
+        kind: UnitKind::Villager,
+        speed: 6.0,
+    });
+    refresh_visibility(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), free));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], source),
+    );
+    assert_eq!(
+        outcome.accepted_units,
+        vec![UnitId(1)],
+        "a hidden occupant never reserves the gather approach cell"
+    );
+    assert!(matches!(
+        world.get::<WorkerTask>(scout),
+        Some(WorkerTask::ToSource { slot, .. }) if *slot == free
+    ));
+
+    // Control: once the approach cell is on camera the enemy reserves it,
+    // so a second worker's gather rejects.
+    world.entity_mut(scout).insert(SimPosition::new(
+        map.cell_center(GridPos::new(free.x - 5, free.y)),
+    ));
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), free));
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(2)], source),
+    );
+    assert_eq!(
+        outcome.rejected_units,
+        vec![(UnitId(2), RejectReason::Crowded)],
+        "a visible occupant still reserves the approach cell"
+    );
+}

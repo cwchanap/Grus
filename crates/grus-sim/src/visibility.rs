@@ -1,9 +1,11 @@
 //! Authoritative per-team visibility: the one fog-of-war contract shared by
 //! combat, placement, gathering, rendering, and AI. `refresh_visibility` is
 //! the exclusive world step; `visible_to` and `explored_by` are the only
-//! public knowledge predicates, and both fall back to full information when
-//! no `VisibilityMap` exists. Geometry (reveal origins, circle metric,
-//! center-vs-edge semantics) is resolved here and nowhere else.
+//! public knowledge predicates, `unit_counts_as_occupancy` is the one
+//! derived occupancy rule over them, and all three fall back to full
+//! information when no `VisibilityMap` exists. Geometry (reveal origins,
+//! circle metric, center-vs-edge semantics) is resolved here and nowhere
+//! else.
 
 use std::collections::{HashMap, HashSet};
 
@@ -129,13 +131,33 @@ pub fn visible_to(world: &World, team: TeamId, subject: impl Into<VisibilitySubj
     }
 }
 
-/// The unit/building/resource has ever been seen by `team` (explored state is
-/// retained across refreshes). True when no `VisibilityMap` exists.
+/// The unit/building/resource has ever been seen by `team`: true when any
+/// cell the subject **currently** occupies is in the retained explored set.
+/// For static subjects (buildings, resources) that is plain "ever seen"; a
+/// unit that has since moved onto never-explored ground is not explored
+/// even if it was seen earlier. True when no `VisibilityMap` exists.
 pub fn explored_by(world: &World, team: TeamId, subject: impl Into<VisibilitySubject>) -> bool {
     match world.get_resource::<VisibilityMap>() {
         None => true,
         Some(visibility) => visibility.subject_explored(team, &subject.into()),
     }
+}
+
+/// Whether a unit of `unit_team` standing at (or holding a `MoveOrder` goal
+/// on) `cell` counts as occupancy to `issuer`: units the issuer owns always
+/// do; any other unit only while that cell is currently visible. The one
+/// rule behind every reservation/occupancy seed (Move and AttackMove
+/// destinations, gather approach slots, drop-off routing, placement), so a
+/// unit the issuer cannot see never surfaces as a reject — its collision
+/// is resolved physically (separation/displacement) instead of leaking a
+/// `Crowded`/`Unreachable`/`Occupied` oracle onto the feedback channel.
+pub fn unit_counts_as_occupancy(
+    world: &World,
+    issuer: TeamId,
+    unit_team: Option<TeamId>,
+    cell: GridPos,
+) -> bool {
+    unit_team == Some(issuer) || visible_to(world, issuer, cell)
 }
 
 /// The exclusive world-level visibility step. Recomputes each team's

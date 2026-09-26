@@ -1580,9 +1580,9 @@ fn advance_production(world: &mut World) {
     });
 }
 
-/// Canonical post-production step: presentation and (later) AI consume the
-/// same freshly computed Team-1 visibility the command validation of the
-/// next tick will enforce.
+/// Canonical post-production step: presentation and AI consume the same
+/// freshly computed fog (every team's cells are refreshed) that the command
+/// validation of the next tick will enforce.
 fn advance_visibility(world: &mut World) {
     world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
@@ -2128,11 +2128,35 @@ mod tests {
                 },
             }));
 
+        let fixture = MapFixture::battlefield();
+        let map = fixture.map;
+        let route = MapFixture::team_plan(TeamId(2)).scout_route;
+
+        // Bank real AI match progress through the cadence gate: an idle
+        // Team-2 spearman scouts route leg 0 on the first 1 Hz decision.
+        let spearman = spawn_unit(
+            &mut world,
+            UnitId(900),
+            TeamId(2),
+            map.cell_center(GridPos::new(108, 52)),
+            UnitKind::Spearman,
+            unit_spec(UnitKind::Spearman).speed,
+        );
+        for _ in 0..25 {
+            world.resource_scope(|world, mut tick_map: Mut<GridMap>| {
+                refresh_visibility(world, &tick_map);
+                step_ai(world, &mut tick_map, SIM_STEP_SECONDS);
+            });
+        }
+        assert_eq!(
+            world.get::<MoveOrder>(spearman).unwrap().goal,
+            route[0],
+            "the used match banked scout progress: leg 0 was issued"
+        );
+
         // Use the fog: a scout beside the enemy start explores its Town
         // Center footprint.
         let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-        let fixture = MapFixture::battlefield();
-        let map = fixture.map;
         world
             .entity_mut(scout)
             .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
@@ -2164,6 +2188,33 @@ mod tests {
             states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
             0,
             "restart must return the used fog to boot Unexplored"
+        );
+
+        // The AI cursor the used match banked must restart at boot: with a
+        // fresh idle spearman and an open match, the first post-reset
+        // decision again takes route leg 0 — a surviving cursor (or
+        // memory) would issue a later leg instead.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        let fresh_scout = spawn_unit(
+            &mut world,
+            UnitId(901),
+            TeamId(2),
+            map.cell_center(GridPos::new(108, 52)),
+            UnitKind::Spearman,
+            unit_spec(UnitKind::Spearman).speed,
+        );
+        for _ in 0..25 {
+            world.resource_scope(|world, mut tick_map: Mut<GridMap>| {
+                refresh_visibility(world, &tick_map);
+                step_ai(world, &mut tick_map, SIM_STEP_SECONDS);
+            });
+        }
+        assert_eq!(
+            world.get::<MoveOrder>(fresh_scout).unwrap().goal,
+            route[0],
+            "the real fixture reset returns the scout cursor to leg 0"
         );
     }
 
@@ -2210,5 +2261,48 @@ mod tests {
                 "benchmark unit {id} never moved without Start interaction"
             );
         }
+    }
+
+    /// The bridge drain is Team-1-only: a tick whose sim slot holds both a
+    /// Team-1 and a Team-2 route reject surfaces only Team 1's code as human
+    /// `CommandFeedback`, leaves Team 2's entry in the sim resource, and a
+    /// second drain with no pending Team-1 reject publishes nothing new.
+    #[test]
+    fn route_reject_drain_surfaces_team_one_only() {
+        let mut world = World::new();
+        world.insert_resource(LastRouteReject(std::collections::HashMap::from([
+            (TeamId(1), RejectReason::Unreachable),
+            (TeamId(2), RejectReason::Crowded),
+        ])));
+        world.insert_resource(CommandFeedback::default());
+
+        drain_route_reject_feedback(&mut world);
+
+        let feedback = world.resource::<CommandFeedback>();
+        assert_eq!(feedback.revision, 1);
+        assert_eq!(feedback.text, "Worker route impossible (Unreachable)");
+        assert_eq!(feedback.last_reject_code, Some(RejectReason::Unreachable));
+        assert_eq!(
+            world.resource::<LastRouteReject>().0.get(&TeamId(2)),
+            Some(&RejectReason::Crowded),
+            "the AI's private reject stays in the sim resource"
+        );
+        assert!(
+            !world
+                .resource::<LastRouteReject>()
+                .0
+                .contains_key(&TeamId(1)),
+            "the drained Team-1 entry is consumed"
+        );
+
+        // Nothing pending for Team 1: the feedback channel is untouched.
+        let revision = world.resource::<CommandFeedback>().revision;
+        drain_route_reject_feedback(&mut world);
+        assert_eq!(world.resource::<CommandFeedback>().revision, revision);
+        assert_eq!(
+            world.resource::<LastRouteReject>().0.get(&TeamId(2)),
+            Some(&RejectReason::Crowded),
+            "a Team-2-only slot never publishes human feedback"
+        );
     }
 }

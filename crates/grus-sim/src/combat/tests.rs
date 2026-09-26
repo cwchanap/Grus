@@ -2323,3 +2323,79 @@ fn bounded_victory_journey_destroys_the_enemy_town_center_through_real_systems()
 
     journeys::assert_result_freezes_and_locks(&mut world, &mut map, TeamId(1));
 }
+
+/// The building arm of the fog oracle rule: a live-but-hidden enemy
+/// building and a nonexistent building id reject with the same
+/// `InvalidTarget` code, and revealing the building flips the same command
+/// to accepted — so `target_visible` cannot treat a hidden footprint like
+/// a missing id.
+#[test]
+fn runtime_fog_hides_missing_and_hidden_buildings_behind_one_reject_code() {
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::TownCenter,
+        GridPos::new(25, 25),
+    );
+    reveal(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(26, 26)));
+
+    let hidden = issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(1),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+    let nonexistent = issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(1),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(9)),
+        ),
+    );
+
+    assert_eq!(
+        hidden.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)]
+    );
+    assert_eq!(
+        nonexistent.rejected_units,
+        vec![(UnitId(1), RejectReason::InvalidTarget)],
+        "a hidden live building is indistinguishable from a nonexistent id"
+    );
+
+    // March the attacker into vision range of the footprint: the same
+    // command now accepts.
+    let attacker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world
+        .entity_mut(attacker)
+        .insert(SimPosition::new(Vec2::new(26.5, 23.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(26, 26)));
+    let accepted = issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(1),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+    assert_eq!(accepted.accepted_units, vec![UnitId(1)]);
+}
