@@ -172,14 +172,27 @@ jobs:
             echo "::error::scouting smoke contract held but godot exited $rc"
             exit 1
           fi
-      - name: Export Linux x86_64 desktop build
+      - name: Export Linux x86_64 desktop builds
+        # The smoke variant swaps the project's main scene to the bridge smoke
+        # scene before exporting: official export templates are compiled with
+        # `disable_path_overrides=yes`, so a scene path on the CLI aborts the
+        # exported binary outright. A dedicated smoke-entry export is the only
+        # way to run that scene from the exported binary. project.godot is
+        # restored via mv so the bevy-e2e export stays the real main scene.
         run: |
           mkdir -p build
           godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
           test -x build/Grus.x86_64
+          cp godot/project.godot godot/project.godot.ci-backup
+          sed -i 's|res://scenes/main.tscn|res://scenes/smoke_test.tscn|' godot/project.godot
+          godot --headless --path godot --export-debug "Linux x86_64" ../build/GrusSmoke.x86_64
+          mv godot/project.godot.ci-backup godot/project.godot
+          test -x build/GrusSmoke.x86_64
       - name: Verify exported build runs the full bridge smoke contract
-        # The contract is the bridge smoke scene's marker, printed only after
-        # real frames of input/selection/move/HUD/cadence — not the load-time
+        # Runs the smoke-entry export (main scene = bridge smoke scene; see the
+        # export step for why the scene can't be passed on the CLI). The
+        # contract is that scene's marker, printed only after real frames of
+        # input/selection/move/HUD/cadence — not the load-time
         # "Initialize godot-rust" line, which a mid-run crash would survive.
         # Exit 139 after the contract held is the known Linux teardown race
         # (first appears with the HPA-473 runtime-visibility commit):
@@ -190,7 +203,7 @@ jobs:
         # smoke steps: contract-held + teardown 139 warns, never fails.
         run: |
           set -o pipefail
-          timeout 90s ./build/Grus.x86_64 --headless res://scenes/smoke_test.tscn 2>&1 | tee export-smoke.log || rc=$?
+          timeout 90s ./build/GrusSmoke.x86_64 --headless 2>&1 | tee export-smoke.log || rc=$?
           rc=${rc:-0}
           grep -q "Initialize godot-rust" export-smoke.log
           if grep -Eq "Failed to load.*GDExtension|Can't open dynamic library|Cannot open dynamic library" export-smoke.log; then
