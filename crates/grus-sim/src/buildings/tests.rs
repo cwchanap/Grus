@@ -9,6 +9,7 @@ use crate::economy::{
 };
 use crate::ids::{IdAllocator, ResourceId};
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::session::{MatchPhase, MatchSession};
 use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
 
 fn setup_build_test() -> (World, GridMap, Entity) {
@@ -942,14 +943,20 @@ fn hidden_attack_move_destination_retargets_with_the_route() {
         .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
     refresh_visibility(&mut world, &map);
 
-    // The hidden enemy attack-moves toward a cell the footprint will cover.
+    // The hidden enemy attack-moves toward a cell the footprint will
+    // cover. A Spearman, not a Villager: `step_combat` skips units whose
+    // kind has no combat spec, so only a combatant exercises the
+    // `resume_destination` interaction under test.
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
     let enemy = spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(40, 40)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Spearman,
+        unit_spec(UnitKind::Spearman).speed,
     );
     world.entity_mut(enemy).insert(MoveOrder {
         waypoints: vec![],
@@ -993,8 +1000,10 @@ fn hidden_attack_move_destination_retargets_with_the_route() {
     // The strand: one combat tick must not discard the retargeted route
     // (a stale destination made `resume_destination` drop it and fail to
     // re-path onto the blocked cell), and the unit must keep marching.
+    // Twenty ticks (1 s) cannot cover the ~25-cell march, so the route
+    // must still be live — arrival legitimately drops it.
     let before = world.get::<SimPosition>(enemy).unwrap().current;
-    for _ in 0..100 {
+    for _ in 0..20 {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
     }
