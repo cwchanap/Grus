@@ -249,7 +249,7 @@ impl GrusBridgeNode {
     }
 
     #[func]
-    fn reset_fixture(&self) -> bool {
+    fn reset_fixture(&mut self) -> bool {
         let Some(mut app_node) = bevy_app_singleton() else {
             return false;
         };
@@ -259,6 +259,11 @@ impl GrusBridgeNode {
         };
 
         reset_fixture_world(app.world_mut());
+        // A fresh map can reuse a revision the bridge already cached from
+        // the previous match (both boot at 1), and the cached payload would
+        // then outlive the reset — drop it so the next fetch rebuilds from
+        // the reseeded map.
+        self.visibility_cache = None;
         true
     }
 
@@ -341,12 +346,12 @@ impl GrusBridgeNode {
     /// Restart = the existing clear + reseed reset seam, returning the
     /// normal skirmish to Start.
     #[func]
-    fn restart_match(&self) -> bool {
+    fn restart_match(&mut self) -> bool {
         self.reset_fixture()
     }
 
     #[func]
-    fn reset_benchmark_fixture(&self) -> bool {
+    fn reset_benchmark_fixture(&mut self) -> bool {
         let Some(mut app_node) = bevy_app_singleton() else {
             return false;
         };
@@ -356,6 +361,10 @@ impl GrusBridgeNode {
         };
 
         reset_benchmark_world(app.world_mut());
+        // Same stale-cache hazard as the fixture reset: the benchmark map is
+        // visibility-free, so the cache would otherwise survive into the
+        // next normal fixture reset.
+        self.visibility_cache = None;
         true
     }
 

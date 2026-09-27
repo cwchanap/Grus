@@ -487,7 +487,7 @@ fn with_last_target_cell(order: &CombatOrder, cell: Option<GridPos>) -> CombatOr
 
 /// Returns the order re-anchored to a different assigned destination goal.
 /// Direct Attack has no destination and is returned unchanged.
-fn with_destination(order: &CombatOrder, destination: GridPos) -> CombatOrder {
+pub(crate) fn with_destination(order: &CombatOrder, destination: GridPos) -> CombatOrder {
     match *order {
         CombatOrder::Attack { .. } => order.clone(),
         CombatOrder::AttackMove {
