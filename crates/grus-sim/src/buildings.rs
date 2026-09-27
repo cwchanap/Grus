@@ -70,8 +70,8 @@ pub struct PlacementPlan {
 /// Authoritative placement validation. Checks, in order: owned villager →
 /// kind unlocked/buildable → footprint in bounds → every footprint cell
 /// explored → footprint cells walkable and free of any unit's current cell
-/// or claimed `MoveOrder` goal the issuer can see, with hidden enemy
-/// *building* cells treated as free ground → affordability → reachable
+/// or claimed `MoveOrder` goal the issuer can see, with fully hidden
+/// enemy *buildings* treated as free ground → affordability → reachable
 /// reserved immediate-perimeter builder slot, evaluated on the
 /// post-placement map (footprint cells already blocked). The explored check
 /// runs before the occupancy scan, and the scan itself only counts
@@ -161,9 +161,13 @@ pub fn validate_placement(
     // building is dynamic state the issuer cannot remember (no last-seen
     // ghosts), so an `Occupied` from its footprint would map it exactly —
     // the preview must answer explored-hidden ground like identical empty
-    // ground. Terrain, resources and own buildings are static or own state
-    // and stay honest. The apply path re-checks real occupancy, because
-    // two real buildings can never overlap.
+    // ground. The hidden/honest classification is per footprint — the same
+    // any-cell `visible_to` rule presentation, combat and targeting use —
+    // so a partially visible building exposes its whole footprint and only
+    // a fully hidden one contributes free cells. Terrain, resources and
+    // own buildings are static or own state and stay honest. The apply
+    // path re-checks real occupancy, because two real buildings can never
+    // overlap.
     let mut hidden_enemy_cells: HashSet<GridPos> = HashSet::new();
     if let Some(index) = world.get_resource::<BuildingIndex>() {
         for (_, building_entity) in index.iter() {
@@ -173,12 +177,10 @@ pub fn validate_placement(
             if owner == Some(issuer) {
                 continue;
             }
-            if let Some(building_footprint) = world.get::<Footprint>(*building_entity) {
-                for cell in building_footprint.cells() {
-                    if !visible_to(world, issuer, cell) {
-                        hidden_enemy_cells.insert(cell);
-                    }
-                }
+            if let Some(building_footprint) = world.get::<Footprint>(*building_entity)
+                && !visible_to(world, issuer, *building_footprint)
+            {
+                hidden_enemy_cells.extend(building_footprint.cells());
             }
         }
     }

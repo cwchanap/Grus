@@ -1068,6 +1068,69 @@ fn visible_enemy_building_footprint_still_rejects_occupied() {
     assert_eq!(result.reject, Some(RejectReason::Occupied));
 }
 
+/// Building visibility is classified once per footprint — the same
+/// any-cell rule presentation/combat use: with only one edge cell in
+/// current vision the whole building is already on screen and pickable,
+/// so its far-side cells must answer `Occupied` honestly instead of
+/// pretending to be free ground that flips to `Occupied` at apply time.
+#[test]
+fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let building_anchor = GridPos::new(18, 16);
+
+    // Scout the ground so every relevant cell is explored.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(17, 12))));
+    reveal(&mut world, &map);
+    spawn_enemy_building(&mut world, &mut map, TeamId(2), building_anchor);
+    refresh_visibility(&mut world, &map);
+
+    // Withdraw to where only the near corner stays in current vision:
+    // the building is on screen (the predicate is any-cell) while its
+    // far cells are explored fog.
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(10.5, 10.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(
+        &world,
+        TeamId(1),
+        Footprint::new(building_anchor, 2, 2)
+    ));
+    assert!(visible_to(&world, TeamId(1), GridPos::new(18, 16)));
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(19, 17)));
+    assert!(explored_by(&world, TeamId(1), GridPos::new(19, 17)));
+
+    // A proposed footprint overlapping only the hidden far cells must
+    // reject `Occupied` at validation, matching the committed command.
+    assert!(
+        matches!(
+            validate_placement(
+                &world,
+                &map,
+                TeamId(1),
+                UnitId(1),
+                BuildingKind::House,
+                GridPos::new(19, 16)
+            ),
+            Err(RejectReason::Occupied)
+        ),
+        "a partially visible building's hidden cells are not free ground"
+    );
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor: GridPos::new(19, 16),
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Occupied));
+}
+
 /// A sibling already moving to a cell inside the footprint has that goal
 /// reserved: accepting the placement would block the goal and strand the
 /// unit on a preserved order that can never replan onto blocked cells.
