@@ -1,5 +1,6 @@
 use super::*;
 use crate::catalog::{Age, ResourceKind, unit_spec};
+use crate::combat::step_combat;
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
@@ -923,6 +924,88 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
         map.is_walkable(order.goal) && !Footprint::new(anchor, 2, 2).cells().contains(&order.goal),
         "the new goal {goal:?} is open ground outside the footprint",
         goal = order.goal
+    );
+}
+
+/// A hidden attack-move destination inside the footprint retargets in
+/// lockstep with the route goal: a stale destination would make the next
+/// combat tick's `resume_destination` discard the fresh route and fail
+/// re-pathing onto the now-blocked cell — the unit stops while its order
+/// lives forever.
+#[test]
+fn hidden_attack_move_destination_retargets_with_the_route() {
+    let (mut world, mut map, villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    world
+        .entity_mut(villager)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+
+    // The hidden enemy attack-moves toward a cell the footprint will cover.
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(40, 40)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(enemy).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(14, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    world.entity_mut(enemy).insert(CombatOrder::AttackMove {
+        destination: GridPos::new(14, 11),
+        target: None,
+        last_target_cell: None,
+    });
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    let goal = world.get::<MoveOrder>(enemy).expect("order preserved").goal;
+    let combat = world.get::<CombatOrder>(enemy).unwrap();
+    let CombatOrder::AttackMove { destination, .. } = *combat else {
+        panic!("combat order must stay an attack-move");
+    };
+    assert_eq!(
+        destination, goal,
+        "the attack-move destination must move in lockstep with the route goal"
+    );
+    assert!(
+        map.is_walkable(goal) && !Footprint::new(anchor, 2, 2).cells().contains(&goal),
+        "the shared new goal {goal:?} is open ground outside the footprint"
+    );
+
+    // The strand: one combat tick must not discard the retargeted route
+    // (a stale destination made `resume_destination` drop it and fail to
+    // re-path onto the blocked cell), and the unit must keep marching.
+    let before = world.get::<SimPosition>(enemy).unwrap().current;
+    for _ in 0..100 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    }
+    assert!(
+        world.get::<MoveOrder>(enemy).is_some(),
+        "the combat tick must keep a live route toward the re-anchored destination"
+    );
+    let after = world.get::<SimPosition>(enemy).unwrap().current;
+    assert_ne!(
+        before, after,
+        "the retargeted attack-mover must still march, not strand"
     );
 }
 

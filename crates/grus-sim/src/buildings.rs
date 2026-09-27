@@ -8,7 +8,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec};
-use crate::combat::Health;
+use crate::combat::{CombatOrder, Health, with_destination};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
 use crate::economy::{
     Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_unit_activity,
@@ -619,6 +619,21 @@ fn retarget_footprint_goals(world: &mut World, map: &GridMap, footprint: Footpri
         if let Some(mut order) = world.get_mut::<MoveOrder>(entity) {
             order.goal = goal;
             order.last_failed_replan = None;
+        }
+        // An attack-move stores its destination separately from the route
+        // goal; a destination left inside the footprint makes the next
+        // combat tick's `resume_destination` discard this retargeted route
+        // and fail re-pathing onto the now-blocked cell, stranding the unit
+        // with a live order. Re-anchor it in lockstep, exactly like the
+        // worker-task slot below.
+        if let Some(combat) = world.get::<CombatOrder>(entity).filter(|combat| {
+            matches!(
+                &**combat,
+                CombatOrder::AttackMove { destination, .. } if footprint_cells.contains(destination)
+            )
+        }) {
+            let reanchored = with_destination(combat, goal);
+            world.entity_mut(entity).insert(reanchored);
         }
         // Arrival compares the worker's cell against the stored task slot:
         // a slot left inside the blocked footprint could never match again,
