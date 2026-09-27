@@ -935,7 +935,7 @@ fn hidden_blocker_on_an_authored_slot_is_remembered_after_apply_reject() {
     );
     assert_eq!(
         world.resource::<AiController>().blocked_anchors,
-        vec![blocked_slot],
+        vec![(blocked_slot, BuildingKind::Storehouse)],
         "the apply-time Occupied reject is remembered"
     );
 
@@ -952,7 +952,117 @@ fn hidden_blocker_on_an_authored_slot_is_remembered_after_apply_reject() {
     }
     assert_eq!(
         world.resource::<AiController>().blocked_anchors,
-        vec![blocked_slot]
+        vec![(blocked_slot, BuildingKind::Storehouse)]
+    );
+}
+
+/// The blocked-anchor memory is anti-stall, not permanent: once the hidden
+/// enemy building is destroyed and its cells walk again on the shared map,
+/// the anchor re-enters the candidate pool — a temporary blocker must not
+/// disable the single authored expansion Storehouse slot for the rest of
+/// the match.
+#[test]
+fn destroyed_blocker_frees_the_remembered_expansion_anchor() {
+    let (mut world, mut map) = ai_world(TeamId(2));
+    let plan = MapFixture::team_plan(TeamId(2));
+    grant(&mut world, TeamId(2), 0, 500, 0);
+    let blocked_slot = plan.expansion_storehouse_slots[0];
+
+    let move_team_eyes = |world: &mut World, at: Vec2| {
+        let eyes: Vec<_> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Unit>(**entity)
+                    .is_some_and(|unit| unit.team == TeamId(2))
+            })
+            .map(|(_, entity)| *entity)
+            .collect();
+        for entity in eyes {
+            world.entity_mut(entity).insert(SimPosition::new(at));
+        }
+    };
+
+    // Scout the expansion slot, then walk every Team-2 eye away so the
+    // blocker is hidden.
+    move_team_eyes(&mut world, map.cell_center(blocked_slot));
+    refresh_visibility(&mut world, &map);
+    move_team_eyes(&mut world, Vec2::new(98.5, 46.5));
+    refresh_visibility(&mut world, &map);
+
+    // A hidden Team-1 House stands on the expansion slot.
+    let footprint = Footprint::new(blocked_slot, 2, 2);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team: TeamId(1),
+                kind: BuildingKind::House,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    refresh_visibility(&mut world, &map);
+
+    let storehouse_anchor = |commands: &[PlayerCommand]| {
+        commands.iter().find_map(|command| match command {
+            PlayerCommand::PlaceBuilding {
+                kind: BuildingKind::Storehouse,
+                anchor,
+                ..
+            } => Some(*anchor),
+            _ => None,
+        })
+    };
+
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        world.resource::<AiController>().blocked_anchors,
+        vec![(blocked_slot, BuildingKind::Storehouse)],
+        "the apply-time Occupied reject is remembered: {commands:?}"
+    );
+
+    // Combat destroys the blocker: cells walk again on the shared map.
+    world.despawn(entity);
+    world.resource_mut::<BuildingIndex>().remove(id);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, false);
+    }
+
+    // Round one tasked three of the four villagers; a fresh idle worker
+    // keeps `allocate_idle_worker` from starving the placement claim.
+    spawn_villager(
+        &mut world,
+        &map,
+        UnitId(300),
+        TeamId(2),
+        GridPos::new(98, 46),
+    );
+
+    // The next decision offers the freed slot again, and the accepted
+    // placement does not re-add the anchor.
+    let commands = decide_and_apply(&mut world, &mut map);
+    assert_eq!(
+        storehouse_anchor(&commands),
+        Some(blocked_slot),
+        "a freed anchor must be offered again: {commands:?}"
+    );
+    assert!(
+        world.resource::<AiController>().blocked_anchors.is_empty(),
+        "the accepted placement leaves no stale memory"
     );
 }
 
@@ -2439,7 +2549,7 @@ fn place_anchor_commit_blocks_only_genuinely_blocked_ground() {
     );
     assert_eq!(
         controller.blocked_anchors,
-        vec![anchor],
+        vec![(anchor, BuildingKind::House)],
         "a really blocked anchor is remembered"
     );
 }

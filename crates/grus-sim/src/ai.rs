@@ -81,9 +81,13 @@ pub struct AiController {
     /// occupancy rejects (an own worker's goal from an earlier command in
     /// the same decision) do not land here: the anchor is retried once the
     /// blocker walks on. `place_at_slot` skips blocked anchors so one
-    /// unseen building cannot stall AI growth forever; restart drops the
-    /// controller and this with it.
-    blocked_anchors: Vec<GridPos>,
+    /// unseen building cannot stall AI growth; the memory is anti-stall,
+    /// not permanent — an anchor returns to the candidate pool as soon as
+    /// its footprint walks again on the shared map (the blocker was
+    /// destroyed), and restart drops the controller and this with it.
+    /// The kind is kept so the footprint check uses the same dimensions
+    /// the rejected placement did.
+    blocked_anchors: Vec<(GridPos, BuildingKind)>,
     next_army_kind: usize,
 }
 
@@ -184,7 +188,8 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
 /// leg forever), gather assignments carry no transition at all (a rejected
 /// source simply re-offers next decision; a source that is truly gone
 /// leaves the `ResourceIndex` and is never a candidate again), and only a
-/// genuinely map-blocked anchor is remembered as a hidden enemy building.
+/// genuinely map-blocked anchor is remembered as a hidden enemy building —
+/// a memory `decide_ai_commands` releases once those cells walk again.
 /// `step_ai` and the test harness share this seam.
 fn commit_outcome(
     controller: &mut AiController,
@@ -214,8 +219,13 @@ fn commit_outcome(
                 .cells()
                 .iter()
                 .any(|cell| !map.is_walkable(*cell));
-            if blocked && !controller.blocked_anchors.contains(&anchor) {
-                controller.blocked_anchors.push(anchor);
+            if blocked
+                && !controller
+                    .blocked_anchors
+                    .iter()
+                    .any(|(known, _)| *known == anchor)
+            {
+                controller.blocked_anchors.push((anchor, kind));
             }
         }
         _ => {}
@@ -243,6 +253,18 @@ pub fn decide_ai_commands(
     // The memory step writes controller state, not a command: while an enemy
     // Town Center is actually visible, its cell is the retained memory.
     update_remembered_town_center(world, controller);
+    // Blocked anchors are anti-stall memory, not permanent: a remembered
+    // anchor returns to the candidate pool once its footprint walks again
+    // on the shared map — the hidden blocker was destroyed — so one
+    // temporary enemy building can never disable a single-slot expansion
+    // for the rest of the match.
+    controller.blocked_anchors.retain(|(anchor, kind)| {
+        let spec = building_spec(*kind);
+        Footprint::new(*anchor, spec.width, spec.height)
+            .cells()
+            .iter()
+            .any(|cell| !map.is_walkable(*cell))
+    });
     let mut commands = Vec::new();
     let mut claimed = Vec::new();
     for step in [
@@ -1154,9 +1176,10 @@ fn slot_explored(world: &World, team: TeamId, anchor: GridPos, kind: BuildingKin
 /// survives the real `validate_placement` for that builder — a slot already
 /// occupied by something observable no longer starves every later candidate
 /// of a retry each decision, and an anchor that rejected `Occupied` at apply
-/// time is skipped until restart. The apply-time validator remains the
-/// authority; the command carries a deferred commit so an apply reject is
-/// remembered instead of retried forever.
+/// time is skipped while its cells stay blocked on the shared map. The
+/// apply-time validator remains the authority; the command carries a
+/// deferred commit so an apply reject is remembered instead of retried
+/// forever.
 fn place_at_slot(
     world: &World,
     controller: &AiController,
@@ -1172,7 +1195,10 @@ fn place_at_slot(
         return None;
     }
     let anchor = anchors.iter().copied().find(|anchor| {
-        !controller.blocked_anchors.contains(anchor)
+        !controller
+            .blocked_anchors
+            .iter()
+            .any(|(blocked, _)| blocked == anchor)
             && validate_placement(world, map, controller.team, builder, kind, *anchor).is_ok()
     })?;
     claimed.push(builder);
