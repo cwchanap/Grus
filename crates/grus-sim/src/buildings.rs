@@ -18,7 +18,9 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
 use crate::session::gameplay_active;
-use crate::visibility::{explored_by, unit_counts_as_occupancy, visible_to};
+use crate::visibility::{
+    explored_by, move_goal_counts_as_occupancy, unit_counts_as_occupancy, visible_to,
+};
 
 #[derive(Component, Debug)]
 pub struct Building {
@@ -130,15 +132,18 @@ pub fn validate_placement(
     }
 
     // 5. footprint cells walkable and free of any observable unit's current
-    // cell or claimed MoveOrder goal: placement would block the cells and
+    // cell or reserved MoveOrder goal: placement would block the cells and
     // permanently entomb a unit standing inside the footprint (find_path
     // needs a walkable start), or strand a unit whose goal lies inside on a
-    // preserved order that can never replan onto blocked cells. Only
-    // occupancy the issuer can see counts — a hidden enemy's position or
-    // goal must never surface as an `Occupied` reject through the preview;
-    // apply handles that collision by displacement instead. Own units are
-    // always observable to their issuer. The builder's own goal is exempt
-    // because acceptance cancels that order.
+    // preserved order that can never replan onto blocked cells. Positions
+    // reserve only when the issuer can observe them — a hidden enemy's cell
+    // must never surface as an `Occupied` reject through the preview; apply
+    // handles that collision by displacement instead. Goals reserve only
+    // for the owner: a MoveOrder is private intent no foreign team can
+    // observe, so an enemy goal never reserves — not even on currently
+    // visible ground, where admitting it would map the unseen unit's
+    // destination. Own units are always observable to their issuer. The
+    // builder's own goal is exempt because acceptance cancels that order.
     let mut unit_cells: HashSet<GridPos> = HashSet::new();
     if let Some(index) = world.get_resource::<UnitIndex>() {
         for (_, unit_entity) in index.iter() {
@@ -151,7 +156,7 @@ pub fn validate_placement(
             }
             if *unit_entity != entity
                 && let Some(order) = world.get::<MoveOrder>(*unit_entity)
-                && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+                && move_goal_counts_as_occupancy(issuer, unit_team)
             {
                 unit_cells.insert(order.goal);
             }
@@ -486,11 +491,12 @@ fn reachable_builder_slot(
         .ok_or(RejectReason::UnknownUnit)?;
     let start = map.world_to_cell(position.current);
 
-    // Same reservation seam as Move: seed every live unit's current cell and
-    // existing MoveOrder goal, excluding the builder's own current cell and
-    // old goal exactly as Move releases a commanded unit's reservations before
-    // reassignment — and only when the issuer can observe the occupant, so a
-    // hidden enemy never blocks an approach slot through this command either.
+    // Same reservation seam as Move: seed every live unit's current cell the
+    // issuer can observe (a hidden enemy never blocks an approach slot
+    // through this command either) and every own unit's existing MoveOrder
+    // goal — a foreign goal is unobservable intent and never reserves —
+    // excluding the builder's own current cell and old goal exactly as Move
+    // releases a commanded unit's reservations before reassignment.
     // `goal_released` frees one more goal ahead of acceptance:
     // the order carrying it is cancelled once the command applies, so only
     // that unit's current cell still reserves. When the new order replaces
@@ -515,7 +521,7 @@ fn reachable_builder_slot(
         }
         if Some(entity) != goal_released
             && let Some(order) = world.get::<MoveOrder>(entity)
-            && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+            && move_goal_counts_as_occupancy(issuer, unit_team)
         {
             used.insert(order.goal);
         }

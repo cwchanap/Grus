@@ -14,7 +14,7 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
 use crate::session::gameplay_active;
-use crate::visibility::{VisibilityMap, unit_counts_as_occupancy};
+use crate::visibility::{VisibilityMap, move_goal_counts_as_occupancy, unit_counts_as_occupancy};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum UnitCommandKind {
@@ -369,17 +369,20 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
             let target_is_walkable = map.is_walkable(target_cell);
             let command_units: HashSet<UnitId> = units.iter().copied().collect();
 
-            // Reference-counted reservations seeded from every live unit
-            // the issuer owns or can see — current cell and existing
-            // MoveOrder goal, including units in this command. A unit the
-            // issuer cannot see never reserves (that would turn its hidden
-            // position into a `Crowded`/`Unreachable` reject); the collision
-            // is resolved physically on arrival instead. A commanded unit
-            // that is later rejected keeps its reservation so an accepted
-            // sibling cannot be assigned the cell it is standing on or
-            // already moving to; a commanded unit's old reservation is
-            // released only when an accepted replacement is assigned (and
-            // restored if assignment fails).
+            // Reference-counted reservations seeded from every live unit's
+            // current cell the issuer owns or can see, plus the existing
+            // MoveOrder goals of units the issuer owns — a foreign goal is
+            // private intent and never reserves, so a hidden enemy marching
+            // toward visible ground cannot displace a destination here.
+            // A unit the issuer cannot see never reserves its cell either
+            // (that would turn its hidden position into a
+            // `Crowded`/`Unreachable` reject); the collision is resolved
+            // physically on arrival instead. A commanded unit that is later
+            // rejected keeps its reservation so an accepted sibling cannot
+            // be assigned the cell it is standing on or already moving to;
+            // a commanded unit's old reservation is released only when an
+            // accepted replacement is assigned (and restored if assignment
+            // fails).
             let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
             // Candidate slot generation excludes only non-commanded
             // reservations, so a commanded unit's own current cell (e.g. a unit
@@ -406,7 +409,7 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     }
                 }
                 if let Some(order) = world.get::<MoveOrder>(*entity)
-                    && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+                    && move_goal_counts_as_occupancy(issuer, unit_team)
                 {
                     reserve_slot(&mut used_slots, order.goal);
                     if !is_commanded {
@@ -562,9 +565,10 @@ fn plan_move_route(
     if !map.is_walkable(target) {
         return None;
     }
-    // Same privacy rule as the batch Move: only units the moving unit's
-    // team owns or can see reserve cells, so hidden units never decide the
-    // reachable-slot probe.
+    // Same privacy rule as the batch Move: only current cells the moving
+    // unit's team owns or can see reserve, and only that team's own
+    // MoveOrder goals — hidden units and foreign route intent never decide
+    // the reachable-slot probe.
     let issuer = world.get::<Unit>(entity)?.team;
     let mut used_slots: HashMap<GridPos, usize> = HashMap::new();
     let entities: Vec<Entity> = world
@@ -583,7 +587,7 @@ fn plan_move_route(
             }
         }
         if let Some(order) = world.get::<MoveOrder>(other)
-            && unit_counts_as_occupancy(world, issuer, unit_team, order.goal)
+            && move_goal_counts_as_occupancy(issuer, unit_team)
         {
             reserve_slot(&mut used_slots, order.goal);
         }

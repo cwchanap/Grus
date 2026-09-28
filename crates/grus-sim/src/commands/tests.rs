@@ -1006,3 +1006,63 @@ fn hidden_units_do_not_reserve_move_destinations() {
         "a visible occupant still reserves the destination — the mover spreads to the neighbor"
     );
 }
+
+/// Fog privacy on the goal seam: a hidden enemy's `MoveOrder` goal is
+/// private intent no foreign team can observe, so it must never reserve a
+/// destination against the issuer — not even when the goal cell sits inside
+/// the issuer's current vision, where admitting it would map the unseen
+/// unit's heading through a displaced or rejected move.
+#[test]
+fn hidden_enemy_move_goal_does_not_reserve_a_visible_destination() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let mover = spawn_unit(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(2.5, 2.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(20.5, 20.5),
+        UnitKind::Villager,
+        6.0,
+    );
+    world.entity_mut(enemy).insert(MoveOrder {
+        waypoints: vec![Vec2::new(8.5, 8.5)],
+        next: 0,
+        goal: GridPos::new(8, 8),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    // Premise: the claimed goal is on camera; the enemy holding it is not.
+    assert!(crate::visibility::visible_to(
+        &world,
+        TeamId(1),
+        GridPos::new(8, 8)
+    ));
+    assert!(!crate::visibility::visible_to(
+        &world,
+        TeamId(1),
+        GridPos::new(20, 20)
+    ));
+
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        move_command(TeamId(1), vec![UnitId(1)], Vec2::new(8.5, 8.5)),
+    );
+
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+    assert_eq!(
+        world.get::<MoveOrder>(mover).unwrap().goal,
+        GridPos::new(8, 8),
+        "an unseen enemy's goal must not displace the destination"
+    );
+}
