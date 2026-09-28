@@ -1,9 +1,10 @@
 //! Authoritative per-team visibility: the one fog-of-war contract shared by
 //! combat, placement, gathering, rendering, and AI. `refresh_visibility` is
 //! the exclusive world step; `visible_to` and `explored_by` are the only
-//! public knowledge predicates, `unit_counts_as_occupancy` is the one
-//! derived occupancy rule over them, and all three fall back to full
-//! information when no `VisibilityMap` exists. Geometry (reveal origins,
+//! public knowledge predicates, `unit_counts_as_occupancy` and
+//! `move_goal_counts_as_occupancy` carry the derived occupancy rules over
+//! them, and the position rules fall back to full information when no
+//! `VisibilityMap` exists. Geometry (reveal origins,
 //! circle metric, center-vs-edge semantics) is resolved here and nowhere
 //! else.
 
@@ -143,10 +144,10 @@ pub fn explored_by(world: &World, team: TeamId, subject: impl Into<VisibilitySub
     }
 }
 
-/// Whether a unit of `unit_team` standing at (or holding a `MoveOrder` goal
-/// on) `cell` counts as occupancy to `issuer`: units the issuer owns always
-/// do; any other unit only while that cell is currently visible. The one
-/// rule behind every reservation/occupancy seed (Move and AttackMove
+/// Whether a unit of `unit_team` standing on `cell` counts as occupancy to
+/// `issuer`: units the issuer owns always do; any other unit only while
+/// that cell is currently visible. The one rule behind every
+/// reservation/occupancy seed for a unit's position (Move and AttackMove
 /// destinations, gather approach slots, drop-off routing, placement), so a
 /// unit the issuer cannot see never surfaces as a reject — its collision
 /// is resolved physically (separation/displacement) instead of leaking a
@@ -158,6 +159,17 @@ pub fn unit_counts_as_occupancy(
     cell: GridPos,
 ) -> bool {
     unit_team == Some(issuer) || visible_to(world, issuer, cell)
+}
+
+/// Whether a unit's live `MoveOrder` goal reserves its cell against
+/// `issuer`: only the owner's own intent reserves. A route goal is private
+/// order state — never something a foreign team can observe — so the goal
+/// cell's visibility must not admit it: a hidden unit marching toward
+/// currently visible ground would otherwise seed `Occupied`/`Crowded`
+/// rejects that map its destination exactly. Own goals still reserve
+/// normally; foreign collisions resolve physically on arrival.
+pub fn move_goal_counts_as_occupancy(issuer: TeamId, unit_team: Option<TeamId>) -> bool {
+    unit_team == Some(issuer)
 }
 
 /// The exclusive world-level visibility step. Recomputes each team's

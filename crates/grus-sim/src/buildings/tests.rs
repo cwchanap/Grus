@@ -928,6 +928,76 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
     );
 }
 
+/// Review item: a hidden enemy's `MoveOrder` goal is order intent no foreign
+/// team can observe — admitting it because the goal *cell* sits on currently
+/// visible ground would seed an `Occupied` reject that maps the unseen
+/// unit's destination. The footprint must validate and accept like
+/// identical empty ground; the covered goal still retargets on acceptance.
+#[test]
+fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
+    let (mut world, mut map, _villager) = setup_build_test();
+    let anchor = GridPos::new(13, 10);
+    reveal(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(14, 11)));
+
+    // The enemy itself stands far outside Team 1's vision (hidden); only
+    // its reserved goal lies on seen ground inside the footprint.
+    let enemy = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        map.cell_center(GridPos::new(50, 50)),
+        UnitKind::Villager,
+        unit_spec(UnitKind::Villager).speed,
+    );
+    world.entity_mut(enemy).insert(MoveOrder {
+        waypoints: vec![],
+        next: 0,
+        goal: GridPos::new(14, 11),
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(50, 50)));
+
+    assert!(
+        validate_placement(
+            &world,
+            &map,
+            TeamId(1),
+            UnitId(1),
+            BuildingKind::House,
+            anchor
+        )
+        .is_ok(),
+        "an unseen enemy's goal must not surface as `Occupied` on visible ground"
+    );
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::House,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    // Acceptance still protects the hidden unit's order: the covered goal
+    // retargets off the footprint exactly as on hidden ground.
+    let order = world.get::<MoveOrder>(enemy).expect("order preserved");
+    assert_ne!(
+        order.goal,
+        GridPos::new(14, 11),
+        "the covered goal is retargeted off the footprint"
+    );
+    assert!(
+        map.is_walkable(order.goal) && !Footprint::new(anchor, 2, 2).cells().contains(&order.goal),
+        "the new goal {goal:?} is open ground outside the footprint",
+        goal = order.goal
+    );
+}
+
 /// A hidden attack-move destination inside the footprint retargets in
 /// lockstep with the route goal: a stale destination would make the next
 /// combat tick's `resume_destination` discard the fresh route and fail
