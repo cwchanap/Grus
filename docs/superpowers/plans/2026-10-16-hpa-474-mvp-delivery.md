@@ -4,7 +4,7 @@
 
 **Goal:** Deliver the existing Grus skirmish as a measured, tuned and reproducibly packaged Linux x86_64 MVP without adding new gameplay systems.
 
-**Architecture:** Keep the merged HPA-470–473 ownership boundaries intact. Replace the old benchmark-only 200-Villager contract in place with one mixed real-game workload, expose one test/manual-only mirrored-start launch seam for the required right-side human playtests, tune only existing catalogue/AI/map values from recorded evidence, add one compact controls label, and package the current Godot+Rust application through one release-export script. Performance work stays measurement-gated: profile first, then change only the measured owner.
+**Architecture:** Keep the merged HPA-470–473 ownership boundaries intact. Replace the old 200-Villager benchmark contract in place with one session-free mixed workload owned by `grus-sim`, reuse one normal match-seed path for setup/restart/benchmark, expose only one manual mirrored-start switch for playtest evidence, tune only existing catalogue/AI/map values from observed runs, add one compact controls label, and package the application through one release-export script. Measure performance early and again on the final SHA; optimize only a measured owner.
 
 **Tech Stack:** Rust 1.95 / Bevy 0.19.1 / godot-bevy 0.12.0 / godot-rust 0.5.5 / Godot 4.6.2 / GDScript / GitHub Actions.
 
@@ -12,222 +12,272 @@
 
 ## Global Constraints
 
-- Exactly one PR for HPA-474. This planning draft becomes the implementation PR.
+- Exactly one PR for HPA-474. This draft becomes the implementation PR.
 - Bevy ECS remains the only mutable gameplay model; Godot remains input/presentation/UI.
 - Keep the fixed 20 Hz simulation and existing command/system order.
 - No new unit/building/faction/map/difficulty/victory system.
-- Balance changes are limited to `catalog.rs`, existing AI thresholds in `ai.rs`, and the one authored layout in `fixture.rs` when playtest evidence requires them.
-- Keep one retained benchmark scene/reset path; delete the superseded `UnitSpawn` / `MapFixture::units_200()` fixture instead of preserving a second legacy benchmark seed.
-- `GRUS_MIRRORED_START=1` is test/manual-only. It must not become a shipping side-selection menu.
-- `README.md` remains the authoritative fixture/controls/benchmark record; update it and `AGENTS.md` in the same tasks that change the benchmark contract.
-- Acceptance performance is a 60-second **release-export** hardware sample at 1920×1080. GitHub Actions remains a software-rendered regression only and must not enforce 60 FPS.
-- Keep the >90% `grus-sim` production-line coverage gate. On the final revision, the real GitHub Actions `rust-build-lint`, `unit-tests`, and `e2e` jobs must all be green.
+- Balance changes stay in `catalog.rs`, existing `ai.rs` policy thresholds, and the one authored `fixture.rs` layout only when playtest evidence requires them.
+- Keep one retained benchmark scene/reset path; delete `UnitSpawn`, `MapFixture::units_200()` and `benchmark_move_all()` instead of preserving a legacy benchmark path.
+- The benchmark stays **session-free**. Missing `MatchSession` already means Playing and intentionally prevents `resolve_result` from freezing the load test.
+- Benchmark workload setup belongs in `grus-sim` and uses `apply_player_command`; do not add `benchmark_start_workload()` to the bridge.
+- `GRUS_MIRRORED_START=1` is manual/test-only. It must not become a shipping side-selection menu.
+- `docs/hpa-474-mvp-evidence.md` is the single home for current HPA-474 measurements. README describes the contract/commands and links there.
+- Acceptance performance is a 60-second **release-export** hardware sample at 1920×1080. CI remains a software-rendered regression and must not enforce 60 FPS.
+- Keep the >90% `grus-sim` production-line coverage gate. On the exact final SHA, `rust-build-lint`, `unit-tests`, and `e2e` must all be green.
 - Package only Linux x86_64. No installer, signing/notarization, store/release automation or multi-OS matrix.
 - No new image art or SFX work is required.
 
 ## Review Focus
 
-1. **Old benchmark contract survives beside the new one:** stale visibility-free/AI-free/session-free tests, comments, `units_200()`, README or AGENTS disagree with runtime. Task 1 replaces them atomically rather than adding compatibility code.
-2. **Benchmark looks large but is not representative:** 200 units exist while gathering/fog/AI/combat are absent. Tasks 1–2 assert the exact mixed world and active workload before timing starts.
-3. **Mirrored playtest changes shipping defaults:** the test/manual seam accidentally moves normal Team 1 or changes AI behavior. Task 3 locks default launch unchanged and separately tests Team-1-right / Team-2-left authored-plan behavior.
-4. **Release archive works only from a dirty developer tree:** Task 5 verifies a fresh checkout, release library staging, archive extraction and launch outside the editor.
-5. **A green local checklist hides a red real CI/e2e surface or tail stalls:** Task 6 requires all three final CI jobs green and records p95/p99/max plus the local 60-second hardware result.
+1. **Benchmark ends the match and inflates FPS:** never insert a benchmark `MatchSession`; attack toward midfield, not Town Centers; keep a liveness checkpoint.
+2. **200-unit headline hides a much smaller measured load:** report start/min/mean/end live units and do not respawn dead units.
+3. **Benchmark gameplay leaks into the bridge:** IDs/composition/orders are built and accepted in pure `grus-sim`; the bridge only resets/reads.
+4. **Mirrored evidence changes shipping identity:** Team 1 remains the local human, Team 2 remains the AI; only authored start/AI plan side swap.
+5. **Final task discovers there is no hardware host:** Task 0 records the real Linux x86_64 GPU host before implementation.
+6. **Release export leaves `project.godot` dirty on failure:** package script owns main-scene override with a restoring `trap`; `dist/` is ignored.
+7. **Author self-test is mistaken for first-time usability:** packaged fresh-player result is recorded, or the missing evidence is listed as a limitation.
+8. **Current benchmark numbers drift between docs:** performance numbers live only in the evidence file.
 
 ---
 
-### Task 1: Replace the old benchmark fixture contract with a mixed 100-vs-100 skirmish
+### Task 0: Lock the real Linux x86_64 reference host before code work
+
+**Files:**
+- Create: `docs/hpa-474-mvp-evidence.md`
+
+- [ ] **Step 1: Create the evidence skeleton**
+
+Create sections for:
+
+```text
+Reference host / revision
+Playtest matrix
+Restart + lifecycle outcomes
+Tuning log
+Early release performance
+Final release performance
+Package verification
+Fresh-player usability
+Asset attribution
+Final CI
+Remaining limitations
+```
+
+- [ ] **Step 2: Record the actual hardware-rendered Linux x86_64 host**
+
+Record a stable machine label plus:
+
+```bash
+uname -a
+lscpu | grep -E 'Architecture|CPU\(s\)|Model name'
+godot --version
+```
+
+Also record the GPU/renderer/adapter once the benchmark prints it.
+
+HPA-470 recorded Linux x86_64 as the supported export target but only a software-rendered llvmpipe CI machine. Do **not** treat that CI runner as the hardware reference.
+
+- [ ] **Step 3: Stop early if the required host does not exist**
+
+If no Linux x86_64 GPU host is available, record that blocking acceptance dependency in the evidence file. Do not silently change the ticket to macOS and do not postpone host discovery until Task 6.
+
+- [ ] **Step 4: Commit the preflight record**
+
+```bash
+git add docs/hpa-474-mvp-evidence.md
+git commit -m "docs: start HPA-474 delivery evidence"
+```
+
+### Task 1: Replace the old benchmark fixture with one shared-seed mixed workload
 
 **Files:**
 - Modify: `crates/grus-sim/src/fixture.rs`
 - Modify: `crates/grus-sim/src/fixture/tests.rs`
 - Modify: `crates/grus-sim/src/lib.rs`
+- Modify: `crates/grus-sim/src/ai.rs`
+- Modify: `crates/grus-sim/src/ai/tests.rs`
 - Modify: `crates/grus-godot/src/lib.rs`
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 
-**Interfaces:**
-- Consumes: `seed_skirmish(world, map, fixture)`, `spawn_unit(...)`, `VisibilityMap`, `refresh_visibility(...)`, `AiController::new(TeamId(2))`, `MatchSession { phase: MatchPhase::Playing }`, `apply_player_command(...)`.
-- Produces: `pub fn seed_benchmark_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)` and `GrusBridge.benchmark_start_workload() -> bool`; removes `UnitSpawn`, `MapFixture::units_200()` and `benchmark_move_all()`.
+**Produces:**
+- one shared bridge-internal `seed_match_world(world, mirrored)` seam;
+- a pure-sim benchmark workload helper that extends a seeded match and applies accepted initial commands;
+- removal of `UnitSpawn`, `MapFixture::units_200()` and `benchmark_move_all()`.
 
-- [ ] **Step 1: Replace the old fixture test with a failing mixed-roster regression**
+- [ ] **Step 1: Add failing simulation tests for the mixed roster and workload**
 
-Delete `two_hundred_unit_fixture_has_stable_unique_walkable_spawns` together with the old helper it specifies. Add `benchmark_skirmish_has_100_units_per_side_with_the_locked_mix`.
-
-After `seed_benchmark_skirmish`, assert:
+Replace `two_hundred_unit_fixture_has_stable_unique_walkable_spawns` with a test that starts from the normal skirmish, extends it with the benchmark workload and asserts:
 
 ```text
 Team 1: 20 Villager, 30 Spearman, 30 Archer, 20 Cavalry
 Team 2: 20 Villager, 30 Spearman, 30 Archer, 20 Cavalry
 Total: 200 units
 Buildings: 2 completed Town Centers
-Standalone resources: 18
+Authored standalone resources: 18
 TeamEconomy: both teams present
+All added units: in bounds + not on blocked authored cells
+Initial Gather/AttackMove commands: accepted
 ```
 
-Also assert every unit starts in bounds and outside blocked terrain/building/resource cells.
+Also add/extend a fixture test for default vs mirrored authored starts:
 
-- [ ] **Step 2: Run the focused fixture test and verify it fails**
-
-```bash
-cargo test -p grus-sim fixture::tests::benchmark_skirmish_has_100_units_per_side_with_the_locked_mix --locked -- --exact
+```text
+default: Team 1 left, Team 2 right
+mirrored: Team 1 right, Team 2 left
 ```
 
-Expected: FAIL because `seed_benchmark_skirmish` does not exist yet.
+- [ ] **Step 2: Add the narrow AI authored-plan-side seam**
 
-- [ ] **Step 3: Implement the mixed benchmark seed and remove the obsolete seed**
+Keep `AiController::new(team)` unchanged for normal use. Add only one authored-plan selector field/constructor for the mirrored harness. `step_ai` uses that field for `MapFixture::team_plan(...)` while commands still use `controller.team` as issuer.
 
-Add:
+Test that a Team-2 controller configured for the left authored plan still emits Team-2 commands against left-side anchors/routes.
 
-```rust
-pub fn seed_benchmark_skirmish(
-    world: &mut World,
-    map: &mut GridMap,
-    fixture: &MapFixture,
-)
+- [ ] **Step 3: Make normal skirmish seeding selectable without changing the default API**
+
+Keep existing `seed_skirmish(world, map, fixture)` as the default non-mirrored entry point used by current tests.
+
+Add one narrow bool-selected helper underneath/alongside it so the bridge can seed Team 1 at the authored right start and Team 2 at the authored left start. Do not add a generic scenario/faction abstraction.
+
+- [ ] **Step 4: Implement the pure benchmark workload helper**
+
+The helper assumes a normal non-mirrored skirmish is already seeded.
+
+Add 96 units per team:
+
+- 16 Villagers;
+- 30 Spearmen;
+- 30 Archers;
+- 20 Cavalry.
+
+For every added unit:
+
+1. obtain the ID from `world.resource_mut::<IdAllocator>().allocate_unit()`;
+2. use normal `unit_spec(kind).speed` and `spawn_unit(...)`;
+3. insert the same `(Carry::Empty, GatherProgress::default(), WorkerTask::Idle)` bundle production gives trained units.
+
+Use deterministic mirrored walkable staging cells. Do not hand-code `9..=104` / `105..=200` or manually set the allocator to 201.
+
+After spawning, resolve unit membership by live team/kind and apply ordinary commands directly through `apply_player_command`:
+
+- first 12 sorted Villagers per side: two Gather assignments per authored safe source;
+- all military: AttackMove to one shared, authored walkable midfield corridor cell (for example the retained northern corridor target), **not** either Town Center.
+
+Assert each deterministic setup `CommandResult` has no top-level reject and no rejected units.
+
+Delete `UnitSpawn` / `MapFixture::units_200()` in this same step.
+
+- [ ] **Step 5: Extract one bridge-internal normal match seed path**
+
+Add conceptually:
+
+```text
+seed_match_world(world, mirrored)
 ```
 
-Decisions:
+It seeds map/skirmish, inserts the map, inserts/refreshes visibility, and inserts Team-2 AI with the authored plan side matching its physical start. It does **not** insert a session.
 
-- call `seed_skirmish` first;
-- retain the eight normal starting Villagers;
-- add 96 units per team: 16 Villagers, 30 Spearmen, 30 Archers, 20 Cavalry;
-- added Villagers get `Carry::Empty`, `GatherProgress::default()` and `WorkerTask::Idle`;
-- stable added IDs are 9..=104 for Team 1 and 105..=200 for Team 2; update the allocator's next unit ID to 201 while preserving building/resource counters;
-- use one pair of mirrored deterministic staging blocks that are verified walkable by the test;
-- no benchmark-only speed, health, damage, immortality or catalogue override.
+Use it from:
 
-Delete `UnitSpawn` and `MapFixture::units_200()` in this same step.
+- `setup_fixture`: call helper, then insert `MatchSession { Start }`;
+- `reset_fixture_world`: clear, call helper, then insert `MatchSession { Start }`;
+- `reset_benchmark_world`: clear, call helper with `false`, extend with the pure benchmark workload, and insert **no session**.
 
-- [ ] **Step 4: Run the fixture module**
+Keep e2e selector reattachment in the existing normal reset location/behavior.
+
+- [ ] **Step 6: Rewrite old benchmark bridge tests atomically**
+
+Update the current locked contracts:
+
+- benchmark reset now has `VisibilityMap` with a refreshed revision;
+- benchmark reset now has Team-2 `AiController`;
+- benchmark reset still has **no `MatchSession`** and therefore reads as Playing;
+- benchmark world has 200 mixed units / 2 starting Town Centers / 18 authored sources;
+- remove the numeric-ID-half movement test and `benchmark_move_all()` test path.
+
+Update stale comments in reset/clear/session tests. Preserve the independent rule that missing session means Playing.
+
+- [ ] **Step 7: Update README and AGENTS with the new contract**
+
+README:
+
+- benchmark reset = session-free mixed 100-vs-100 skirmish with fog + Team-2 AI;
+- current HPA-474 measurements live in `docs/hpa-474-mvp-evidence.md`;
+- remove the old HPA-470 numeric benchmark table rather than carrying two homes for benchmark numbers; PR #1/git history remain the historical record.
+
+AGENTS:
+
+- replace the “200-villager visibility-free benchmark” invariant;
+- state benchmark reset is mixed + visibility + AI + **session-free**;
+- remove `benchmark_move_all` from bridge command documentation.
+
+- [ ] **Step 8: Verify Task 1**
 
 ```bash
 cargo test -p grus-sim fixture::tests --locked
-```
-
-Expected: PASS, including authored symmetry/reachability tests.
-
-- [ ] **Step 5: Rewrite the three bridge tests that currently lock the old benchmark behavior**
-
-In `crates/grus-godot/src/lib.rs`, change the old contracts in the same commit as `reset_benchmark_world`:
-
-- `runtime_setup_and_resets_manage_the_visibility_resource`: after benchmark reset, require `VisibilityMap` present with revision >= 1 rather than absent;
-- `the_team_two_ai_controller_follows_setup_reset_and_test_disable`: after benchmark reset, require a Team-2 `AiController` rather than no controller;
-- replace `benchmark_world_moves_units_without_a_session` with `benchmark_world_runs_playing_mixed_workload`: require `MatchPhase::Playing`, 200 units / 2 buildings / 18 resources, and accepted workload commands resolved from live team/kind membership rather than IDs 1..=100.
-
-Keep the unrelated assertion that a completely missing session reads as Playing where that compatibility seam is tested elsewhere; do not preserve “benchmark must have no session” as a fixture requirement.
-
-- [ ] **Step 6: Run the focused bridge tests and verify the old reset fails them**
-
-```bash
-cargo test -p grus-godot runtime_setup_and_resets_manage_the_visibility_resource --lib --locked -- --exact
-cargo test -p grus-godot the_team_two_ai_controller_follows_setup_reset_and_test_disable --lib --locked -- --exact
-cargo test -p grus-godot benchmark_world_runs_playing_mixed_workload --lib --locked -- --exact
-```
-
-Expected: the rewritten benchmark assertions fail until Steps 7–8 land.
-
-- [ ] **Step 7: Replace `reset_benchmark_world` with the mixed Playing/fog/AI contract**
-
-After the existing clear seam:
-
-1. construct the battlefield map;
-2. call `seed_benchmark_skirmish`;
-3. insert the map resource;
-4. insert `MatchSession { phase: MatchPhase::Playing }`;
-5. insert a fresh `VisibilityMap` and call the normal initial refresh;
-6. insert `AiController::new(TeamId(2))`;
-7. leave the normal fixed-step schedule unchanged.
-
-Update nearby comments in `clear_gameplay_world`, reset helpers and tests that currently say the benchmark is visibility-free, AI-free or session-free.
-
-- [ ] **Step 8: Replace `benchmark_move_all()` with `benchmark_start_workload()`**
-
-```rust
-#[func]
-fn benchmark_start_workload(&self) -> bool
-```
-
-Resolve live units from `UnitIndex` by team/kind; never depend on the old numeric half split.
-
-Apply ordinary commands:
-
-- first 12 sorted Villagers per team: two Gather assignments per authored safe source (Team 1 resources 1..=6; Team 2 resources 7..=12);
-- all 80 military units per team: AttackMove toward the opposing Town Center area.
-
-Return true only when all required setup commands are accepted. Keep Team 2's real AI installed for later ticks.
-
-- [ ] **Step 9: Update README and AGENTS with the contract change**
-
-`README.md`:
-
-- change Benchmark reset from “200-villager fixture” to the mixed 100-vs-100 Playing/fog/AI workload;
-- keep the HPA-470 llvmpipe 5.2 FPS table as explicitly **historical HPA-470 baseline**, not the current benchmark composition;
-- state that HPA-474 current evidence will live in `docs/hpa-474-mvp-evidence.md`.
-
-`AGENTS.md`:
-
-- replace the “benchmark = 200-villager fixture” reset invariant with the mixed `Playing + VisibilityMap + Team-2 AI` contract;
-- replace/add the bridge benchmark call name with `benchmark_start_workload`.
-
-- [ ] **Step 10: Run the simulation/bridge suites**
-
-```bash
+cargo test -p grus-sim ai::tests --locked
 cargo test -p grus-sim --locked
 cargo test -p grus-godot --lib --locked
 ```
 
 Expected: PASS.
 
-- [ ] **Step 11: Commit the atomic benchmark-contract replacement**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add crates/grus-sim/src/fixture.rs crates/grus-sim/src/fixture/tests.rs crates/grus-sim/src/lib.rs crates/grus-godot/src/lib.rs README.md AGENTS.md
+git add crates/grus-sim crates/grus-godot README.md AGENTS.md
 git commit -m "test: make benchmark workload representative"
 ```
 
-### Task 2: Make the retained benchmark duration-based and keep CI cheap
+### Task 2: Make benchmark sampling duration-based, live, and cheap in CI
 
 **Files:**
 - Modify: `godot/scripts/benchmark_200.gd`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `README.md`
 
-**Interfaces:**
-- Consumes: `GrusBridge.reset_benchmark_fixture()`, `GrusBridge.benchmark_start_workload()`, `GrusBridge.visibility_revision()` and live unit/building/resource views.
-- Produces: one `GRUS_BENCHMARK_200` record with duration, frame-time distribution, start/min/end live units and renderer information.
+- [ ] **Step 1: Replace the old start-shape assumptions**
 
-- [ ] **Step 1: Update the scene's starting-shape/workload contract**
+After `reset_benchmark_fixture()`:
 
-Before timing, require:
+- wait for exactly 200 unique unit views;
+- require `building_views >= 2` (AI may place a foundation before all views attach);
+- require at least the authored 18 resource views;
+- capture the current visibility revision and wait until it advances before timing.
 
-```text
-200 unique unit views
-2 building views
-18 resource views
-visibility_revision() >= 0
-benchmark_start_workload() == true
-```
+There is no `benchmark_start_workload()` call; Task 1 already seeded and accepted the workload.
 
-After workload start, wait for at least one visibility revision advance before sampling so movement/fog are proven active.
+- [ ] **Step 2: Convert fixed-frame timing to elapsed-time timing**
 
-- [ ] **Step 2: Replace the fixed 40-frame sample with a duration**
-
-Add:
+Use:
 
 ```gdscript
 const DEFAULT_SAMPLE_SECONDS := 10.0
 const WARMUP_SECONDS := 2.0
 ```
 
-Read `GRUS_BENCHMARK_SECONDS`; default to 10 seconds and fail on a non-positive/non-finite override. Collect one frame-time sample per `process_frame` until real elapsed time reaches the requested duration.
+Read `GRUS_BENCHMARK_SECONDS`; default to 10 and reject non-positive/non-finite values. Collect one frame-time sample per `process_frame` until real elapsed time reaches the requested duration.
 
-- [ ] **Step 3: Emit the final benchmark marker fields**
+- [ ] **Step 3: Preserve and generalize the liveness checkpoint**
 
-Track live unit count throughout real combat. Emit at least:
+Do not delete the current movement checkpoint.
+
+At a fixed interval:
+
+- compare current live unit positions against the previous checkpoint for IDs that still exist;
+- drain/count benchmark combat events through the existing bridge event read;
+- fail only if the window shows neither meaningful unit movement nor combat activity.
+
+This prevents a visually rendering but simulation-dead sample from passing.
+
+- [ ] **Step 4: Record the actual live-unit load**
+
+At each sampled frame record current live unit count. Emit:
 
 ```text
 start_units=200
 min_live_units=<n>
+mean_live_units=<frame-weighted average>
 end_units=<n>
 duration_s=<seconds>
 frames=<n>
@@ -244,31 +294,23 @@ vendor=<...>
 display=<...>
 ```
 
-Do not respawn/reset health and do not fail merely because combat lowers `min_live_units` after a valid 200-unit start.
+Real combat deaths are allowed. Do not respawn or reset health.
 
-- [ ] **Step 4: Run a short local benchmark**
+- [ ] **Step 5: Keep CI at 10 seconds with no FPS gate**
 
-```bash
-GRUS_BENCHMARK_SECONDS=3 godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn
-```
-
-Expected: exactly one `GRUS_BENCHMARK_200 start_units=200 ...` marker and exit 0, or the already-tolerated post-marker teardown 139.
-
-- [ ] **Step 5: Keep CI on a 10-second software-rendered regression**
-
-In only the existing benchmark step add:
+Set only the existing benchmark step:
 
 ```yaml
 GRUS_BENCHMARK_SECONDS: "10"
 ```
 
-Keep Xvfb, `LIBGL_ALWAYS_SOFTWARE=1`, timeout/139 handling; change the marker grep from `moved=200` to `start_units=200`. Do not add a 60 FPS CI gate.
+Keep Xvfb, `LIBGL_ALWAYS_SOFTWARE=1` and existing teardown-139 handling. Grep the new marker using `start_units=200`; do not enforce 60 FPS in CI.
 
-- [ ] **Step 6: Update README's current sampling description**
+- [ ] **Step 6: Update README benchmark commands**
 
-Document 10-second CI regression vs `GRUS_BENCHMARK_SECONDS=60` hardware acceptance, while leaving the old HPA-470 table clearly labeled historical.
+Document the 10-second CI regression vs 60-second hardware acceptance and point current numbers to `docs/hpa-474-mvp-evidence.md`.
 
-- [ ] **Step 7: Run benchmark + owning smokes**
+- [ ] **Step 7: Verify Task 2**
 
 ```bash
 godot --headless --path godot res://scenes/reset_test.tscn
@@ -276,7 +318,7 @@ godot --headless --path godot res://scenes/scouting_ai_smoke_test.tscn
 GRUS_BENCHMARK_SECONDS=3 godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn
 ```
 
-Expected: both smoke markers and the new benchmark marker.
+Expected: retained smoke markers plus one live benchmark marker.
 
 - [ ] **Step 8: Commit**
 
@@ -285,178 +327,195 @@ git add godot/scripts/benchmark_200.gd .github/workflows/ci.yml README.md
 git commit -m "perf: measure mixed benchmark workload"
 ```
 
-### Task 3: Add the manual mirrored-start seam, run four openings, then tune only from evidence
+### Task 3: Add safe release packaging and take the early 60-second hardware sample
 
 **Files:**
-- Modify: `crates/grus-sim/src/fixture.rs`
-- Modify: `crates/grus-sim/src/fixture/tests.rs`
-- Modify: `crates/grus-sim/src/ai.rs`
-- Modify: `crates/grus-sim/src/ai/tests.rs`
-- Modify: `crates/grus-godot/src/lib.rs`
-- Create: `docs/hpa-474-mvp-evidence.md`
-- Conditional modify: `crates/grus-sim/src/catalog.rs`, `catalog/tests.rs`, `ai.rs`, `ai/tests.rs`, `fixture.rs`, `fixture/tests.rs` only for evidence-backed tuning
+- Create: `scripts/package_linux_x86_64.sh`
+- Modify: `.gitignore`
+- Modify: `README.md`
+- Modify: `docs/hpa-474-mvp-evidence.md`
+- Conditional modify: only the measured performance owner + its existing test module if the early sample demonstrates a bottleneck
 
-**Interfaces:**
-- Consumes: normal shipping Team-1-left / Team-2-right seed, the authored mirrored map/plans, current HPA-472 catalogue and HPA-473 AI.
-- Produces: `GRUS_MIRRORED_START=1` test/manual runtime setup plus four-run directional evidence and only the smallest proven tuning.
+- [ ] **Step 1: Write the one release package script**
 
-- [ ] **Step 1: Add failing tests for the exact mirrored setup without changing defaults**
-
-Add focused assertions for:
-
-```text
-default: Team 1 Town Center anchor == left authored start
-         Team 2 Town Center anchor == right authored start
-mirrored: Team 1 Town Center anchor == right authored start
-          Team 2 Town Center anchor == left authored start
-```
-
-Add an AI policy regression that a Team-2 controller configured for the left authored side still issues `issuer: TeamId(2)` commands but reads the left-side build/scout anchors.
-
-- [ ] **Step 2: Implement the smallest authored-side seam**
-
-Keep `AiController::new(team)` as the normal constructor. Add only the state/constructor needed for the harness, e.g.:
-
-```rust
-pub fn new_for_authored_side(team: TeamId, authored_side: TeamId) -> Self
-```
-
-Store `authored_side` in the controller and use `MapFixture::team_plan(controller.authored_side)` where the policy currently derives the plan from `controller.team`. Normal `new(team)` sets `authored_side = team`, so shipping behavior is unchanged.
-
-Add a narrow mirrored fixture seed/helper that assigns Team 1 entities/economy to the authored right start and Team 2 to the authored left start while keeping resource IDs/map contents unchanged. Do not add a generic scenario abstraction.
-
-- [ ] **Step 3: Wire only the normal runtime setup/reset to the manual environment switch**
-
-Add one internal helper:
-
-```rust
-fn mirrored_start_enabled() -> bool
-```
-
-It returns true only when `GRUS_MIRRORED_START=1`.
-
-`reset_fixture_world` / first setup choose:
-
-- default: current `seed_skirmish` + `AiController::new(TeamId(2))`;
-- mirrored: mirrored seed + `AiController::new_for_authored_side(TeamId(2), TeamId(1))`.
-
-Team 1 remains the bridge/local human team. No button/menu/state is added. Restart rereads the same environment flag.
-
-Keep direct environment parsing outside the pure sim; tests may exercise the bool-selected setup helper directly so parallel Rust tests do not mutate process-global env vars.
-
-- [ ] **Step 4: Run the mirrored/default focused tests**
+Required base behavior:
 
 ```bash
-cargo test -p grus-sim fixture::tests --locked
-cargo test -p grus-sim ai::tests --locked
-cargo test -p grus-godot mirrored --lib --locked
+#!/usr/bin/env bash
+set -euo pipefail
 ```
 
-Expected: default and mirrored contracts pass.
+Then:
 
-- [ ] **Step 5: Create the evidence record**
+1. resolve repo root;
+2. build `cargo build --release -p grus-godot --locked`;
+3. stage `target/release/libgrus_godot.so` into `godot/bin/libgrus_godot.so`;
+4. run Godot headless import;
+5. clean/recreate `dist/grus-linux-x86_64/`;
+6. export `Linux x86_64` with `--export-release`;
+7. verify exported executable exists/is executable;
+8. archive the full directory as `dist/grus-linux-x86_64.tar.gz`.
 
-`docs/hpa-474-mvp-evidence.md` starts with:
+Add optional `GRUS_MAIN_SCENE`. When set:
 
-```text
-Revision / environment
-Playtest matrix
-Tuning log
-Release performance
-Package verification
-Regression / final CI
-Remaining limitations
+- save the current `godot/project.godot` to a temporary file;
+- install a shell `trap` before editing;
+- temporarily replace the main-scene entry;
+- restore `project.godot` on success, error or interruption.
+
+The script must not download/install toolchains.
+
+- [ ] **Step 2: Ignore generated release output**
+
+Add:
+
+```gitignore
+dist/
 ```
 
-Playtest columns: start side, opening, duration, result, first expansion use, worker-raid observation, Town Center finish observation, tuning after run.
+- [ ] **Step 3: Export the benchmark as a release build**
 
-- [ ] **Step 6: Run the four required human playtests**
+On the Task-0 reference host:
+
+```bash
+GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn \
+  ./scripts/package_linux_x86_64.sh
+```
+
+Verify `git diff -- godot/project.godot` is empty after the script, including after a deliberate failed export invocation used to exercise the trap path.
+
+- [ ] **Step 4: Run the early 60-second sample**
+
+Run the exported benchmark executable at 1920×1080 with:
+
+```bash
+GRUS_BENCHMARK_SECONDS=60
+```
+
+Record the full marker plus revision/host data in `Early release performance`.
+
+- [ ] **Step 5: Apply the performance gate now, not at the end**
+
+If mean FPS >= 60 and no repeatable stall exists, record “early target met; no performance change” and continue.
+
+If target/stall fails:
+
+1. profile first on the same workload;
+2. record the measured hotspot;
+3. add the narrowest owning regression/measurement;
+4. make the smallest change in the existing owner only;
+5. rerun the same 60-second sample and keep the change only if it improves the demonstrated problem without correctness loss.
+
+No flow fields, second renderer, multithreaded presentation or speculative rewrite.
+
+- [ ] **Step 6: Commit packaging + early evidence (and measured fix only if needed)**
+
+```bash
+git add scripts/package_linux_x86_64.sh .gitignore README.md docs/hpa-474-mvp-evidence.md crates godot
+git commit -m "perf: establish release benchmark baseline"
+```
+
+### Task 4: Wire the mirrored manual launch, run the four openings, and tune from evidence
+
+**Files:**
+- Modify: `crates/grus-godot/src/lib.rs`
+- Modify: `docs/hpa-474-mvp-evidence.md`
+- Conditional modify: `crates/grus-sim/src/catalog.rs`, `catalog/tests.rs`, `ai.rs`, `ai/tests.rs`, `fixture.rs`, `fixture/tests.rs`
+
+- [ ] **Step 1: Wire `GRUS_MIRRORED_START` only at the runtime seed boundary**
+
+Read `GRUS_MIRRORED_START` outside pure simulation and pass a boolean into the shared `seed_match_world` helper.
+
+Normal/unset launch stays Team 1 left / Team 2 right.
+
+`GRUS_MIRRORED_START=1` becomes Team 1 right / Team 2 left, with Team-2 AI reading the authored left-side plan while remaining issuer Team 2.
+
+Do not expose a menu toggle.
+
+- [ ] **Step 2: Test the bool-selected seed directly**
+
+Avoid tests that mutate process-global environment. Test the shared helper/default-vs-mirrored behavior directly.
+
+Run:
+
+```bash
+cargo test -p grus-godot --lib --locked
+cargo test -p grus-sim ai::tests fixture::tests --locked
+```
+
+- [ ] **Step 3: Run the left-side pair in one process**
 
 Default launch:
 
-```bash
-godot --path godot
-```
+1. early pressure;
+2. reach Result;
+3. Restart and record clean resources/entities/queues/selections/fog/AI state;
+4. economy-first/age-up;
+5. reach Result;
+6. Restart and record cleanliness again.
 
-Run left early-pressure and left economy-first/age-up.
+Record duration/result/expansion/raid/TC-finish observations immediately.
 
-Mirrored launch:
+- [ ] **Step 4: Run the right-side pair in one mirrored process**
 
 ```bash
 GRUS_MIRRORED_START=1 godot --path godot
 ```
 
-Run right early-pressure and right economy-first/age-up.
+Repeat the same early-pressure → Restart → economy-first → Restart evidence.
 
-Record facts immediately after each run. Four runs are directional evidence, not a competitive-balance claim.
+- [ ] **Step 5: Ensure both lifecycle outcomes are evidenced**
 
-- [ ] **Step 7: For each demonstrated balance defect, write the narrow owning regression first**
+If the four strategy runs produced both Victory and Defeat, record them.
 
-Examples only when the matching symptom occurred:
+If all four produced only one outcome, perform one explicit lifecycle-only check by intentionally allowing the other result, then Restart and record clean state. Do not treat this extra run as balance evidence.
 
-- catalogue relationship → existing catalogue/combat/economy behavioural test;
+- [ ] **Step 6: Add a narrow regression before every demonstrated balance fix**
+
+Examples only when the matching problem occurred:
+
+- catalogue values → existing catalogue/combat/economy behavior test;
 - AI threshold → existing pure policy/bounded journey test;
-- resource/route position → fixture symmetry/reachability/visibility test;
-- worker-raid economics → extend `raid_reduces_income_until_paid_replacement_lands` only if current coverage does not express the observed issue.
+- spatial resource/route change → fixture symmetry/reachability/visibility test.
 
-Never test “match duration == 15–25 minutes.”
+Never assert that a match must last 15–25 minutes in an automated test.
 
-- [ ] **Step 8: Apply only proven tuning in existing owners**
+- [ ] **Step 7: Tune only the proven owner and rerun only affected matrix cases**
 
-No tuning/config framework. Modify only `catalog.rs`, current AI threshold constants, and/or `fixture.rs` map/resource/route values justified by the playtest record.
+Keep tuning in `catalog.rs`, existing `ai.rs` thresholds and/or `fixture.rs` only.
 
-- [ ] **Step 9: Run focused tests after each tuning change and rerun only materially affected matrix cases**
+Append reruns to the evidence table; do not overwrite original observations.
 
-```bash
-cargo test -p grus-sim catalog::tests --locked
-cargo test -p grus-sim ai::tests --locked
-cargo test -p grus-sim fixture::tests --locked
-```
-
-Append reruns to the evidence table; preserve the original observation.
-
-- [ ] **Step 10: Run the full simulation + coverage gate**
+- [ ] **Step 8: Run simulation coverage gate and commit**
 
 ```bash
 cargo test -p grus-sim --locked
 cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$'
 ```
 
-Expected: PASS / >= 90% lines.
-
-- [ ] **Step 11: Commit the mirrored harness + measured balance evidence**
+If no balance change is justified, commit only the evidence and explicitly record “no tuning change required.”
 
 ```bash
-git add crates/grus-sim/src crates/grus-godot/src/lib.rs docs/hpa-474-mvp-evidence.md
-git commit -m "balance: tune final MVP from playtests"
+git add docs/hpa-474-mvp-evidence.md crates/grus-sim crates/grus-godot/src/lib.rs
+git commit -m "balance: validate final MVP openings"
 ```
 
-If no tuning is needed, commit the mirrored test harness + evidence and explicitly record “no balance-code change required.”
-
-### Task 4: Add the minimal in-game controls aid and only demonstrated usability fixes
+### Task 5: Add the minimal controls aid and validate the normal extracted package
 
 **Files:**
 - Modify: `godot/scenes/main.tscn`
 - Modify: `godot/scripts/smoke_test.gd`
-- Conditional modify: only the existing scene/script that owns a concrete Task-3 playtest defect
+- Modify: `README.md`
+- Modify: `docs/hpa-474-mvp-evidence.md`
+- Conditional modify: only the existing scene/script that owns a demonstrated usability defect
 
-**Interfaces:**
-- Consumes: existing `SessionPanel` and runtime controls.
-- Produces: one static `HUD/SessionPanel/ControlsLabel`; no help/menu framework.
+- [ ] **Step 1: Add a failing smoke assertion for first-run controls help**
 
-- [ ] **Step 1: Add a failing smoke assertion**
+Before Start, require visible `HUD/SessionPanel/ControlsLabel` containing at least `Right click`, `A`, `S`, `Esc`, and `Minimap`.
 
-Before Start, require visible `HUD/SessionPanel/ControlsLabel` containing `Right click`, `A`, `S`, `Esc`, and `Minimap`.
+- [ ] **Step 2: Add one compact static label**
 
-- [ ] **Step 2: Run the bridge smoke and verify it fails**
-
-```bash
-godot --headless --path godot res://scenes/smoke_test.tscn
-```
-
-- [ ] **Step 3: Add the compact static label**
-
-Copy:
+Use copy equivalent to:
 
 ```text
 Select: left click / drag / Shift
@@ -468,17 +527,13 @@ Camera: wheel / middle-drag
 Minimap: click to recenter
 ```
 
-Keep it inside the existing session panel so it naturally hides during Playing. No controller state.
+Keep it inside the existing session panel so it hides during Playing. No help framework or new state.
 
-- [ ] **Step 4: Verify 1280×720 layout + smoke**
+- [ ] **Step 3: Fix only usability defects already demonstrated by Task 4**
 
-Visually check the Start panel does not overlap economy/command/minimap, then run the smoke and require `GRUS_GODOT_SMOKE_OK`.
+For each concrete issue, add a focused assertion in the owning existing smoke first, then make the smallest scene/script change. No unrelated polish.
 
-- [ ] **Step 5: Fix only concrete usability defects already recorded in Task 3**
-
-For each defect, add a focused assertion to its existing owning smoke before the smallest fix. No unrelated polish.
-
-- [ ] **Step 6: Run all five Godot smokes**
+- [ ] **Step 4: Run all retained Godot smokes**
 
 ```bash
 godot --headless --path godot res://scenes/smoke_test.tscn
@@ -488,142 +543,111 @@ godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
 godot --headless --path godot res://scenes/scouting_ai_smoke_test.tscn
 ```
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 5: Build the normal package from a fresh checkout/worktree**
 
-```bash
-git add godot/scenes/main.tscn godot/scripts
-git commit -m "ui: add compact skirmish controls help"
-```
-
-### Task 5: Produce one reproducible Linux x86_64 release package
-
-**Files:**
-- Create: `scripts/package_linux_x86_64.sh`
-- Modify: `README.md`
-- Modify: `docs/hpa-474-mvp-evidence.md`
-- Conditional modify: `godot/export_presets.cfg` only if the existing preset cannot place all export files under the requested directory
-
-**Interfaces:**
-- Consumes: existing `Linux x86_64` export preset and release GDExtension mapping.
-- Produces: `dist/grus-linux-x86_64/` and `dist/grus-linux-x86_64.tar.gz`.
-
-- [ ] **Step 1: Write `scripts/package_linux_x86_64.sh`**
-
-Start with:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-```
-
-Then:
-
-1. resolve repository root from script path;
-2. remove/recreate `dist/grus-linux-x86_64/`;
-3. `cargo build --release -p grus-godot --locked`;
-4. stage `target/release/libgrus_godot.so` to `godot/bin/libgrus_godot.so`;
-5. `godot --headless --path godot --editor --quit-after 120`;
-6. `godot --headless --path godot --export-release "Linux x86_64" ../dist/grus-linux-x86_64/Grus.x86_64`;
-7. verify executable exists/is executable;
-8. archive the complete directory to `dist/grus-linux-x86_64.tar.gz`.
-
-Do not download/install toolchains from the script.
-
-- [ ] **Step 2: Run it from a clean checkout/worktree**
+Run without `GRUS_MAIN_SCENE`:
 
 ```bash
 ./scripts/package_linux_x86_64.sh
 ```
 
-Expected: release build, import, export and archive all succeed.
+Extract elsewhere and launch outside the editor on the reference host.
 
-- [ ] **Step 3: Extract outside the checkout and launch**
+- [ ] **Step 6: Complete the packaged gameplay journey**
 
-```bash
-rm -rf /tmp/grus-package-check
-mkdir -p /tmp/grus-package-check
-tar -xzf dist/grus-linux-x86_64.tar.gz -C /tmp/grus-package-check
-/tmp/grus-package-check/grus-linux-x86_64/Grus.x86_64
+Verify:
+
+```text
+Start
+pause/resume
+select + gather
+place/build
+train
+scout/fog/minimap
+fight
+Victory or Defeat
+Restart returns clean Start state
+start again briefly
+Quit
 ```
 
-Expected: boots outside editor and loads Rust GDExtension.
+Record the result.
 
-- [ ] **Step 4: Complete the packaged journey**
+- [ ] **Step 7: Collect first-time-player evidence or state the exact limitation**
 
-Verify Start → pause/resume → gather/build/train → scout/fog/minimap → fight → Result → Restart → brief second Start → Quit. Record result.
+Have someone who has not previously played Grus attempt the extracted build using only the in-game controls label and no developer walkthrough.
 
-- [ ] **Step 5: Record archive SHA and exact commands**
+Record whether they can start, gather/build/train, scout, fight, interpret result/restart and quit.
+
+If no fresh player is available, write that specific missing acceptance evidence under Remaining limitations; do not substitute the author’s own run.
+
+- [ ] **Step 8: Record attribution and package hash**
+
+If no third-party game assets are present, record:
+
+```text
+Asset attribution: none.
+```
+
+Then:
 
 ```bash
 sha256sum dist/grus-linux-x86_64.tar.gz
 ```
 
-Store hash, Godot version and revision in evidence.
+- [ ] **Step 9: Update README run/build/controls instructions and commit**
 
-- [ ] **Step 6: Update concise README release instructions**
-
-Point to the packaging script, archive path and Linux x86_64 support boundary. Keep existing debug/dev instructions.
-
-- [ ] **Step 7: Commit**
+README should point current performance numbers to the evidence file rather than duplicating them.
 
 ```bash
-git add scripts/package_linux_x86_64.sh README.md docs/hpa-474-mvp-evidence.md godot/export_presets.cfg
-git commit -m "build: package Linux desktop MVP"
+git add godot/scenes/main.tscn godot/scripts README.md docs/hpa-474-mvp-evidence.md
+git commit -m "ui: finish desktop MVP usability"
 ```
 
-### Task 6: Run the release profile, optimize only if measured, and close evidence on the actual CI surface
+### Task 6: Re-measure the final SHA and close CI/package evidence
 
 **Files:**
 - Modify: `docs/hpa-474-mvp-evidence.md`
-- Conditional modify: only existing file(s) identified by profiling
-- Conditional test: owning Rust/Godot test for any optimization
+- Modify: `README.md` only for final limitations/instructions if needed
+- Conditional modify: only the profiler-identified owner + owning regression if final measurement reveals a new repeatable bottleneck
 
-**Interfaces:**
-- Consumes: Tasks 1–2 mixed benchmark and Task 5 release path.
-- Produces: final 60-second performance record, optional profile-driven fix, final three-job CI evidence, package verification and limitations.
+- [ ] **Step 1: Export the benchmark from the final candidate revision**
 
-- [ ] **Step 1: Build a release benchmark entry without permanently changing the main scene**
-
-Reuse CI's safe pattern: back up `godot/project.godot`, temporarily swap `res://scenes/main.tscn` to `res://scenes/benchmark_200.tscn`, `--export-release` a temporary benchmark executable, and restore the file on success/failure. Use the release GDExtension staged by Task 5.
-
-- [ ] **Step 2: Record reference host/revision**
+On the same Task-0 host:
 
 ```bash
-git rev-parse HEAD
-uname -a
-lscpu | grep -E 'Architecture|CPU\(s\)|Model name'
-godot --version
+GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn \
+  ./scripts/package_linux_x86_64.sh
 ```
 
-GPU/renderer/adapter come from the benchmark marker.
+Confirm `project.godot` restored cleanly.
 
-- [ ] **Step 3: Run the 60-second 1920×1080 release sample**
+- [ ] **Step 2: Run the identical final 60-second sample**
 
-Set `GRUS_BENCHMARK_SECONDS=60`, run the release benchmark export on the reference desktop renderer, and record the full marker.
+Use the same host, 1920×1080, release mode and `GRUS_BENCHMARK_SECONDS=60` workload as Task 3.
 
-Required: duration, mean FPS/ms, p95, p99, max, start/min/end units, renderer/adapter/vendor.
+Record the complete marker and compare early vs final results side by side.
 
-- [ ] **Step 4: Apply the optimization gate**
+- [ ] **Step 3: Apply the final optimization gate**
 
-If mean FPS >= 60 and no repeatable command/frame stall appears: record “target met; no performance code change” and skip to Step 8.
+If target is met and no repeatable stall exists, make no performance change.
 
-Otherwise continue.
+If a new/repeatable failure exists, profile first and apply only the smallest measured-owner fix with one focused regression. Rerun the identical 60-second sample after the fix.
 
-- [ ] **Step 5: Profile before touching code**
+- [ ] **Step 4: Rebuild the normal final package and recheck extraction/boot**
 
-Use the host's available Godot/Rust profiler. Record one repeatable hotspot/reproduction. Do not pick a fix from speculation.
+Run:
 
-- [ ] **Step 6: Add a focused regression/measurement, then make the smallest fix in the measured owner**
+```bash
+./scripts/package_linux_x86_64.sh
+sha256sum dist/grus-linux-x86_64.tar.gz
+```
 
-Keep existing interfaces. No flow fields, second renderer, parallel state owner or broad refactor.
+Update the final hash and packaged journey status if the final revision changed after Task 5.
 
-- [ ] **Step 7: Rerun the identical 60-second release sample**
+- [ ] **Step 5: Require the real final CI surface**
 
-Record before/after side by side and keep the fix only if the same workload improves the demonstrated bottleneck without correctness regressions.
-
-- [ ] **Step 8: Put the exact final revision through the real GitHub Actions gate**
-
-Push the final candidate SHA and require these three workflow jobs on **that SHA** to pass:
+After pushing the exact final SHA, require all three GitHub Actions jobs green:
 
 ```text
 rust-build-lint
@@ -631,44 +655,37 @@ unit-tests
 e2e
 ```
 
-This is the final automated gate instead of duplicating an incomplete local command list. It necessarily covers the e2e-feature Clippy/unit tests, export smoke, exported-game Bevy E2E, Godot smokes, coverage and short software benchmark already owned by `.github/workflows/ci.yml`.
+This is the automated release gate. Do not replace it with a shorter hand-maintained local command list.
 
-Record the CI run URL and exact SHA in `docs/hpa-474-mvp-evidence.md`.
-
-- [ ] **Step 9: Rerun only the local acceptance checks CI cannot prove**
-
-On the exact final SHA:
-
-1. ensure the recorded 60-second hardware release sample is from that SHA (rerun if any performance-relevant code changed afterward);
-2. run `./scripts/package_linux_x86_64.sh` from a clean checkout/worktree;
-3. extract elsewhere and repeat the packaged journey;
-4. record the final archive SHA256.
-
-- [ ] **Step 10: Finish evidence and limitations**
+- [ ] **Step 6: Finish the evidence record**
 
 Record:
 
-- final four-run/rerun balance summary;
-- tuning values changed, or explicitly none;
-- final hardware benchmark marker;
-- profile before/after if applicable;
-- final CI SHA/run and all-three-job status;
-- package hash/journey;
-- honest remaining limitations, including the known Linux post-marker teardown-139 issue if still present.
+- exact final SHA;
+- four required balance runs + any reruns;
+- both lifecycle outcomes + repeated restart cleanliness;
+- final tuning values, or none;
+- early/final 60-second hardware results including mean live units;
+- any profile-driven fix with before/after evidence;
+- final package hash + fresh-checkout/extracted journey;
+- fresh-player usability result or explicit gap;
+- asset attribution;
+- final CI run URL/status; and
+- honest remaining limitations, including the known post-marker teardown-139 issue if it still exists.
 
-- [ ] **Step 11: Commit final evidence/performance work**
+- [ ] **Step 7: Commit final evidence**
 
 ```bash
-git add docs/hpa-474-mvp-evidence.md README.md crates godot scripts .github AGENTS.md
+git add docs/hpa-474-mvp-evidence.md README.md crates godot scripts .github .gitignore
 git commit -m "docs: record Grus MVP delivery evidence"
 ```
 
-If Step 11 creates a new SHA after the recorded CI run, repeat Step 8 for that exact final SHA before marking the PR ready.
-
 ## Self-review result
 
-- **Spec coverage:** benchmark contract replacement, mirrored launch, four playtests, evidence-backed tuning, controls help, 60-second release profiling, profile-only optimization, clean packaging, packaged journey, actual CI surface and limitations all map to Tasks 1–6.
-- **Step scan:** the plan no longer defers the mirrored launch mechanism or old benchmark callers/docs to implementation-time discovery. No task preselects balance numbers or speculative optimization.
-- **Type consistency:** new retained APIs are `seed_benchmark_skirmish(...)`, `benchmark_start_workload()`, the manual-only mirrored fixture/setup seam, and an `AiController` authored-side constructor; old `units_200()` / `benchmark_move_all()` are deleted.
-- **Review Focus:** old-contract drift, workload realism, mirrored-default safety, clean packaging and CI/tail-latency gaps each have an owning test/gate.
-- **Proportion:** decisions that cannot be inferred safely are explicit; no generic benchmark, scenario, tuning, help or release framework is introduced.
+- **Benchmark lifecycle:** session-free by design; Town Center destruction cannot transition the benchmark to Result/freeze fixed systems.
+- **Workload ownership:** pure `grus-sim`; bridge does not pretend queued commands are accepted gameplay commands.
+- **ID/component reuse:** allocator-owned IDs and production-equivalent post-spawn components; no manual counter repair.
+- **Runtime seed reuse:** one normal world seed path shared by setup/restart/benchmark; normal sessions are layered on top.
+- **Performance evidence:** liveness + start/min/mean/end live load; one early and one final hardware sample on the same named host.
+- **Acceptance mapping:** four directional runs, both outcomes, repeated restarts, controls, fresh-player evidence/limitation, package journey, attribution, final CI and current measurements all have explicit owners.
+- **Scope:** no extra content, generic tuning framework, second benchmark, platform matrix or speculative optimization.
