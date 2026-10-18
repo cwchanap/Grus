@@ -130,6 +130,23 @@ func _run() -> void:
 	if str(boot_session.get("phase", "")) != "Start":
 		_fail("skirmish boot session is not Start: %s" % [boot_session])
 		return
+	# First-run controls aid: the Start overlay must surface the controls label
+	# before gameplay opens. Tokens match case-insensitively against the label's
+	# own text; A/S must appear as standalone words, not substrings.
+	var controls_label := get_node("Main/HUD/SessionPanel/ControlsLabel") as Label
+	if controls_label == null or not controls_label.is_visible_in_tree():
+		_fail("HUD/SessionPanel/ControlsLabel is missing or not visible before Start")
+		return
+	var controls_text := controls_label.text.to_lower()
+	for token in ["right click", "minimap", "esc"]:
+		if not controls_text.contains(token):
+			_fail("ControlsLabel is missing '%s': %s" % [token, controls_label.text])
+			return
+	var control_words := controls_text.replace("\n", " ").split(" ", false)
+	for token in ["a", "s"]:
+		if not token in control_words:
+			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
+			return
 	# This scripted choreography runs AI-free: the Start-only test seam must
 	# lift the Team-2 controller before gameplay opens.
 	if not GrusBridge.disable_ai_for_test():
@@ -140,6 +157,10 @@ func _run() -> void:
 		return
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
+		return
+	await get_tree().process_frame
+	if controls_label.is_visible_in_tree():
+		_fail("ControlsLabel stayed visible after the match reached Playing")
 		return
 
 	var camera := get_node("Main/Camera3D") as Camera3D

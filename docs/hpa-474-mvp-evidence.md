@@ -59,15 +59,17 @@ What could be verified without the host: the packaging script itself ships in th
 
 ## Package verification
 
-(empty — to be filled)
+**BLOCKED — no Linux x86_64 host (same Task-0 dependency).** Steps 5–7 of Task 5 (run `./scripts/package_linux_x86_64.sh` without `GRUS_MAIN_SCENE` on a fresh checkout, extract elsewhere, launch outside the editor, and complete the packaged gameplay journey: Start → pause/resume → select + gather → place/build → train → scout/fog/minimap → fight → Victory or Defeat → Restart-clean → start again → Quit) **did not run and no result is recorded or invented**. The packaging script and its `GRUS_MAIN_SCENE` trap were delivered in Task 3 (see Early release performance above), but the script's export/archive steps require the Linux x86_64 host that this session does not have — the same blocking acceptance dependency recorded under **Reference host / revision**. No tarball, extraction, launch, journey observation, or `sha256sum dist/grus-linux-x86_64.tar.gz` exists; the package hash is explicitly **BLOCKED** until that host exists.
 
 ## Fresh-player usability
 
-(empty — to be filled)
+**NOT RUN — no first-time player available in this agent session.** Step 7 requires a person who has never played Grus to attempt the extracted build using only the in-game controls label, with no developer walkthrough, and records whether they can start, gather/build/train, scout, fight, interpret the result, restart, and quit. No such person and no extracted build exist in this session, so **no fresh-player observation is recorded or substituted** (per Ledger Ruling 1 the author's own run would not be acceptable evidence anyway). This missing acceptance evidence is listed under Remaining limitations.
 
 ## Asset attribution
 
-(empty — to be filled)
+Asset attribution: none.
+
+Verified by inspection on 2026-10-16: the repository contains no third-party game assets — no image, audio, font, or 3D-model files anywhere under `godot/` or `crates/`, no Godot `.import` artifacts, and no third-party license/attribution files. All presentation is generated in code (procedural meshes, the runtime `ImageTexture` minimap, and the generated audio blip described in README).
 
 ## Final CI
 
@@ -76,4 +78,6 @@ What could be verified without the host: the packaging script itself ships in th
 ## Remaining limitations
 
 - No hardware-rendered Linux x86_64 reference host is available; all hardware acceptance evidence (performance, GPU/adapter identification) is blocked until one is provisioned.
+- The packaged-build acceptance chain (Task 5 Steps 5–8) is blocked by the same missing host: no package build/extract/launch, no packaged gameplay journey, no `sha256sum` of `dist/grus-linux-x86_64.tar.gz` (see Package verification above).
+- The first-time-player usability evidence (Task 5 Step 7) is missing: no fresh player attempted the extracted build with only the in-game controls label in this session; running it needs a human with the extracted package on the reference host (see Fresh-player usability above).
 - The four interactive playtests (Playtest matrix), their restart-cleanliness and Victory/Defeat lifecycle records (Restart + lifecycle outcomes), and consequently any balance tuning (Tuning log) are **not run**: this agent session has no human player and no playable interactive session. All four cells carry an explicit not-run status above; running them only needs a human with `godot --path godot` (and `GRUS_MIRRORED_START=1` for the mirrored pair) on the delivered build.

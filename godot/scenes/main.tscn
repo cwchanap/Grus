@@ -200,7 +200,7 @@ text = "Pause"
 offset_left = 440.0
 offset_top = 250.0
 offset_right = 840.0
-offset_bottom = 470.0
+offset_bottom = 620.0
 mouse_filter = 0
 
 [node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
@@ -244,6 +244,15 @@ offset_top = 170.0
 offset_right = 392.0
 offset_bottom = 210.0
 text = "Quit"
+
+[node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 220.0
+offset_right = 392.0
+offset_bottom = 360.0
+theme_override_font_sizes/font_size = 13
+text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause/resume: Esc\nCamera: wheel / middle-drag\nMinimap: click to recenter"
 
 [node name="Minimap" type="Control" parent="HUD"]
 offset_left = 1120.0
