@@ -24,6 +24,8 @@ $ godot --version
 
 Note: the `lscpu` command from the plan cannot run on macOS (no `lscpu` on Darwin); it applies to the future Linux x86_64 reference host once provisioned. GPU/renderer/adapter will be recorded once the benchmark prints it on that host.
 
+**Final candidate revision:** the delivery's final code SHA is pinned under **Final CI** below (the exact SHA the controller pushes for the final CI run).
+
 ## Playtest matrix
 
 **NOT RUN — all four interactive playtests require a human player and were not run in this agent session.** The delivery session has no human player and no playable interactive session; per Ledger Ruling 1 the four runs below were not executed, and no observation, duration or outcome is invented here. They remain the blocking directional evidence for any balance tuning, exactly like the Task-0 reference-host blocker above blocks hardware evidence.
@@ -55,11 +57,13 @@ What could be verified without the host: the packaging script itself ships in th
 
 ## Final release performance
 
-(empty — to be filled; requires the Linux x86_64 reference host)
+**BLOCKED — no reference host (same Task-0 dependency).** Task 6 Steps 1–2 (final export from the final candidate revision via `GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn ./scripts/package_linux_x86_64.sh`, then the identical 60-second `GRUS_BENCHMARK_SECONDS=60` sample at 1920×1080 on the exported executable, same host as Task 3) require the hardware-rendered Linux x86_64 reference host that still does not exist in this session — see the blocking acceptance dependency under **Reference host / revision**. No final export, no marker output, no early-vs-final comparison, and no mean-live-units figure exists; none are invented.
+
+**Performance gate (Task 6 Step 3): no measurement → no performance change.** With both hardware samples blocked there is no measurement, therefore no measured owner to profile and no evidence to justify any performance-motivated code change. No profile-driven fix exists (none could: no measurements existed anywhere in this session), so there is no before/after evidence to record. Profiling and any fix remain deferred until the reference host is provisioned.
 
 ## Package verification
 
-**BLOCKED — no Linux x86_64 host (same Task-0 dependency).** Steps 5–7 of Task 5 (run `./scripts/package_linux_x86_64.sh` without `GRUS_MAIN_SCENE` on a fresh checkout, extract elsewhere, launch outside the editor, and complete the packaged gameplay journey: Start → pause/resume → select + gather → place/build → train → scout/fog/minimap → fight → Victory or Defeat → Restart-clean → start again → Quit) **did not run and no result is recorded or invented**. The packaging script and its `GRUS_MAIN_SCENE` trap were delivered in Task 3 (see Early release performance above), but the script's export/archive steps require the Linux x86_64 host that this session does not have — the same blocking acceptance dependency recorded under **Reference host / revision**. No tarball, extraction, launch, journey observation, or `sha256sum dist/grus-linux-x86_64.tar.gz` exists; the package hash is explicitly **BLOCKED** until that host exists.
+**BLOCKED — no Linux x86_64 host (same Task-0 dependency).** Steps 5–7 of Task 5 (run `./scripts/package_linux_x86_64.sh` without `GRUS_MAIN_SCENE` on a fresh checkout, extract elsewhere, launch outside the editor, and complete the packaged gameplay journey: Start → pause/resume → select + gather → place/build → train → scout/fog/minimap → fight → Victory or Defeat → Restart-clean → start again → Quit) **did not run and no result is recorded or invented**. The packaging script and its `GRUS_MAIN_SCENE` trap were delivered in Task 3 (see Early release performance above), but the script's export/archive steps require the Linux x86_64 host that this session does not have — the same blocking acceptance dependency recorded under **Reference host / revision**. No tarball, extraction, launch, journey observation, or `sha256sum dist/grus-linux-x86_64.tar.gz` exists; the package hash is explicitly **BLOCKED** until that host exists. Task 6's final rebuild of the normal package (re-run without `GRUS_MAIN_SCENE`, recheck extraction/boot, fresh `sha256sum`) is blocked by the same missing host — the blocked status above covers the Task-5 and Task-6 package steps alike; no new hash exists.
 
 ## Fresh-player usability
 
@@ -73,11 +77,17 @@ Verified by inspection on 2026-10-16: the repository contains no third-party gam
 
 ## Final CI
 
-(empty — to be filled)
+Validated code SHA: PENDING — CI URL pending — **controller pushes this SHA; CI URL to be recorded here**.
+
+Requirement (Task 6 Step 5): after the push, all three GitHub Actions jobs must be green on that exact SHA — `rust-build-lint`, `unit-tests`, `e2e`. This automated release gate is the final gate; it is not replaced by a hand-maintained local command list. (Supplementary only: before these commits, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --locked`, and the five headless Godot smokes all ran green on this tree on the development machine.)
 
 ## Remaining limitations
 
-- No hardware-rendered Linux x86_64 reference host is available; all hardware acceptance evidence (performance, GPU/adapter identification) is blocked until one is provisioned.
-- The packaged-build acceptance chain (Task 5 Steps 5–8) is blocked by the same missing host: no package build/extract/launch, no packaged gameplay journey, no `sha256sum` of `dist/grus-linux-x86_64.tar.gz` (see Package verification above).
-- The first-time-player usability evidence (Task 5 Step 7) is missing: no fresh player attempted the extracted build with only the in-game controls label in this session; running it needs a human with the extracted package on the reference host (see Fresh-player usability above).
-- The four interactive playtests (Playtest matrix), their restart-cleanliness and Victory/Defeat lifecycle records (Restart + lifecycle outcomes), and consequently any balance tuning (Tuning log) are **not run**: this agent session has no human player and no playable interactive session. All four cells carry an explicit not-run status above; running them only needs a human with `godot --path godot` (and `GRUS_MIRRORED_START=1` for the mirrored pair) on the delivered build.
+Consolidated list; each item carries its per-section owner above.
+
+- **No Linux x86_64 reference host (root blocker):** no hardware-rendered Linux x86_64 machine exists in this session, so all hardware acceptance evidence is blocked — no final export, no early or final 60-second benchmark sample, no GPU/adapter identification (see Reference host / revision, Early release performance, Final release performance).
+- **Four directional playtests not run:** every playtest-matrix cell is an explicit not-run; this agent session has no human player and no playable interactive session. Running them needs only a human with `godot --path godot` (and `GRUS_MIRRORED_START=1` for the mirrored pair) (see Playtest matrix).
+- **Both lifecycle outcomes + restart cleanliness not evidenced:** the Victory/Defeat outcome records and repeated-restart cleanliness checks share the playtest blocker and were not run (see Restart + lifecycle outcomes); balance tuning stays blocked with them (see Tuning log).
+- **Extracted-package journey not run + no final tarball hash:** no package build/extract/launch, no packaged gameplay journey, and no `sha256sum` of `dist/grus-linux-x86_64.tar.gz` — blocked by the missing host, identically for the Task-5 and Task-6 package steps (see Package verification).
+- **Fresh-player usability not run:** no first-time player attempted the extracted build using only the in-game controls label; this needs a human with the extracted package on the reference host (see Fresh-player usability).
+- **Teardown-139 still applies; handled in CI:** the post-contract-marker exit 139 (Godot's teardown path dlclose()s the extension while bevy_asset's parked async-io driver thread holds module TLS in the `.so`; upstream godot-bevy 0.12 / bevy_asset shutdown ordering, both `=`-pinned) still exists. `.github/workflows/ci.yml` gates every smoke/benchmark/export step on the printed contract marker and demotes a post-marker 139 to a `::warning` (`TEARDOWN_WARNED`) instead of a failure, so it neither masks a broken contract nor fails the run; the defect itself remains open upstream.
