@@ -998,11 +998,21 @@ fn setup_fixture(world: &mut World) {
     if world.get_resource::<UnitIndex>().is_some() {
         return;
     }
-    seed_match_world(world, false);
+    seed_match_world(world, mirrored_start_from_env());
     // Normal Godot setup boots into Start; start_match opens gameplay.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+}
+
+/// The manual mirrored-launch switch, read only here at the bridge seed
+/// boundary — never inside pure simulation. Exactly `GRUS_MIRRORED_START=1`
+/// swaps the authored team starts for the whole launch; unset or any other
+/// value keeps Team 1 left / Team 2 right. Boot and every restart re-read
+/// the same process env, so one launch choice cannot drift mid-session.
+/// Deliberately not a menu toggle.
+fn mirrored_start_from_env() -> bool {
+    std::env::var("GRUS_MIRRORED_START").is_ok_and(|value| value == "1")
 }
 
 /// The one shared match seed path for boot, restart and the benchmark:
@@ -1357,7 +1367,9 @@ fn update_health_bars(
 
 fn reset_fixture_world(world: &mut World) {
     clear_gameplay_world(world);
-    seed_match_world(world, false);
+    // The restart re-reads the launch env so a mirrored launch stays
+    // mirrored across every restart in the same process.
+    seed_match_world(world, mirrored_start_from_env());
     // A normal-skirmish restart returns the session to Start — fogged with a
     // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
@@ -1371,6 +1383,9 @@ fn reset_fixture_world(world: &mut World) {
 
 fn reset_benchmark_world(world: &mut World) {
     clear_gameplay_world(world);
+    // The benchmark always measures the authored layout: it is a load
+    // fixture, not a match, so the mirrored launch flag must not change
+    // its physical layout between runs.
     seed_match_world(world, false);
     // The benchmark extends the normal seed with the pure mixed workload —
     // roster, staging and initial orders belong to grus-sim — and inserts
@@ -1772,6 +1787,48 @@ mod tests {
         assert!(
             world.resource::<VisibilityMap>().revision() >= 1,
             "the benchmark fog must be refreshed, not a stale empty map"
+        );
+    }
+
+    /// The mirrored manual launch through the bridge seed boundary:
+    /// `seed_match_world(.., true)` swaps the authored team starts while the
+    /// AI issuer stays Team 2. The plan-side pin is exercised end-to-end in
+    /// grus-sim (`mirrored_harness_pins_the_authored_plan_side`).
+    #[test]
+    fn mirrored_seed_swaps_the_team_starts_and_keeps_the_team_two_issuer() {
+        let [left, right] = MapFixture::team_starts();
+        let mut world = World::new();
+        seed_match_world(&mut world, true);
+
+        let town_center_anchor = |world: &World, team: TeamId| {
+            let entity = world
+                .resource::<BuildingIndex>()
+                .iter()
+                .find_map(|(_, entity)| {
+                    world
+                        .get::<Building>(*entity)
+                        .is_some_and(|building| {
+                            building.team == team && building.kind == BuildingKind::TownCenter
+                        })
+                        .then_some(*entity)
+                })
+                .expect("a seeded Town Center per team");
+            world.get::<Footprint>(entity).unwrap().anchor
+        };
+        assert_eq!(
+            town_center_anchor(&world, TeamId(1)),
+            right.town_center_anchor,
+            "mirrored: Team 1 seeds on the authored right start"
+        );
+        assert_eq!(
+            town_center_anchor(&world, TeamId(2)),
+            left.town_center_anchor,
+            "mirrored: Team 2 seeds on the authored left start"
+        );
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "mirroring swaps starts, never the AI issuer"
         );
     }
 
