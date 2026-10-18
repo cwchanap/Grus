@@ -77,7 +77,7 @@ Verified by inspection on 2026-10-16: the repository contains no third-party gam
 
 ## Final CI
 
-Validated code SHA: PENDING — CI URL pending — **controller pushes this SHA; CI URL to be recorded here**.
+Validated code SHA: `857e0b6f748dab499fac3ec22ef6718f50116f98` — CI URL pending — **controller pushes this SHA; CI URL to be recorded here**.
 
 Requirement (Task 6 Step 5): after the push, all three GitHub Actions jobs must be green on that exact SHA — `rust-build-lint`, `unit-tests`, `e2e`. This automated release gate is the final gate; it is not replaced by a hand-maintained local command list. (Supplementary only: before these commits, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --locked`, and the five headless Godot smokes all ran green on this tree on the development machine.)
 
