@@ -77,7 +77,8 @@ Verified by inspection on 2026-10-16: the repository contains no third-party gam
 
 ## Final CI
 
-Validated code SHA: `857e0b6f748dab499fac3ec22ef6718f50116f98` — CI URL pending — **controller pushes this SHA; CI URL to be recorded here**.
+Validated code SHA: `857e0b6f748dab499fac3ec22ef6718f50116f98`; pushed head `24806c77ea1c4ec6b784035c51f724a5c48384c5` (docs-only delta on top).
+Final CI run: https://github.com/cwchanap/Grus/actions/runs/39103831991 — **success** on pushed head `24806c7` (pull_request): `rust-build-lint` ✅, `unit-tests` ✅, `e2e` ✅. Known post-marker teardown-139 warning appeared in e2e and was handled non-fatally by the existing workflow guard.
 
 Requirement (Task 6 Step 5): after the push, all three GitHub Actions jobs must be green on that exact SHA — `rust-build-lint`, `unit-tests`, `e2e`. This automated release gate is the final gate; it is not replaced by a hand-maintained local command list. (Supplementary only: before these commits, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --locked`, and the five headless Godot smokes all ran green on this tree on the development machine.)
 
