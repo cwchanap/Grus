@@ -68,6 +68,11 @@ const ARMY_ROTATION: [UnitKind; 3] = [UnitKind::Spearman, UnitKind::Archer, Unit
 #[derive(Debug, Resource)]
 pub struct AiController {
     pub team: TeamId,
+    /// The authored plan side `step_ai` decides against. Normal play pins it
+    /// to `team`; the mirrored-start harness pins Team 2 to the left plan
+    /// (`TeamId(1)`) because its physical start is the authored left side.
+    /// Commands still issue from `team`.
+    authored_plan_team: TeamId,
     decision_accumulator: f32,
     scout_route_index: usize,
     /// The only retained enemy memory: the last cell of an enemy Town Center
@@ -95,12 +100,21 @@ impl AiController {
     pub fn new(team: TeamId) -> Self {
         Self {
             team,
+            authored_plan_team: team,
             decision_accumulator: 0.0,
             scout_route_index: 0,
             remembered_enemy_town_center: None,
             blocked_anchors: Vec::new(),
             next_army_kind: 0,
         }
+    }
+
+    /// The one mirrored-harness seam: pin the authored plan side so a
+    /// controller whose physical start is the other side still walks its
+    /// own side's anchors and routes.
+    pub fn with_authored_plan_side(mut self, plan_side: TeamId) -> Self {
+        self.authored_plan_team = plan_side;
+        self
     }
 }
 
@@ -170,7 +184,7 @@ pub fn step_ai(world: &mut World, map: &mut GridMap, seconds: f32) {
     controller.decision_accumulator += seconds;
     if controller.decision_accumulator >= AI_DECISION_SECONDS {
         controller.decision_accumulator -= AI_DECISION_SECONDS;
-        let plan = MapFixture::team_plan(controller.team);
+        let plan = MapFixture::team_plan(controller.authored_plan_team);
         for planned in decide_ai_commands(world, &mut controller, &plan, map) {
             // Rejects never reach the human `CommandFeedback` channel, but
             // they do gate the controller transition the command carried.

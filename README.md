@@ -115,7 +115,7 @@ HUD controls consume their mouse events so UI interaction does not leak into wor
 ### Reset modes
 
 - **Fixture reset** (`reset_fixture`, used by `reset_test.tscn`): despawns gameplay and reseeds the 8-unit/2-building/18-resource skirmish with starting stockpiles.
-- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the benchmark-only 200-villager fixture for the 1080p performance baseline; it is never used by the runtime skirmish or its smokes.
+- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the **session-free mixed 100-vs-100 skirmish** — the normal fixture seed plus a workload of 96 added units per team (16 Villagers, 30 Spearmen, 30 Archers, 20 Cavalry) with initial gather and attack-move orders, running under fog of war against the Team-2 AI and **no match session** (a missing session reads as Playing, so the load can never freeze). It is never used by the runtime skirmish or its smokes.
 
 ### Linux x86_64 export
 
@@ -163,27 +163,6 @@ GRUS_E2E_BINARY=<path-to-exported-grus> \
 
 `GRUS_E2E_BINARY` must point at the exported Grus executable (stage the extension, then `godot --headless --path godot --export-debug "Linux x86_64"` as in the export section above); without it the e2e test skips loudly instead of running.
 
-## 200-unit 1080p baseline
+## Benchmark
 
-The 200-unit fixture exists only for this benchmark (`benchmark_200.tscn` after an explicit benchmark reset); the runtime game and its smokes run the skirmish fixture above.
-
-CI run **95** records the post-20-Hz/interpolation 1920x1080 baseline while **all 200 units are moving** through the retained command/path/movement systems.
-
-| Item | Baseline |
-| --- | --- |
-| Host OS | Ubuntu 24.04, Linux x86_64 |
-| Reference CPU | 4 vCPU, AMD EPYC 7763 64-Core Processor |
-| Godot | 4.6.2 |
-| Build mode | Rust dev/debug GDExtension in the Godot editor runtime; debug export verified separately |
-| Display | X11 via Xvfb, 1920x1080 |
-| Renderer | `gl_compatibility`, OpenGL 4.5 |
-| Adapter | Mesa `llvmpipe` (LLVM 20.1.2, 256-bit) software renderer |
-| Sample | 8 warm-up frames + 40 measured frames |
-| Mean frame time | 192.607 ms |
-| p50 | 198.735 ms |
-| p95 | 208.873 ms |
-| p99 | 210.047 ms |
-| Max | 210.047 ms |
-| Mean FPS | 5.2 |
-
-This is intentionally a **software-rendered CI reference baseline**, not a representative discrete/integrated-GPU performance result. The project target remains 60 FPS; a hardware-rendered workstation measurement is still required before treating that target as achieved or missed.
+The benchmark fixture (mixed 100-vs-100, see **Reset modes** above) exists only for `benchmark_200.tscn` after an explicit benchmark reset; the runtime game and its smokes run the skirmish fixture above. Current HPA-474 measurements live in [`docs/hpa-474-mvp-evidence.md`](docs/hpa-474-mvp-evidence.md); the HPA-470 numeric baseline table was removed from this file — PR #1 and git history remain its historical record.

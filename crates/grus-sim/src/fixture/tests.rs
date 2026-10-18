@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use crate::buildings::Building;
 use crate::catalog::{Age, resource_amount};
+use crate::combat::CombatOrder;
 use crate::commands::UnitIndex;
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
 use crate::ids::IdAllocator;
@@ -32,27 +33,168 @@ fn retained_battlefield_has_multiple_routes_between_base_zones() {
     assert!(!alternate.contains(&interior));
 }
 
-#[test]
-fn two_hundred_unit_fixture_has_stable_unique_walkable_spawns() {
-    let fixture = MapFixture::battlefield();
-    let units = fixture.units_200();
-    let ids = units.iter().map(|unit| unit.id).collect::<HashSet<_>>();
+/// Team-kind census over the live `UnitIndex`, sorted nowhere — counts only.
+fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> usize {
+    world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter(|(_, entity)| {
+            world
+                .get::<Unit>(**entity)
+                .is_some_and(|unit| unit.team == team && unit.kind == kind)
+        })
+        .count()
+}
 
-    assert_eq!(units.len(), 200);
-    assert_eq!(ids.len(), 200);
-    assert_eq!(
-        units.iter().filter(|unit| unit.team == TeamId(1)).count(),
-        100
-    );
-    assert_eq!(
-        units.iter().filter(|unit| unit.team == TeamId(2)).count(),
-        100
-    );
-    assert!(units.iter().all(|unit| {
-        fixture
-            .map
-            .is_walkable(fixture.map.world_to_cell(unit.position))
-    }));
+#[test]
+fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+
+    seed_skirmish(&mut world, &mut map, &fixture);
+    extend_with_benchmark_workload(&mut world, &mut map);
+
+    // The mixed roster: the four authored villagers plus the workload make
+    // 20/30/30/20 per team — 200 units total.
+    for team in [TeamId(1), TeamId(2)] {
+        assert_eq!(units_of_kind(&world, team, UnitKind::Villager), 20);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Spearman), 30);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Archer), 30);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Cavalry), 20);
+        assert!(
+            world.resource::<TeamEconomy>().0.contains_key(&team),
+            "team {team:?} economy present"
+        );
+    }
+    assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
+
+    // IDs flowed only through the allocator: 8 authored + 192 allocated.
+    assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
+
+    // The two starting Town Centers still stand completed, one per team.
+    let town_centers = world
+        .resource::<BuildingIndex>()
+        .iter()
+        .filter(|(_, entity)| {
+            world.get::<Building>(**entity).is_some_and(|building| {
+                building.kind == BuildingKind::TownCenter && building.construction.complete
+            })
+        })
+        .count();
+    assert_eq!(town_centers, 2);
+
+    // The authored standalone resources are untouched.
+    assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
+
+    // Every added unit stands in bounds on a walkable (non-authored-blocked)
+    // cell — staging never parks a unit inside terrain, a Town Center or a
+    // resource.
+    for (_, entity) in world.resource::<UnitIndex>().iter() {
+        let position = world.get::<SimPosition>(*entity).unwrap().current;
+        let cell = map.world_to_cell(position);
+        assert!(
+            map.in_bounds(cell) && map.is_walkable(cell),
+            "unit at {position:?} sits on invalid cell {cell:?}"
+        );
+    }
+
+    // The initial Gather/AttackMove commands were applied through the
+    // ordinary dispatcher and accepted: the first 12 sorted villagers per
+    // side are tasked two-per-source to the authored safe sources, and both
+    // armies hold one AttackMove order toward the shared midfield corridor.
+    for team in [TeamId(1), TeamId(2)] {
+        let tasked: HashSet<u32> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter_map(|(id, entity)| {
+                let unit = world.get::<Unit>(*entity)?;
+                (unit.team == team).then_some(())?;
+                match world.get::<WorkerTask>(*entity)? {
+                    WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } => Some(id.0),
+                    _ => None,
+                }
+            })
+            .collect();
+        assert_eq!(
+            tasked.len(),
+            12,
+            "team {team:?}: twelve villagers tasked by the setup gathers"
+        );
+        let marching = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Unit>(**entity)
+                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Villager)
+                    && matches!(
+                        world.get::<CombatOrder>(**entity),
+                        Some(CombatOrder::AttackMove { .. })
+                    )
+            })
+            .count();
+        assert_eq!(
+            marching, 80,
+            "team {team:?}: every combatant marches on the midfield corridor"
+        );
+    }
+}
+
+#[test]
+fn mirrored_seeding_swaps_the_authored_team_starts() {
+    let fixture = MapFixture::battlefield();
+    let [left, right] = MapFixture::team_starts();
+
+    for (mirrored, team_one_start, team_two_start) in [
+        // Default: Team 1 left, Team 2 right.
+        (false, &left, &right),
+        // Mirrored: Team 1 right, Team 2 left.
+        (true, &right, &left),
+    ] {
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish_mirrored(&mut world, &mut map, &fixture, mirrored);
+
+        for (team, start) in [(TeamId(1), team_one_start), (TeamId(2), team_two_start)] {
+            // The team's Town Center stands on the expected authored anchor.
+            let tc_entity = world
+                .resource::<BuildingIndex>()
+                .iter()
+                .find_map(|(_, entity)| {
+                    world
+                        .get::<Building>(*entity)
+                        .is_some_and(|building| {
+                            building.team == team && building.kind == BuildingKind::TownCenter
+                        })
+                        .then_some(*entity)
+                })
+                .expect("a seeded Town Center per team");
+            assert_eq!(
+                world.get::<Footprint>(tc_entity).unwrap().anchor,
+                start.town_center_anchor,
+                "mirrored={mirrored}: team {team:?} town center on the wrong start"
+            );
+
+            // And its four villagers stand exactly on that start's cells.
+            let villager_cells: HashSet<GridPos> = world
+                .resource::<UnitIndex>()
+                .iter()
+                .filter_map(|(_, entity)| {
+                    let unit = world.get::<Unit>(*entity)?;
+                    (unit.team == team && unit.kind == UnitKind::Villager).then_some(|| {
+                        map.world_to_cell(world.get::<SimPosition>(*entity).unwrap().current)
+                    })
+                })
+                .map(|get_cell| get_cell())
+                .collect();
+            let expected: HashSet<GridPos> = start.villagers.into_iter().collect();
+            assert_eq!(
+                villager_cells, expected,
+                "mirrored={mirrored}: team {team:?} villagers on the wrong start"
+            );
+        }
+    }
 }
 
 #[test]

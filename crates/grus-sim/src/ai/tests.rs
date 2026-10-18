@@ -14,8 +14,8 @@ use crate::movement::SimPosition;
 use crate::session::{MatchPhase, MatchSession, active_phase};
 use crate::visibility::{VisibilityMap, refresh_visibility};
 use crate::{
-    SIM_STEP_SECONDS, seed_skirmish, step_combat, step_construction, step_economy, step_movement,
-    step_production,
+    SIM_STEP_SECONDS, seed_skirmish, seed_skirmish_mirrored, step_combat, step_construction,
+    step_economy, step_movement, step_production,
 };
 
 /// Tick budget for every bounded journey loop; a correct AI settles far
@@ -72,7 +72,7 @@ fn run_until(
 /// fire.
 fn decide(world: &mut World, map: &GridMap) -> Vec<PlayerCommand> {
     let mut controller = world.remove_resource::<AiController>().unwrap();
-    let plan = MapFixture::team_plan(controller.team);
+    let plan = MapFixture::team_plan(controller.authored_plan_team);
     let planned = decide_ai_commands(world, &mut controller, &plan, map);
     world.insert_resource(controller);
     planned.into_iter().map(|planned| planned.command).collect()
@@ -83,7 +83,7 @@ fn decide(world: &mut World, map: &GridMap) -> Vec<PlayerCommand> {
 /// transitions commit only on acceptance.
 fn decide_and_apply(world: &mut World, map: &mut GridMap) -> Vec<PlayerCommand> {
     let mut controller = world.remove_resource::<AiController>().unwrap();
-    let plan = MapFixture::team_plan(controller.team);
+    let plan = MapFixture::team_plan(controller.authored_plan_team);
     let planned = decide_ai_commands(world, &mut controller, &plan, map);
     let commands: Vec<PlayerCommand> = planned
         .iter()
@@ -480,6 +480,58 @@ fn scout_leg_retries_transient_rejects_and_skips_only_a_map_blocked_cell() {
     world.insert_resource(controller);
     decide_and_apply(&mut world, &mut map);
     assert_eq!(world.resource::<AiController>().scout_route_index, 2);
+}
+
+/// The mirrored-start harness seam, in the exact shape the bridge builds
+/// it: Team 2 physically seeds at the authored LEFT start (mirrored
+/// skirmish) while its controller is pinned to the left plan. It still
+/// issues Team-2 commands, scouts the left route leg and builds on the
+/// left authored anchors — `step_ai` decides against the pinned plan side,
+/// not against `team`.
+#[test]
+fn mirrored_harness_pins_the_authored_plan_side() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish_mirrored(&mut world, &mut map, &fixture, true);
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    world.insert_resource(AiController::new(TeamId(2)).with_authored_plan_side(TeamId(1)));
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    let left_plan = MapFixture::team_plan(TeamId(1));
+    let spearman = spawn_military(
+        &mut world,
+        &map,
+        UnitId(20),
+        TeamId(2),
+        GridPos::new(8, 46),
+        UnitKind::Spearman,
+    );
+
+    // One decision through the real gate (20 ticks = 1 s cadence).
+    for _ in 0..20 {
+        step_ai(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+
+    assert_eq!(
+        world.get::<MoveOrder>(spearman).unwrap().goal,
+        left_plan.scout_route[0],
+        "the pinned controller scouts the LEFT authored route with a Team-2 unit"
+    );
+    let barracks = own_buildings_of(&world, TeamId(2), BuildingKind::Barracks);
+    assert_eq!(barracks.len(), 1, "the pinned controller grew a Barracks");
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(barracks[0])
+        .unwrap();
+    assert_eq!(
+        world.get::<Footprint>(entity).unwrap().anchor,
+        left_plan.barracks_anchor,
+        "Team-2 commands land on the LEFT authored anchors"
+    );
 }
 
 // ---- Allocation -------------------------------------------------------------

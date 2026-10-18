@@ -35,7 +35,10 @@ pub use economy::{
     ResourceStockpile, TeamEconomy, TeamState, WorkerTask, gather_rate_for_age, idle_worker_ids,
     is_idle_worker, step_economy,
 };
-pub use fixture::{AiMapPlan, MapFixture, ResourceSpawn, TeamStart, seed_skirmish};
+pub use fixture::{
+    AiMapPlan, MapFixture, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
+    seed_skirmish_mirrored,
+};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
 pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};
