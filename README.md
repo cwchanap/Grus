@@ -93,6 +93,20 @@ The main Godot smoke exercises real input-derived click/box/additive selection, 
 
 ### Controls
 
+The Start overlay shows a compact first-run controls label until the match starts:
+
+```text
+Select: left click / drag / Shift
+Command: right click
+Attack-move: A then right click
+Stop: S
+Pause/resume: Esc
+Camera: wheel / middle-drag
+Minimap: click to recenter
+```
+
+The full reference:
+
 - Left click: select a friendly unit or building (units take priority within the click radius)
 - Shift + left click: add to selection
 - Left drag: box select
