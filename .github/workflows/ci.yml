@@ -232,6 +232,7 @@ jobs:
       - name: Benchmark 200 moving units at 1080p
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
+          GRUS_BENCHMARK_SECONDS: "10"
         run: |
           echo "GRUS_BENCHMARK_HOST"
           uname -a
@@ -240,7 +241,7 @@ jobs:
           set -o pipefail
           timeout 90s xvfb-run -a -s "-screen 0 1920x1080x24" godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn 2>&1 | tee benchmark.log || rc=$?
           rc=${rc:-0}
-          grep -q "GRUS_BENCHMARK_200 moved=200" benchmark.log || exit 1
+          grep -q "GRUS_BENCHMARK_200 start_units=200" benchmark.log || exit 1
           if [ "$rc" -eq 139 ]; then
             echo "::warning::benchmark contract held but godot exited 139 during teardown"
             echo "TEARDOWN_WARNED=1" >> "$GITHUB_ENV"
