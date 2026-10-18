@@ -6,3 +6,4 @@ godot/bin/*
 .DS_Store
 .worktrees/
 test_output/
+dist/
