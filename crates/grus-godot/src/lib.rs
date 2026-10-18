@@ -14,10 +14,10 @@ use grus_sim::{
     PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
-    apply_player_command, explored_by, gather_rate_for_age, idle_worker_ids, population_cap,
-    population_used, produces, refresh_visibility, seed_skirmish, set_paused, spawn_unit,
-    start_match, step_ai, step_combat, step_construction, step_economy, step_movement,
-    step_production, validate_placement, visible_to,
+    apply_player_command, explored_by, extend_with_benchmark_workload, gather_rate_for_age,
+    idle_worker_ids, population_cap, population_used, produces, refresh_visibility,
+    seed_skirmish_mirrored, set_paused, start_match, step_ai, step_combat, step_construction,
+    step_economy, step_movement, step_production, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -228,27 +228,6 @@ impl GrusBridgeNode {
     }
 
     #[func]
-    fn benchmark_move_all(&self) -> bool {
-        let fixture = MapFixture::battlefield();
-        let player_queued = queue_command(PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units: (1_u32..=100).map(UnitId).collect(),
-            kind: UnitCommandKind::Move {
-                target: fixture.right_spawn,
-            },
-        }));
-        let enemy_queued = queue_command(PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(2),
-            units: (101_u32..=200).map(UnitId).collect(),
-            kind: UnitCommandKind::Move {
-                target: fixture.left_spawn,
-            },
-        }));
-
-        player_queued && enemy_queued
-    }
-
-    #[func]
     fn reset_fixture(&mut self) -> bool {
         let Some(mut app_node) = bevy_app_singleton() else {
             return false;
@@ -361,9 +340,10 @@ impl GrusBridgeNode {
         };
 
         reset_benchmark_world(app.world_mut());
-        // Same stale-cache hazard as the fixture reset: the benchmark map is
-        // visibility-free, so the cache would otherwise survive into the
-        // next normal fixture reset.
+        // Same stale-cache hazard as the fixture reset: the benchmark's fresh
+        // map can reuse a revision the bridge already cached from the
+        // previous match, and the cached payload would then outlive the
+        // reset — drop it so the next fetch rebuilds from the reseeded map.
         self.visibility_cache = None;
         true
     }
@@ -431,7 +411,7 @@ impl GrusBridgeNode {
 
     /// Monotonic Team-1 visibility revision for cheap per-frame polling: fog
     /// and minimap fetch the packed snapshot only when this changes. `-1`
-    /// when no visibility state exists (the visibility-free benchmark).
+    /// when no visibility state exists.
     #[func]
     fn visibility_revision(&self) -> i64 {
         with_app(|app| {
@@ -1018,23 +998,35 @@ fn setup_fixture(world: &mut World) {
     if world.get_resource::<UnitIndex>().is_some() {
         return;
     }
-    let fixture = MapFixture::battlefield();
-    let mut map = fixture.map.clone();
-    seed_skirmish(world, &mut map, &fixture);
-    world.insert_resource(map);
+    seed_match_world(world, false);
     // Normal Godot setup boots into Start; start_match opens gameplay.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
+}
+
+/// The one shared match seed path for boot, restart and the benchmark:
+/// seeds the authored skirmish (mirrored flips the team starts), inserts
+/// the map, inserts fresh Team-1 fog with an initial refresh, and inserts
+/// the Team-2 AI controller whose authored plan side matches its physical
+/// start. Deliberately does NOT insert a `MatchSession` — normal callers
+/// add `Start`; the benchmark stays session-free so the missing session
+/// (Playing forever) can never freeze the load.
+fn seed_match_world(world: &mut World, mirrored: bool) {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    seed_skirmish_mirrored(world, &mut map, &fixture, mirrored);
+    world.insert_resource(map);
     insert_fresh_visibility(world);
-    // The Team-2 economic AI opponent ships with every normal setup; the
-    // benchmark reset never inserts one.
-    world.insert_resource(AiController::new(TeamId(2)));
+    // Mirrored, Team 2 physically holds the authored left start, so its
+    // plan side is the left-authored table.
+    let plan_side = if mirrored { TeamId(1) } else { TeamId(2) };
+    world.insert_resource(AiController::new(TeamId(2)).with_authored_plan_side(plan_side));
 }
 
 /// Normal runtime gameplay runs fogged: a fresh `VisibilityMap` beside the
 /// session plus one initial refresh so the Start screen already has correct
-/// fog. The benchmark reset never calls this — it stays visibility-free.
+/// fog. Every seed path calls this through `seed_match_world`.
 fn insert_fresh_visibility(world: &mut World) {
     world.insert_resource(VisibilityMap::default());
     world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
@@ -1365,19 +1357,12 @@ fn update_health_bars(
 
 fn reset_fixture_world(world: &mut World) {
     clear_gameplay_world(world);
-    let fixture = MapFixture::battlefield();
-    let mut map = fixture.map.clone();
-    seed_skirmish(world, &mut map, &fixture);
-    world.insert_resource(map);
+    seed_match_world(world, false);
     // A normal-skirmish restart returns the session to Start — fogged with a
     // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
-    insert_fresh_visibility(world);
-    // A fresh controller: scout progress, exploration-adjacent decision
-    // state and the remembered enemy Town Center all restart clean.
-    world.insert_resource(AiController::new(TeamId(2)));
     // The clear despawns the selector-bearing gameplay entities; reattach the
     // e2e selector surface to the reseeded fixture. Inert without BEVY_E2E=1.
     #[cfg(feature = "e2e")]
@@ -1386,18 +1371,14 @@ fn reset_fixture_world(world: &mut World) {
 
 fn reset_benchmark_world(world: &mut World) {
     clear_gameplay_world(world);
-    let fixture = MapFixture::battlefield();
-    world.insert_resource(fixture.map.clone());
-    for spawn in fixture.units_200() {
-        spawn_unit(
-            world,
-            spawn.id,
-            spawn.team,
-            spawn.position,
-            UnitKind::Villager,
-            12.0,
-        );
-    }
+    seed_match_world(world, false);
+    // The benchmark extends the normal seed with the pure mixed workload —
+    // roster, staging and initial orders belong to grus-sim — and inserts
+    // no session: the missing session reads as Playing forever, which is
+    // what keeps the load test from freezing on a settled match.
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        extend_with_benchmark_workload(world, &mut map);
+    });
 }
 
 /// The narrow test-disable seam behind `disable_ai_for_test`: Start-only and
@@ -1437,11 +1418,11 @@ fn clear_gameplay_world(world: &mut World) {
     world.remove_resource::<ResourceIndex>();
     world.remove_resource::<TeamEconomy>();
     world.remove_resource::<IdAllocator>();
-    // Visibility dies with the match: the benchmark restart must stay
-    // visibility-free, and a normal reset re-inserts a fresh fogged map.
+    // Visibility dies with the match: every seed path re-inserts a fresh
+    // fogged map through `seed_match_world`.
     world.remove_resource::<VisibilityMap>();
-    // The AI controller dies with the match: the benchmark stays AI-free and
-    // a normal reset re-inserts a fresh Team-2 controller.
+    // The AI controller dies with the match: every seed path re-inserts a
+    // fresh Team-2 controller through `seed_match_world`.
     world.remove_resource::<AiController>();
     // Combat/session transients die with the match: the benchmark restarts
     // session-free (missing session = Playing), the normal reset re-inserts
@@ -1672,7 +1653,8 @@ mod tests {
     use bevy::prelude::World;
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
-    use grus_sim::{CombatEvent, CombatTarget, MatchResult, MoveOrder, WorkerTask};
+    use grus_sim::seed_skirmish;
+    use grus_sim::{CombatEvent, CombatTarget, MatchResult, MoveOrder, WorkerTask, spawn_unit};
 
     use super::*;
 
@@ -1751,8 +1733,8 @@ mod tests {
 
     /// Runtime setup fog: the fixture boots with a fresh `VisibilityMap`, an
     /// initial refresh (revision >= 1), the enemy start Unexplored and the
-    /// own start Visible. Restarts re-fog; the benchmark stays free of
-    /// visibility so its full-information contract cannot silently flip.
+    /// own start Visible. Restarts and the benchmark reset re-fog the same
+    /// way through the shared seed path.
     #[test]
     fn runtime_setup_and_resets_manage_the_visibility_resource() {
         let mut world = World::new();
@@ -1783,15 +1765,18 @@ mod tests {
         assert!(world.get_resource::<VisibilityMap>().is_some());
         assert!(world.resource::<VisibilityMap>().revision() >= 1);
 
-        // The benchmark reset must remove visibility: seed_skirmish and the
-        // 200-villager benchmark run full-information.
+        // The benchmark reset re-inserts a fresh fogged map too: the mixed
+        // workload runs under the same fog rules as the runtime skirmish.
         reset_benchmark_world(&mut world);
-        assert!(world.get_resource::<VisibilityMap>().is_none());
+        assert!(world.get_resource::<VisibilityMap>().is_some());
+        assert!(
+            world.resource::<VisibilityMap>().revision() >= 1,
+            "the benchmark fog must be refreshed, not a stale empty map"
+        );
     }
 
-    /// Normal setup/reset insert a fresh Team-2 controller; the benchmark
-    /// stays AI-free; the test-disable seam lifts only the controller and
-    /// only from Start.
+    /// Normal setup/reset and the benchmark insert a fresh Team-2 controller;
+    /// the test-disable seam lifts only the controller and only from Start.
     #[test]
     fn the_team_two_ai_controller_follows_setup_reset_and_test_disable() {
         let mut world = World::new();
@@ -1810,9 +1795,10 @@ mod tests {
         );
 
         reset_benchmark_world(&mut world);
-        assert!(
-            world.get_resource::<AiController>().is_none(),
-            "the benchmark fixture stays AI-free"
+        assert_eq!(
+            world.resource::<AiController>().team,
+            TeamId(2),
+            "the benchmark reset ships the Team-2 AI opponent too"
         );
 
         // The disable seam: no session at all must fail closed, Start must
@@ -2227,8 +2213,12 @@ mod tests {
         );
     }
 
+    /// The benchmark contract: the shared normal seed (fog + Team-2 AI)
+    /// extended with the pure mixed workload, and no `MatchSession` — the
+    /// missing session reads as Playing forever, so a settled stale session
+    /// cannot leak in and the load can never freeze.
     #[test]
-    fn benchmark_world_moves_units_without_a_session() {
+    fn benchmark_reset_is_session_free_mixed_workload() {
         let mut world = World::new();
         // A stale normal-skirmish session must not leak into the benchmark:
         // reset removes it, and the missing session reads as Playing.
@@ -2237,39 +2227,45 @@ mod tests {
         });
         reset_benchmark_world(&mut world);
         assert!(world.get_resource::<MatchSession>().is_none());
+        assert_eq!(
+            active_phase(&world),
+            MatchPhase::Playing,
+            "the missing session reads as Playing"
+        );
+
+        // The mixed 100-vs-100 roster: 20/30/30/20 per team.
+        let count = |team: TeamId, kind: UnitKind| {
+            world
+                .resource::<UnitIndex>()
+                .iter()
+                .filter(|(_, entity)| {
+                    world
+                        .get::<Unit>(**entity)
+                        .is_some_and(|unit| unit.team == team && unit.kind == kind)
+                })
+                .count()
+        };
+        for team in [TeamId(1), TeamId(2)] {
+            assert_eq!(count(team, UnitKind::Villager), 20);
+            assert_eq!(count(team, UnitKind::Spearman), 30);
+            assert_eq!(count(team, UnitKind::Archer), 30);
+            assert_eq!(count(team, UnitKind::Cavalry), 20);
+        }
         assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
 
-        let command = PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units: (1_u32..=100).map(UnitId).collect(),
-            kind: UnitCommandKind::Move {
-                target: MapFixture::battlefield().right_spawn,
-            },
-        });
-        world.resource_scope(|world, mut map: Mut<GridMap>| {
-            let result = apply_player_command(world, &mut map, command);
-            assert_eq!(result.reject, None);
-            assert!(result.rejected_units.is_empty());
-        });
-
-        let positions_before: Vec<Vec2> = (1_u32..=100)
-            .map(|id| {
-                let entity = world.resource::<UnitIndex>().entity(UnitId(id)).unwrap();
-                world.get::<SimPosition>(entity).unwrap().current
+        // The two starting Town Centers and all 18 authored sources survive
+        // from the shared skirmish seed.
+        let town_centers = world
+            .resource::<BuildingIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world.get::<Building>(**entity).is_some_and(|building| {
+                    building.kind == BuildingKind::TownCenter && building.construction.complete
+                })
             })
-            .collect();
-        let map = world.resource::<GridMap>().clone();
-        for _ in 0..20 {
-            step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        }
-        for (index, id) in (1_u32..=100).enumerate() {
-            let entity = world.resource::<UnitIndex>().entity(UnitId(id)).unwrap();
-            let position = world.get::<SimPosition>(entity).unwrap().current;
-            assert!(
-                position.distance(positions_before[index]) > 0.5,
-                "benchmark unit {id} never moved without Start interaction"
-            );
-        }
+            .count();
+        assert_eq!(town_centers, 2);
+        assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
     }
 
     /// The bridge drain is Team-1-only: a tick whose sim slot holds both a

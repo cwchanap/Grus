@@ -6,20 +6,16 @@ use crate::catalog::{
     Age, BuildingKind, ResourceKind, UnitKind, building_spec, resource_amount, unit_spec,
 };
 use crate::combat::Health;
-use crate::commands::spawn_unit;
+use crate::commands::{
+    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, spawn_unit,
+};
 use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
     spawn_resource_source,
 };
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
-
-#[derive(Clone, Copy, Debug)]
-pub struct UnitSpawn {
-    pub id: UnitId,
-    pub team: TeamId,
-    pub position: Vec2,
-}
+use crate::movement::Unit;
 
 /// Authored starting position of one team: Town Center anchor plus the four
 /// villager spawn cells. All values are cells on the 128×96 battlefield.
@@ -217,45 +213,47 @@ impl MapFixture {
                 .collect(),
         }
     }
-
-    pub fn units_200(&self) -> Vec<UnitSpawn> {
-        let mut units = Vec::with_capacity(200);
-
-        for row in 0..10 {
-            for column in 0..10 {
-                let offset = (row * 10 + column) as u32;
-                units.push(UnitSpawn {
-                    id: UnitId(offset + 1),
-                    team: TeamId(1),
-                    position: Vec2::new(
-                        self.left_spawn.x - 4.0 + column as f32,
-                        self.left_spawn.y - 4.0 + row as f32,
-                    ),
-                });
-                units.push(UnitSpawn {
-                    id: UnitId(offset + 101),
-                    team: TeamId(2),
-                    position: Vec2::new(
-                        self.right_spawn.x + 4.0 - column as f32,
-                        self.right_spawn.y - 4.0 + row as f32,
-                    ),
-                });
-            }
-        }
-
-        units
-    }
 }
 
-/// The pure simulation skirmish seed for one normal match: real completed
-/// Town Center Buildings (4×4 Footprints + `Dropoff` from birth), four
-/// Villagers per team with fresh worker components, both teams' economies
-/// (200 Food / 300 Wood / 100 Gold, Age 1), Town Center map occupancy, the
-/// authored finite resource sources, and `UnitIndex`/`BuildingIndex`
-/// `IdAllocator` counters above the authored maxima. Every starting entity
-/// flows through the production constructors — there is no temporary
-/// Dropoff-only Town Center.
+/// The default skirmish seed: Team 1 at the authored left start, Team 2 at
+/// the authored right start. The pure simulation skirmish seed for one
+/// normal match: real completed Town Center Buildings (4×4 Footprints +
+/// `Dropoff` from birth), four Villagers per team with fresh worker
+/// components, both teams' economies (200 Food / 300 Wood / 100 Gold, Age
+/// 1), Town Center map occupancy, the authored finite resource sources, and
+/// `UnitIndex`/`BuildingIndex` `IdAllocator` counters above the authored
+/// maxima. Every starting entity flows through the production constructors —
+/// there is no temporary Dropoff-only Town Center.
 pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture) {
+    seed_skirmish_mirrored(world, map, fixture, false);
+}
+
+/// The one narrow bool-selected variant the bridge's mirrored-start switch
+/// uses: when `mirrored`, Team 1 seeds at the authored right start and Team
+/// 2 at the authored left start. One bool over the same authored table — no
+/// scenario/faction abstraction.
+pub fn seed_skirmish_mirrored(
+    world: &mut World,
+    map: &mut GridMap,
+    fixture: &MapFixture,
+    mirrored: bool,
+) {
+    let [left, right] = MapFixture::team_starts();
+    let starts = if mirrored {
+        // Team 1 takes the authored right start, Team 2 the left one.
+        [
+            TeamStart {
+                team: TeamId(1),
+                ..right
+            },
+            TeamStart {
+                team: TeamId(2),
+                ..left
+            },
+        ]
+    } else {
+        [left, right]
+    };
     let mut economy = TeamEconomy::default();
     economy.insert_team(
         TeamId(1),
@@ -279,7 +277,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
 
     let mut unit_counter: u32 = 0;
     let town_center_health = building_spec(BuildingKind::TownCenter).max_health;
-    for (index, start) in MapFixture::team_starts().into_iter().enumerate() {
+    for (index, start) in starts.into_iter().enumerate() {
         let building_id = BuildingId(index as u32 + 1);
         let footprint = Footprint::new(start.town_center_anchor, 4, 4);
         for cell in footprint.cells() {
@@ -380,6 +378,159 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
         cell: GridPos::new(x, y),
         amount: resource_amount(kind),
     }
+}
+
+/// Per-team workload roster on top of the four authored villagers.
+const BENCHMARK_ROSTER: [(UnitKind, usize); 4] = [
+    (UnitKind::Villager, 16),
+    (UnitKind::Spearman, 30),
+    (UnitKind::Archer, 30),
+    (UnitKind::Cavalry, 20),
+];
+
+/// The shared AttackMove target: the authored northern midfield corridor
+/// waypoint (team-1 scout route leg) — walkable, center-map, and never a
+/// Town Center, so the benchmark load fights in the field instead of ending
+/// the match.
+const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
+
+/// Extends an already-seeded **non-mirrored** skirmish with the benchmark
+/// workload: 96 more units per team (the roster above) staged on
+/// deterministic mirrored walkable cells — team 2 point-reflects team 1's
+/// cells through the map center — IDs taken only from the `IdAllocator`, the
+/// production worker bundle on every spawn, then the initial commands
+/// applied through the ordinary dispatcher: the first 12 sorted villagers
+/// per side go two-per-source onto the authored safe sources, and every
+/// combatant AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected
+/// setup command: a benchmark that boots with rejected orders would
+/// silently measure an idle crowd.
+pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
+    for team in [TeamId(1), TeamId(2)] {
+        let mut cells = benchmark_staging_cells(map, team).into_iter();
+        for (kind, count) in BENCHMARK_ROSTER {
+            for _ in 0..count {
+                let cell = cells.next().expect("staging capacity");
+                let unit_id = world.resource_mut::<IdAllocator>().allocate_unit();
+                let spawned = spawn_unit(
+                    world,
+                    unit_id,
+                    team,
+                    map.cell_center(cell),
+                    kind,
+                    unit_spec(kind).speed,
+                );
+                world.entity_mut(spawned).insert((
+                    Carry::Empty,
+                    GatherProgress::default(),
+                    WorkerTask::Idle,
+                ));
+            }
+        }
+    }
+
+    // Membership resolves from the live world, not spawn-order bookkeeping.
+    let target = map.cell_center(BENCHMARK_MIDFIELD);
+    for team in [TeamId(1), TeamId(2)] {
+        let workers: Vec<UnitId> = live_team_kind_ids(world, team, UnitKind::Villager)
+            .into_iter()
+            .take(12)
+            .collect();
+        for (pair, source) in workers.chunks(2).zip(safe_source_ids(team)) {
+            accept(
+                world,
+                map,
+                PlayerCommand::Gather {
+                    issuer: team,
+                    workers: pair.to_vec(),
+                    source,
+                },
+            );
+        }
+        let army: Vec<UnitId> = [UnitKind::Spearman, UnitKind::Archer, UnitKind::Cavalry]
+            .into_iter()
+            .flat_map(|kind| live_team_kind_ids(world, team, kind))
+            .collect();
+        accept(
+            world,
+            map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: team,
+                units: army,
+                kind: UnitCommandKind::AttackMove { target },
+            }),
+        );
+    }
+}
+
+/// Applies one deterministic setup command and panics unless it was fully
+/// accepted (no top-level reject, no rejected units).
+fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
+    let result = apply_player_command(world, map, command);
+    assert!(
+        result.reject.is_none() && result.rejected_units.is_empty(),
+        "benchmark setup command rejected: {result:?}"
+    );
+}
+
+/// The first `BENCHMARK_ROSTER` units per team stage on the first 96
+/// row-major walkable cells of x 26..=53, y 20..=75 — a region holding no
+/// authored blocker, Town Center or source — and team 2 mirrors them by
+/// point reflection through the map center (the axis the authored map is
+/// symmetric under).
+fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
+    if team == TeamId(2) {
+        return benchmark_staging_cells(map, TeamId(1))
+            .into_iter()
+            .map(point_reflect)
+            .collect();
+    }
+    let capacity: usize = BENCHMARK_ROSTER.iter().map(|(_, count)| count).sum();
+    let mut cells = Vec::with_capacity(capacity);
+    'scan: for y in 20..=75 {
+        for x in 26..=53 {
+            let cell = GridPos::new(x, y);
+            if map.is_walkable(cell) {
+                cells.push(cell);
+                if cells.len() == capacity {
+                    break 'scan;
+                }
+            }
+        }
+    }
+    assert_eq!(
+        cells.len(),
+        capacity,
+        "the staging region lost walkable cells"
+    );
+    cells
+}
+
+/// The authored safe (starting) sources of one team's half, in ID order.
+fn safe_source_ids(team: TeamId) -> Vec<ResourceId> {
+    MapFixture::starting_resources()
+        .into_iter()
+        .filter(|spawn| {
+            let left_half = spawn.cell.x < 64;
+            left_half == (team == TeamId(1))
+        })
+        .map(|spawn| spawn.id)
+        .collect()
+}
+
+/// Sorted live unit IDs of one team and kind, resolved through `UnitIndex`.
+fn live_team_kind_ids(world: &World, team: TeamId, kind: UnitKind) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .is_some_and(|unit| unit.team == team && unit.kind == kind)
+                .then_some(*id)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
 }
 
 #[cfg(test)]
