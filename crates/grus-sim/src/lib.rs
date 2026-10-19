@@ -23,8 +23,8 @@ pub use catalog::{
     UnitKind, UnitSpec, resource_amount,
 };
 pub use combat::{
-    AttackCooldown, CombatEvent, CombatEvents, CombatOrder, CombatTarget, Health, step_combat,
-    target_eligible,
+    AttackCooldown, CombatEvent, CombatEventTotal, CombatEvents, CombatOrder, CombatTarget, Health,
+    step_combat, target_eligible,
 };
 pub use commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,

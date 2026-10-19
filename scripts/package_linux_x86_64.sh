@@ -29,9 +29,12 @@ cp target/release/libgrus_godot.so godot/bin/libgrus_godot.so
 godot --headless --path godot --import
 
 dist="dist/grus-linux-x86_64"
+archive="dist/grus-linux-x86_64.tar.gz"
 rm -rf "$dist"
+rm -f "$archive" "$archive.tmp"
 mkdir -p "$dist"
 godot --headless --path godot --export-release "Linux x86_64" "../$dist/Grus.x86_64"
 test -x "$dist/Grus.x86_64"
-tar -czf dist/grus-linux-x86_64.tar.gz -C dist grus-linux-x86_64
-echo "packaged: dist/grus-linux-x86_64.tar.gz"
+tar -czf "$archive.tmp" -C dist grus-linux-x86_64
+mv "$archive.tmp" "$archive"
+echo "packaged: $archive"

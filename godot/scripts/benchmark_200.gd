@@ -17,6 +17,8 @@ const VISIBILITY_WAIT_FRAMES := 600
 const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
+var _last_combat_event_total := 0
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -31,26 +33,35 @@ func _percentile(sorted_samples: Array[float], fraction: float) -> float:
 	var index := clampi(int(ceil((sorted_samples.size() - 1) * fraction)), 0, sorted_samples.size() - 1)
 	return sorted_samples[index]
 
-## Sample duration: `GRUS_BENCHMARK_SECONDS` when set to a positive finite
-## value, else the 10 s default. A present but invalid value fails the run —
+## Sample duration: `GRUS_BENCHMARK_SECONDS`, or the 10 s default when the
+## variable is unset. Any present value — including an explicitly empty
+## one — must be a complete positive finite number: `to_float()` alone would accept a
+## leading number and silently drop trailing garbage like "10seconds", and
 ## silently sampling a different duration than requested would corrupt the
 ## measurement contract.
 func _read_sample_seconds() -> float:
-	var raw := OS.get_environment("GRUS_BENCHMARK_SECONDS")
-	if raw.is_empty():
+	if not OS.has_environment("GRUS_BENCHMARK_SECONDS"):
 		return DEFAULT_SAMPLE_SECONDS
+	var raw := OS.get_environment("GRUS_BENCHMARK_SECONDS")
+	if not raw.is_valid_float():
+		_fail("GRUS_BENCHMARK_SECONDS must be a positive finite number of seconds, got '%s'" % raw)
+		return -1.0
 	var seconds := raw.to_float()
 	if not is_finite(seconds) or seconds <= 0.0:
 		_fail("GRUS_BENCHMARK_SECONDS must be a positive finite number of seconds, got '%s'" % raw)
 		return -1.0
 	return seconds
 
-## One liveness window: drains benchmark combat events through the bridge and
+## One liveness window: diffs the bridge's monotonic combat-event total and
 ## compares still-existing unit positions against the previous checkpoint.
+## The counter is non-consuming: the instanced main scene's battlefield
+## controller already drains `drain_combat_events()` every rendered frame
+## for cosmetics (a missing session reads as Playing), so a second drain
+## here would always see an empty buffer and would steal cosmetic events.
 ## Returns false (after failing) when the window shows neither meaningful
 ## movement nor combat activity — a rendering-alive but simulation-dead load.
 func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int) -> bool:
-	var events: Array = GrusBridge.drain_combat_events()
+	var events := int(GrusBridge.combat_event_total())
 	var moved := 0
 	for unit in get_tree().get_nodes_in_group("unit_views"):
 		var id := int(unit.get_meta("unit_id", -1))
@@ -60,9 +71,10 @@ func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: in
 		if checkpoint_positions.has(id) and now.distance_to(checkpoint_positions[id]) > MOVEMENT_EPSILON:
 			moved += 1
 		checkpoint_positions[id] = now
-	if moved == 0 and events.is_empty():
+	if moved == 0 and events <= _last_combat_event_total:
 		_fail("benchmark liveness window ending at frame %d showed neither unit movement nor combat activity" % window_end_frame)
 		return false
+	_last_combat_event_total = events
 	_progress("active", moved)
 	return true
 
@@ -83,6 +95,9 @@ func _run() -> void:
 
 	if not GrusBridge.has_method("reset_benchmark_fixture"):
 		_fail("benchmark reset bridge is missing")
+		return
+	if not GrusBridge.has_method("combat_event_total"):
+		_fail("benchmark combat-activity counter is missing")
 		return
 	if not GrusBridge.reset_benchmark_fixture():
 		_fail("benchmark reset bridge rejected the benchmark fixture")
@@ -142,6 +157,7 @@ func _run() -> void:
 	var checkpoint_positions: Dictionary = {}
 	for unit in units:
 		checkpoint_positions[int(unit.get_meta("unit_id"))] = (unit as Node3D).global_position
+	_last_combat_event_total = int(GrusBridge.combat_event_total())
 
 	var samples: Array[float] = []
 	var min_live_units := 0

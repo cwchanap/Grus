@@ -142,10 +142,16 @@ godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
 For a reproducible release package on a Linux x86_64 host (Godot and the Linux export templates already installed), run:
 
 ```bash
-GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn ./scripts/package_linux_x86_64.sh
+./scripts/package_linux_x86_64.sh
 ```
 
-The script builds `grus-godot` in release mode, stages the extension into `godot/bin/`, exports the `Linux x86_64` preset into `dist/grus-linux-x86_64/`, and archives the full directory as `dist/grus-linux-x86_64.tar.gz`. `GRUS_MAIN_SCENE` (optional) temporarily swaps the packaged main scene — for the benchmark above — and `godot/project.godot` is always restored afterwards, on success, error or interruption. The script installs nothing and downloads no toolchains.
+The script builds `grus-godot` in release mode, stages the extension into `godot/bin/`, exports the `Linux x86_64` preset into `dist/grus-linux-x86_64/`, and archives the full directory as `dist/grus-linux-x86_64.tar.gz`. The script installs nothing and downloads no toolchains.
+
+`GRUS_MAIN_SCENE` (optional) temporarily swaps the packaged main scene and `godot/project.godot` is always restored afterwards, on success, error or interruption. It exists for the hardware-acceptance benchmark package only — a release package built with it would boot the benchmark instead of the game:
+
+```bash
+GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn ./scripts/package_linux_x86_64.sh
+```
 
 CI also boots the exported executable headlessly and verifies that the Rust GDExtension initializes successfully.
 

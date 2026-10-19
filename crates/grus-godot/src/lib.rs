@@ -9,15 +9,16 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
     AGE_TWO_COST, AGE_TWO_SECONDS, Age, AiController, Building, BuildingId, BuildingIndex,
-    BuildingKind, CombatEvent, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap,
-    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
-    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
-    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
-    apply_player_command, explored_by, extend_with_benchmark_workload, gather_rate_for_age,
-    idle_worker_ids, population_cap, population_used, produces, refresh_visibility,
-    seed_skirmish_mirrored, set_paused, start_match, step_ai, step_combat, step_construction,
-    step_economy, step_movement, step_production, validate_placement, visible_to,
+    BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
+    Footprint, GridMap, GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase,
+    MatchSession, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint,
+    RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
+    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
+    VisibilityMap, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
+    gather_rate_for_age, idle_worker_ids, population_cap, population_used, produces,
+    refresh_visibility, seed_skirmish_mirrored, set_paused, start_match, step_ai, step_combat,
+    step_construction, step_economy, step_movement, step_production, validate_placement,
+    visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -237,7 +238,7 @@ impl GrusBridgeNode {
             return false;
         };
 
-        reset_fixture_world(app.world_mut());
+        reset_fixture_world(app.world_mut(), mirrored_start_from_env());
         // A fresh map can reuse a revision the bridge already cached from
         // the previous match (both boot at 1), and the cached payload would
         // then outlive the reset — drop it so the next fetch rebuilds from
@@ -396,6 +397,22 @@ impl GrusBridgeNode {
             .into_iter()
             .map(combat_event_dict)
             .collect()
+    }
+
+    /// Monotonic count of strikes recorded in the world: the benchmark's
+    /// liveness checkpoint diffs it between windows instead of calling
+    /// `drain_combat_events`, whose buffer the battlefield controller
+    /// already drains every rendered frame for cosmetics. 0 when no combat
+    /// has run in the current world; reset paths drop it with the match.
+    #[func]
+    fn combat_event_total(&self) -> i64 {
+        with_app(|app| {
+            app.world()
+                .get_resource::<CombatEventTotal>()
+                .map(|total| total.0 as i64)
+                .unwrap_or(0)
+        })
+        .unwrap_or(0)
     }
 
     #[func]
@@ -1365,11 +1382,12 @@ fn update_health_bars(
     }
 }
 
-fn reset_fixture_world(world: &mut World) {
+fn reset_fixture_world(world: &mut World, mirrored: bool) {
     clear_gameplay_world(world);
-    // The restart re-reads the launch env so a mirrored launch stays
-    // mirrored across every restart in the same process.
-    seed_match_world(world, mirrored_start_from_env());
+    // The restart reuses the launch's mirrored choice — the caller re-reads
+    // the env at the Godot boundary, so a mirrored launch stays mirrored
+    // across every restart in the same process.
+    seed_match_world(world, mirrored);
     // A normal-skirmish restart returns the session to Start — fogged with a
     // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
@@ -1443,6 +1461,7 @@ fn clear_gameplay_world(world: &mut World) {
     // session-free (missing session = Playing), the normal reset re-inserts
     // Start.
     world.remove_resource::<CombatEvents>();
+    world.remove_resource::<CombatEventTotal>();
     world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
@@ -1776,7 +1795,7 @@ mod tests {
         );
 
         // A normal restart re-inserts a fresh fogged map.
-        reset_fixture_world(&mut world);
+        reset_fixture_world(&mut world, false);
         assert!(world.get_resource::<VisibilityMap>().is_some());
         assert!(world.resource::<VisibilityMap>().revision() >= 1);
 
@@ -1800,21 +1819,6 @@ mod tests {
         let mut world = World::new();
         seed_match_world(&mut world, true);
 
-        let town_center_anchor = |world: &World, team: TeamId| {
-            let entity = world
-                .resource::<BuildingIndex>()
-                .iter()
-                .find_map(|(_, entity)| {
-                    world
-                        .get::<Building>(*entity)
-                        .is_some_and(|building| {
-                            building.team == team && building.kind == BuildingKind::TownCenter
-                        })
-                        .then_some(*entity)
-                })
-                .expect("a seeded Town Center per team");
-            world.get::<Footprint>(entity).unwrap().anchor
-        };
         assert_eq!(
             town_center_anchor(&world, TeamId(1)),
             right.town_center_anchor,
@@ -1832,6 +1836,52 @@ mod tests {
         );
     }
 
+    fn town_center_anchor(world: &World, team: TeamId) -> GridPos {
+        let entity = world
+            .resource::<BuildingIndex>()
+            .iter()
+            .find_map(|(_, entity)| {
+                world
+                    .get::<Building>(*entity)
+                    .is_some_and(|building| {
+                        building.team == team && building.kind == BuildingKind::TownCenter
+                    })
+                    .then_some(*entity)
+            })
+            .expect("a seeded Town Center per team");
+        world.get::<Footprint>(entity).unwrap().anchor
+    }
+
+    /// A mirrored launch stays mirrored across Restart: the reset seam takes
+    /// the launch's `mirrored` choice (the bridge re-reads the env at the
+    /// Godot boundary) rather than silently reverting to the default layout.
+    #[test]
+    fn mirrored_launch_stays_mirrored_across_restart() {
+        let [left, right] = MapFixture::team_starts();
+        let mut world = World::new();
+        seed_match_world(&mut world, true);
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+
+        reset_fixture_world(&mut world, true);
+
+        assert_eq!(
+            town_center_anchor(&world, TeamId(1)),
+            right.town_center_anchor,
+            "mirrored restart: Team 1 reseeds on the authored right start"
+        );
+        assert_eq!(
+            town_center_anchor(&world, TeamId(2)),
+            left.town_center_anchor,
+            "mirrored restart: Team 2 reseeds on the authored left start"
+        );
+        assert!(matches!(
+            world.resource::<MatchSession>().phase,
+            MatchPhase::Start
+        ));
+    }
+
     /// Normal setup/reset and the benchmark insert a fresh Team-2 controller;
     /// the test-disable seam lifts only the controller and only from Start.
     #[test]
@@ -1844,7 +1894,7 @@ mod tests {
             "normal setup ships the Team-2 AI opponent"
         );
 
-        reset_fixture_world(&mut world);
+        reset_fixture_world(&mut world, false);
         assert_eq!(
             world.resource::<AiController>().team,
             TeamId(2),
@@ -2149,9 +2199,9 @@ mod tests {
 
         // Restart rides the reset seam; repeated cycles restore the initial
         // resources/entities/indexes exactly once, with no stale state.
-        reset_fixture_world(&mut world);
+        reset_fixture_world(&mut world, false);
         assert_fixture_restored(&world);
-        reset_fixture_world(&mut world);
+        reset_fixture_world(&mut world, false);
         assert_fixture_restored(&world);
     }
 
@@ -2221,7 +2271,7 @@ mod tests {
         refresh_visibility(&mut world, &map);
         assert!(explored_by(&world, TeamId(1), enemy_town_center_footprint));
 
-        reset_fixture_world(&mut world);
+        reset_fixture_world(&mut world, false);
 
         assert!(
             world.resource::<PendingCommands>().0.is_empty(),

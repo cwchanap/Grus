@@ -76,6 +76,15 @@ pub struct CombatEvent {
 #[derive(Debug, Default, Resource)]
 pub struct CombatEvents(pub Vec<CombatEvent>);
 
+/// Monotonic count of strikes recorded in this world: unlike the per-tick
+/// `CombatEvents` buffer (cleared every non-Result tick, then consumed by
+/// the presentation drain), this never rewinds, so a second reader can
+/// detect combat activity without consuming the buffer another reader
+/// owns. Reset paths drop it with `CombatEvents` so a reseeded world starts
+/// at zero.
+#[derive(Debug, Default, Resource)]
+pub struct CombatEventTotal(pub u64);
+
 /// Stable lookup of one attackable target: entity, owning team, and health.
 pub(crate) fn resolve_target(
     world: &World,
@@ -149,6 +158,9 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     // they ever present.
     if world.get_resource::<CombatEvents>().is_none() {
         world.init_resource::<CombatEvents>();
+    }
+    if world.get_resource::<CombatEventTotal>().is_none() {
+        world.init_resource::<CombatEventTotal>();
     }
     if !matches!(active_phase(world), MatchPhase::Result(_)) {
         world.resource_mut::<CombatEvents>().0.clear();
@@ -581,6 +593,9 @@ fn strike(
             ranged: spec.ranged,
             killed,
         });
+    }
+    if let Some(mut total) = world.get_resource_mut::<CombatEventTotal>() {
+        total.0 += 1;
     }
     if killed {
         match target {
