@@ -166,6 +166,51 @@ fn melee_attacker_in_range_hits_without_pathing() {
     );
 }
 
+/// The monotonic counter survives the per-tick buffer rewind: each step
+/// clears `CombatEvents` for presentation while `CombatEventTotal` keeps
+/// counting every strike, so a second reader can diff it for combat
+/// activity without consuming the buffer.
+#[test]
+fn combat_event_total_counts_strikes_across_buffer_rewinds() {
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Spearman,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Spearman,
+    );
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(world.resource::<CombatEventTotal>().0, 1);
+    assert_eq!(events(&world).len(), 1);
+
+    // The next tick rewinds the buffer with no new strike; the total holds.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(events(&world).is_empty());
+    assert_eq!(world.resource::<CombatEventTotal>().0, 1);
+
+    // The second strike lands once the catalogue cooldown elapses (~20
+    // ticks), taking the total to two.
+    for _ in 0..25 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    assert_eq!(world.resource::<CombatEventTotal>().0, 2);
+}
+
 #[test]
 fn melee_attacker_out_of_range_pursues_without_striking() {
     let mut world = World::new();

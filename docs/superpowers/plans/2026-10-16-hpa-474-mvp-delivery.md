@@ -180,7 +180,7 @@ It seeds map/skirmish, inserts the map, inserts/refreshes visibility, and insert
 Use it from:
 
 - `setup_fixture`: call helper, then insert `MatchSession { Start }`;
-- `reset_fixture_world`: clear, call helper, then insert `MatchSession { Start }`;
+- `reset_fixture_world`: clear, call helper with the launch `mirrored` boolean (the bridge re-reads `GRUS_MIRRORED_START` at the reset boundary, so a mirrored launch stays mirrored across every restart in the same process), then insert `MatchSession { Start }`; a regression test pins the mirrored layout across the reset seam;
 - `reset_benchmark_world`: clear, call helper with `false`, extend with the pure benchmark workload, and insert **no session**.
 
 Keep e2e selector reattachment in the existing normal reset location/behavior.
@@ -440,7 +440,8 @@ Run:
 
 ```bash
 cargo test -p grus-godot --lib --locked
-cargo test -p grus-sim ai::tests fixture::tests --locked
+cargo test -p grus-sim ai::tests --locked
+cargo test -p grus-sim fixture::tests --locked
 ```
 
 - [ ] **Step 3: Run the left-side pair in one process**
@@ -645,19 +646,7 @@ sha256sum dist/grus-linux-x86_64.tar.gz
 
 Update the final hash and packaged journey status if the final revision changed after Task 5.
 
-- [ ] **Step 5: Require the real final CI surface**
-
-After pushing the exact final SHA, require all three GitHub Actions jobs green:
-
-```text
-rust-build-lint
-unit-tests
-e2e
-```
-
-This is the automated release gate. Do not replace it with a shorter hand-maintained local command list.
-
-- [ ] **Step 6: Finish the evidence record**
+- [ ] **Step 5: Finish the evidence record**
 
 Record:
 
@@ -673,12 +662,25 @@ Record:
 - final CI run URL/status; and
 - honest remaining limitations, including the known post-marker teardown-139 issue if it still exists.
 
-- [ ] **Step 7: Commit final evidence**
+- [ ] **Step 6: Commit and push final evidence**
 
 ```bash
 git add docs/hpa-474-mvp-evidence.md README.md crates godot scripts .github .gitignore
 git commit -m "docs: record Grus MVP delivery evidence"
+git push
 ```
+
+- [ ] **Step 7: Require the real final CI surface on the pushed head**
+
+The evidence commit cannot cite its own run: it records the run on the last code/pin head, and pushing it re-runs the gate on the resulting commit. Require all three GitHub Actions jobs green on that pushed head — the exact final SHA:
+
+```text
+rust-build-lint
+unit-tests
+e2e
+```
+
+This is the automated release gate. Do not replace it with a shorter hand-maintained local command list. The evidence file names both the validated code SHA and the pushed head each recorded run covered, so a docs-only tail commit is explicit rather than untested.
 
 ## Self-review result
 
