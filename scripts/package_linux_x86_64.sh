@@ -23,15 +23,18 @@ if [[ -n "${GRUS_MAIN_SCENE:-}" ]]; then
     mv "$main_scene_backup.tmp" godot/project.godot
 fi
 
+# Clear previous package outputs before the first fallible build/import step
+# so a failed run can never leave a stale archive at the release path.
+dist="dist/grus-linux-x86_64"
+archive="dist/grus-linux-x86_64.tar.gz"
+rm -rf "$dist"
+rm -f "$archive" "$archive.tmp"
+
 cargo build --release -p grus-godot --locked
 mkdir -p godot/bin
 cp target/release/libgrus_godot.so godot/bin/libgrus_godot.so
 godot --headless --path godot --import
 
-dist="dist/grus-linux-x86_64"
-archive="dist/grus-linux-x86_64.tar.gz"
-rm -rf "$dist"
-rm -f "$archive" "$archive.tmp"
 mkdir -p "$dist"
 godot --headless --path godot --export-release "Linux x86_64" "../$dist/Grus.x86_64"
 test -x "$dist/Grus.x86_64"
