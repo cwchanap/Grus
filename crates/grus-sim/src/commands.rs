@@ -123,6 +123,25 @@ impl UnitIndex {
     }
 }
 
+/// Stable-ID-sorted live units of one team and kind, resolved through
+/// `UnitIndex`. A missing index reads as empty (unseeded world).
+pub(crate) fn team_kind_ids(world: &World, team: TeamId, kind: UnitKind) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    let unit = world.get::<Unit>(*entity)?;
+                    (unit.team == team && unit.kind == kind).then_some(*id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
+}
+
 /// Spawns one unit registered in `UnitIndex`, carrying its catalogue
 /// `Health` at full value and a ready `AttackCooldown`.
 pub fn spawn_unit(

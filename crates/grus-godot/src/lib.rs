@@ -27,6 +27,13 @@ mod e2e;
 #[derive(Default, Resource)]
 struct PendingCommands(Vec<PlayerCommand>);
 
+/// The launch's mirrored-start choice, captured once at app build and
+/// reused by boot and every restart — one launch choice cannot drift
+/// mid-session. Pure-test worlds read a missing resource as the default
+/// layout, so the process env never leaks into them.
+#[derive(Debug, Resource)]
+struct MirroredStart(bool);
+
 #[derive(Resource)]
 struct CommandFeedback {
     revision: u64,
@@ -238,7 +245,8 @@ impl GrusBridgeNode {
             return false;
         };
 
-        reset_fixture_world(app.world_mut(), mirrored_start_from_env());
+        let mirrored = mirrored_choice(app.world());
+        reset_fixture_world(app.world_mut(), mirrored);
         // A fresh map can reuse a revision the bridge already cached from
         // the previous match (both boot at 1), and the cached payload would
         // then outlive the reset — drop it so the next fetch rebuilds from
@@ -767,6 +775,7 @@ fn build_app(app: &mut App) {
         .init_resource::<PendingCommands>()
         .init_resource::<CommandFeedback>()
         .init_resource::<LastRouteReject>()
+        .insert_resource(MirroredStart(mirrored_start_from_env()))
         .add_systems(Startup, setup_fixture)
         .add_systems(
             Update,
@@ -1015,21 +1024,28 @@ fn setup_fixture(world: &mut World) {
     if world.get_resource::<UnitIndex>().is_some() {
         return;
     }
-    seed_match_world(world, mirrored_start_from_env());
+    seed_match_world(world, mirrored_choice(world));
     // Normal Godot setup boots into Start; start_match opens gameplay.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
 }
 
-/// The manual mirrored-launch switch, read only here at the bridge seed
-/// boundary — never inside pure simulation. Exactly `GRUS_MIRRORED_START=1`
-/// swaps the authored team starts for the whole launch; unset or any other
-/// value keeps Team 1 left / Team 2 right. Boot and every restart re-read
-/// the same process env, so one launch choice cannot drift mid-session.
+/// The manual mirrored-launch switch, read once at app build into
+/// `MirroredStart` — never inside pure simulation. Exactly
+/// `GRUS_MIRRORED_START=1` swaps the authored team starts for the whole
+/// launch; unset or any other value keeps Team 1 left / Team 2 right.
 /// Deliberately not a menu toggle.
 fn mirrored_start_from_env() -> bool {
     std::env::var("GRUS_MIRRORED_START").is_ok_and(|value| value == "1")
+}
+
+/// The launch choice every seed path reuses: the `MirroredStart` captured
+/// at app build, or the default layout in a bare test world.
+fn mirrored_choice(world: &World) -> bool {
+    world
+        .get_resource::<MirroredStart>()
+        .is_some_and(|choice| choice.0)
 }
 
 /// The one shared match seed path for boot, restart and the benchmark:
@@ -1384,9 +1400,9 @@ fn update_health_bars(
 
 fn reset_fixture_world(world: &mut World, mirrored: bool) {
     clear_gameplay_world(world);
-    // The restart reuses the launch's mirrored choice — the caller re-reads
-    // the env at the Godot boundary, so a mirrored launch stays mirrored
-    // across every restart in the same process.
+    // The restart reuses the launch's mirrored choice — the caller passes
+    // the choice captured once at app build, so a mirrored launch stays
+    // mirrored across every restart in the same process.
     seed_match_world(world, mirrored);
     // A normal-skirmish restart returns the session to Start — fogged with a
     // fresh exploration state, same as a first boot.
@@ -1834,6 +1850,42 @@ mod tests {
             TeamId(2),
             "mirroring swaps starts, never the AI issuer"
         );
+        assert_eq!(
+            world.resource::<AiController>().authored_plan_side(),
+            TeamId(1),
+            "mirroring pins Team 2 to the authored LEFT plan — its physical start"
+        );
+    }
+
+    /// `setup_fixture` honors the launch `MirroredStart` resource captured
+    /// at app build: a bare test world gets the default layout, a world
+    /// carrying the pinned choice boots mirrored — and neither touches the
+    /// process env.
+    #[test]
+    fn setup_fixture_seeds_the_captured_mirrored_choice() {
+        let [left, right] = MapFixture::team_starts();
+
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        assert_eq!(
+            town_center_anchor(&world, TeamId(1)),
+            left.town_center_anchor,
+            "a missing MirroredStart resource reads as the default layout"
+        );
+
+        let mut world = World::new();
+        world.insert_resource(MirroredStart(true));
+        setup_fixture(&mut world);
+        assert_eq!(
+            town_center_anchor(&world, TeamId(1)),
+            right.town_center_anchor,
+            "the captured launch choice drives the boot seed"
+        );
+        assert_eq!(
+            world.resource::<AiController>().authored_plan_side(),
+            TeamId(1),
+            "a mirrored boot pins the AI to the authored LEFT plan"
+        );
     }
 
     fn town_center_anchor(world: &World, team: TeamId) -> GridPos {
@@ -1892,6 +1944,11 @@ mod tests {
             world.resource::<AiController>().team,
             TeamId(2),
             "normal setup ships the Team-2 AI opponent"
+        );
+        assert_eq!(
+            world.resource::<AiController>().authored_plan_side(),
+            TeamId(2),
+            "default layout: Team 2 decides against its own authored plan"
         );
 
         reset_fixture_world(&mut world, false);

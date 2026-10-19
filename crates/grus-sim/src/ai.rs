@@ -23,7 +23,7 @@ use crate::catalog::{
 use crate::combat::{CombatOrder, CombatTarget};
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
-    apply_player_command,
+    apply_player_command, team_kind_ids,
 };
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, idle_worker_ids};
 use crate::fixture::{AiMapPlan, MapFixture};
@@ -115,6 +115,12 @@ impl AiController {
     pub fn with_authored_plan_side(mut self, plan_side: TeamId) -> Self {
         self.authored_plan_team = plan_side;
         self
+    }
+
+    /// The authored plan side `step_ai` currently decides against —
+    /// `team` unless pinned through `with_authored_plan_side`.
+    pub fn authored_plan_side(&self) -> TeamId {
+        self.authored_plan_team
     }
 }
 
@@ -856,20 +862,7 @@ fn has_allocation_deficit(world: &World, team: TeamId) -> bool {
 
 /// Stable-ID-sorted villagers of one team.
 fn villager_ids(world: &World, team: TeamId) -> Vec<UnitId> {
-    let mut ids: Vec<UnitId> = world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter_map(|(id, entity)| {
-                    let unit = world.get::<Unit>(*entity)?;
-                    (unit.team == team && unit.kind == UnitKind::Villager).then_some(*id)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort_unstable();
-    ids
+    team_kind_ids(world, team, UnitKind::Villager)
 }
 
 /// Stable-ID-sorted combatants of one team holding no route and no combat

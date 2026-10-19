@@ -7,7 +7,7 @@ use crate::catalog::{
 };
 use crate::combat::Health;
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, spawn_unit,
+    PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit, team_kind_ids,
 };
 use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
@@ -15,7 +15,6 @@ use crate::economy::{
 };
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
-use crate::movement::Unit;
 
 /// Authored starting position of one team: Town Center anchor plus the four
 /// villager spawn cells. All values are cells on the 128×96 battlefield.
@@ -404,7 +403,13 @@ const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 /// combatant AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected
 /// setup command: a benchmark that boots with rejected orders would
 /// silently measure an idle crowd.
+///
+/// Requires the non-mirrored seed: staging assigns team 1 the left region
+/// and `safe_source_ids` assigns team 1 the left-half sources, so a
+/// mirrored seed would stage team 1 inside team 2's base and gather it to
+/// the wrong side. That precondition is asserted, not assumed.
 pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
+    assert_non_mirrored_seed(world);
     for team in [TeamId(1), TeamId(2)] {
         let mut cells = benchmark_staging_cells(map, team).into_iter();
         for (kind, count) in BENCHMARK_ROSTER {
@@ -431,7 +436,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
     // Membership resolves from the live world, not spawn-order bookkeeping.
     let target = map.cell_center(BENCHMARK_MIDFIELD);
     for team in [TeamId(1), TeamId(2)] {
-        let workers: Vec<UnitId> = live_team_kind_ids(world, team, UnitKind::Villager)
+        let workers: Vec<UnitId> = team_kind_ids(world, team, UnitKind::Villager)
             .into_iter()
             .take(12)
             .collect();
@@ -448,7 +453,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         }
         let army: Vec<UnitId> = [UnitKind::Spearman, UnitKind::Archer, UnitKind::Cavalry]
             .into_iter()
-            .flat_map(|kind| live_team_kind_ids(world, team, kind))
+            .flat_map(|kind| team_kind_ids(world, team, kind))
             .collect();
         accept(
             world,
@@ -458,6 +463,29 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 units: army,
                 kind: UnitCommandKind::AttackMove { target },
             }),
+        );
+    }
+}
+
+/// The benchmark workload's non-mirrored precondition: each team's seeded
+/// Town Center stands on its own authored start, so the left-region
+/// staging and left-half safe sources really belong to team 1.
+fn assert_non_mirrored_seed(world: &World) {
+    for start in MapFixture::team_starts() {
+        let anchored = world.resource::<BuildingIndex>().iter().any(|(_, entity)| {
+            world.get::<Building>(*entity).is_some_and(|building| {
+                building.team == start.team
+                    && building.kind == BuildingKind::TownCenter
+                    && world
+                        .get::<Footprint>(*entity)
+                        .is_some_and(|footprint| footprint.anchor == start.town_center_anchor)
+            })
+        });
+        assert!(
+            anchored,
+            "benchmark workload requires the non-mirrored authored seed: \
+             team {:?} has no Town Center on its own start",
+            start.team
         );
     }
 }
@@ -479,10 +507,19 @@ fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
 /// symmetric under).
 fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
     if team == TeamId(2) {
-        return benchmark_staging_cells(map, TeamId(1))
+        let cells: Vec<GridPos> = benchmark_staging_cells(map, TeamId(1))
             .into_iter()
             .map(point_reflect)
             .collect();
+        // The reflected cells are walkable only while the map keeps the
+        // authored point-reflection symmetry — check instead of assuming
+        // so a fixture retune fails loudly here instead of spawning team 2
+        // into terrain.
+        assert!(
+            cells.iter().all(|cell| map.is_walkable(*cell)),
+            "team-2 staging reflected a walkable team-1 cell onto blocked ground"
+        );
+        return cells;
     }
     let capacity: usize = BENCHMARK_ROSTER.iter().map(|(_, count)| count).sum();
     let mut cells = Vec::with_capacity(capacity);
@@ -515,22 +552,6 @@ fn safe_source_ids(team: TeamId) -> Vec<ResourceId> {
         })
         .map(|spawn| spawn.id)
         .collect()
-}
-
-/// Sorted live unit IDs of one team and kind, resolved through `UnitIndex`.
-fn live_team_kind_ids(world: &World, team: TeamId, kind: UnitKind) -> Vec<UnitId> {
-    let mut ids: Vec<UnitId> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            world
-                .get::<Unit>(*entity)
-                .is_some_and(|unit| unit.team == team && unit.kind == kind)
-                .then_some(*id)
-        })
-        .collect();
-    ids.sort_unstable();
-    ids
 }
 
 #[cfg(test)]
