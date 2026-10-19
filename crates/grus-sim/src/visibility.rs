@@ -123,8 +123,8 @@ impl VisibilityMap {
 }
 
 /// The unit/building/resource cell or footprint is currently seen by `team`.
-/// True when no `VisibilityMap` exists — isolated pure-sim tests and the
-/// benchmark run with full information.
+/// True when no `VisibilityMap` exists — isolated pure-sim tests run with
+/// full information.
 pub fn visible_to(world: &World, team: TeamId, subject: impl Into<VisibilitySubject>) -> bool {
     match world.get_resource::<VisibilityMap>() {
         None => true,
@@ -185,8 +185,8 @@ pub fn move_goal_counts_as_occupancy(issuer: TeamId, unit_team: Option<TeamId>) 
 /// this once so the Start screen already has correct fog).
 pub fn refresh_visibility(world: &mut World, map: &GridMap) {
     // Opt out before paying the origin-collection scan: worlds without a
-    // VisibilityMap (focused pure-sim tests, the benchmark) run with full
-    // information and must not collect origins they will never use.
+    // VisibilityMap (focused pure-sim tests) run with full information and
+    // must not collect origins they will never use.
     if !world.contains_resource::<VisibilityMap>() {
         return;
     }

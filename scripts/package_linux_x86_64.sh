@@ -7,12 +7,21 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
 
-# Optional: package with a different main scene (e.g. the benchmark), always
-# restoring godot/project.godot afterwards — on success, error or interrupt.
+# Optional: package with a different main scene (e.g. the benchmark). The
+# value must be a plain res:// path — it is substituted into project.godot
+# by sed, so anything more exotic is rejected rather than escaped. The
+# original file is restored afterwards — on success, error or interrupt —
+# with its own mode (cp -p; a plain cp into the 0600 mktemp file would
+# restore project.godot owner-only).
 main_scene_backup=""
+suffix=""
 if [[ -n "${GRUS_MAIN_SCENE:-}" ]]; then
+    [[ "$GRUS_MAIN_SCENE" =~ ^res://[A-Za-z0-9_./-]+$ ]] \
+        || { echo "error: GRUS_MAIN_SCENE must be a res:// scene path, got '$GRUS_MAIN_SCENE'" >&2; exit 1; }
+    scene_stem="$(basename "$GRUS_MAIN_SCENE")"
+    suffix="-${scene_stem%.*}"
     main_scene_backup="$(mktemp)"
-    cp godot/project.godot "$main_scene_backup"
+    cp -p godot/project.godot "$main_scene_backup"
     trap 'mv -f "$main_scene_backup" godot/project.godot' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -23,10 +32,12 @@ if [[ -n "${GRUS_MAIN_SCENE:-}" ]]; then
     mv "$main_scene_backup.tmp" godot/project.godot
 fi
 
-# Clear previous package outputs before the first fallible build/import step
-# so a failed run can never leave a stale archive at the release path.
-dist="dist/grus-linux-x86_64"
-archive="dist/grus-linux-x86_64.tar.gz"
+# Clear previous package outputs before the first fallible build/import
+# step so a failed run can never leave a stale archive behind. An
+# alternate main scene gets its own output name — a package that boots
+# the benchmark must never sit at the release path.
+dist="dist/grus-linux-x86_64$suffix"
+archive="dist/grus-linux-x86_64$suffix.tar.gz"
 rm -rf "$dist"
 rm -f "$archive" "$archive.tmp"
 

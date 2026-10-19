@@ -33,17 +33,9 @@ fn retained_battlefield_has_multiple_routes_between_base_zones() {
     assert!(!alternate.contains(&interior));
 }
 
-/// Team-kind census over the live `UnitIndex`, sorted nowhere — counts only.
+/// Team-kind census over the live `UnitIndex` — counts only.
 fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> usize {
-    world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter(|(_, entity)| {
-            world
-                .get::<Unit>(**entity)
-                .is_some_and(|unit| unit.team == team && unit.kind == kind)
-        })
-        .count()
+    team_kind_ids(world, team, kind).len()
 }
 
 #[test]
@@ -182,11 +174,10 @@ fn mirrored_seeding_swaps_the_authored_team_starts() {
                 .iter()
                 .filter_map(|(_, entity)| {
                     let unit = world.get::<Unit>(*entity)?;
-                    (unit.team == team && unit.kind == UnitKind::Villager).then_some(|| {
+                    (unit.team == team && unit.kind == UnitKind::Villager).then(|| {
                         map.world_to_cell(world.get::<SimPosition>(*entity).unwrap().current)
                     })
                 })
-                .map(|get_cell| get_cell())
                 .collect();
             let expected: HashSet<GridPos> = start.villagers.into_iter().collect();
             assert_eq!(

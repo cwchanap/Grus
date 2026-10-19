@@ -4,10 +4,10 @@ extends Node
 ## full 200-unit load (buildings/resources may already show extra AI
 ## foundations), waits for the fog revision to advance so the sim is provably
 ## ticking, then records one frame-time sample per rendered frame plus the
-## live unit count for a real-time duration. A liveness checkpoint between
-## fixed frame intervals fails a sample that shows neither unit movement nor
-## combat activity. Real combat deaths are expected: units are never respawned
-## and health is never reset.
+## drawn unit count sampled once per liveness window for a real-time
+## duration. A liveness checkpoint between fixed frame intervals fails a
+## sample that shows neither unit movement nor combat activity. Real combat
+## deaths are expected: units are never respawned and health is never reset.
 
 const BENCHMARK_SIZE := Vector2i(1920, 1080)
 const DEFAULT_SAMPLE_SECONDS := 10.0
@@ -18,6 +18,9 @@ const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
 var _last_combat_event_total := 0
+## Drawn-unit samples, one per liveness window — the per-frame group scan
+## these replaced would land in every measured frame time.
+var _visible_unit_samples: Array[int] = []
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -52,31 +55,56 @@ func _read_sample_seconds() -> float:
 		return -1.0
 	return seconds
 
-## One liveness window: diffs the bridge's monotonic combat-event total and
-## compares still-existing unit positions against the previous checkpoint.
-## The counter is non-consuming: the instanced main scene's battlefield
-## controller already drains `drain_combat_events()` every rendered frame
-## for cosmetics (a missing session reads as Playing), so a second drain
-## here would always see an empty buffer and would steal cosmetic events.
-## Returns false (after failing) when the window shows neither meaningful
-## movement nor combat activity — a rendering-alive but simulation-dead load.
-func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int) -> bool:
-	var events := int(GrusBridge.combat_event_total())
+## Unit views that moved more than MOVEMENT_EPSILON since `baseline`. The
+## scan walks the live group only: a view freed since the baseline was
+## taken (real combat deaths in this workload) is simply absent, never a
+## 'previously freed' access. With `rebase` the baseline adopts the current
+## positions for the next window.
+func _movement_since(baseline: Dictionary, rebase: bool) -> int:
 	var moved := 0
 	for unit in get_tree().get_nodes_in_group("unit_views"):
 		var id := int(unit.get_meta("unit_id", -1))
 		if id <= 0:
 			continue
 		var now: Vector3 = (unit as Node3D).global_position
-		if checkpoint_positions.has(id) and now.distance_to(checkpoint_positions[id]) > MOVEMENT_EPSILON:
+		if baseline.has(id) and now.distance_to(baseline[id]) > MOVEMENT_EPSILON:
 			moved += 1
-		checkpoint_positions[id] = now
+		if rebase:
+			baseline[id] = now
+	return moved
+
+## Unit views actually drawn right now: fog-hidden enemies stay in the
+## group with `visible = false` and are never submitted to the renderer,
+## so they do not count as measured load.
+func _visible_unit_count() -> int:
+	var count := 0
+	for unit in get_tree().get_nodes_in_group("unit_views"):
+		if unit.is_visible_in_tree():
+			count += 1
+	return count
+
+## One liveness verdict for a measured window: diffs the bridge's
+## monotonic combat-event total and fails when the window shows neither
+## meaningful movement nor combat activity — a rendering-alive but
+## simulation-dead load. The counter is non-consuming: the instanced main
+## scene's battlefield controller already drains `drain_combat_events()`
+## every rendered frame for cosmetics (a missing session reads as
+## Playing), so a second drain here would always see an empty buffer and
+## would steal cosmetic events.
+func _liveness_verdict(moved: int, window_end_frame: int) -> bool:
+	var events := int(GrusBridge.combat_event_total())
 	if moved == 0 and events <= _last_combat_event_total:
 		_fail("benchmark liveness window ending at frame %d showed neither unit movement nor combat activity" % window_end_frame)
 		return false
 	_last_combat_event_total = events
 	_progress("active", moved)
 	return true
+
+## One full liveness window: records the drawn-load sample, diffs
+## positions against the checkpoint and rebases it for the next window.
+func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int) -> bool:
+	_visible_unit_samples.append(_visible_unit_count())
+	return _liveness_verdict(_movement_since(checkpoint_positions, true), window_end_frame)
 
 func _run() -> void:
 	var sample_seconds := _read_sample_seconds()
@@ -153,15 +181,21 @@ func _run() -> void:
 	_progress("warmup")
 
 	# Checkpoint baseline at the start of the sample so each liveness window
-	# compares against positions from inside the measured load.
+	# compares against positions from inside the measured load. Rebuilt
+	# from the live group: the `units` array was captured before the fog
+	# wait and the warm-up, so views freed since (real combat deaths) are
+	# absent here instead of faulting on access.
 	var checkpoint_positions: Dictionary = {}
-	for unit in units:
-		checkpoint_positions[int(unit.get_meta("unit_id"))] = (unit as Node3D).global_position
+	for unit in get_tree().get_nodes_in_group("unit_views"):
+		var id := int(unit.get_meta("unit_id", -1))
+		if id > 0:
+			checkpoint_positions[id] = (unit as Node3D).global_position
+	# One baseline behind the checkpoint, so a trailing partial window
+	# still diffs a full measurement window instead of a handful of frames.
+	var older_checkpoint_positions := checkpoint_positions.duplicate()
 	_last_combat_event_total = int(GrusBridge.combat_event_total())
 
 	var samples: Array[float] = []
-	var min_live_units := 0
-	var live_unit_sum := 0
 	var start_ticks := Time.get_ticks_usec()
 	var deadline := start_ticks + int(roundf(sample_seconds * 1_000_000.0))
 	var previous_ticks := start_ticks
@@ -171,18 +205,30 @@ func _run() -> void:
 		var now := Time.get_ticks_usec()
 		samples.append(float(now - previous_ticks) / 1000.0)
 		previous_ticks = now
-		var live := get_tree().get_nodes_in_group("unit_views").size()
-		if frame == 0 or live < min_live_units:
-			min_live_units = live
-		live_unit_sum += live
 		frame += 1
-		if frame % MOVEMENT_CHECK_INTERVAL == 0 and not _liveness_checkpoint(checkpoint_positions, frame):
-			return
+		if frame % MOVEMENT_CHECK_INTERVAL == 0:
+			older_checkpoint_positions = checkpoint_positions.duplicate()
+			if not _liveness_checkpoint(checkpoint_positions, frame):
+				return
 		if now >= deadline:
 			break
-	# A trailing partial window still owes one liveness check.
-	if samples.size() % MOVEMENT_CHECK_INTERVAL != 0 and not _liveness_checkpoint(checkpoint_positions, samples.size()):
-		return
+	# A trailing partial window still owes one liveness check — against the
+	# previous full-window baseline, since a handful of leftover frames can
+	# span less than a sim tick and would fail a healthy run.
+	if samples.size() % MOVEMENT_CHECK_INTERVAL != 0:
+		_visible_unit_samples.append(_visible_unit_count())
+		if not _liveness_verdict(_movement_since(older_checkpoint_positions, false), samples.size()):
+			return
+
+	if _visible_unit_samples.is_empty():
+		_visible_unit_samples.append(_visible_unit_count())
+	var min_live_units := 0
+	var live_unit_sum := 0
+	for index in _visible_unit_samples.size():
+		var count := _visible_unit_samples[index]
+		if index == 0 or count < min_live_units:
+			min_live_units = count
+		live_unit_sum += count
 
 	var sorted_samples := samples.duplicate()
 	sorted_samples.sort()
@@ -197,8 +243,8 @@ func _run() -> void:
 
 	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
 		min_live_units,
-		float(live_unit_sum) / samples.size(),
-		get_tree().get_nodes_in_group("unit_views").size(),
+		float(live_unit_sum) / _visible_unit_samples.size(),
+		_visible_unit_count(),
 		float(previous_ticks - start_ticks) / 1_000_000.0,
 		samples.size(),
 		mean_ms,

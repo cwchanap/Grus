@@ -193,13 +193,14 @@ GRUS_E2E_BINARY=<path-to-exported-grus> \
 
 ## Benchmark
 
-The benchmark fixture (mixed 100-vs-100, see **Reset modes** above) exists only for `benchmark_200.tscn` after an explicit benchmark reset; the runtime game and its smokes run the skirmish fixture above. The scene samples for a real-time duration set by `GRUS_BENCHMARK_SECONDS` (default 10, must be positive and finite): it waits for the 200 unit views and the fog revision to advance, then records frame times and live unit counts, failing a sample that shows neither movement nor combat.
+The benchmark fixture (mixed 100-vs-100, see **Reset modes** above) exists only for `benchmark_200.tscn` after an explicit benchmark reset; the runtime game and its smokes run the skirmish fixture above. The scene samples for a real-time duration set by `GRUS_BENCHMARK_SECONDS` (default 10, must be positive and finite): it waits for the 200 unit views and the fog revision to advance, then records frame times and drawn unit counts, failing a sample that shows neither movement nor combat.
 
 - **CI regression:** 10 seconds (`GRUS_BENCHMARK_SECONDS=10` in the e2e job under software GL). It guards per-frame cost only — CI enforces no FPS floor.
-- **Hardware acceptance:** 60 seconds on the reference Linux x86_64 host:
+- **Hardware acceptance:** 60 seconds on the reference Linux x86_64 host, on the release export packaged with the benchmark as its main scene (not the editor/debug project runtime):
 
 ```bash
-GRUS_BENCHMARK_SECONDS=60 godot --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn
+GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn ./scripts/package_linux_x86_64.sh
+GRUS_BENCHMARK_SECONDS=60 dist/grus-linux-x86_64-benchmark_200/Grus.x86_64
 ```
 
 Current HPA-474 measurements live in [`docs/hpa-474-mvp-evidence.md`](docs/hpa-474-mvp-evidence.md); the HPA-470 numeric baseline table was removed from this file — PR #1 and git history remain its historical record.
