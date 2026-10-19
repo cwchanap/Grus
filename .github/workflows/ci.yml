@@ -172,6 +172,10 @@ jobs:
             echo "::error::scouting smoke contract held but godot exited $rc"
             exit 1
           fi
+      - name: Test packaging stale-archive guard
+        # Pure-bash contract test: stubs cargo/godot in a scratch repo and
+        # asserts a failed package run never leaves a stale release archive.
+        run: bash scripts/package_linux_x86_64_test.sh
       - name: Export Linux x86_64 desktop builds
         # The smoke variant swaps the project's main scene to the bridge smoke
         # scene before exporting: official export templates are compiled with
