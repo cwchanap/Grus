@@ -77,10 +77,10 @@ Verified by inspection on 2026-10-16: the repository contains no third-party gam
 
 ## Final CI
 
-Validated code SHA: `857e0b6f748dab499fac3ec22ef6718f50116f98`; pushed head `24806c77ea1c4ec6b784035c51f724a5c48384c5` (docs-only delta on top).
-Final CI run: https://github.com/cwchanap/Grus/actions/runs/39103831991 — **success** on pushed head `24806c7` (pull_request): `rust-build-lint` ✅, `unit-tests` ✅, `e2e` ✅. Known post-marker teardown-139 warning appeared in e2e and was handled non-fatally by the existing workflow guard.
+Validated code SHA: `fdcd9ffe35419615f49ebe56d02539eec4ecc7ad` (PR-#7 review-fix commit: non-consuming benchmark liveness counter, complete-string `GRUS_BENCHMARK_SECONDS` validation, packaging stale-archive guard, README release-example correction, mirrored-restart contract + regression test, plan corrections). The record commit documenting this is a docs-only delta on top — it re-runs the same three jobs on the resulting pushed head, so the gate still covers the true final SHA.
+Final CI run: https://github.com/cwchanap/Grus/actions/runs/39182679195 — **success** on pushed head `fdcd9ff` (pull_request): `rust-build-lint` ✅, `unit-tests` ✅, `e2e` ✅. (Prior records: run 39103831991 on `24806c7` and run 39104453875 on `cecffd1`, both success. The earlier e2e run surfaced the known post-marker teardown-139 warning, handled non-fatally by the existing workflow guard.)
 
-Requirement (Task 6 Step 5): after the push, all three GitHub Actions jobs must be green on that exact SHA — `rust-build-lint`, `unit-tests`, `e2e`. This automated release gate is the final gate; it is not replaced by a hand-maintained local command list. (Supplementary only: before these commits, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --locked`, and the five headless Godot smokes all ran green on this tree on the development machine.)
+Requirement (Task 6 Step 7): after the push, all three GitHub Actions jobs must be green on that exact SHA — `rust-build-lint`, `unit-tests`, `e2e`. This automated release gate is the final gate; it is not replaced by a hand-maintained local command list. (Supplementary only: on `fdcd9ff`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p grus-godot --all-targets --features e2e --locked -- -D warnings`, `cargo test -p grus-sim --locked`, `cargo test -p grus-godot --lib --locked`, the e2e-feature lib tests, and the headless Godot `smoke_test`, `reset_test`, `combat_lifecycle_smoke_test` and `benchmark_200` scenes all ran green on the development machine.)
 
 ## Remaining limitations
 
