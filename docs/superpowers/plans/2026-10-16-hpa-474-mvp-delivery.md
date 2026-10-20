@@ -272,16 +272,16 @@ This prevents a visually rendering but simulation-dead sample from passing.
 
 - [ ] **Step 4: Record the actual live-unit load**
 
-Record current live-unit and drawn-unit counts once per liveness window — a per-frame `unit_views` group scan would land inside the measured frame times the benchmark exists to record. Live units are the `unit_views` group membership (fog-hidden enemies stay in the group); drawn units are the subset with `is_visible_in_tree()`, the actual render load. Emit:
+Record current live-unit and visible-in-tree unit counts once per liveness window — a per-frame `unit_views` group scan would land inside the measured frame times the benchmark exists to record. Live units are the `unit_views` group membership (fog-hidden enemies stay in the group); visible-in-tree units are the subset with `is_visible_in_tree()` — a visibility-flag render-load proxy, not a drawn count (cull-mask/layer filtering and frustum culling are not accounted for). Both means are elapsed-time weighted: each window's count is multiplied by its measured window duration, the products are summed, and the total is divided by the measured duration, so a trailing partial window counts only for the time it spanned. Emit:
 
 ```text
 start_units=200
 min_live_units=<n>
-mean_live_units=<sample-weighted average>
+mean_live_units=<elapsed-time-weighted average>
 end_units=<n>
-min_visible_units=<n>
-mean_visible_units=<sample-weighted average>
-end_visible_units=<n>
+min_visible_in_tree_units=<n>
+mean_visible_in_tree_units=<elapsed-time-weighted average>
+end_visible_in_tree_units=<n>
 duration_s=<seconds>
 frames=<n>
 mean_ms=<n>
