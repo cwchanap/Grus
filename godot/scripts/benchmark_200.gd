@@ -4,7 +4,7 @@ extends Node
 ## full 200-unit load (buildings/resources may already show extra AI
 ## foundations), waits for the fog revision to advance so the sim is provably
 ## ticking, then records one frame-time sample per rendered frame plus
-## live and drawn unit counts sampled once per liveness window for a
+## live and visible-in-tree unit counts sampled once per liveness window for a
 ## real-time duration. A liveness checkpoint between fixed frame intervals fails a
 ## sample that shows neither unit movement nor combat activity. Real combat
 ## deaths are expected: units are never respawned and health is never reset.
@@ -18,11 +18,15 @@ const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
 var _last_combat_event_total := 0
-## Live-unit and drawn-unit samples, one of each per liveness window — the
-## per-frame group scans these replaced would land in every measured
-## frame time.
+## Live-unit and visible-in-tree samples, one of each per liveness window —
+## the per-frame group scans these replaced would land in every measured
+## frame time. `_sample_window_seconds` holds each window's measured
+## duration so the emitted means are elapsed-time weighted — a trailing
+## partial window must not count like a full one.
 var _live_unit_samples: Array[int] = []
-var _visible_unit_samples: Array[int] = []
+var _visible_in_tree_samples: Array[int] = []
+var _sample_window_seconds: Array[float] = []
+var _last_sample_ticks := 0
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -77,14 +81,17 @@ func _movement_since(baseline: Dictionary, rebase: bool) -> int:
 
 ## Live unit views right now: dead views leave the group entirely while
 ## fog-hidden enemies stay in it with `visible = false`, so membership is
-## the live count — visibility is the render-load number, not this one.
+## the live count — the visible-in-tree subset is the render-load proxy,
+## not this one.
 func _live_unit_count() -> int:
 	return get_tree().get_nodes_in_group("unit_views").size()
 
-## Unit views actually drawn right now: fog-hidden enemies stay in the
-## group with `visible = false` and are never submitted to the renderer,
-## so they do not count as measured load.
-func _visible_unit_count() -> int:
+## Unit views flagged visible in the scene tree right now: fog-hidden
+## enemies stay in the group with `visible = false` and are never submitted
+## to the renderer, so they do not count as measured load. This is the
+## visibility flag only, not a drawn count — cull-mask/layer filtering and
+## frustum culling are not accounted for.
+func _visible_in_tree_count() -> int:
 	var count := 0
 	for unit in get_tree().get_nodes_in_group("unit_views"):
 		if unit.is_visible_in_tree():
@@ -108,12 +115,20 @@ func _liveness_verdict(moved: int, window_end_frame: int) -> bool:
 	_progress("active", moved)
 	return true
 
-## One full liveness window: records the live and drawn-load samples,
+## Appends one live and one visible-in-tree sample for the liveness window
+## ending at `now_ticks`, storing the measured window duration alongside so
+## each count weighs into the means by elapsed time.
+func _record_unit_samples(now_ticks: int) -> void:
+	_sample_window_seconds.append(float(now_ticks - _last_sample_ticks) / 1_000_000.0)
+	_last_sample_ticks = now_ticks
+	_live_unit_samples.append(_live_unit_count())
+	_visible_in_tree_samples.append(_visible_in_tree_count())
+
+## One full liveness window: records the live and visible-in-tree samples,
 ## diffs positions against the checkpoint and rebases it for the next
 ## window.
-func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int) -> bool:
-	_live_unit_samples.append(_live_unit_count())
-	_visible_unit_samples.append(_visible_unit_count())
+func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int, now_ticks: int) -> bool:
+	_record_unit_samples(now_ticks)
 	return _liveness_verdict(_movement_since(checkpoint_positions, true), window_end_frame)
 
 func _run() -> void:
@@ -185,14 +200,14 @@ func _run() -> void:
 		return
 	_progress("visibility", revision)
 
-	# Live and drawn counts must be able to disagree: fog has provably
-	# ticked (revision advanced), no combat deaths have landed yet, and
-	# the enemy army still sits under fog — so equality here means a
-	# "live" metric is really counting drawn views again.
+	# Live and visible-in-tree counts must be able to disagree: fog has
+	# provably ticked (revision advanced), no combat deaths have landed
+	# yet, and the enemy army still sits under fog — so equality here
+	# means a "live" metric is really counting visible views again.
 	var start_live := _live_unit_count()
-	var start_visible := _visible_unit_count()
-	if start_visible >= start_live:
-		_fail("expected fog-hidden live units after the first fog pass, got live=%d visible=%d" % [start_live, start_visible])
+	var start_visible_in_tree := _visible_in_tree_count()
+	if start_visible_in_tree >= start_live:
+		_fail("expected fog-hidden live units after the first fog pass, got live=%d visible_in_tree=%d" % [start_live, start_visible_in_tree])
 		return
 
 	var warmup_deadline := Time.get_ticks_usec() + int(roundf(WARMUP_SECONDS * 1_000_000.0))
@@ -217,6 +232,7 @@ func _run() -> void:
 
 	var samples: Array[float] = []
 	var start_ticks := Time.get_ticks_usec()
+	_last_sample_ticks = start_ticks
 	var deadline := start_ticks + int(roundf(sample_seconds * 1_000_000.0))
 	var previous_ticks := start_ticks
 	var frame := 0
@@ -228,7 +244,7 @@ func _run() -> void:
 		frame += 1
 		if frame % MOVEMENT_CHECK_INTERVAL == 0:
 			older_checkpoint_positions = checkpoint_positions.duplicate()
-			if not _liveness_checkpoint(checkpoint_positions, frame):
+			if not _liveness_checkpoint(checkpoint_positions, frame, now):
 				return
 		if now >= deadline:
 			break
@@ -236,28 +252,30 @@ func _run() -> void:
 	# previous full-window baseline, since a handful of leftover frames can
 	# span less than a sim tick and would fail a healthy run.
 	if samples.size() % MOVEMENT_CHECK_INTERVAL != 0:
-		_live_unit_samples.append(_live_unit_count())
-		_visible_unit_samples.append(_visible_unit_count())
+		_record_unit_samples(previous_ticks)
 		if not _liveness_verdict(_movement_since(older_checkpoint_positions, false), samples.size()):
 			return
 
 	if _live_unit_samples.is_empty():
-		_live_unit_samples.append(_live_unit_count())
-		_visible_unit_samples.append(_visible_unit_count())
+		_record_unit_samples(previous_ticks)
 	var min_live_units := 0
-	var live_unit_sum := 0
+	var min_visible_in_tree_units := 0
+	var live_unit_seconds := 0.0
+	var visible_in_tree_unit_seconds := 0.0
+	var sampled_seconds := 0.0
 	for index in _live_unit_samples.size():
-		var count := _live_unit_samples[index]
-		if index == 0 or count < min_live_units:
-			min_live_units = count
-		live_unit_sum += count
-	var min_visible_units := 0
-	var visible_unit_sum := 0
-	for index in _visible_unit_samples.size():
-		var count := _visible_unit_samples[index]
-		if index == 0 or count < min_visible_units:
-			min_visible_units = count
-		visible_unit_sum += count
+		var live_count := _live_unit_samples[index]
+		var visible_count := _visible_in_tree_samples[index]
+		if index == 0 or live_count < min_live_units:
+			min_live_units = live_count
+		if index == 0 or visible_count < min_visible_in_tree_units:
+			min_visible_in_tree_units = visible_count
+		var window_seconds := _sample_window_seconds[index]
+		live_unit_seconds += live_count * window_seconds
+		visible_in_tree_unit_seconds += visible_count * window_seconds
+		sampled_seconds += window_seconds
+	var mean_live_units := live_unit_seconds / sampled_seconds if sampled_seconds > 0.0 else float(_live_unit_samples[0])
+	var mean_visible_in_tree_units := visible_in_tree_unit_seconds / sampled_seconds if sampled_seconds > 0.0 else float(_visible_in_tree_samples[0])
 
 	var sorted_samples := samples.duplicate()
 	sorted_samples.sort()
@@ -270,13 +288,13 @@ func _run() -> void:
 	var adapter := RenderingServer.get_video_adapter_name()
 	var vendor := RenderingServer.get_video_adapter_vendor()
 
-	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_units=%d mean_visible_units=%.1f end_visible_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
+	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_in_tree_units=%d mean_visible_in_tree_units=%.1f end_visible_in_tree_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
 		min_live_units,
-		float(live_unit_sum) / _live_unit_samples.size(),
+		mean_live_units,
 		_live_unit_count(),
-		min_visible_units,
-		float(visible_unit_sum) / _visible_unit_samples.size(),
-		_visible_unit_count(),
+		min_visible_in_tree_units,
+		mean_visible_in_tree_units,
+		_visible_in_tree_count(),
 		float(previous_ticks - start_ticks) / 1_000_000.0,
 		samples.size(),
 		mean_ms,

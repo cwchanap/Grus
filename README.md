@@ -193,7 +193,7 @@ GRUS_E2E_BINARY=<path-to-exported-grus> \
 
 ## Benchmark
 
-The benchmark fixture (mixed 100-vs-100, see **Reset modes** above) exists only for `benchmark_200.tscn` after an explicit benchmark reset; the runtime game and its smokes run the skirmish fixture above. The scene samples for a real-time duration set by `GRUS_BENCHMARK_SECONDS` (default 10, must be positive and finite): it waits for 200 live unit views and the fog revision to advance, then records frame times plus live-unit and drawn-unit counts, failing a sample that shows neither movement nor combat.
+The benchmark fixture (mixed 100-vs-100, see **Reset modes** above) exists only for `benchmark_200.tscn` after an explicit benchmark reset; the runtime game and its smokes run the skirmish fixture above. The scene samples for a real-time duration set by `GRUS_BENCHMARK_SECONDS` (default 10, must be positive and finite): it waits for 200 live unit views and the fog revision to advance, then records frame times plus live-unit and visible-in-tree unit counts (the visibility-flag render-load proxy), failing a sample that shows neither movement nor combat.
 
 - **CI regression:** 10 seconds (`GRUS_BENCHMARK_SECONDS=10` in the e2e job under software GL). It guards per-frame cost only — CI enforces no FPS floor.
 - **Hardware acceptance:** 60 seconds on the reference Linux x86_64 host, on the release export packaged with the benchmark as its main scene (not the editor/debug project runtime):
