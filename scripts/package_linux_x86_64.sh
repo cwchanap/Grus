@@ -49,6 +49,6 @@ godot --headless --path godot --import
 mkdir -p "$dist"
 godot --headless --path godot --export-release "Linux x86_64" "../$dist/Grus.x86_64"
 test -x "$dist/Grus.x86_64"
-tar -czf "$archive.tmp" -C dist grus-linux-x86_64
+tar -czf "$archive.tmp" -C dist "${dist##*/}"
 mv "$archive.tmp" "$archive"
 echo "packaged: $archive"

@@ -3,9 +3,9 @@ extends Node
 ## HPA-474 mixed-workload benchmark. After a benchmark reset it waits for the
 ## full 200-unit load (buildings/resources may already show extra AI
 ## foundations), waits for the fog revision to advance so the sim is provably
-## ticking, then records one frame-time sample per rendered frame plus the
-## drawn unit count sampled once per liveness window for a real-time
-## duration. A liveness checkpoint between fixed frame intervals fails a
+## ticking, then records one frame-time sample per rendered frame plus
+## live and drawn unit counts sampled once per liveness window for a
+## real-time duration. A liveness checkpoint between fixed frame intervals fails a
 ## sample that shows neither unit movement nor combat activity. Real combat
 ## deaths are expected: units are never respawned and health is never reset.
 
@@ -18,8 +18,10 @@ const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
 var _last_combat_event_total := 0
-## Drawn-unit samples, one per liveness window — the per-frame group scan
-## these replaced would land in every measured frame time.
+## Live-unit and drawn-unit samples, one of each per liveness window — the
+## per-frame group scans these replaced would land in every measured
+## frame time.
+var _live_unit_samples: Array[int] = []
 var _visible_unit_samples: Array[int] = []
 
 func _ready() -> void:
@@ -73,6 +75,12 @@ func _movement_since(baseline: Dictionary, rebase: bool) -> int:
 			baseline[id] = now
 	return moved
 
+## Live unit views right now: dead views leave the group entirely while
+## fog-hidden enemies stay in it with `visible = false`, so membership is
+## the live count — visibility is the render-load number, not this one.
+func _live_unit_count() -> int:
+	return get_tree().get_nodes_in_group("unit_views").size()
+
 ## Unit views actually drawn right now: fog-hidden enemies stay in the
 ## group with `visible = false` and are never submitted to the renderer,
 ## so they do not count as measured load.
@@ -100,9 +108,11 @@ func _liveness_verdict(moved: int, window_end_frame: int) -> bool:
 	_progress("active", moved)
 	return true
 
-## One full liveness window: records the drawn-load sample, diffs
-## positions against the checkpoint and rebases it for the next window.
+## One full liveness window: records the live and drawn-load samples,
+## diffs positions against the checkpoint and rebases it for the next
+## window.
 func _liveness_checkpoint(checkpoint_positions: Dictionary, window_end_frame: int) -> bool:
+	_live_unit_samples.append(_live_unit_count())
 	_visible_unit_samples.append(_visible_unit_count())
 	return _liveness_verdict(_movement_since(checkpoint_positions, true), window_end_frame)
 
@@ -175,6 +185,16 @@ func _run() -> void:
 		return
 	_progress("visibility", revision)
 
+	# Live and drawn counts must be able to disagree: fog has provably
+	# ticked (revision advanced), no combat deaths have landed yet, and
+	# the enemy army still sits under fog — so equality here means a
+	# "live" metric is really counting drawn views again.
+	var start_live := _live_unit_count()
+	var start_visible := _visible_unit_count()
+	if start_visible >= start_live:
+		_fail("expected fog-hidden live units after the first fog pass, got live=%d visible=%d" % [start_live, start_visible])
+		return
+
 	var warmup_deadline := Time.get_ticks_usec() + int(roundf(WARMUP_SECONDS * 1_000_000.0))
 	while Time.get_ticks_usec() < warmup_deadline:
 		await get_tree().process_frame
@@ -216,19 +236,28 @@ func _run() -> void:
 	# previous full-window baseline, since a handful of leftover frames can
 	# span less than a sim tick and would fail a healthy run.
 	if samples.size() % MOVEMENT_CHECK_INTERVAL != 0:
+		_live_unit_samples.append(_live_unit_count())
 		_visible_unit_samples.append(_visible_unit_count())
 		if not _liveness_verdict(_movement_since(older_checkpoint_positions, false), samples.size()):
 			return
 
-	if _visible_unit_samples.is_empty():
+	if _live_unit_samples.is_empty():
+		_live_unit_samples.append(_live_unit_count())
 		_visible_unit_samples.append(_visible_unit_count())
 	var min_live_units := 0
 	var live_unit_sum := 0
-	for index in _visible_unit_samples.size():
-		var count := _visible_unit_samples[index]
+	for index in _live_unit_samples.size():
+		var count := _live_unit_samples[index]
 		if index == 0 or count < min_live_units:
 			min_live_units = count
 		live_unit_sum += count
+	var min_visible_units := 0
+	var visible_unit_sum := 0
+	for index in _visible_unit_samples.size():
+		var count := _visible_unit_samples[index]
+		if index == 0 or count < min_visible_units:
+			min_visible_units = count
+		visible_unit_sum += count
 
 	var sorted_samples := samples.duplicate()
 	sorted_samples.sort()
@@ -241,9 +270,12 @@ func _run() -> void:
 	var adapter := RenderingServer.get_video_adapter_name()
 	var vendor := RenderingServer.get_video_adapter_vendor()
 
-	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
+	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_units=%d mean_visible_units=%.1f end_visible_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
 		min_live_units,
-		float(live_unit_sum) / _visible_unit_samples.size(),
+		float(live_unit_sum) / _live_unit_samples.size(),
+		_live_unit_count(),
+		min_visible_units,
+		float(visible_unit_sum) / _visible_unit_samples.size(),
 		_visible_unit_count(),
 		float(previous_ticks - start_ticks) / 1_000_000.0,
 		samples.size(),
