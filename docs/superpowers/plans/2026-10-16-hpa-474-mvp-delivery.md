@@ -180,7 +180,7 @@ It seeds map/skirmish, inserts the map, inserts/refreshes visibility, and insert
 Use it from:
 
 - `setup_fixture`: call helper, then insert `MatchSession { Start }`;
-- `reset_fixture_world`: clear, call helper with the launch `mirrored` boolean (the bridge re-reads `GRUS_MIRRORED_START` at the reset boundary, so a mirrored launch stays mirrored across every restart in the same process), then insert `MatchSession { Start }`; a regression test pins the mirrored layout across the reset seam;
+- `reset_fixture_world`: clear, call helper with the launch `mirrored` boolean (captured once from `GRUS_MIRRORED_START` at app build into `MirroredStart`, so a mirrored launch stays mirrored across every restart in the same process and cannot drift mid-session), then insert `MatchSession { Start }`; a regression test pins the mirrored layout across the reset seam;
 - `reset_benchmark_world`: clear, call helper with `false`, extend with the pure benchmark workload, and insert **no session**.
 
 Keep e2e selector reattachment in the existing normal reset location/behavior.
@@ -272,13 +272,16 @@ This prevents a visually rendering but simulation-dead sample from passing.
 
 - [ ] **Step 4: Record the actual live-unit load**
 
-At each sampled frame record current live unit count. Emit:
+Record current live-unit and drawn-unit counts once per liveness window — a per-frame `unit_views` group scan would land inside the measured frame times the benchmark exists to record. Live units are the `unit_views` group membership (fog-hidden enemies stay in the group); drawn units are the subset with `is_visible_in_tree()`, the actual render load. Emit:
 
 ```text
 start_units=200
 min_live_units=<n>
-mean_live_units=<frame-weighted average>
+mean_live_units=<sample-weighted average>
 end_units=<n>
+min_visible_units=<n>
+mean_visible_units=<sample-weighted average>
+end_visible_units=<n>
 duration_s=<seconds>
 frames=<n>
 mean_ms=<n>
