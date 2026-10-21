@@ -71,7 +71,35 @@ Keep the existing single Bevy World and bridge architecture. The only fixed-step
 | Formatting | Clean Rust style | cargo fmt --all -- --check |
 | Lints | No warnings in all targets, including e2e feature | cargo clippy --workspace --all-targets --locked -- -D warnings; cargo clippy -p grus-godot --all-targets --features e2e --locked -- -D warnings |
 | Unit/integration | All existing non-AI simulation, lifecycle and bridge tests | cargo test --workspace --locked; cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1 |
-| Coverage | >=90% grus-sim non-test line coverage | cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\\.rs$' |
+| Coverage | >=90% grus-sim non-test line coverage | cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs |
+| Standard fixture | Team 1 starts left; Team 2 starts right; 8 stable unit IDs, 2 centers, 18 resource nodes; Team 2 receives no autonomous orders after fixed steps | Fixture / bridge tests and reset_test.tscn |
+| Fog | Own area Visible, enemy start Unexplored at boot; reset removes explored fog | Visibility tests plus reset and bridge smokes |
+| Basic input/economy | Selection, routing, gather, build, train and UI still work | smoke_test.tscn; economy_smoke_test.tscn |
+| Combat/session | Start lock, passive enemy damage, Victory/Result and Restart remain valid | combat_lifecycle_smoke_test.tscn |
+| Benchmark (CI) | 200-unit scripted load still reaches existing liveness, visibility, frame and marker assertions without AI | benchmark_200.tscn with GRUS_BENCHMARK_SECONDS=10 in CI |
+| Benchmark (hardware re-baseline) | Re-run 60 s on the reference packaged benchmark build after AI removal; update README/evidence min/mean/end and visible-in-tree measurements from actual output, noting the hardware/renderer used. Scripted starting count stays 200, but AI-era time-weighted means must not be reused. | GRUS_BENCHMARK_SECONDS=60 and existing GRUS_MAIN_SCENE benchmark package workflow |
+| Git hygiene | No references to removed AI symbols or mirrored env switch in compiled/runtime files; no scouting CI step | rg across crates, godot/scripts, godot/scenes, .github/workflows, current README / developer guides |
+
+For the Godot smokes: build grus-godot, copy the rebuilt GDExtension into godot/bin (use the host-specific .so/.dylib), run the Godot editor scan once on a clean clone, then execute the four retained headless scenes. CI remains the final integration check, including its packaged-export boot and benchmark where applicable.
+
+## Failure modes and focused safeguards
+
+- **Dangling AI call sites:** Rust compile and Godot scene parsing will reveal missed imports / removed bridge methods. Grep both languages and CI.
+- **Fixture drift:** removing the mirrored wrapper must not reorder team/ID insertion or alter geometry. Assert known Team 1/Team 2 spawn anchors plus stable IDs and counts before and after reset.
+- **Benchmark false pass/false fail:** do not remove its deterministic scripted workload, its combat-liveness checks or its visibility refresh just because AI disappears. Run the actual scene, not only Rust tests. The longer 60 s trajectory may change when Team 2 no longer reassigns workers: update observed metrics, never hardcode expected old means.
+- **Weakening fog correctness:** remove only AI-dependent tests; keep human-side visibility and no-information-leak behavior. Enemy structures still exist and stay fogged until seen.
+- **Overwide scope:** no rename to Research Center, no centered-city layout, no enemy-wave system and no change to catalogue balance; those belong to HPA-448 and HPA-449.
+- **Coverage gate shifts:** deleting ai.rs changes the denominator and may expose under-covered remaining logic. Add targeted assertions only where a genuine non-AI behavior lacks coverage.
+
+## Review checklist / ready to implement
+
+- [ ] Validate file/symbol call sites against the latest main before code edits.
+- [ ] Implement steps 1–4 as commits on this **same** PR branch.
+- [ ] Run all Rust and Godot checks listed above and address regressions.
+- [ ] Verify CI on the final pushed head and update README/PR evidence accordingly.
+- [ ] Keep the PR draft for review until implementation and acceptance are complete.
+
+**Not part of this draft:** source implementation, a claim that CI passed, or completion of HPA-445. |
 | Standard fixture | Team 1 starts left; Team 2 starts right; 8 stable unit IDs, 2 centers, 18 resource nodes; Team 2 receives no autonomous orders after fixed steps | Fixture / bridge tests and reset_test.tscn |
 | Fog | Own area Visible, enemy start Unexplored at boot; reset removes explored fog | Visibility tests plus reset and bridge smokes |
 | Basic input/economy | Selection, routing, gather, build, train and UI still work | smoke_test.tscn; economy_smoke_test.tscn |
