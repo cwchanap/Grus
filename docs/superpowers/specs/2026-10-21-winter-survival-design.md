@@ -35,6 +35,7 @@ Each ticket owns its code, UI, tests and README edits in **one PR**. Art models/
 - Retain shared map occupancy / revision-driven navigation and existing fog-of-war semantics. Friendly vision reveals enemy entities; undiscovered/hidden enemies are not leaked via bridge, minimap or picking.
 - Start freezes gameplay, Playing runs the simulation, Paused freezes gameplay and cosmetics, Result rejects mutations, and Restart returns to a fresh start. A session-free benchmark may continue to use the existing always-playing convention.
 - Task 1 deliberately keeps both seeded teams but no AI decisions: Team 2 is a passive combat target. Task 3 removes the passive base once the wave system owns the alien side.
+- **Aliens are regular `TeamId(2)` units** (the same opposing team already used by combat, visibility and minimap). Do not introduce a parallel Faction/Alien identity. They reuse the current `UnitKind` catalogue, `spawn_unit`, and `AttackMove` command. Alien destruction of the Team-1 Research Center reaches Defeat through the existing `resolve_result(world, attacker.team)` path.
 
 ## 4. Economy and catalogue after task 2
 
@@ -61,7 +62,7 @@ Cavalry, farms, Archery Range, Stable, Age 2 and the Age-up command disappear in
 | Flame Tower | 2×2, 120 Scrap + 60 Coal | Unlocked at 25% research; range 3, high damage, bonus vs Swarmer |
 | Crystal Lance | 2×2, 150 Scrap + 40 Crystals | Unlocked at 50% research; range 10, bonus vs Brute |
 
-Detailed base HP, rates, queue times and unspecified values remain in the single typed catalogue. Do not invent duplicate balance constants in Godot.
+**All tunable numeric gameplay parameters described in §§4–8 belong in the existing `crates/grus-sim/src/catalog.rs` as typed spec fields or named constants, not private tuning literals inside waves/heat/research/underground modules or duplicated in Godot.** Extend `UnitSpec` with alien threat points, Crystal reward, and first-wave unlock metadata as needed; extend `BuildingSpec` with heat supply/demand; keep wave prep/interval, budget coefficients, cap, zone-count thresholds, furnace burn, efficiency floor, research rates/milestones/Analyze conversion, excavation coefficients/times and room outputs in the catalogue. Feature modules implement the formulas and algorithms, reading their tuning values from this single source. Do not add a generalized settings system or change existing unspecified balance values here; HPA-289 remains a catalogue-only balance pass.
 
 ## 5. Alien wave director (task 3)
 
@@ -87,7 +88,7 @@ The first pass uses placeholder meshes and existing combat feedback. Dedicated a
 
 Buildings with combat stats auto-acquire visible aliens and reuse combat damage/cooldown/event presentation. Generalize the combat attacker identity only as far as necessary to support buildings; do not add a separate tower combat engine.
 
-- Gate passability is **team-aware in the same GridMap**: at HPA-450, extend the current free/blocked occupancy representation with a minimal explicit Gate state (free / blocked / gate), and pass the moving team to walkability and A* checks. A player unit treats gates as walkable; an alien treats them as blocked. Today's global `is_walkable` boolean and unparameterized `find_path` cannot express this alone. Gate placement/destruction bumps the existing map revision so affected paths replan; **do not create a second occupancy map**.
+- Gate passability is **team-aware in the same `GridMap`**: at HPA-450, extend occupancy with a minimal free / blocked / gate distinction. Retain the existing team-agnostic `is_walkable(cell)` as a **free-cell/placement check**: it returns false for gates, so nothing builds or spawns inside them. Only pathfinding (`find_path`) and movement's per-step traversal checks take the mover's `TeamId` and allow Team 1 through a gate while blocking Team 2 aliens. Adjust relevant pathfinding callers to supply team identity, but do not thread it through all existing placement, spawn or gather-slot checks. Gate placement/destruction bumps the existing revision so affected movers replan; **do not create a second occupancy map**.
 - Wall/Gate placement stays armed for multiple clicks. A finished builder proceeds to the nearest unfinished friendly construction site.
 - Surface heat supply: Research Center **15**; active Coal Furnace **+12** while spending **0.5 Coal/s** through a fractional accumulator; Geothermal Taps from task 7 also contribute.
 - Heat demand sums completed above-ground structures: Research Center **10**, Bunkhouse **1**, Depot **1**, Barracks **3**, Gun Turret **2**, Flame Tower **3**, Crystal Lance **4**. Walls, gates, furnaces and construction sites consume **0**.
@@ -109,7 +110,7 @@ Show research progress and ETA based on the current rate. Preserve deterministic
 
 ## 8. Underground extension (task 7)
 
-The Research Center grants an **Excavate** command, one level at a time. Level n costs **100 × 1.6^(n−1) Scrap** and half as much Coal (the issue's rounded examples: L1 100/50; L2 160/80; L3 256/128; L4 410/205). Dig time starts at **30 s**, increasing **15 s per level**. There is no depth cap.
+The Research Center grants an **Excavate** command, one level at a time. For level n, calculate **Scrap = round-half-up(100 × 1.6^(n−1))** to an integer, then **Coal = round-half-up(Scrap / 2)** (not half the unrounded Scrap cost). Examples: L1 100/50, L2 160/80, L3 256/128, L4 410/205, **L5 655/328**. Use named catalogue constants for the 100 and 1.6 parameters. Dig time starts at **30 s**, increasing **15 s per level**. There is no depth cap.
 
 Each level contains **four room slots**. Rooms cost **50–150 Scrap** depending on catalogue kind; they are paid upfront, built on timers, and have fractional production accumulators. No underground units, navigation, waves, or cold penalty.
 
@@ -125,11 +126,18 @@ Shelters respect the existing maximum population cap. Tab opens a simple levels-
 
 ## 9. Performance, balance and acceptance
 
-Task 1 does **not** replace the current 200-unit scripted benchmark; it removes AI decisions while preserving existing scripted gather/attack-move workload, metrics and CI checks. Because the original Team-2 AI reassigns workers, removing it can change later time-weighted load and visibility means: **re-run the 60-second hardware benchmark and update README/evidence with observed numbers**, not historical AI-run measurements. Task 8 replaces the scenario with **150 live aliens against about 40 towers and 50 friendly units**, including wall/gate replanning pressure.
+Benchmark workload transitions are deliberately **owned by the ticket that changes the entities/catalogue they depend on**, rather than kept as a hidden legacy PvP mode:
+
+- **HPA-445:** retain the current 200-unit scripted gather/attack-move benchmark without economic AI. Because AI formerly retasked Team-2 workers, **re-run the 60-second hardware benchmark and update README/evidence using observed metrics**, explicitly marking these as *interim post-AI, pre-winter-re-skin* measurements.
+- **HPA-448:** mechanically replace the benchmark roster's removed Cavalry (and renamed types) with the retained Worker/Guard/Rifleman roster, reanchor scripted staging/midfield/gather points around the centered-city fixture, and adapt the benchmark scene's census while preserving its existing measured-liveness contract.
+- **HPA-449:** when the Team-2 passive base/villagers disappear, **replace** the two-sided scripted workload with scripted Team-2 aliens versus Team-1 human defenders. Reuse the newly introduced alien spawn/attack-move path; remove assumptions that both teams have Town Centers, gatherers or a fixed old 8+192 seed. Keep a bounded smoke/benchmark workload and existing timing/measurement fields; do not preserve a benchmark-only PvP base.
+- **HPA-289:** deliver the final survival stress scenario: **150 live aliens against approximately 40 towers and 50 player units**, with wall/gate replanning pressure, deterministic balance guard and catalogue tuning.
+
+No intermediate ticket may leave CI calling a benchmark whose spawn/command prerequisites have been deleted. Do not claim measurements from one workload apply to the next.
 
 Keep the existing benchmark measurement contract: **10 s in CI**, **60 s for hardware acceptance** (GRUS_BENCHMARK_SECONDS). In task 8, add a deterministic Rust journey: a fixed authored defense survives through wave 10 but falls before wave 40. Catalogue-only tuning targets the minute-38-to-45 win window; owner playtests evaluate feel.
 
-Every coding ticket must pass formatting, Clippy with warnings denied, Rust workspace tests, the **90% grus-sim line coverage gate**, relevant real Godot smoke scenes, and the current benchmark. Do not substitute unit tests for essential Godot bridge or presentation smoke coverage.
+Every coding ticket must pass formatting, Clippy with warnings denied, Rust workspace tests, the **90% grus-sim line coverage gate**, relevant real Godot smoke scenes, and the benchmark **updated for that ticket's current entities and mechanics**. Do not substitute unit tests for essential Godot bridge or presentation smoke coverage.
 
 ## 10. Explicit exclusions and decisions pending owner review
 
