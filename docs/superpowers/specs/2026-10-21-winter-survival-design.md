@@ -87,7 +87,7 @@ The first pass uses placeholder meshes and existing combat feedback. Dedicated a
 
 Buildings with combat stats auto-acquire visible aliens and reuse combat damage/cooldown/event presentation. Generalize the combat attacker identity only as far as necessary to support buildings; do not add a separate tower combat engine.
 
-- A Gate remains walkable in the shared base grid, with alien-specific extra blockage and map-revision invalidation on placement/destruction. No second occupancy map.
+- Gate passability is **team-aware in the same GridMap**: at HPA-450, extend the current free/blocked occupancy representation with a minimal explicit Gate state (free / blocked / gate), and pass the moving team to walkability and A* checks. A player unit treats gates as walkable; an alien treats them as blocked. Today's global `is_walkable` boolean and unparameterized `find_path` cannot express this alone. Gate placement/destruction bumps the existing map revision so affected paths replan; **do not create a second occupancy map**.
 - Wall/Gate placement stays armed for multiple clicks. A finished builder proceeds to the nearest unfinished friendly construction site.
 - Surface heat supply: Research Center **15**; active Coal Furnace **+12** while spending **0.5 Coal/s** through a fractional accumulator; Geothermal Taps from task 7 also contribute.
 - Heat demand sums completed above-ground structures: Research Center **10**, Bunkhouse **1**, Depot **1**, Barracks **3**, Gun Turret **2**, Flame Tower **3**, Crystal Lance **4**. Walls, gates, furnaces and construction sites consume **0**.
@@ -125,7 +125,7 @@ Shelters respect the existing maximum population cap. Tab opens a simple levels-
 
 ## 9. Performance, balance and acceptance
 
-Task 1 does **not** replace the current 200-unit scripted benchmark; it removes AI decisions while preserving existing scripted gather/attack-move workload, metrics and CI checks. Task 8 replaces that scenario with **150 live aliens against about 40 towers and 50 friendly units**, including wall/gate replanning pressure.
+Task 1 does **not** replace the current 200-unit scripted benchmark; it removes AI decisions while preserving existing scripted gather/attack-move workload, metrics and CI checks. Because the original Team-2 AI reassigns workers, removing it can change later time-weighted load and visibility means: **re-run the 60-second hardware benchmark and update README/evidence with observed numbers**, not historical AI-run measurements. Task 8 replaces the scenario with **150 live aliens against about 40 towers and 50 friendly units**, including wall/gate replanning pressure.
 
 Keep the existing benchmark measurement contract: **10 s in CI**, **60 s for hardware acceptance** (GRUS_BENCHMARK_SECONDS). In task 8, add a deterministic Rust journey: a fixed authored defense survives through wave 10 but falls before wave 40. Catalogue-only tuning targets the minute-38-to-45 win window; owner playtests evaluate feel.
 
