@@ -502,10 +502,10 @@ fn nearest_source(world: &World, team: TeamId, kind: ResourceKind) -> ResourceId
 }
 
 /// The authored mirrored Barracks anchor from the one base-coordinate table
-/// (`MapFixture::team_plan`): clear of every authored start cell, resource
-/// node, footprint, and gather slot on both starts.
+/// (`MapFixture::barracks_anchor`): clear of every authored start cell,
+/// resource node, footprint, and gather slot on both starts.
 fn barracks_anchor(team: TeamId) -> GridPos {
-    MapFixture::team_plan(team).barracks_anchor
+    MapFixture::barracks_anchor(team)
 }
 
 fn barracks_of(world: &World, team: TeamId) -> BuildingId {

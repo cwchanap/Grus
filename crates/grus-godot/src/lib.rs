@@ -8,17 +8,16 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
-    AGE_TWO_COST, AGE_TWO_SECONDS, Age, AiController, Building, BuildingId, BuildingIndex,
-    BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
-    Footprint, GridMap, GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase,
-    MatchSession, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint,
-    RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
-    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
-    VisibilityMap, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
-    gather_rate_for_age, idle_worker_ids, population_cap, population_used, produces,
-    refresh_visibility, seed_skirmish_mirrored, set_paused, start_match, step_ai, step_combat,
-    step_construction, step_economy, step_movement, step_production, validate_placement,
-    visible_to,
+    AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
+    CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap,
+    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
+    apply_player_command, explored_by, extend_with_benchmark_workload, gather_rate_for_age,
+    idle_worker_ids, population_cap, population_used, produces, refresh_visibility, seed_skirmish,
+    set_paused, start_match, step_combat, step_construction, step_economy, step_movement,
+    step_production, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -26,13 +25,6 @@ mod e2e;
 
 #[derive(Default, Resource)]
 struct PendingCommands(Vec<PlayerCommand>);
-
-/// The launch's mirrored-start choice, captured once at app build and
-/// reused by boot and every restart — one launch choice cannot drift
-/// mid-session. Pure-test worlds read a missing resource as the default
-/// layout, so the process env never leaks into them.
-#[derive(Debug, Resource)]
-struct MirroredStart(bool);
 
 #[derive(Resource)]
 struct CommandFeedback {
@@ -245,8 +237,7 @@ impl GrusBridgeNode {
             return false;
         };
 
-        let mirrored = mirrored_choice(app.world());
-        reset_fixture_world(app.world_mut(), mirrored);
+        reset_fixture_world(app.world_mut());
         // A fresh map can reuse a revision the bridge already cached from
         // the previous match (both boot at 1), and the cached payload would
         // then outlive the reset — drop it so the next fetch rebuilds from
@@ -297,23 +288,6 @@ impl GrusBridgeNode {
         };
         start_match(app.world_mut());
         true
-    }
-
-    /// Test-only AI removal for scripted legacy gameplay smokes: succeeds
-    /// only while the session sits in Start (never mid-match) and removes
-    /// only the `AiController` — visibility, entities and session state are
-    /// untouched. The HPA-473 scouting smoke deliberately never calls this:
-    /// it asserts the AI stays present.
-    #[func]
-    fn disable_ai_for_test(&self) -> bool {
-        let Some(mut app_node) = bevy_app_singleton() else {
-            return false;
-        };
-        let mut app_node = app_node.bind_mut();
-        let Some(app) = app_node.get_app_mut() else {
-            return false;
-        };
-        disable_ai_in_world(app.world_mut())
     }
 
     /// Pause/Resume. Changes the session phase only — never
@@ -775,7 +749,6 @@ fn build_app(app: &mut App) {
         .init_resource::<PendingCommands>()
         .init_resource::<CommandFeedback>()
         .init_resource::<LastRouteReject>()
-        .insert_resource(MirroredStart(mirrored_start_from_env()))
         .add_systems(Startup, setup_fixture)
         .add_systems(
             Update,
@@ -798,7 +771,6 @@ fn build_app(app: &mut App) {
                 advance_construction,
                 advance_production,
                 advance_visibility,
-                advance_ai,
                 drain_route_reject_feedback,
             )
                 .chain(),
@@ -1024,47 +996,25 @@ fn setup_fixture(world: &mut World) {
     if world.get_resource::<UnitIndex>().is_some() {
         return;
     }
-    seed_match_world(world, mirrored_choice(world));
+    seed_match_world(world);
     // Normal Godot setup boots into Start; start_match opens gameplay.
     world.insert_resource(MatchSession {
         phase: MatchPhase::Start,
     });
 }
 
-/// The manual mirrored-launch switch, read once at app build into
-/// `MirroredStart` — never inside pure simulation. Exactly
-/// `GRUS_MIRRORED_START=1` swaps the authored team starts for the whole
-/// launch; unset or any other value keeps Team 1 left / Team 2 right.
-/// Deliberately not a menu toggle.
-fn mirrored_start_from_env() -> bool {
-    std::env::var("GRUS_MIRRORED_START").is_ok_and(|value| value == "1")
-}
-
-/// The launch choice every seed path reuses: the `MirroredStart` captured
-/// at app build, or the default layout in a bare test world.
-fn mirrored_choice(world: &World) -> bool {
-    world
-        .get_resource::<MirroredStart>()
-        .is_some_and(|choice| choice.0)
-}
-
 /// The one shared match seed path for boot, restart and the benchmark:
-/// seeds the authored skirmish (mirrored flips the team starts), inserts
-/// the map, inserts fresh Team-1 fog with an initial refresh, and inserts
-/// the Team-2 AI controller whose authored plan side matches its physical
-/// start. Deliberately does NOT insert a `MatchSession` — normal callers
-/// add `Start`; the benchmark stays session-free so the missing session
-/// (Playing forever) can never freeze the load.
-fn seed_match_world(world: &mut World, mirrored: bool) {
+/// seeds the authored skirmish, inserts the map, and inserts fresh Team-1
+/// fog with an initial refresh. Deliberately does NOT insert a
+/// `MatchSession` — normal callers add `Start`; the benchmark stays
+/// session-free so the missing session (Playing forever) can never freeze
+/// the load.
+fn seed_match_world(world: &mut World) {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
-    seed_skirmish_mirrored(world, &mut map, &fixture, mirrored);
+    seed_skirmish(world, &mut map, &fixture);
     world.insert_resource(map);
     insert_fresh_visibility(world);
-    // Mirrored, Team 2 physically holds the authored left start, so its
-    // plan side is the left-authored table.
-    let plan_side = if mirrored { TeamId(1) } else { TeamId(2) };
-    world.insert_resource(AiController::new(TeamId(2)).with_authored_plan_side(plan_side));
 }
 
 /// Normal runtime gameplay runs fogged: a fresh `VisibilityMap` beside the
@@ -1398,12 +1348,9 @@ fn update_health_bars(
     }
 }
 
-fn reset_fixture_world(world: &mut World, mirrored: bool) {
+fn reset_fixture_world(world: &mut World) {
     clear_gameplay_world(world);
-    // The restart reuses the launch's mirrored choice — the caller passes
-    // the choice captured once at app build, so a mirrored launch stays
-    // mirrored across every restart in the same process.
-    seed_match_world(world, mirrored);
+    seed_match_world(world);
     // A normal-skirmish restart returns the session to Start — fogged with a
     // fresh exploration state, same as a first boot.
     world.insert_resource(MatchSession {
@@ -1417,10 +1364,9 @@ fn reset_fixture_world(world: &mut World, mirrored: bool) {
 
 fn reset_benchmark_world(world: &mut World) {
     clear_gameplay_world(world);
-    // The benchmark always measures the authored layout: it is a load
-    // fixture, not a match, so the mirrored launch flag must not change
-    // its physical layout between runs.
-    seed_match_world(world, false);
+    // The benchmark always measures the authored load fixture through the
+    // one ordinary start seed path.
+    seed_match_world(world);
     // The benchmark extends the normal seed with the pure mixed workload —
     // roster, staging and initial orders belong to grus-sim — and inserts
     // no session: the missing session reads as Playing forever, which is
@@ -1428,20 +1374,6 @@ fn reset_benchmark_world(world: &mut World) {
     world.resource_scope(|world, mut map: Mut<GridMap>| {
         extend_with_benchmark_workload(world, &mut map);
     });
-}
-
-/// The narrow test-disable seam behind `disable_ai_for_test`: Start-only and
-/// controller-only.
-fn disable_ai_in_world(world: &mut World) -> bool {
-    if !matches!(
-        world
-            .get_resource::<MatchSession>()
-            .map(|session| &session.phase),
-        Some(MatchPhase::Start)
-    ) {
-        return false;
-    }
-    world.remove_resource::<AiController>().is_some()
 }
 
 fn clear_gameplay_world(world: &mut World) {
@@ -1470,9 +1402,6 @@ fn clear_gameplay_world(world: &mut World) {
     // Visibility dies with the match: every seed path re-inserts a fresh
     // fogged map through `seed_match_world`.
     world.remove_resource::<VisibilityMap>();
-    // The AI controller dies with the match: every seed path re-inserts a
-    // fresh Team-2 controller through `seed_match_world`.
-    world.remove_resource::<AiController>();
     // Combat/session transients die with the match: the benchmark restarts
     // session-free (missing session = Playing), the normal reset re-inserts
     // Start.
@@ -1620,27 +1549,18 @@ fn advance_production(world: &mut World) {
     });
 }
 
-/// Canonical post-production step: presentation and AI consume the same
-/// freshly computed fog (every team's cells are refreshed) that the command
+/// Canonical post-production step: presentation consumes the same freshly
+/// computed fog (every team's cells are refreshed) that the command
 /// validation of the next tick will enforce.
 fn advance_visibility(world: &mut World) {
     world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
 
-/// The Team-2 AI fixed step, last mutation before the feedback drain: the
-/// decision reads exactly the fog the presentation received this tick.
-fn advance_ai(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_ai(world, &mut map, seconds);
-    });
-}
-
 /// Drains the sim's latest Team-1 worker route-failure reject into the
 /// existing feedback channel, so mid-step idles surface as typed codes with
 /// a revision bump instead of disappearing silently. Team 2's entries stay
-/// in the sim resource: the AI's private rejects must never surface as — or
-/// overwrite — the human player's feedback.
+/// in the sim resource: only the human player's rejects surface as — or
+/// overwrite — the feedback channel.
 fn drain_route_reject_feedback(world: &mut World) {
     let reason = world
         .get_resource_mut::<LastRouteReject>()
@@ -1811,7 +1731,7 @@ mod tests {
         );
 
         // A normal restart re-inserts a fresh fogged map.
-        reset_fixture_world(&mut world, false);
+        reset_fixture_world(&mut world);
         assert!(world.get_resource::<VisibilityMap>().is_some());
         assert!(world.resource::<VisibilityMap>().revision() >= 1);
 
@@ -1825,66 +1745,22 @@ mod tests {
         );
     }
 
-    /// The mirrored manual launch through the bridge seed boundary:
-    /// `seed_match_world(.., true)` swaps the authored team starts while the
-    /// AI issuer stays Team 2. The plan-side pin is exercised end-to-end in
-    /// grus-sim (`mirrored_harness_pins_the_authored_plan_side`).
+    /// Runtime boot seeds the authored layout through the one ordinary
+    /// start path: Team 1 on the authored left start, Team 2 on the right.
     #[test]
-    fn mirrored_seed_swaps_the_team_starts_and_keeps_the_team_two_issuer() {
-        let [left, right] = MapFixture::team_starts();
+    fn setup_fixture_seeds_the_authored_team_starts() {
         let mut world = World::new();
-        seed_match_world(&mut world, true);
-
+        setup_fixture(&mut world);
+        let [left, right] = MapFixture::team_starts();
         assert_eq!(
             town_center_anchor(&world, TeamId(1)),
-            right.town_center_anchor,
-            "mirrored: Team 1 seeds on the authored right start"
+            left.town_center_anchor,
+            "boot: Team 1 seeds on the authored left start"
         );
         assert_eq!(
             town_center_anchor(&world, TeamId(2)),
-            left.town_center_anchor,
-            "mirrored: Team 2 seeds on the authored left start"
-        );
-        assert_eq!(
-            world.resource::<AiController>().team,
-            TeamId(2),
-            "mirroring swaps starts, never the AI issuer"
-        );
-        assert_eq!(
-            world.resource::<AiController>().authored_plan_side(),
-            TeamId(1),
-            "mirroring pins Team 2 to the authored LEFT plan — its physical start"
-        );
-    }
-
-    /// `setup_fixture` honors the launch `MirroredStart` resource captured
-    /// at app build: a bare test world gets the default layout, a world
-    /// carrying the pinned choice boots mirrored — and neither touches the
-    /// process env.
-    #[test]
-    fn setup_fixture_seeds_the_captured_mirrored_choice() {
-        let [left, right] = MapFixture::team_starts();
-
-        let mut world = World::new();
-        setup_fixture(&mut world);
-        assert_eq!(
-            town_center_anchor(&world, TeamId(1)),
-            left.town_center_anchor,
-            "a missing MirroredStart resource reads as the default layout"
-        );
-
-        let mut world = World::new();
-        world.insert_resource(MirroredStart(true));
-        setup_fixture(&mut world);
-        assert_eq!(
-            town_center_anchor(&world, TeamId(1)),
             right.town_center_anchor,
-            "the captured launch choice drives the boot seed"
-        );
-        assert_eq!(
-            world.resource::<AiController>().authored_plan_side(),
-            TeamId(1),
-            "a mirrored boot pins the AI to the authored LEFT plan"
+            "boot: Team 2 seeds on the authored right start"
         );
     }
 
@@ -1902,84 +1778,6 @@ mod tests {
             })
             .expect("a seeded Town Center per team");
         world.get::<Footprint>(entity).unwrap().anchor
-    }
-
-    /// A mirrored launch stays mirrored across Restart: the reset seam takes
-    /// the launch's `mirrored` choice (the bridge re-reads the env at the
-    /// Godot boundary) rather than silently reverting to the default layout.
-    #[test]
-    fn mirrored_launch_stays_mirrored_across_restart() {
-        let [left, right] = MapFixture::team_starts();
-        let mut world = World::new();
-        seed_match_world(&mut world, true);
-        world.insert_resource(MatchSession {
-            phase: MatchPhase::Playing,
-        });
-
-        reset_fixture_world(&mut world, true);
-
-        assert_eq!(
-            town_center_anchor(&world, TeamId(1)),
-            right.town_center_anchor,
-            "mirrored restart: Team 1 reseeds on the authored right start"
-        );
-        assert_eq!(
-            town_center_anchor(&world, TeamId(2)),
-            left.town_center_anchor,
-            "mirrored restart: Team 2 reseeds on the authored left start"
-        );
-        assert!(matches!(
-            world.resource::<MatchSession>().phase,
-            MatchPhase::Start
-        ));
-    }
-
-    /// Normal setup/reset and the benchmark insert a fresh Team-2 controller;
-    /// the test-disable seam lifts only the controller and only from Start.
-    #[test]
-    fn the_team_two_ai_controller_follows_setup_reset_and_test_disable() {
-        let mut world = World::new();
-        setup_fixture(&mut world);
-        assert_eq!(
-            world.resource::<AiController>().team,
-            TeamId(2),
-            "normal setup ships the Team-2 AI opponent"
-        );
-        assert_eq!(
-            world.resource::<AiController>().authored_plan_side(),
-            TeamId(2),
-            "default layout: Team 2 decides against its own authored plan"
-        );
-
-        reset_fixture_world(&mut world, false);
-        assert_eq!(
-            world.resource::<AiController>().team,
-            TeamId(2),
-            "a restart re-inserts a fresh controller"
-        );
-
-        reset_benchmark_world(&mut world);
-        assert_eq!(
-            world.resource::<AiController>().team,
-            TeamId(2),
-            "the benchmark reset ships the Team-2 AI opponent too"
-        );
-
-        // The disable seam: no session at all must fail closed, Start must
-        // succeed exactly once, and Playing/Paused must refuse.
-        assert!(!disable_ai_in_world(&mut world), "no session: refuse");
-        world.insert_resource(MatchSession {
-            phase: MatchPhase::Start,
-        });
-        world.insert_resource(AiController::new(TeamId(2)));
-        assert!(disable_ai_in_world(&mut world), "Start: disable succeeds");
-        assert!(!disable_ai_in_world(&mut world), "already disabled: refuse");
-        world.insert_resource(AiController::new(TeamId(2)));
-        world.insert_resource(MatchSession {
-            phase: MatchPhase::Playing,
-        });
-        assert!(!disable_ai_in_world(&mut world), "Playing: refuse");
-        assert!(world.get_resource::<AiController>().is_some());
     }
 
     #[test]
@@ -2256,17 +2054,14 @@ mod tests {
 
         // Restart rides the reset seam; repeated cycles restore the initial
         // resources/entities/indexes exactly once, with no stale state.
-        reset_fixture_world(&mut world, false);
+        reset_fixture_world(&mut world);
         assert_fixture_restored(&world);
-        reset_fixture_world(&mut world, false);
+        reset_fixture_world(&mut world);
         assert_fixture_restored(&world);
     }
 
     /// Restart wipes everything a used match banked: pending human commands
-    /// and explored fog. The AI's scout cursor, remembered Town Center and
-    /// cadence accumulator ride the fresh `AiController` reseed — their deep
-    /// reset is proven in grus-sim's `ai::tests`, which can read the private
-    /// fields the bridge cannot.
+    /// and explored fog.
     #[test]
     fn restart_clears_pending_commands_and_used_fog() {
         let mut world = World::new();
@@ -2287,34 +2082,10 @@ mod tests {
                 },
             }));
 
-        let fixture = MapFixture::battlefield();
-        let map = fixture.map;
-        let route = MapFixture::team_plan(TeamId(2)).scout_route;
-
-        // Bank real AI match progress through the cadence gate: an idle
-        // Team-2 spearman scouts route leg 0 on the first 1 Hz decision.
-        let spearman = spawn_unit(
-            &mut world,
-            UnitId(900),
-            TeamId(2),
-            map.cell_center(GridPos::new(108, 52)),
-            UnitKind::Spearman,
-            unit_spec(UnitKind::Spearman).speed,
-        );
-        for _ in 0..25 {
-            world.resource_scope(|world, mut tick_map: Mut<GridMap>| {
-                refresh_visibility(world, &tick_map);
-                step_ai(world, &mut tick_map, SIM_STEP_SECONDS);
-            });
-        }
-        assert_eq!(
-            world.get::<MoveOrder>(spearman).unwrap().goal,
-            route[0],
-            "the used match banked scout progress: leg 0 was issued"
-        );
-
         // Use the fog: a scout beside the enemy start explores its Town
         // Center footprint.
+        let fixture = MapFixture::battlefield();
+        let map = fixture.map;
         let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
         world
             .entity_mut(scout)
@@ -2328,7 +2099,7 @@ mod tests {
         refresh_visibility(&mut world, &map);
         assert!(explored_by(&world, TeamId(1), enemy_town_center_footprint));
 
-        reset_fixture_world(&mut world, false);
+        reset_fixture_world(&mut world);
 
         assert!(
             world.resource::<PendingCommands>().0.is_empty(),
@@ -2338,7 +2109,6 @@ mod tests {
             world.resource::<MatchSession>().phase,
             MatchPhase::Start
         ));
-        assert_eq!(world.resource::<AiController>().team, TeamId(2));
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
@@ -2348,39 +2118,12 @@ mod tests {
             0,
             "restart must return the used fog to boot Unexplored"
         );
-
-        // The AI cursor the used match banked must restart at boot: with a
-        // fresh idle spearman and an open match, the first post-reset
-        // decision again takes route leg 0 — a surviving cursor (or
-        // memory) would issue a later leg instead.
-        world.insert_resource(MatchSession {
-            phase: MatchPhase::Playing,
-        });
-        let fresh_scout = spawn_unit(
-            &mut world,
-            UnitId(901),
-            TeamId(2),
-            map.cell_center(GridPos::new(108, 52)),
-            UnitKind::Spearman,
-            unit_spec(UnitKind::Spearman).speed,
-        );
-        for _ in 0..25 {
-            world.resource_scope(|world, mut tick_map: Mut<GridMap>| {
-                refresh_visibility(world, &tick_map);
-                step_ai(world, &mut tick_map, SIM_STEP_SECONDS);
-            });
-        }
-        assert_eq!(
-            world.get::<MoveOrder>(fresh_scout).unwrap().goal,
-            route[0],
-            "the real fixture reset returns the scout cursor to leg 0"
-        );
     }
 
-    /// The benchmark contract: the shared normal seed (fog + Team-2 AI)
-    /// extended with the pure mixed workload, and no `MatchSession` — the
-    /// missing session reads as Playing forever, so a settled stale session
-    /// cannot leak in and the load can never freeze.
+    /// The benchmark contract: the shared normal seed (fogged authored
+    /// skirmish) extended with the pure mixed workload, and no
+    /// `MatchSession` — the missing session reads as Playing forever, so a
+    /// settled stale session cannot leak in and the load can never freeze.
     #[test]
     fn benchmark_reset_is_session_free_mixed_workload() {
         let mut world = World::new();
@@ -2454,7 +2197,7 @@ mod tests {
         assert_eq!(
             world.resource::<LastRouteReject>().0.get(&TeamId(2)),
             Some(&RejectReason::Crowded),
-            "the AI's private reject stays in the sim resource"
+            "the Team-2 entry stays in the sim resource"
         );
         assert!(
             !world

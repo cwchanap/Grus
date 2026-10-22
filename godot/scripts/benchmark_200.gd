@@ -1,8 +1,7 @@
 extends Node
 
 ## HPA-474 mixed-workload benchmark. After a benchmark reset it waits for the
-## full 200-unit load (buildings/resources may already show extra AI
-## foundations), waits for the fog revision to advance so the sim is provably
+## full 200-unit load, waits for the fog revision to advance so the sim is provably
 ## ticking, then records one frame-time sample per rendered frame plus
 ## live and visible-in-tree unit counts sampled once per liveness window for a
 ## real-time duration. A liveness checkpoint between fixed frame intervals fails a
@@ -157,10 +156,10 @@ func _run() -> void:
 		return
 	_progress("benchmark_reset")
 
-	# Start shape: exactly 200 unique unit views; buildings >= 2 (the AI may
-	# place extra foundations before views attach); at least the authored 18
-	# resource sources. The workload itself was already accepted during the
-	# benchmark reset — there is no separate start call.
+	# Start shape: exactly 200 unique unit views; exactly the authored 2
+	# buildings; at least the authored 18 resource sources. The workload
+	# itself was already accepted during the benchmark reset — there is no
+	# separate start call.
 	var units: Array[Node] = []
 	var unique_ids: Dictionary = {}
 	for _frame in range(VIEW_WAIT_FRAMES):
@@ -172,14 +171,14 @@ func _run() -> void:
 			if id > 0:
 				unique_ids[id] = true
 		if units.size() == 200 and unique_ids.size() == 200 \
-				and get_tree().get_nodes_in_group("building_views").size() >= 2 \
+				and get_tree().get_nodes_in_group("building_views").size() == 2 \
 				and get_tree().get_nodes_in_group("resource_views").size() >= 18:
 			break
 	if units.size() != 200 or unique_ids.size() != 200:
 		_fail("expected 200 unique unit views, found %d nodes / %d ids" % [units.size(), unique_ids.size()])
 		return
-	if get_tree().get_nodes_in_group("building_views").size() < 2:
-		_fail("benchmark fixture must show at least 2 building views, found %d" % get_tree().get_nodes_in_group("building_views").size())
+	if get_tree().get_nodes_in_group("building_views").size() != 2:
+		_fail("benchmark fixture must show exactly 2 building views, found %d" % get_tree().get_nodes_in_group("building_views").size())
 		return
 	if get_tree().get_nodes_in_group("resource_views").size() < 18:
 		_fail("benchmark fixture must show at least 18 resource views, found %d" % get_tree().get_nodes_in_group("resource_views").size())

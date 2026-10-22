@@ -34,25 +34,6 @@ pub struct ResourceSpawn {
     pub amount: u32,
 }
 
-/// Coordinate-only authored AI base layout for one team: building slots and
-/// the scout/attack route, mirrored between the two team starts. Deliberately
-/// no live `UnitId`/`BuildingId`/`ResourceId` references — the AI policy
-/// resolves everything through the indexes and real command validation at
-/// apply time. Not exposed through any bridge snapshot; GDScript smoke build
-/// constants stay independent human-UI test choreography.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AiMapPlan {
-    pub town_center_anchor: GridPos,
-    pub house_slots: Vec<GridPos>,
-    pub farm_slots: Vec<GridPos>,
-    pub safe_storehouse_slots: Vec<GridPos>,
-    pub expansion_storehouse_slots: Vec<GridPos>,
-    pub barracks_anchor: GridPos,
-    pub archery_range_anchor: GridPos,
-    pub stable_anchor: GridPos,
-    pub scout_route: Vec<GridPos>,
-}
-
 #[derive(Clone, Debug)]
 pub struct MapFixture {
     pub map: GridMap,
@@ -142,74 +123,29 @@ impl MapFixture {
         }
     }
 
-    /// The one authored **Rust** base-coordinate table: the team-1 layout
-    /// below, mirrored for team 2. Base slots flip on the vertical center
-    /// line (footprint-width aware) and the scout route plus expansion
-    /// storehouse point-reflect through the map center, where the authored
-    /// blockers and expansion resources are symmetric. Session/system-order
-    /// tests anchor their choreography here so there is exactly one table.
-    pub fn team_plan(team: TeamId) -> AiMapPlan {
-        let plan = AiMapPlan {
-            town_center_anchor: GridPos::new(12, 46),
-            house_slots: vec![
-                GridPos::new(8, 44),
-                GridPos::new(8, 48),
-                GridPos::new(8, 52),
-            ],
-            farm_slots: vec![
-                GridPos::new(22, 44),
-                GridPos::new(22, 50),
-                GridPos::new(22, 56),
-            ],
-            safe_storehouse_slots: vec![GridPos::new(21, 46)],
-            expansion_storehouse_slots: vec![GridPos::new(45, 20)],
-            barracks_anchor: GridPos::new(17, 51),
-            archery_range_anchor: GridPos::new(17, 38),
-            stable_anchor: GridPos::new(17, 55),
-            scout_route: vec![
-                GridPos::new(30, 36),
-                GridPos::new(45, 17),
-                GridPos::new(64, 12),
-                GridPos::new(85, 25),
-                GridPos::new(106, 44),
-            ],
-        };
-        if team == TeamId(1) {
-            return plan;
+    /// The authored Barracks anchor of one team's base layout (3×3
+    /// footprint): clear of every authored start cell, resource node and
+    /// gather slot on both starts. Team 2 mirrors the team-1 anchor on the
+    /// vertical center line (footprint-width aware).
+    pub fn barracks_anchor(team: TeamId) -> GridPos {
+        let anchor = GridPos::new(17, 51);
+        if team == TeamId(2) {
+            mirror_anchor(anchor, building_spec(BuildingKind::Barracks).width)
+        } else {
+            anchor
         }
-        AiMapPlan {
-            town_center_anchor: mirror_anchor(
-                plan.town_center_anchor,
-                building_spec(BuildingKind::TownCenter).width,
-            ),
-            house_slots: mirrored(&plan.house_slots, building_spec(BuildingKind::House).width),
-            farm_slots: mirrored(&plan.farm_slots, building_spec(BuildingKind::Farm).width),
-            safe_storehouse_slots: mirrored(
-                &plan.safe_storehouse_slots,
-                building_spec(BuildingKind::Storehouse).width,
-            ),
-            expansion_storehouse_slots: plan
-                .expansion_storehouse_slots
-                .iter()
-                .map(|slot| point_reflect_anchor(*slot, BuildingKind::Storehouse))
-                .collect(),
-            barracks_anchor: mirror_anchor(
-                plan.barracks_anchor,
-                building_spec(BuildingKind::Barracks).width,
-            ),
-            archery_range_anchor: mirror_anchor(
-                plan.archery_range_anchor,
-                building_spec(BuildingKind::ArcheryRange).width,
-            ),
-            stable_anchor: mirror_anchor(
-                plan.stable_anchor,
-                building_spec(BuildingKind::Stable).width,
-            ),
-            scout_route: plan
-                .scout_route
-                .iter()
-                .map(|cell| point_reflect(*cell))
-                .collect(),
+    }
+
+    /// The authored safe Storehouse anchor of one team's base layout (2×2
+    /// footprint), beside the Town Center's resource line. Team 2 mirrors
+    /// the team-1 anchor on the vertical center line (footprint-width
+    /// aware).
+    pub fn safe_storehouse_anchor(team: TeamId) -> GridPos {
+        let anchor = GridPos::new(21, 46);
+        if team == TeamId(2) {
+            mirror_anchor(anchor, building_spec(BuildingKind::Storehouse).width)
+        } else {
+            anchor
         }
     }
 }
@@ -224,35 +160,7 @@ impl MapFixture {
 /// maxima. Every starting entity flows through the production constructors —
 /// there is no temporary Dropoff-only Town Center.
 pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture) {
-    seed_skirmish_mirrored(world, map, fixture, false);
-}
-
-/// The one narrow bool-selected variant the bridge's mirrored-start switch
-/// uses: when `mirrored`, Team 1 seeds at the authored right start and Team
-/// 2 at the authored left start. One bool over the same authored table — no
-/// scenario/faction abstraction.
-pub fn seed_skirmish_mirrored(
-    world: &mut World,
-    map: &mut GridMap,
-    fixture: &MapFixture,
-    mirrored: bool,
-) {
-    let [left, right] = MapFixture::team_starts();
-    let starts = if mirrored {
-        // Team 1 takes the authored right start, Team 2 the left one.
-        [
-            TeamStart {
-                team: TeamId(1),
-                ..right
-            },
-            TeamStart {
-                team: TeamId(2),
-                ..left
-            },
-        ]
-    } else {
-        [left, right]
-    };
+    let starts = MapFixture::team_starts();
     let mut economy = TeamEconomy::default();
     economy.insert_team(
         TeamId(1),
@@ -349,25 +257,6 @@ fn mirror_anchor(anchor: GridPos, width: u8) -> GridPos {
 /// blockers and the expansion resources are symmetric under.
 fn point_reflect(cell: GridPos) -> GridPos {
     GridPos::new(127 - cell.x, 95 - cell.y)
-}
-
-/// Point reflection of a footprint *anchor*, footprint-size aware on both
-/// axes: reflecting only the anchor point would shift a w×h footprint by
-/// (w-1, h-1) cells and break the authored symmetry (the team-2 expansion
-/// Storehouse landed on a tree's gathering cells before this).
-fn point_reflect_anchor(anchor: GridPos, kind: BuildingKind) -> GridPos {
-    let spec = building_spec(kind);
-    GridPos::new(
-        127 - anchor.x - i32::from(spec.width) + 1,
-        95 - anchor.y - i32::from(spec.height) + 1,
-    )
-}
-
-fn mirrored(anchors: &[GridPos], width: u8) -> Vec<GridPos> {
-    anchors
-        .iter()
-        .map(|anchor| mirror_anchor(*anchor, width))
-        .collect()
 }
 
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
