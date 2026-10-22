@@ -2,6 +2,18 @@ extends Node
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
+## Authored fixture geometry for the fog-scouting leg
+## (crates/grus-sim/src/fixture.rs).
+const EXPANSION_TREE_ID := 14
+const TREE_CELL := Vector2i(43, 18)
+const ENEMY_TOWN_CENTER_CELL := Vector2i(112, 46)
+
+## March destinations: the expansion tree at (43,18), a vantage inside
+## vision of the enemy start, and open ground back out of vision.
+const TREE_VANTAGE := Vector2(44.5, 19.5)
+const ENEMY_VANTAGE := Vector2(108.5, 44.5)
+const HOME_CELL := Vector2(95.5, 44.5)
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -73,6 +85,60 @@ func _find_unit(units: Array[Node], id: int) -> Node3D:
 
 func _ring(unit: Node3D) -> MeshInstance3D:
 	return unit.get_node("SelectionRing") as MeshInstance3D
+
+func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
+	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	for _frame in frame_budget:
+		if condition.call():
+			return true
+		await get_tree().physics_frame
+	_fail("%s (waited %.0fs)" % [message, timeout_s])
+	return false
+
+func _find_view(group: String, meta: String, id: int) -> Node3D:
+	for node in get_tree().get_nodes_in_group(group):
+		if int(node.get_meta(meta, -1)) == id:
+			return node as Node3D
+	return null
+
+func _unit_view(id: int) -> Node3D:
+	return _find_view("unit_views", "unit_id", id)
+
+func _building_view(id: int) -> Node3D:
+	return _find_view("building_views", "building_id", id)
+
+func _resource_view(id: int) -> Node3D:
+	return _find_view("resource_views", "resource_id", id)
+
+func _shown(view: Node3D) -> bool:
+	return view != null and view.is_visible_in_tree()
+
+func _hidden(view: Node3D) -> bool:
+	return view != null and not view.is_visible_in_tree()
+
+func _all_enemies_hidden() -> bool:
+	if not _hidden(_building_view(2)):
+		return false
+	for id in range(5, 9):
+		if not _hidden(_unit_view(id)):
+			return false
+	return true
+
+## A queued move is not acceptance: the sim's own feedback must say so.
+func _accepted_since(revision: int) -> bool:
+	return int(GrusBridge.command_feedback_revision()) > revision \
+		and str(GrusBridge.command_feedback()).begins_with("Command accepted")
+
+func _move_scout(unit_id: int, target: Vector2, what: String) -> bool:
+	var revision_before := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(PackedInt32Array([unit_id]), target):
+		_fail("%s: move was not queued" % what)
+		return false
+	return await _wait_until(_accepted_since.bind(revision_before), 10.0,
+			"%s: move was not accepted by the sim" % what)
+
+func _cell_state(states: PackedInt32Array, cell: Vector2i) -> int:
+	return states[cell.y * 128 + cell.x]
 
 func _run() -> void:
 	var window := get_window()
@@ -297,5 +363,156 @@ func _run() -> void:
 		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=8 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f" % max_visual_step)
+	# HPA-445 fog/minimap contract (moved out of the removed scouting-AI
+	# smoke): a human scout — villager 4, untouched by the choreography
+	# above — reveals a hidden resource and the passive enemy start, then
+	# leaves again. Presentation must track sim fog throughout: enemy views
+	# and the HUD data path open only under current vision, explored
+	# resources persist, a stale enemy selection clears itself, and enemy
+	# minimap markers appear/disappear with the presented views. The
+	# minimap click at the end recenters the camera without queuing any
+	# gameplay command.
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("failed to accelerate the sim for the scouting leg")
+		return
+	var main := get_node("Main") as Node3D
+	var minimap := get_node("Main/HUD/Minimap") as Control
+
+	# Pre-scout baseline: the earlier choreography stayed inside own
+	# vision, so the enemy start and the expansion tree are still
+	# Unexplored — enemy views hidden (but alive in the view tree), the
+	# fog-gated building snapshot empty, and no enemy minimap markers.
+	var pre_snap: Dictionary = GrusBridge.visibility_snapshot()
+	var pre_states: PackedInt32Array = pre_snap.get("states", PackedInt32Array())
+	if pre_states.size() != 128 * 96:
+		_fail("visibility snapshot payload is not 128x96: %d" % pre_states.size())
+		return
+	if _cell_state(pre_states, TREE_CELL) != 0 \
+			or _cell_state(pre_states, ENEMY_TOWN_CENTER_CELL) != 0:
+		_fail("scout targets did not stay Unexplored before the leg")
+		return
+	for id in range(5, 9):
+		if not _hidden(_unit_view(id)):
+			_fail("enemy villager %d was not hidden before the scout leg" % id)
+			return
+	if not _hidden(_building_view(2)):
+		_fail("enemy Town Center view was not hidden before the scout leg")
+		return
+	if not _hidden(_resource_view(EXPANSION_TREE_ID)):
+		_fail("expansion tree view was not hidden before the scout leg")
+		return
+	if not GrusBridge.building_snapshot(2).is_empty():
+		_fail("building_snapshot(2) leaked data for a hidden enemy building")
+		return
+	if int(minimap.enemy_marker_count) != 0:
+		_fail("minimap drew enemy markers while every enemy is hidden")
+		return
+	if int(minimap.friendly_marker_count) < 4:
+		_fail("minimap lost friendly markers")
+		return
+
+	# Scout leg 1: reveal the expansion tree.
+	if not await _move_scout(4, TREE_VANTAGE, "tree scout"):
+		return
+	if not await _wait_until(func(): return _shown(_resource_view(EXPANSION_TREE_ID)), 60.0,
+			"scout never revealed the expansion tree"):
+		return
+
+	# Scout leg 2: reveal the enemy start — views, the fog-gated building
+	# snapshot, and minimap markers all open together.
+	if not await _move_scout(4, ENEMY_VANTAGE, "enemy scout"):
+		return
+	if not await _wait_until(func(): return _shown(_building_view(2)) and _shown(_unit_view(5)), 60.0,
+			"scout never revealed the enemy Town Center/villagers"):
+		return
+	var enemy_snap: Dictionary = GrusBridge.building_snapshot(2)
+	if enemy_snap.is_empty() or int(enemy_snap.get("team_id", -1)) != 2:
+		_fail("visible enemy Town Center snapshot is missing or wrong: %s" % [enemy_snap])
+		return
+	if int(minimap.enemy_marker_count) < 1:
+		_fail("minimap shows no enemy markers after the reveal")
+		return
+	# A visible enemy building may be selected, and reconcile keeps it.
+	# Deliberate test seam: the selection is poked directly because the
+	# enemy Town Center boots hidden under fog, and the real picking funnel
+	# (battlefield _select_at) rightly skips not-visible-in-tree views —
+	# selecting it through a real click would first require marching the
+	# scout into the enemy start, machinery the fog contract under test
+	# does not need.
+	main.set("selected_building_id", 2)
+	for _frame in 3:
+		await get_tree().process_frame
+	if int(main.get("selected_building_id")) != 2:
+		_fail("reconcile dropped the selection of a visible enemy building")
+		return
+
+	# Scout leg 3: march home — vision shrinks, enemies hide, exploration
+	# persists. With a passive Team 2 nothing can wander back into vision,
+	# so the hidden enemies' marker count must return to exactly zero.
+	if not await _move_scout(4, HOME_CELL, "return march"):
+		return
+	if not await _wait_until(_all_enemies_hidden, 60.0,
+			"the enemy start never fully hid after the scout left"):
+		return
+	if not _shown(_resource_view(EXPANSION_TREE_ID)):
+		_fail("explored expansion tree lost its view after leaving vision")
+		return
+	if int(main.get("selected_building_id")) != -1:
+		_fail("stale selected enemy building was never cleared once hidden")
+		return
+	if not GrusBridge.building_snapshot(2).is_empty():
+		_fail("building_snapshot(2) leaked data after the enemy hid again")
+		return
+	for _frame in 2:
+		await get_tree().process_frame
+	if int(minimap.enemy_marker_count) != 0:
+		_fail("minimap kept enemy markers after every enemy hid")
+		return
+	# The fog data agrees: scouted cells keep Explored instead of snapping
+	# back to Unexplored.
+	var fog_snap: Dictionary = GrusBridge.visibility_snapshot()
+	var fog_states: PackedInt32Array = fog_snap.get("states", PackedInt32Array())
+	if fog_states.size() != 128 * 96:
+		_fail("visibility snapshot lost its payload")
+		return
+	if _cell_state(fog_states, TREE_CELL) != 1 \
+			or _cell_state(fog_states, ENEMY_TOWN_CENTER_CELL) != 1:
+		_fail("explored fog did not persist after the scout left")
+		return
+
+	# Minimap click recenters the camera and never queues a command.
+	var feedback_revision := int(GrusBridge.command_feedback_revision())
+	var click_at := minimap.get_global_rect().position + Vector2(20, 80)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.position = click_at
+	press.pressed = true
+	# push_input drives the same Window->Viewport GUI routing an OS click
+	# takes; parse_input_event's buffered path is unreliable at this depth in
+	# headless runs.
+	get_tree().root.push_input(press)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.position = click_at
+	release.pressed = false
+	get_tree().root.push_input(release)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	# The camera is pitched down: the click must center the *viewed* ground
+	# cell — where the view axis hits y=0 — computed from the logical
+	# transform because `project_ray_*` read the physics-interpolated one.
+	var forward := -camera.global_transform.basis.z.normalized()
+	var ground_hit := camera.global_position + forward * (-camera.global_position.y / forward.y)
+	if not Vector2(ground_hit.x, ground_hit.z).is_equal_approx(Vector2(20.5, 80.5)):
+		_fail("minimap click did not center the clicked ground cell: %s" % [ground_hit])
+		return
+	if int(GrusBridge.command_feedback_revision()) != feedback_revision:
+		_fail("minimap click leaked a gameplay command")
+		return
+
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("failed to restore sim speed")
+		return
+
+	print("GRUS_GODOT_SMOKE_OK units=8 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true stale_selection_cleared=true markers=fog_gated recenter=command_free" % max_visual_step)
 	get_tree().quit(0)
