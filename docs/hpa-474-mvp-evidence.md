@@ -46,26 +46,26 @@ GRUS_BENCHMARK_200 start_units=200 min_live_units=87 mean_live_units=134.2 end_u
 
 ## Playtest matrix
 
-**NOT RUN — all four interactive playtests require a human player and were not run in this agent session.** The delivery session has no human player and no playable interactive session; per Ledger Ruling 1 the four runs below were not executed, and no observation, duration or outcome is invented here. They remain the blocking directional evidence for any balance tuning, exactly like the Task-0 reference-host blocker above blocks hardware evidence.
+**NOT RUN — rows 1–2 require a human player and were not run in this agent session; rows 3–4 are obsolete.** The delivery session has no human player and no playable interactive session; per Ledger Ruling 1 the runs below were not executed, and no observation, duration or outcome is invented here. Rows 1–2 remain the blocking directional evidence for any balance tuning, exactly like the Task-0 reference-host blocker above blocks hardware evidence.
 
-The mirrored launch switch itself **is** wired and unit-tested in this task (Task 4 Step 1–2): `GRUS_MIRRORED_START=1 godot --path godot` swaps the authored team starts (Team 1 right / Team 2 left, Team-2 AI reading the authored left plan as issuer Team 2); unset keeps Team 1 left / Team 2 right. A human playtester can run the matrix as-is.
+The mirrored launch switch itself **was** wired and unit-tested during this task (Task 4 Step 1–2): `GRUS_MIRRORED_START=1 godot --path godot` swapped the authored team starts (Team 1 right / Team 2 left, Team-2 AI reading the authored left plan as issuer Team 2); unset kept Team 1 left / Team 2 right.
 
-*Superseded by HPA-445: the mirrored launch mode no longer exists; matrix rows 3–4 are obsolete — run rows 1–2 only.*
+*Superseded by HPA-445: the mirrored launch mode no longer exists — `GRUS_MIRRORED_START` has no effect and matrix rows 3–4 below are obsolete. A human playtester can run rows 1–2 only.*
 
 | # | Launch | Opening | Duration | Result | Expansion | Raids | TC finish |
 |---|--------|---------|----------|--------|-----------|-------|-----------|
 | 1 | default (Team 1 left) | early pressure | not run in agent session — requires human playtest | not run | not run | not run | not run |
 | 2 | default (Team 1 left) | economy-first / age-up | not run in agent session — requires human playtest | not run | not run | not run | not run |
-| 3 | `GRUS_MIRRORED_START=1` (Team 1 right) | early pressure | not run in agent session — requires human playtest | not run | not run | not run | not run |
-| 4 | `GRUS_MIRRORED_START=1` (Team 1 right) | economy-first / age-up | not run in agent session — requires human playtest | not run | not run | not run | not run |
+| 3 | `GRUS_MIRRORED_START=1` (Team 1 right) | early pressure | obsolete — mirrored launch mode removed in HPA-445 | — | — | — | — |
+| 4 | `GRUS_MIRRORED_START=1` (Team 1 right) | economy-first / age-up | obsolete — mirrored launch mode removed in HPA-445 | — | — | — | — |
 
 ## Restart + lifecycle outcomes
 
-**NOT RUN — requires human playtest.** The restart-cleanliness checks (resources / entities / queues / selections / fog / AI state after each Restart) and the Victory/Defeat lifecycle outcomes (brief Steps 3–5) are part of the same four interactive runs and share the same blocking dependency: no human player exists in this agent session. No restart observation or lifecycle outcome is recorded or invented. The automated equivalent that does run (`reset_fixture_world` re-seeding through the shared `seed_match_world` path, covered by `cargo test -p grus-godot --lib`) verifies re-seed correctness at the state level, but is not a substitute for the human evidence the plan requires.
+**NOT RUN — requires human playtest.** The restart-cleanliness checks (resources / entities / queues / selections / fog / AI state after each Restart) and the Victory/Defeat lifecycle outcomes (brief Steps 3–5) are part of the same interactive runs (matrix rows 1–2; rows 3–4 are obsolete) and share the same blocking dependency: no human player exists in this agent session. No restart observation or lifecycle outcome is recorded or invented. The automated equivalent that does run (`reset_fixture_world` re-seeding through the shared `seed_match_world` path, covered by `cargo test -p grus-godot --lib`) verifies re-seed correctness at the state level, but is not a substitute for the human evidence the plan requires.
 
 ## Tuning log
 
-**BLOCKED ON MISSING PLAYTEST EVIDENCE — no tuning decision is possible.** With all four matrix runs not executed (see Playtest matrix above), there is no duration, result, expansion, raid or TC-finish observation to justify changing any owner. Per plan Step 6–7 a balance fix requires demonstrated evidence and a narrow regression first; none exists, so **no catalogue / AI / fixture value was touched in this task**. This is not a "no tuning change required" verdict — balance quality is simply unknown and tuning remains blocked until a human playtester produces the four-run evidence.
+**BLOCKED ON MISSING PLAYTEST EVIDENCE — no tuning decision is possible.** With the runnable matrix runs (rows 1–2) not executed (see Playtest matrix above), there is no duration, result, expansion, raid or TC-finish observation to justify changing any owner. Per plan Step 6–7 a balance fix requires demonstrated evidence and a narrow regression first; none exists, so **no catalogue / AI / fixture value was touched in this task**. This is not a "no tuning change required" verdict — balance quality is simply unknown and tuning remains blocked until a human playtester produces the rows 1–2 evidence.
 
 ## Early release performance
 
@@ -107,7 +107,7 @@ Requirement (Task 6 Step 7): after the push, all three GitHub Actions jobs must 
 Consolidated list; each item carries its per-section owner above.
 
 - **No Linux x86_64 reference host (root blocker):** no hardware-rendered Linux x86_64 machine exists in this session, so all hardware acceptance evidence is blocked — no final export, no early or final 60-second benchmark sample, no GPU/adapter identification (see Reference host / revision, Early release performance, Final release performance).
-- **Four directional playtests not run:** every playtest-matrix cell is an explicit not-run; this agent session has no human player and no playable interactive session. Running them needs only a human with `godot --path godot` (and `GRUS_MIRRORED_START=1` for the mirrored pair) (see Playtest matrix).
+- **Directional playtests not run:** playtest-matrix rows 1–2 are explicit not-runs and rows 3–4 are obsolete (mirrored launch removed in HPA-445); this agent session has no human player and no playable interactive session. Running rows 1–2 needs only a human with `godot --path godot` (see Playtest matrix).
 - **Both lifecycle outcomes + restart cleanliness not evidenced:** the Victory/Defeat outcome records and repeated-restart cleanliness checks share the playtest blocker and were not run (see Restart + lifecycle outcomes); balance tuning stays blocked with them (see Tuning log).
 - **Extracted-package journey not run + no final tarball hash:** no package build/extract/launch, no packaged gameplay journey, and no `sha256sum` of `dist/grus-linux-x86_64.tar.gz` — blocked by the missing host, identically for the Task-5 and Task-6 package steps (see Package verification).
 - **Fresh-player usability not run:** no first-time player attempted the extracted build using only the in-game controls label; this needs a human with the extracted package on the reference host (see Fresh-player usability).

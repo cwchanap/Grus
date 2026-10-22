@@ -4,7 +4,7 @@
 **Base audited:** cwchanap/Grus main @ 60a9c0440a0ff85df1826e98036b4ec0c1ae709a (2026-10-20)
 **Design:** ../specs/2026-10-21-winter-survival-design.md
 **PR policy:** **Exactly one PR for HPA-445.** This planning draft must become the implementation PR; do not open a separate follow-up PR to perform the changes.
-**Status:** Proposed implementation plan — **documentation only**, not yet implemented or tested.
+**Status:** Implemented in this PR — the section 1–3 code cut, the section 4 documentation cutover and the interim post-AI benchmark re-baseline all landed on this branch.
 
 ## Goal and acceptance contract
 
@@ -62,7 +62,7 @@ Keep the existing single Bevy World and bridge architecture. The only fixed-step
 ### 4. Documentation cutover
 
 - The Winter Survival design specification was introduced in this PR as docs/superpowers/specs/2026-10-21-winter-survival-design.md, assembled from current Linear contracts because the external Claude artifact was inaccessible. Review differences against that artifact when available without expanding this ticket.
-- README: remove the “economic AI” feature section, two-sided full-match journey claims, the mirrored-start feature and scouting-AI smoke commands. Say clearly that Team 2 is currently a passive target **until task 3**, while fog, minimap, combat, and benchmark remain operational. **Re-measure the 60-second hardware-acceptance benchmark after deleting AI and update recorded README/evidence numbers from actual output; do not carry forward AI-era mean unit/liveness/visibility results. Label the measurements as the interim post-AI scripted 200-unit workload, which changes again in HPA-448 and HPA-449.** Avoid advertising alien waves as already implemented.
+- README: remove the “economic AI” feature section, two-sided full-match journey claims, the mirrored-start feature and scouting-AI smoke commands. Say clearly that Team 2 is currently a passive target **until HPA-449**, while fog, minimap, combat, and benchmark remain operational. **Re-measure the 60-second hardware-acceptance benchmark after deleting AI and update recorded README/evidence numbers from actual output; do not carry forward AI-era mean unit/liveness/visibility results. Label the measurements as the interim post-AI scripted 200-unit workload, which changes again in HPA-448 and HPA-449.** Avoid advertising alien waves as already implemented.
 - Update CLAUDE.md current development guidance (AGENTS.md is a symlink to CLAUDE.md, **not** a second document to edit), including fixed system order, setup/reset modes, and test commands. Do not rewrite historical design records solely to remove references to former features.
 - No new art, SFX, setup libraries, runtime configuration, migration or compatibility shim.
 
@@ -101,4 +101,4 @@ For the Godot smokes: build grus-godot, copy the rebuilt GDExtension into godot/
 - [ ] Verify CI on the final pushed head and update README/PR evidence accordingly.
 - [ ] Keep the PR draft for review until implementation and acceptance are complete.
 
-**Not part of this draft:** source implementation, a claim that CI passed, or completion of HPA-445.
+**Scope update:** per the PR policy above, the source implementation, documentation cutover and interim post-AI benchmark re-baseline are all part of this same PR — the draft is no longer documentation-only.
