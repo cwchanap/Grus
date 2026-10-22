@@ -124,8 +124,8 @@ impl MapFixture {
     }
 
     /// The authored Barracks anchor of one team's base layout (3×3
-    /// footprint): clear of every authored start cell, resource node and
-    /// gather slot on both starts. Team 2 mirrors the team-1 anchor on the
+    /// footprint): clear of every authored start cell and resource node on
+    /// both starts. Team 2 mirrors the team-1 anchor on the
     /// vertical center line (footprint-width aware).
     pub fn barracks_anchor(team: TeamId) -> GridPos {
         let anchor = GridPos::new(17, 51);
