@@ -705,8 +705,8 @@ fn first_open_perimeter_cell(
 }
 
 /// The nearest walkable cell outside `excluded`, searched by expanding
-/// Chebyshev rings row-major — same ring order as the AI target picker.
-/// Radius 0 first, so callers may ask about the cell itself.
+/// Chebyshev rings row-major. Radius 0 first, so callers may ask about the
+/// cell itself.
 /// ponytail: capped at ring 7; a fully blocked 15×15 pocket around the
 /// cell returns None (displacement then leaves the unit in place) — a
 /// full-map scan if an authored map ever produces such a pocket.

@@ -293,8 +293,8 @@ pub(crate) fn reroute_dropoff_worker(
 }
 
 /// The one idle-villager definition: Villager + `WorkerTask::Idle` + no
-/// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count and the AI
-/// worker pool read the same truth.
+/// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count reads the
+/// same truth.
 pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
     world
         .get::<Unit>(entity)
@@ -303,8 +303,7 @@ pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
         && world.get::<MoveOrder>(entity).is_none()
 }
 
-/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD
-/// and the AI alike.
+/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD.
 pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
     let mut ids: Vec<UnitId> = world
         .get_resource::<UnitIndex>()

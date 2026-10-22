@@ -1,5 +1,5 @@
 //! Authoritative per-team visibility: the one fog-of-war contract shared by
-//! combat, placement, gathering, rendering, and AI. `refresh_visibility` is
+//! combat, placement, gathering, and rendering. `refresh_visibility` is
 //! the exclusive world step; `visible_to` and `explored_by` are the only
 //! public knowledge predicates, `unit_counts_as_occupancy` and
 //! `move_goal_counts_as_occupancy` carry the derived occupancy rules over

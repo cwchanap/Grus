@@ -147,11 +147,8 @@ func _run() -> void:
 		if not token in control_words:
 			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
 			return
-	# This scripted choreography runs AI-free: the Start-only test seam must
-	# lift the Team-2 controller before gameplay opens.
-	if not GrusBridge.disable_ai_for_test():
-		_fail("disable_ai_for_test did not lift the AI from Start")
-		return
+	# This scripted choreography runs against a passive Team 2: no opponent
+	# controller exists to lift before gameplay opens.
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
 		return

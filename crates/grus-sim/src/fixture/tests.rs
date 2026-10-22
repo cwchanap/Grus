@@ -133,59 +133,58 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     }
 }
 
+/// The two authored anchor accessors are the one shared base-coordinate
+/// table left for session/system-order choreography: each team's slot must
+/// sit in-bounds, walkable and clear of both starts and every resource, and
+/// team 2 must be the exact horizontal mirror of team 1.
 #[test]
-fn mirrored_seeding_swaps_the_authored_team_starts() {
+fn authored_anchor_accessors_mirror_between_team_halves() {
     let fixture = MapFixture::battlefield();
-    let [left, right] = MapFixture::team_starts();
+    let map = &fixture.map;
+    let starts = MapFixture::team_starts();
+    let occupied: HashSet<GridPos> = starts
+        .iter()
+        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
+        .chain(starts.iter().flat_map(|start| start.villagers))
+        .chain(fixture.resources.iter().map(|spawn| spawn.cell))
+        .collect();
 
-    for (mirrored, team_one_start, team_two_start) in [
-        // Default: Team 1 left, Team 2 right.
-        (false, &left, &right),
-        // Mirrored: Team 1 right, Team 2 left.
-        (true, &right, &left),
-    ] {
-        let mut map = fixture.map.clone();
-        let mut world = World::new();
-        seed_skirmish_mirrored(&mut world, &mut map, &fixture, mirrored);
-
-        for (team, start) in [(TeamId(1), team_one_start), (TeamId(2), team_two_start)] {
-            // The team's Town Center stands on the expected authored anchor.
-            let tc_entity = world
-                .resource::<BuildingIndex>()
-                .iter()
-                .find_map(|(_, entity)| {
-                    world
-                        .get::<Building>(*entity)
-                        .is_some_and(|building| {
-                            building.team == team && building.kind == BuildingKind::TownCenter
-                        })
-                        .then_some(*entity)
-                })
-                .expect("a seeded Town Center per team");
-            assert_eq!(
-                world.get::<Footprint>(tc_entity).unwrap().anchor,
-                start.town_center_anchor,
-                "mirrored={mirrored}: team {team:?} town center on the wrong start"
-            );
-
-            // And its four villagers stand exactly on that start's cells.
-            let villager_cells: HashSet<GridPos> = world
-                .resource::<UnitIndex>()
-                .iter()
-                .filter_map(|(_, entity)| {
-                    let unit = world.get::<Unit>(*entity)?;
-                    (unit.team == team && unit.kind == UnitKind::Villager).then(|| {
-                        map.world_to_cell(world.get::<SimPosition>(*entity).unwrap().current)
-                    })
-                })
-                .collect();
-            let expected: HashSet<GridPos> = start.villagers.into_iter().collect();
-            assert_eq!(
-                villager_cells, expected,
-                "mirrored={mirrored}: team {team:?} villagers on the wrong start"
-            );
+    for team in [TeamId(1), TeamId(2)] {
+        for (name, anchor, width) in [
+            (
+                "barracks",
+                MapFixture::barracks_anchor(team),
+                building_spec(BuildingKind::Barracks).width,
+            ),
+            (
+                "storehouse",
+                MapFixture::safe_storehouse_anchor(team),
+                building_spec(BuildingKind::Storehouse).width,
+            ),
+        ] {
+            for cell in Footprint::new(anchor, width, width).cells() {
+                assert!(
+                    map.in_bounds(cell) && map.is_walkable(cell) && !occupied.contains(&cell),
+                    "team {team:?} {name} cell {cell:?} must be in-bounds, walkable and clear"
+                );
+            }
         }
     }
+
+    assert_eq!(
+        MapFixture::barracks_anchor(TeamId(2)),
+        mirror_anchor(
+            MapFixture::barracks_anchor(TeamId(1)),
+            building_spec(BuildingKind::Barracks).width
+        )
+    );
+    assert_eq!(
+        MapFixture::safe_storehouse_anchor(TeamId(2)),
+        mirror_anchor(
+            MapFixture::safe_storehouse_anchor(TeamId(1)),
+            building_spec(BuildingKind::Storehouse).width
+        )
+    );
 }
 
 #[test]
@@ -267,143 +266,6 @@ fn villager_starts_stay_walkable_after_town_center_blocking() {
             );
         }
     }
-}
-
-#[test]
-fn ai_map_plan_slots_are_buildable_mirrored_and_route_walkable() {
-    let fixture = MapFixture::battlefield();
-    let map = &fixture.map;
-
-    let starts = MapFixture::team_starts();
-    let occupied: HashSet<GridPos> = starts
-        .iter()
-        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
-        .chain(starts.iter().flat_map(|start| start.villagers))
-        .chain(fixture.resources.iter().map(|spawn| spawn.cell))
-        .collect();
-
-    for team in [TeamId(1), TeamId(2)] {
-        let plan = MapFixture::team_plan(team);
-        // The plan's Town Center slot is not a build to place — it restates
-        // the authored start's already-seeded anchor.
-        let start = starts
-            .iter()
-            .find(|start| start.team == team)
-            .expect("an authored start for every planned team");
-        assert_eq!(
-            plan.town_center_anchor, start.town_center_anchor,
-            "team {team:?}: the plan's Town Center slot restates the authored start"
-        );
-        let check_anchor = |name: &str, anchor: GridPos, size: u8| {
-            for cell in Footprint::new(anchor, size, size).cells() {
-                assert!(
-                    map.in_bounds(cell) && map.is_walkable(cell) && !occupied.contains(&cell),
-                    "team {team:?} {name} cell {cell:?} must be in-bounds, walkable and clear"
-                );
-            }
-        };
-        for slot in &plan.house_slots {
-            check_anchor("house", *slot, 2);
-        }
-        for slot in &plan.farm_slots {
-            check_anchor("farm", *slot, 2);
-        }
-        for slot in plan
-            .safe_storehouse_slots
-            .iter()
-            .chain(&plan.expansion_storehouse_slots)
-        {
-            check_anchor("storehouse", *slot, 2);
-        }
-        check_anchor("barracks", plan.barracks_anchor, 3);
-        check_anchor("archery range", plan.archery_range_anchor, 3);
-        check_anchor("stable", plan.stable_anchor, 3);
-
-        // Authored slots never overlap each other.
-        let mut all_slot_cells = Vec::new();
-        for (anchor, size) in plan
-            .house_slots
-            .iter()
-            .chain(&plan.farm_slots)
-            .chain(&plan.safe_storehouse_slots)
-            .chain(&plan.expansion_storehouse_slots)
-            .map(|slot| (*slot, 2_u8))
-            .chain([
-                (plan.barracks_anchor, 3_u8),
-                (plan.archery_range_anchor, 3),
-                (plan.stable_anchor, 3),
-            ])
-        {
-            all_slot_cells.extend(Footprint::new(anchor, size, size).cells());
-        }
-        let unique: HashSet<GridPos> = all_slot_cells.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            all_slot_cells.len(),
-            "team {team:?} authored slots overlap"
-        );
-
-        // The scout route is non-empty and walkable end to end.
-        assert!(!plan.scout_route.is_empty());
-        for cell in &plan.scout_route {
-            assert!(
-                map.is_walkable(*cell),
-                "team {team:?} route cell {cell:?} blocked"
-            );
-        }
-    }
-
-    // Team 2 is the exact mirror of team 1.
-    let one = MapFixture::team_plan(TeamId(1));
-    let two = MapFixture::team_plan(TeamId(2));
-    assert_eq!(
-        two.town_center_anchor,
-        mirror_anchor(one.town_center_anchor, 4)
-    );
-    assert_eq!(two.house_slots, mirrored(&one.house_slots, 2));
-    assert_eq!(two.farm_slots, mirrored(&one.farm_slots, 2));
-    assert_eq!(
-        two.safe_storehouse_slots,
-        mirrored(&one.safe_storehouse_slots, 2)
-    );
-    assert_eq!(
-        two.expansion_storehouse_slots,
-        one.expansion_storehouse_slots
-            .iter()
-            .map(|slot| point_reflect_anchor(*slot, BuildingKind::Storehouse))
-            .collect::<Vec<_>>()
-    );
-    // Footprint-aware reflection keeps the mirrored Storehouse off the
-    // team-2 expansion trees' gathering cells: the raw point reflection of
-    // the anchor (82,75) covered tree 17's (83,76) approach cell.
-    let battlefield = MapFixture::battlefield();
-    let southeast_trees: HashSet<GridPos> = battlefield
-        .resources
-        .iter()
-        .filter(|spawn| spawn.id.0 >= 16)
-        .flat_map(|spawn| Footprint::new(spawn.cell, 1, 1).perimeter_cells())
-        .collect();
-    for slot in &two.expansion_storehouse_slots {
-        for cell in Footprint::new(*slot, 2, 2).cells() {
-            assert!(
-                !southeast_trees.contains(&cell),
-                "mirrored expansion Storehouse covers a team-2 gathering cell {cell:?}"
-            );
-        }
-    }
-    assert_eq!(two.barracks_anchor, mirror_anchor(one.barracks_anchor, 3));
-    assert_eq!(
-        two.archery_range_anchor,
-        mirror_anchor(one.archery_range_anchor, 3)
-    );
-    assert_eq!(two.stable_anchor, mirror_anchor(one.stable_anchor, 3));
-    assert_eq!(
-        two.scout_route,
-        one.scout_route
-            .iter()
-            .map(|cell| point_reflect(*cell))
-            .collect::<Vec<_>>()
-    );
 }
 
 #[test]

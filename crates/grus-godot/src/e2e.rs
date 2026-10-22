@@ -226,7 +226,7 @@ mod tests {
         let mut app = test_app();
         run_first_frame(&mut app);
 
-        crate::reset_fixture_world(app.world_mut(), false);
+        crate::reset_fixture_world(app.world_mut());
 
         let world = app.world_mut();
         let mut query = world.query::<(Entity, &E2eId)>();

@@ -1,4 +1,3 @@
-pub mod ai;
 pub mod buildings;
 pub mod catalog;
 pub mod combat;
@@ -12,7 +11,6 @@ pub mod production;
 pub mod session;
 pub mod visibility;
 
-pub use ai::{AI_DECISION_SECONDS, AiController, PlannedCommand, decide_ai_commands, step_ai};
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
     validate_placement,
@@ -36,8 +34,7 @@ pub use economy::{
     is_idle_worker, step_economy,
 };
 pub use fixture::{
-    AiMapPlan, MapFixture, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
-    seed_skirmish_mirrored,
+    MapFixture, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
 };
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
