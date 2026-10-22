@@ -25,7 +25,7 @@ Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-s
 - **buildings** — placement validation, construction, completion grants (Dropoff, queues, Farm sources)
 - **production** — FIFO queues, population caps, spawn clearance, rally points, one-time Age 2
 
-Systems tick in a fixed order (commands → combat → movement → economy → construction → production → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+Systems tick in a fixed order (commands → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
 ## HPA-472 combat and match lifecycle
 
@@ -33,9 +33,9 @@ Combat runs in `grus-sim` on the same fixed tick: melee/ranged range and cooldow
 
 The match lifecycle is simulated-side: the skirmish boots into **Start** (gameplay orders reject with `SessionLocked`), the Start button moves to **Playing**, `Esc` or the Pause button toggles **Paused** (sim and cosmetics freeze; interpolation collapses `previous = current` so nothing oscillates), and destroying one side's last Town Center settles **Result** (Victory!/Defeat overlay; later gameplay mutation is rejected). Restart/Quit belong to Result: Restart reseeds one fresh match — no duplicate nodes, stale ids, leftover selection/control groups, or lingering effects; Quit exits the app. Workers, buildings, and construction sites die with full economy/occupancy/queue cleanup.
 
-Fog of war and economic AI remain owned by HPA-473.
+Fog of war is owned by HPA-473 (next section); the economic AI opponent shipped alongside it was removed in HPA-445 — Team 2 is now a passive authored base.
 
-## HPA-473 scouting, fog of war, and economic AI
+## HPA-473 fog of war and minimap
 
 ### Fog of war
 
@@ -45,19 +45,9 @@ Visibility is simulation-owned: `VisibilityMap` in `grus-sim` tracks three state
 
 The minimap is a **128x96 runtime `ImageTexture`** (1 px per cell) redrawn from the Team-1 fog states: friendly markers always, enemy markers only while currently visible, resource markers once explored, plus the camera viewport rectangle. Left-clicking the minimap **recenters the camera only** — it never issues gameplay commands and never reveals anything.
 
-### Economic AI (Team 2)
-
-The opponent is a **Team-2 economic AI** that plays by the ordinary `PlayerCommand` rules: the same economy tick, the same catalogue costs, the same build/train/age-up commands — no stockpile grants, free spawns, or other mutation that a human player could not perform. It makes decisions at **1 Hz** (one decision per simulated second, gated on the Playing phase):
-
-- **Scouts early** — sends the lowest-stable-ID idle military unit, or (above a 4-villager floor) an idle surplus villager, along a route of expansion nodes; never pulls an active economic worker off-task.
-- **Defends only visible threats** — nearby military respond when an enemy is currently visible inside the defense radius; it does not react to hidden positions.
-- **Attacks at 6 military units** — assembles the army and marches on the enemy Town Center; it **remembers only genuinely observed** enemy Town Center cells, so behavior is invariant to hidden enemy positions.
-
-Worker and building losses have real economic consequences for the AI — it gathers, builds, and trains replacements through the same queues and costs as the player.
-
 ### Runtime setup
 
-The runtime match is **human Team 1 vs AI Team 2**. Starting the AI from the other side is **automated Rust-test coverage only** (the full-match journeys run the same policy from both authored starts, and both sides settle real conquest wins — roughly 3.3k and 3.2k ticks at 20 Hz; exact figures shift with any balance change), not a user-selectable mode. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, enemies hidden again) and fresh AI memory.
+The runtime match is **human Team 1 against a passive, still-authored Team 2 base**: Team 2 has no AI and receives no autonomous orders — it is a passive target **until HPA-449**, which re-introduces opponent play. Fog of war, the minimap, combat, victory, restart and the benchmark all remain operational. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, enemies hidden again).
 
 ### Build and launch
 
@@ -86,10 +76,9 @@ godot --headless --path godot res://scenes/smoke_test.tscn
 godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
-godot --headless --path godot res://scenes/scouting_ai_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness. The HPA-473 scouting AI smoke plays the real runtime against the live Team-2 AI under full fog — trains/builds through ordinary AI progress, scouts to reveal the expansion tree and the enemy start, verifies enemy hiding/selection/minimap markers follow current vision, and proves restart restores boot fog and a working fresh AI.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness.
 
 ### Controls
 
@@ -129,7 +118,7 @@ HUD controls consume their mouse events so UI interaction does not leak into wor
 ### Reset modes
 
 - **Fixture reset** (`reset_fixture`, used by `reset_test.tscn`): despawns gameplay and reseeds the 8-unit/2-building/18-resource skirmish with starting stockpiles.
-- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the **session-free mixed 100-vs-100 skirmish** — the normal fixture seed plus a workload of 96 added units per team (16 Villagers, 30 Spearmen, 30 Archers, 20 Cavalry) with initial gather and attack-move orders, running under fog of war against the Team-2 AI and **no match session** (a missing session reads as Playing, so the load can never freeze). It is never used by the runtime skirmish or its smokes.
+- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the **session-free mixed 100-vs-100 skirmish** — the normal fixture seed plus a workload of 96 added units per team (16 Villagers, 30 Spearmen, 30 Archers, 20 Cavalry) with initial gather and attack-move orders, running under fog of war with **no match session** (a missing session reads as Playing, so the load can never freeze). It is never used by the runtime skirmish or its smokes.
 
 ### Linux x86_64 export
 
@@ -157,7 +146,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/scouting-AI smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 
@@ -203,4 +192,6 @@ GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn ./scripts/package_linux_x86_64.s
 GRUS_BENCHMARK_SECONDS=60 dist/grus-linux-x86_64-benchmark_200/Grus.x86_64
 ```
 
-Current HPA-474 measurements live in [`docs/hpa-474-mvp-evidence.md`](docs/hpa-474-mvp-evidence.md); the HPA-470 numeric baseline table was removed from this file — PR #1 and git history remain its historical record.
+- **Interim post-AI re-baseline (HPA-445):** with the economic AI removed, the 60-second benchmark was re-measured locally (Apple M1 Pro, macOS 26.6.2, arm64; Godot 4.6.2 mono; current debug GDExtension build, `gl_compatibility`, headless): 60.01 s / 2343 frames, mean **25.611 ms** per frame (p50 6.263 ms, mean 39.0 fps), live units start 200 / mean 134.2 / end 87, visible-in-tree mean 81.5 (min/end 20). This is the **interim post-AI scripted 200-unit workload** — it changes again in HPA-448 and HPA-449, and the reference Linux x86_64 release-host run remains to be re-confirmed. Details in [`docs/hpa-474-mvp-evidence.md`](docs/hpa-474-mvp-evidence.md).
+
+Current benchmark measurements (the HPA-445 interim post-AI re-baseline and the historical HPA-474 record) live in [`docs/hpa-474-mvp-evidence.md`](docs/hpa-474-mvp-evidence.md); the HPA-470 numeric baseline table was removed from this file — PR #1 and git history remain its historical record.

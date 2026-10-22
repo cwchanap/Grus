@@ -26,6 +26,24 @@ Note: the `lscpu` command from the plan cannot run on macOS (no `lscpu` on Darwi
 
 **Final candidate revision:** the delivery's final code SHA is pinned under **Final CI** below (the exact SHA the controller pushes for the final CI run).
 
+## HPA-445 interim post-AI benchmark re-baseline
+
+HPA-445 removed the Team-2 economic AI and the mirrored-start launch mode; its plan requires re-measuring the 60-second benchmark from actual output instead of carrying forward AI-era means. The reference hardware-rendered Linux x86_64 release host required by the HPA-474 sections above **still does not exist** — that blocker and every HPA-474 BLOCKED status above are unchanged, and no HPA-474 hardware-acceptance figure is recorded. Per the HPA-445 controller ruling, the re-baseline below is a **local development-machine measurement**, explicitly **not** the reference host, on the **current debug** GDExtension build (not the release export).
+
+**Host (measured 2026-10-21, post-AI tree @ HPA-445 branch):** Apple M1 Pro, macOS 26.6.2 (25G83), arm64; Godot 4.6.2.stable.mono.official.71f334935 (matches the repo pin); debug `grus-godot` GDExtension; `--rendering-method gl_compatibility`, display headless (the marker's `adapter`/`vendor` fields are empty under headless).
+
+**Command:** `GRUS_BENCHMARK_SECONDS=60 /Applications/Godot_mono.app/Contents/MacOS/Godot --headless --path godot --rendering-method gl_compatibility res://scenes/benchmark_200.tscn`
+
+**Actual marker output (verbatim):**
+
+```
+GRUS_BENCHMARK_200 start_units=200 min_live_units=87 mean_live_units=134.2 end_units=87 min_visible_in_tree_units=20 mean_visible_in_tree_units=81.5 end_visible_in_tree_units=20 duration_s=60.01 frames=2343 mean_ms=25.611 p50_ms=6.263 p95_ms=35.559 p99_ms=695.460 max_ms=1033.359 mean_fps=39.0 visibility_revision=822 renderer=gl_compatibility adapter= vendor= display=headless
+```
+
+**Reading:** over the 60.01 s sample the workload rendered 2343 frames at a mean **25.611 ms** per frame (mean 39.0 fps; p50 6.263 ms, p95 35.559 ms, p99 695.460 ms, max 1033.359 ms — the tail spikes are headless-startup/GC outliers on an unattended debug build). Live units started at the scripted 200 and fell to a **mean of 134.2** (min/end 87): the benchmark's scripted attack-move workload attrits units and nothing replaces them now that no AI rebuilds either side; the scene's liveness check (movement or combat present) still held. Visible-in-tree units (the render-load proxy) averaged **81.5** (min/end 20). Fog refresh advanced (`visibility_revision=822`).
+
+**Label:** these are the **interim post-AI scripted 200-unit workload** numbers. The workload and its trajectory change again in **HPA-448** and **HPA-449**; the authoritative 60-second release-export measurement on the reference Linux x86_64 host **remains to be re-confirmed** once that host is provisioned. These local figures must not be reused as HPA-474 hardware-acceptance evidence.
+
 ## Playtest matrix
 
 **NOT RUN — all four interactive playtests require a human player and were not run in this agent session.** The delivery session has no human player and no playable interactive session; per Ledger Ruling 1 the four runs below were not executed, and no observation, duration or outcome is invented here. They remain the blocking directional evidence for any balance tuning, exactly like the Task-0 reference-host blocker above blocks hardware evidence.
