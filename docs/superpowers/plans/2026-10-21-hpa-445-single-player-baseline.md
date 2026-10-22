@@ -75,7 +75,7 @@ Keep the existing single Bevy World and bridge architecture. The only fixed-step
 | Unit/integration | All existing non-AI simulation, lifecycle and bridge tests | cargo test --workspace --locked; cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1 |
 | Coverage | >=90% grus-sim non-test line coverage | cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$' |
 | Standard fixture | Team 1 starts left; Team 2 starts right; 8 stable unit IDs, 2 centers, 18 resource nodes; Team 2 receives no autonomous orders after fixed steps | Fixture / bridge tests and reset_test.tscn |
-| Fog | Own area Visible, enemy start Unexplored at boot; reset removes explored fog | Visibility tests plus reset and bridge smokes |
+| Fog | Own area Visible, enemy start Unexplored at boot; reset removes explored fog; human-scout reveal/hide, explored persistence, stale-selection clearing, enemy minimap markers and command-free recenter | Visibility tests plus reset and bridge smokes (the scouting leg lives in smoke_test.tscn) |
 | Basic input/economy | Selection, routing, gather, build, train and UI still work | smoke_test.tscn; economy_smoke_test.tscn |
 | Combat/session | Start lock, passive enemy damage, Victory/Result and Restart remain valid | combat_lifecycle_smoke_test.tscn |
 | Benchmark (CI) | 200-unit scripted load still reaches existing liveness, visibility, frame and marker assertions without AI | benchmark_200.tscn with GRUS_BENCHMARK_SECONDS=10 in CI |

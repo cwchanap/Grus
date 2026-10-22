@@ -45,7 +45,7 @@ cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 Godot headless smokes (each is a real end-to-end contract, not a stub):
 
 ```bash
-godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence
+godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg
 godot --headless --path godot res://scenes/reset_test.tscn           # fixture reset → 8 units / 2 buildings / 18 resources
 godot --headless --path godot res://scenes/economy_smoke_test.tscn   # full HPA-471 economy loop at 20x sim speed
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # HPA-472 combat/session lifecycle at 20x sim speed
