@@ -50,6 +50,8 @@ GRUS_BENCHMARK_200 start_units=200 min_live_units=87 mean_live_units=134.2 end_u
 
 The mirrored launch switch itself **is** wired and unit-tested in this task (Task 4 Step 1–2): `GRUS_MIRRORED_START=1 godot --path godot` swaps the authored team starts (Team 1 right / Team 2 left, Team-2 AI reading the authored left plan as issuer Team 2); unset keeps Team 1 left / Team 2 right. A human playtester can run the matrix as-is.
 
+*Superseded by HPA-445: the mirrored launch mode no longer exists; matrix rows 3–4 are obsolete — run rows 1–2 only.*
+
 | # | Launch | Opening | Duration | Result | Expansion | Raids | TC finish |
 |---|--------|---------|----------|--------|-----------|-------|-----------|
 | 1 | default (Team 1 left) | early pressure | not run in agent session — requires human playtest | not run | not run | not run | not run |
