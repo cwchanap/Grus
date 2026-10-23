@@ -12,7 +12,7 @@ use crate::economy::{apply_gather, cancel_unit_activity};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
-use crate::production::{apply_enqueue_age_up, apply_enqueue_unit, apply_set_rally};
+use crate::production::{apply_enqueue_unit, apply_set_rally};
 use crate::session::gameplay_active;
 use crate::visibility::{VisibilityMap, move_goal_counts_as_occupancy, unit_counts_as_occupancy};
 
@@ -55,10 +55,6 @@ pub enum PlayerCommand {
         building: BuildingId,
         kind: UnitKind,
     },
-    EnqueueAgeUp {
-        issuer: TeamId,
-        building: BuildingId,
-    },
     SetRally {
         issuer: TeamId,
         building: BuildingId,
@@ -85,7 +81,6 @@ pub enum RejectReason {
     OutOfBounds,
     Occupied,
     WrongProducer,
-    FarmOccupied,
     PopulationFull,
     NoSpawnSpace,
     NotCombatant,
@@ -213,9 +208,6 @@ pub fn apply_player_command(
             building,
             kind,
         } => apply_enqueue_unit(world, issuer, building, kind),
-        PlayerCommand::EnqueueAgeUp { issuer, building } => {
-            apply_enqueue_age_up(world, issuer, building)
-        }
         PlayerCommand::SetRally {
             issuer,
             building,

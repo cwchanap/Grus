@@ -11,7 +11,6 @@ const ZOOM_STEP := 6.0
 @onready var economy_label: Label = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
-@onready var age_button: Button = $HUD/CommandPanel/TrainGrid/AgeButton
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
@@ -34,8 +33,8 @@ var _placement_kind := ""
 var _idle_cursor := 0
 var _session_phase := ""
 var _attack_move_armed := false
-## Producer building kinds and the Age-up cost come from the Rust catalogue
-## via catalogue_snapshot — GDScript hardcodes no gameplay data.
+## Producer building kinds come from the Rust catalogue via
+## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
 
 func _ready() -> void:
@@ -46,20 +45,12 @@ func _ready() -> void:
 		producers[str(units[kind].get("producer", ""))] = true
 	_producer_kinds.assign(producers.keys())
 	_producer_kinds.sort()
-	var age_up: Dictionary = catalogue.get("age_up", {})
-	age_button.text = "Advance Age (%df %dg)" % [
-		int(age_up.get("food", 0)),
-		int(age_up.get("gold", 0)),
-	]
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
 	for button in _build_grid.get_children():
 		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
 	for button in _train_grid.get_children():
-		if button.has_meta("kind"):
-			button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
-		else:
-			button.pressed.connect(_on_age_pressed)
+		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
 	idle_button.pressed.connect(_on_idle_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	resume_button.pressed.connect(_on_resume_pressed)
@@ -170,20 +161,17 @@ func _reconcile_selection() -> void:
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	economy_label.text = "Food %d   Wood %d   Gold %d\nPopulation %d/%d   Age %d" % [
+	economy_label.text = "Food %d   Wood %d   Gold %d\nPopulation %d/%d" % [
 		int(economy.get("food", 0)),
 		int(economy.get("wood", 0)),
 		int(economy.get("gold", 0)),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
-		int(economy.get("age", 1)),
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	var building: Dictionary = {}
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)
-	age_button.disabled = int(economy.get("age", 1)) >= 2 \
-		or str(building.get("kind", "")) != "TownCenter"
 	_refresh_selection(building)
 
 func _refresh_selection(building: Dictionary) -> void:
@@ -546,16 +534,9 @@ func _lowest_selected_villager_id() -> int:
 	return villagers[0] if not villagers.is_empty() else 0
 
 func _gatherable_resource_id(screen_position: Vector2) -> int:
+	# Only standalone finite sources are gatherable; buildings never carry
+	# resource metadata.
 	var resource := _nearest_view("resource_views", screen_position)
-	var building := _nearest_view("building_views", screen_position)
-	if building != null and (int(building.get_meta("team_id", -1)) != 1 \
-			or not building.has_meta("resource_id")):
-		building = null
-	# A Farm body under the cursor outranks a neighbouring source when it is
-	# the nearer view — the building's footprint centre is the click target.
-	if building != null and (resource == null \
-			or _view_distance(building, screen_position) < _view_distance(resource, screen_position)):
-		return int(building.get_meta("resource_id", -1))
 	if resource != null:
 		return int(resource.get_meta("resource_id", -1))
 	return -1
@@ -641,18 +622,6 @@ func _on_train_pressed(kind: String) -> void:
 		command_status.text = "%s training queued" % kind
 	else:
 		command_status.text = "Training rejected"
-
-func _on_age_pressed() -> void:
-	if not _playing():
-		command_status.text = "Match is not playing"
-		return
-	if selected_building_id <= 0:
-		command_status.text = "Select the Town Center to advance"
-		return
-	if GrusBridge.enqueue_age_up(selected_building_id):
-		command_status.text = "Age advancement queued"
-	else:
-		command_status.text = "Age advancement rejected"
 
 func _on_idle_pressed() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()

@@ -1,17 +1,17 @@
 //! Canonical fixed-step order: commands → combat → movement → economy →
 //! construction → production → visibility → route feedback. Movement
 //! arrival is visible to economy/construction in the same fixed tick, and
-//! production runs last, so the economy step of the tick in which the Age 2
-//! job completes still uses the Age 1 gather rate.
+//! production runs last, so a unit completing in tick N does not move until
+//! tick N+1 even when its producer owns a rally point.
 
 use std::cell::RefCell;
 
 use bevy::math::Vec2;
-use bevy::prelude::{Entity, World};
+use bevy::prelude::World;
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
-    Age, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget,
-    Dropoff, Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, PlayerCommand,
+    Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget, Dropoff,
+    Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, MoveOrder, PlayerCommand,
     ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId,
     UnitIndex, UnitKind, VisibilityMap, WorkerTask, apply_player_command, explored_by,
     refresh_visibility, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
@@ -25,26 +25,17 @@ const BERRIES: ResourceId = ResourceId(1);
 /// The placed Barracks takes the first runtime building id after the two TCs.
 const BARRACKS: BuildingId = BuildingId(3);
 
-fn gather_progress(world: &World, worker: Entity) -> f32 {
-    world
-        .get::<GatherProgress>(worker)
-        .map_or(0.0, |state| state.0)
-}
-
+/// Production runs after movement, economy and construction: in the tick a
+/// queued unit completes, a worker's gather arrival transitions to
+/// `Gathering`, a builder's arrival transitions to `Constructing` and the
+/// spawn exists — but the rallied spawn has not moved yet, because movement
+/// already ran. It starts marching on the next tick.
 #[test]
-fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
+fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_tick() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
-
-    // Fund the 300F + 200G Age 2 job on top of the 200F/300W/100G seed.
-    if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
-        && let Some(state) = economy.0.get_mut(&TEAM)
-    {
-        state.stockpile.food = 1000;
-        state.stockpile.gold = 500;
-    }
 
     // Gatherer A parks beside the berries at (22, 42); villager 2 stays home
     // as the builder for the authored Barracks slot.
@@ -54,12 +45,24 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
         .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
     let builder = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
 
+    // A Town Center rally point on open ground south-east of the footprint:
+    // the spawn must march to it, but only after its completion tick.
+    let rally = GridPos::new(20, 58);
+
     // Commands queued ahead of the chain; the helper drains whatever is
     // queued through the public dispatcher before each tick's systems run.
-    let queue: RefCell<Vec<PlayerCommand>> = RefCell::new(vec![PlayerCommand::EnqueueAgeUp {
-        issuer: TEAM,
-        building: TOWN_CENTER,
-    }]);
+    let queue: RefCell<Vec<PlayerCommand>> = RefCell::new(vec![
+        PlayerCommand::SetRally {
+            issuer: TEAM,
+            building: TOWN_CENTER,
+            target: rally,
+        },
+        PlayerCommand::EnqueueUnit {
+            issuer: TEAM,
+            building: TOWN_CENTER,
+            kind: UnitKind::Villager,
+        },
+    ]);
     let apply_queued_test_commands = |world: &mut World, map: &mut GridMap| {
         for command in queue.borrow_mut().drain(..) {
             let outcome = apply_player_command(world, map, command);
@@ -68,11 +71,12 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
     };
 
     // Tick arithmetic (0.3 cells per movement tick at villager speed):
-    // - Age job enqueued at tick 1 completes at tick 900 (45s / 0.05).
-    // - Barracks placed at tick 870: builder walks 6 cells over 24 movement
-    //   ticks (871..=894) and arrives at tick 894.
-    // - Gather tasked at tick 896: gatherer walks 1 cell over 4 movement
-    //   ticks (897..=900) and arrives at tick 900.
+    // - The Villager job enqueued at tick 1 completes at tick 300 (15s /
+    //   0.05).
+    // - Barracks placed at tick 270: builder walks 6 cells over 24 movement
+    //   ticks (271..=294) and arrives at tick 294.
+    // - Gather tasked at tick 296: gatherer walks 1 cell over 4 movement
+    //   ticks (297..=300) and arrives at tick 300.
     let place_barracks = PlayerCommand::PlaceBuilding {
         issuer: TEAM,
         builder: UnitId(2),
@@ -85,11 +89,10 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
         source: BERRIES,
     };
 
-    let mut progress_before_completion_tick = 0.0;
-    for tick in 1..=900 {
+    for tick in 1..=300 {
         match tick {
-            870 => queue.borrow_mut().push(place_barracks.clone()),
-            896 => queue.borrow_mut().push(gather_berries.clone()),
+            270 => queue.borrow_mut().push(place_barracks.clone()),
+            296 => queue.borrow_mut().push(gather_berries.clone()),
             _ => {}
         }
         apply_queued_test_commands(&mut world, &mut map);
@@ -98,9 +101,6 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
         step_production(&mut world, &mut map, SIM_STEP_SECONDS);
-        if tick == 899 {
-            progress_before_completion_tick = gather_progress(&world, gatherer);
-        }
     }
 
     // The completion tick: both arrivals are visible to their consumers in
@@ -129,27 +129,37 @@ fn age_two_completes_after_that_ticks_economy_used_the_age_one_rate() {
         "construction advanced in the arrival tick"
     );
 
-    // Production ran last: the age already flipped, but the economy step of
-    // this tick ran BEFORE production and must have used the Age 1 rate.
-    assert_eq!(world.resource::<TeamEconomy>().0[&TEAM].age, Age::Age2);
-    let progress_after_completion_tick = gather_progress(&world, gatherer);
-    let age_one_delta = progress_after_completion_tick - progress_before_completion_tick;
+    // Production ran last: the rallied spawn exists and holds its MoveOrder,
+    // but it still stands exactly on its spawn cell — movement already ran
+    // this tick, so it cannot have marched.
+    let spawned = world
+        .resource::<UnitIndex>()
+        .entity(UnitId(9))
+        .expect("the trained villager spawned in this tick");
+    let spawn_position = world.get::<SimPosition>(spawned).unwrap().current;
+    let spawn_cell = map.world_to_cell(spawn_position);
+    assert_eq!(
+        spawn_position,
+        map.cell_center(spawn_cell),
+        "the rallied spawn must not move inside its completion tick"
+    );
     assert!(
-        age_one_delta > 0.0 && age_one_delta < 0.105,
-        "the completion tick's economy must gather at the Age 1 rate (2.0/s), got {age_one_delta}"
+        world.get::<MoveOrder>(spawned).is_some(),
+        "the rally order is installed inside the completion tick"
     );
 
-    // The next economy tick gathers at the Age 2 rate.
+    // One more tick: the same unit has now left its spawn cell, proving the
+    // movement step consumed the rally order only from the next tick on.
     apply_queued_test_commands(&mut world, &mut map);
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     step_movement(&mut world, &map, SIM_STEP_SECONDS);
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     step_construction(&mut world, SIM_STEP_SECONDS);
     step_production(&mut world, &mut map, SIM_STEP_SECONDS);
-    let age_two_delta = gather_progress(&world, gatherer) - progress_after_completion_tick;
-    assert!(
-        age_two_delta > 0.105 && (age_two_delta - 0.11).abs() < 1e-4,
-        "the next economy tick must gather at 2.2/s, got {age_two_delta}"
+    assert_ne!(
+        world.get::<SimPosition>(spawned).unwrap().current,
+        spawn_position,
+        "the rallied spawn must start marching on the next tick"
     );
 }
 

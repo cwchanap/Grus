@@ -31,7 +31,7 @@ cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings
 cargo test --workspace
 
 # single test / module
-cargo test -p grus-sim age_two_completes            # by name substring
+cargo test -p grus-sim barracks_trains            # by name substring
 cargo test -p grus-sim --test system_order          # one integration target
 cargo test -p grus-sim economy::tests               # one inline module
 
@@ -69,7 +69,7 @@ refresh_visibility(&mut world, &map)
 
 This is deliberate: sim tests build `World::new()` + `seed_skirmish` and call the steps directly, with no app, no schedule, and no engine. Keep new gameplay in this shape.
 
-Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally, one-time Age 2), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `fixture` (authored skirmish + benchmark seeds), `ids`.
+Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `fixture` (authored skirmish + benchmark seeds), `ids`.
 
 **`crates/grus-godot`** — the GDExtension. `build_app` (`#[bevy_app]`) registers the godot-bevy plugins, sets `Time::<Fixed>` to `SIM_STEP_SECONDS` (0.05 → 20 Hz), and chains `FixedUpdate` in a fixed order:
 
@@ -77,9 +77,9 @@ Modules: `catalog` (the single source of costs, build/train seconds, footprints,
 apply_pending_commands → advance_combat → advance_movement → advance_economy → advance_construction → advance_production → advance_visibility → drain_route_reject_feedback
 ```
 
-Order is a contract, not an accident: arrival is visible to economy/construction in the same tick, and production runs last so an Age 2 completion does not retroactively change that tick's gather rate; `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
+Order is a contract, not an accident: arrival is visible to economy/construction in the same tick, and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick; `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
 
-**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `enqueue_age_up`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
+**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
 
 ### Non-obvious invariants
 

@@ -3,7 +3,7 @@ use bevy::prelude::World;
 
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
 use crate::catalog::{
-    Age, BuildingKind, ResourceKind, UnitKind, building_spec, resource_amount, unit_spec,
+    BuildingKind, ResourceKind, UnitKind, building_spec, resource_amount, unit_spec,
 };
 use crate::combat::Health;
 use crate::commands::{
@@ -154,8 +154,8 @@ impl MapFixture {
 /// the authored right start. The pure simulation skirmish seed for one
 /// normal match: real completed Town Center Buildings (4×4 Footprints +
 /// `Dropoff` from birth), four Villagers per team with fresh worker
-/// components, both teams' economies (200 Food / 300 Wood / 100 Gold, Age
-/// 1), Town Center map occupancy, the authored finite resource sources, and
+/// components, both teams' economies (200 Food / 300 Wood / 100 Gold),
+/// Town Center map occupancy, the authored finite resource sources, and
 /// `UnitIndex`/`BuildingIndex` `IdAllocator` counters above the authored
 /// maxima. Every starting entity flows through the production constructors —
 /// there is no temporary Dropoff-only Town Center.
@@ -169,7 +169,6 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
             wood: 300,
             gold: 100,
         },
-        Age::Age1,
     );
     economy.insert_team(
         TeamId(2),
@@ -178,7 +177,6 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
             wood: 300,
             gold: 100,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
 
@@ -269,11 +267,10 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
 }
 
 /// Per-team workload roster on top of the four authored villagers.
-const BENCHMARK_ROSTER: [(UnitKind, usize); 4] = [
+const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
     (UnitKind::Villager, 16),
-    (UnitKind::Spearman, 30),
-    (UnitKind::Archer, 30),
-    (UnitKind::Cavalry, 20),
+    (UnitKind::Spearman, 40),
+    (UnitKind::Archer, 40),
 ];
 
 /// The shared AttackMove target: the authored northern midfield corridor
@@ -340,7 +337,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 },
             );
         }
-        let army: Vec<UnitId> = [UnitKind::Spearman, UnitKind::Archer, UnitKind::Cavalry]
+        let army: Vec<UnitId> = [UnitKind::Spearman, UnitKind::Archer]
             .into_iter()
             .flat_map(|kind| team_kind_ids(world, team, kind))
             .collect();

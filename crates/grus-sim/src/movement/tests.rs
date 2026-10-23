@@ -305,37 +305,23 @@ fn failed_revision_replan_preserves_order_until_route_reopens() {
 }
 
 #[test]
-fn failed_route_idles_an_active_worker_and_releases_its_farm() {
+fn failed_route_idles_an_active_worker_and_preserves_carry() {
     let mut world = World::new();
     let mut map = GridMap::new(16, 16);
-    // A completed Farm whose assignment is held by the traveling worker.
-    let farm = world
+    // A standalone finite source the traveling worker is heading for.
+    let source = world
         .spawn((
-            crate::buildings::Building {
-                id: crate::ids::BuildingId(1),
-                team: TeamId(1),
-                kind: crate::catalog::BuildingKind::Farm,
-                construction: crate::buildings::ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            Footprint::new(GridPos::new(8, 8), 2, 2),
             crate::economy::ResourceSource {
                 id: crate::ids::ResourceId(1),
                 kind: crate::catalog::ResourceKind::Food,
-                remaining: None,
-                assigned_worker: Some(UnitId(1)),
+                remaining: 400,
             },
+            Footprint::new(GridPos::new(8, 8), 1, 1),
         ))
         .id();
     world
-        .get_resource_or_insert_with(crate::buildings::BuildingIndex::default)
-        .insert(crate::ids::BuildingId(1), farm);
-    world
         .get_resource_or_insert_with(crate::economy::ResourceIndex::default)
-        .insert(crate::ids::ResourceId(1), farm);
+        .insert(crate::ids::ResourceId(1), source);
 
     let worker = spawn_unit(
         &mut world,
@@ -346,9 +332,8 @@ fn failed_route_idles_an_active_worker_and_releases_its_farm() {
         6.0,
     );
     world.entity_mut(worker).insert((
-        crate::economy::WorkerTask::ToDropoff {
+        crate::economy::WorkerTask::ToSource {
             source: crate::ids::ResourceId(1),
-            dropoff: crate::ids::BuildingId(1),
             slot: GridPos::new(7, 7),
         },
         crate::economy::Carry::Holding {
@@ -380,14 +365,6 @@ fn failed_route_idles_an_active_worker_and_releases_its_farm() {
         Some(&crate::economy::WorkerTask::Idle)
     );
     assert!(world.get::<MoveOrder>(worker).is_none());
-    assert_eq!(
-        world
-            .get::<crate::economy::ResourceSource>(farm)
-            .unwrap()
-            .assigned_worker,
-        None,
-        "route failure releases the Farm assignment"
-    );
     assert_eq!(
         world
             .get::<crate::economy::Carry>(worker)

@@ -5,14 +5,13 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
+use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, apply_player_command,
     spawn_unit,
 };
 use crate::economy::{
-    Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
-    ResourceStockpile, TeamEconomy, WorkerTask,
+    Carry, Dropoff, GatherProgress, LastRouteReject, ResourceStockpile, TeamEconomy, WorkerTask,
 };
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
@@ -259,7 +258,7 @@ fn archer_strikes_at_ranged_range_without_moving() {
         UnitId(2),
         TeamId(2),
         Vec2::new(10.5, 5.5),
-        UnitKind::Cavalry,
+        UnitKind::Spearman,
     );
 
     issue(
@@ -269,8 +268,9 @@ fn archer_strikes_at_ranged_range_without_moving() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Cavalry takes the archer's base damage: its counter bonus names Spearman.
-    assert_eq!(world.get::<Health>(defender).unwrap().current, 132);
+    // Counter bonuses were deleted with the PvP roster: every kind takes the
+    // attacker's base damage.
+    assert_eq!(world.get::<Health>(defender).unwrap().current, 92);
     assert!(world.get::<MoveOrder>(attacker).is_none());
     let recorded = events(&world);
     assert_eq!(recorded.len(), 1);
@@ -279,7 +279,7 @@ fn archer_strikes_at_ranged_range_without_moving() {
 }
 
 #[test]
-fn counter_bonus_applies_only_to_the_named_kind() {
+fn strikes_deal_only_base_damage_to_every_kind() {
     let mut world = World::new();
     let mut map = open_map();
     spawn_combatant(
@@ -289,12 +289,12 @@ fn counter_bonus_applies_only_to_the_named_kind() {
         Vec2::new(5.5, 5.5),
         UnitKind::Spearman,
     );
-    let cavalry = spawn_combatant(
+    let archer = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Cavalry,
+        UnitKind::Archer,
     );
 
     issue(
@@ -304,9 +304,9 @@ fn counter_bonus_applies_only_to_the_named_kind() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Spearman base 10 + counter bonus 10 vs Cavalry.
-    assert_eq!(world.get::<Health>(cavalry).unwrap().current, 120);
-    assert_eq!(events(&world)[0].damage, 20);
+    // Spearman base 10; no counter bonus survives the PvP-roster deletion.
+    assert_eq!(world.get::<Health>(archer).unwrap().current, 60);
+    assert_eq!(events(&world)[0].damage, 10);
 }
 
 #[test]
@@ -833,150 +833,6 @@ fn destroying_a_construction_site_cancels_every_tasking_worker() {
 }
 
 #[test]
-fn destroying_a_farm_idles_its_workers_in_every_phase_preserving_carry() {
-    let mut world = World::new();
-    let mut map = open_map();
-    let farm = spawn_building(
-        &mut world,
-        &mut map,
-        BuildingId(1),
-        TeamId(1),
-        BuildingKind::Farm,
-        GridPos::new(8, 10),
-    );
-    let farm_source = ResourceId(1);
-    world.entity_mut(farm).insert(ResourceSource {
-        id: farm_source,
-        kind: ResourceKind::Food,
-        remaining: None,
-        assigned_worker: Some(UnitId(3)),
-    });
-    world
-        .get_resource_or_insert_with(ResourceIndex::default)
-        .insert(farm_source, farm);
-    let town_center = spawn_building(
-        &mut world,
-        &mut map,
-        BuildingId(2),
-        TeamId(1),
-        BuildingKind::TownCenter,
-        GridPos::new(16, 10),
-    );
-    world
-        .entity_mut(town_center)
-        .insert(Dropoff { team: TeamId(1) });
-
-    // Moving to the farm, gathering from it, and returning a Farm-sourced
-    // load to the (surviving) Town Center.
-    let to_farm = spawn_combatant(
-        &mut world,
-        UnitId(2),
-        TeamId(1),
-        Vec2::new(7.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(to_farm).insert((
-        Carry::Empty,
-        GatherProgress::default(),
-        WorkerTask::ToSource {
-            source: farm_source,
-            slot: GridPos::new(7, 10),
-        },
-    ));
-    let gatherer = spawn_combatant(
-        &mut world,
-        UnitId(3),
-        TeamId(1),
-        Vec2::new(6.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(gatherer).insert((
-        Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(5).unwrap(),
-        },
-        GatherProgress(0.5),
-        WorkerTask::Gathering {
-            source: farm_source,
-        },
-    ));
-    let returning = spawn_combatant(
-        &mut world,
-        UnitId(4),
-        TeamId(1),
-        Vec2::new(15.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(returning).insert((
-        Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(10).unwrap(),
-        },
-        GatherProgress::default(),
-        WorkerTask::ToDropoff {
-            source: farm_source,
-            dropoff: BuildingId(2),
-            slot: GridPos::new(15, 10),
-        },
-    ));
-
-    spawn_combatant(
-        &mut world,
-        UnitId(1),
-        TeamId(2),
-        Vec2::new(7.5, 9.5),
-        UnitKind::Spearman,
-    );
-    world.get_mut::<Health>(farm).unwrap().current = 10;
-    issue(
-        &mut world,
-        &mut map,
-        attack_command(
-            TeamId(2),
-            &[UnitId(1)],
-            CombatTarget::Building(BuildingId(1)),
-        ),
-    );
-
-    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
-
-    for worker in [to_farm, gatherer, returning] {
-        assert_eq!(
-            world.get::<WorkerTask>(worker),
-            Some(&WorkerTask::Idle),
-            "the destroyed Farm idles its worker in every phase"
-        );
-        assert!(world.get::<MoveOrder>(worker).is_none());
-    }
-    assert_eq!(
-        world.get::<Carry>(gatherer),
-        Some(&Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(5).unwrap(),
-        })
-    );
-    assert_eq!(
-        world.get::<Carry>(returning),
-        Some(&Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(10).unwrap(),
-        }),
-        "Carry is preserved through the idle"
-    );
-    assert!(
-        world
-            .resource::<ResourceIndex>()
-            .entity(farm_source)
-            .is_none(),
-        "the Farm's resource identity leaves the ResourceIndex"
-    );
-    assert!(world.get::<Building>(farm).is_none(), "the Farm despawned");
-    for cell in Footprint::new(GridPos::new(8, 10), 2, 2).cells() {
-        assert!(map.is_walkable(cell), "farm cell {cell:?} freed");
-    }
-}
-
-#[test]
 fn destroying_a_producer_drops_its_queue_without_refund() {
     let mut world = World::new();
     let mut map = open_map();
@@ -996,7 +852,6 @@ fn destroying_a_producer_drops_its_queue_without_refund() {
             wood: 1000,
             gold: 1000,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
     let result = issue(
@@ -1559,26 +1414,18 @@ fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
 }
 
 #[test]
-fn spearman_survives_the_symmetric_cavalry_duel() {
+fn spearman_survives_the_symmetric_archer_duel() {
     assert_eq!(
-        run_symmetric_duel(UnitKind::Spearman, UnitKind::Cavalry),
+        run_symmetric_duel(UnitKind::Spearman, UnitKind::Archer),
         Some(UnitKind::Spearman)
     );
 }
 
 #[test]
-fn archer_survives_the_symmetric_spearman_duel() {
+fn archer_loses_the_symmetric_spearman_duel() {
     assert_eq!(
         run_symmetric_duel(UnitKind::Archer, UnitKind::Spearman),
-        Some(UnitKind::Archer)
-    );
-}
-
-#[test]
-fn cavalry_survives_the_symmetric_archer_duel() {
-    assert_eq!(
-        run_symmetric_duel(UnitKind::Cavalry, UnitKind::Archer),
-        Some(UnitKind::Cavalry)
+        Some(UnitKind::Spearman)
     );
 }
 
@@ -2109,7 +1956,7 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
         Vec2::new(6.5, 5.5),
         UnitKind::Villager,
     );
-    let source = crate::economy::spawn_resource_source(
+    let _source = crate::economy::spawn_resource_source(
         &mut world,
         &mut map,
         ResourceId(1),
@@ -2117,10 +1964,6 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
         GridPos::new(9, 5),
         100,
     );
-    world
-        .get_mut::<ResourceSource>(source)
-        .unwrap()
-        .assigned_worker = Some(UnitId(2));
     world.entity_mut(worker).insert((
         WorkerTask::Gathering {
             source: ResourceId(1),
@@ -2147,11 +1990,6 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
     assert!(
         world.get::<Health>(worker).is_none(),
         "the entity is despawned"
-    );
-    assert_eq!(
-        world.get::<ResourceSource>(source).unwrap().assigned_worker,
-        None,
-        "the source reservation dies with the worker"
     );
 }
 
@@ -2320,8 +2158,7 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
     );
 
     // Holding position: no closing into melee, and the next shot still
-    // lands once the cooldown elapses (20 = 8 base + 12 counter vs
-    // Spearman).
+    // lands once the cooldown elapses (8 base; no counter bonus survives).
     let mut rearmed = false;
     for _ in 0..30 {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -2340,7 +2177,7 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
     assert!(rearmed, "the settled archer keeps attacking on cooldown");
     assert_eq!(
         world.get::<Health>(defender).unwrap().current,
-        health_at_range - 20
+        health_at_range - 8
     );
 }
 

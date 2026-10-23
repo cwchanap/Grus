@@ -7,7 +7,6 @@ const ROLE_SPECS := {
 	"Villager": {"body_scale": 0.8, "marker": ""},
 	"Spearman": {"body_scale": 1.0, "marker": "spear"},
 	"Archer": {"body_scale": 0.9, "marker": "bow"},
-	"Cavalry": {"body_scale": 1.4, "marker": "lance"},
 }
 
 @onready var body: MeshInstance3D = $Body
@@ -74,10 +73,6 @@ func _apply_role(kind: String) -> void:
 			_add_marker(_make_box_mesh(Vector3(0.08, 1.6, 0.08)))
 		"bow":
 			_add_marker(_make_box_mesh(Vector3(0.55, 0.55, 0.08)))
-		"lance":
-			var mesh := PrismMesh.new()
-			mesh.size = Vector3(0.12, 1.7, 0.12)
-			_add_marker(mesh)
 
 func _make_box_mesh(size: Vector3) -> BoxMesh:
 	var mesh := BoxMesh.new()

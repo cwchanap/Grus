@@ -10,9 +10,9 @@ extends Node
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 ## RejectReason declaration order (crates/grus-sim/src/commands.rs):
-## SessionLocked is the 19th variant (0-based 18). The bridge exposes
+## SessionLocked is the 18th variant (0-based 17). The bridge exposes
 ## numeric codes only (last_reject_code) and reports "no rejection" as -1.
-const REJECT_SESSION_LOCKED := 18
+const REJECT_SESSION_LOCKED := 17
 
 ## Proven-open Barracks anchor for the Team 1 base
 ## (crates/grus-sim/src/fixture.rs layout).
@@ -207,7 +207,7 @@ func _run() -> void:
 	var unit_view_script := preload("res://scripts/unit_view.gd")
 	var role_specs: Dictionary = unit_view_script.ROLE_SPECS
 	var presentations := {}
-	for kind in ["Villager", "Spearman", "Archer", "Cavalry"]:
+	for kind in ["Villager", "Spearman", "Archer"]:
 		if not role_specs.has(kind):
 			_fail("role spec missing for %s" % kind)
 			return
@@ -474,6 +474,6 @@ func _run() -> void:
 		_fail("restart left transient combat effects on the stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result selection_reconciled=true restart_cleared=true")
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=3 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result selection_reconciled=true restart_cleared=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)

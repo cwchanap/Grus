@@ -640,15 +640,20 @@ fn spawn_unit_attaches_catalogue_health_and_ready_cooldown() {
 
 #[test]
 fn reject_reason_variants_stay_append_ordered() {
-    // `RejectReason` is append-only and its discriminants leak to Godot as
-    // numeric reject codes (`reason as i32`). `SessionLocked` (the newest
-    // variant) must keep a higher discriminant than every pre-existing
-    // variant and must not reuse `Locked`.
+    // `RejectReason` discriminants leak to Godot as numeric reject codes
+    // (`reason as i32`). Deleting `FarmOccupied` (formerly index 12) renumbered
+    // every later variant down by one; these pins lock the post-deletion wire
+    // values asserted by the GDScript smokes.
+    assert_eq!(RejectReason::Locked as i32, 7);
+    assert_eq!(RejectReason::PopulationFull as i32, 12);
+    assert_eq!(RejectReason::NoSpawnSpace as i32, 13);
+    assert_eq!(RejectReason::NotCombatant as i32, 14);
+    assert_eq!(RejectReason::TargetMissing as i32, 15);
+    assert_eq!(RejectReason::InvalidTarget as i32, 16);
+    assert_eq!(RejectReason::SessionLocked as i32, 17);
+    assert_eq!(RejectReason::Unexplored as i32, 18);
     assert!(RejectReason::SessionLocked as i32 > RejectReason::NoSpawnSpace as i32);
     assert!(RejectReason::SessionLocked as i32 > RejectReason::UnknownUnit as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::NotCombatant as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::TargetMissing as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::InvalidTarget as i32);
     assert_ne!(RejectReason::SessionLocked, RejectReason::Locked);
 }
 

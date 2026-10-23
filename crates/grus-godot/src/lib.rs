@@ -8,16 +8,16 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
-    AGE_TWO_COST, AGE_TWO_SECONDS, Age, Building, BuildingId, BuildingIndex, BuildingKind,
-    CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap,
-    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
-    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason,
-    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
-    apply_player_command, explored_by, extend_with_benchmark_workload, gather_rate_for_age,
-    idle_worker_ids, population_cap, population_used, produces, refresh_visibility, seed_skirmish,
-    set_paused, start_match, step_combat, step_construction, step_economy, step_movement,
-    step_production, validate_placement, visible_to,
+    BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
+    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
+    Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, PlayerCommand,
+    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
+    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
+    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
+    apply_player_command, explored_by, extend_with_benchmark_workload, idle_worker_ids,
+    population_cap, population_used, produces, refresh_visibility, seed_skirmish, set_paused,
+    start_match, step_combat, step_construction, step_economy, step_movement, step_production,
+    validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -201,17 +201,6 @@ impl GrusBridgeNode {
             issuer: TeamId(1),
             building: BuildingId(building),
             kind,
-        })
-    }
-
-    #[func]
-    fn enqueue_age_up(&self, building_id: i32) -> bool {
-        let Ok(building) = u32::try_from(building_id) else {
-            return false;
-        };
-        queue_command(PlayerCommand::EnqueueAgeUp {
-            issuer: TeamId(1),
-            building: BuildingId(building),
         })
     }
 
@@ -484,8 +473,8 @@ impl GrusBridgeNode {
         .unwrap_or(-1)
     }
 
-    /// Team 1 economy state: stockpile, age, population, idle villagers, the
-    /// current gather rate, and the latest rejection code. `age` is 1 or 2;
+    /// Team 1 economy state: stockpile, population, idle villagers, the
+    /// current gather rate, and the latest rejection code.
     /// `last_reject_code` follows `RejectReason` discriminant order (-1 =
     /// none); `gather_rate` is the team's current resources/second.
     #[func]
@@ -496,22 +485,17 @@ impl GrusBridgeNode {
             let state = world
                 .get_resource::<TeamEconomy>()
                 .and_then(|economy| economy.0.get(&TeamId(1)));
-            let (food, wood, gold, age) = match state {
+            let (food, wood, gold) = match state {
                 Some(state) => (
                     i64::from(state.stockpile.food),
                     i64::from(state.stockpile.wood),
                     i64::from(state.stockpile.gold),
-                    match state.age {
-                        Age::Age1 => 1,
-                        Age::Age2 => 2,
-                    },
                 ),
-                None => (0, 0, 0, 1),
+                None => (0, 0, 0),
             };
             dict.set("food", food);
             dict.set("wood", wood);
             dict.set("gold", gold);
-            dict.set("age", age);
             dict.set(
                 "population_used",
                 i64::from(population_used(world, TeamId(1))),
@@ -520,12 +504,7 @@ impl GrusBridgeNode {
                 "population_cap",
                 i64::from(population_cap(world, TeamId(1))),
             );
-            dict.set(
-                "gather_rate",
-                f64::from(gather_rate_for_age(
-                    state.map(|state| state.age).unwrap_or(Age::Age1),
-                )),
-            );
+            dict.set("gather_rate", f64::from(BASE_GATHER_RATE));
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
             dict.set(
@@ -692,13 +671,11 @@ impl GrusBridgeNode {
 
     /// Catalogue action data computed from the Rust catalogue, so GDScript
     /// never hardcodes gameplay costs or unlocks. Keys:
-    /// - "units": {kind -> {food, wood, gold, seconds, producer, age}} —
-    ///   train cost, train seconds, the producing building kind name, and the
-    ///   required age (1|2).
+    /// - "units": {kind -> {food, wood, gold, seconds, producer}} —
+    ///   train cost, train seconds, and the producing building kind name.
     /// - "buildings": {kind -> {food, wood, gold, seconds, width, height,
-    ///   age, population}} — build cost, build seconds, footprint, required
-    ///   age, and population capacity contribution.
-    /// - "age_up": {food, wood, gold, seconds} for the one-time Age 2 job.
+    ///   population}} — build cost, build seconds, footprint, and
+    ///   population capacity contribution.
     #[func]
     fn catalogue_snapshot(&self) -> VarDictionary {
         let mut units = VarDictionary::new();
@@ -710,7 +687,6 @@ impl GrusBridgeNode {
             entry.set("gold", i64::from(spec.cost.gold));
             entry.set("seconds", i64::from(spec.train_seconds));
             entry.set("producer", &producer_kind_name(kind));
-            entry.set("age", age_number(spec.required_age));
             units.set(&kind_name(kind), &entry.to_variant());
         }
         let mut buildings = VarDictionary::new();
@@ -723,19 +699,12 @@ impl GrusBridgeNode {
             entry.set("seconds", i64::from(spec.build_seconds));
             entry.set("width", i64::from(spec.width));
             entry.set("height", i64::from(spec.height));
-            entry.set("age", age_number(spec.required_age));
             entry.set("population", i64::from(spec.population_capacity));
             buildings.set(&kind_name(kind), &entry.to_variant());
         }
-        let mut age_up = VarDictionary::new();
-        age_up.set("food", i64::from(AGE_TWO_COST.food));
-        age_up.set("wood", i64::from(AGE_TWO_COST.wood));
-        age_up.set("gold", i64::from(AGE_TWO_COST.gold));
-        age_up.set("seconds", i64::from(AGE_TWO_SECONDS));
         let mut catalogue = VarDictionary::new();
         catalogue.set("units", &units.to_variant());
         catalogue.set("buildings", &buildings.to_variant());
-        catalogue.set("age_up", &age_up.to_variant());
         catalogue
     }
 }
@@ -755,7 +724,6 @@ fn build_app(app: &mut App) {
             (
                 attach_missing_gameplay_views,
                 initialize_view_metadata,
-                stamp_late_resource_metadata,
                 sync_view_visibility,
                 sync_interpolated_unit_transforms,
                 update_health_bars,
@@ -796,7 +764,6 @@ fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
         "Villager" => Some(UnitKind::Villager),
         "Spearman" => Some(UnitKind::Spearman),
         "Archer" => Some(UnitKind::Archer),
-        "Cavalry" => Some(UnitKind::Cavalry),
         _ => None,
     }
 }
@@ -827,10 +794,7 @@ fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
     match name.to_string().as_str() {
         "House" => Some(BuildingKind::House),
         "Storehouse" => Some(BuildingKind::Storehouse),
-        "Farm" => Some(BuildingKind::Farm),
         "Barracks" => Some(BuildingKind::Barracks),
-        "ArcheryRange" => Some(BuildingKind::ArcheryRange),
-        "Stable" => Some(BuildingKind::Stable),
         // Town Centers are seeded, never placed.
         _ => None,
     }
@@ -844,16 +808,9 @@ fn kind_name(value: impl std::fmt::Debug) -> GString {
     GString::from(format!("{value:?}").as_str())
 }
 
-fn age_number(age: Age) -> i64 {
-    match age {
-        Age::Age1 => 1,
-        Age::Age2 => 2,
-    }
-}
-
 /// The building kind that trains the given unit, per the fixed producer
-/// compatibility table (Town Center trains villagers, Barracks spearmen,
-/// Archery Range archers, Stable cavalry).
+/// compatibility table (Town Center trains villagers, Barracks spearmen
+/// and archers).
 fn producer_kind_name(kind: UnitKind) -> GString {
     for building in BuildingKind::ALL {
         if produces(building, ProductionKind::Unit(kind)) {
@@ -1029,22 +986,7 @@ fn insert_fresh_visibility(world: &mut World) {
 fn attach_missing_gameplay_views(
     mut commands: Commands,
     units: Query<(Entity, &SimPosition), (With<Unit>, Without<GameplayViewRequested>)>,
-    farm_buildings: Query<
-        (Entity, &Footprint),
-        (
-            With<Building>,
-            With<ResourceSource>,
-            Without<GameplayViewRequested>,
-        ),
-    >,
-    plain_buildings: Query<
-        (Entity, &Footprint),
-        (
-            With<Building>,
-            Without<ResourceSource>,
-            Without<GameplayViewRequested>,
-        ),
-    >,
+    buildings: Query<(Entity, &Footprint), (With<Building>, Without<GameplayViewRequested>)>,
     standalone_resources: Query<
         (Entity, &Footprint),
         (
@@ -1062,15 +1004,7 @@ fn attach_missing_gameplay_views(
             Transform::from_xyz(position.current.x, 0.0, position.current.y),
         );
     }
-    for (entity, footprint) in &farm_buildings {
-        attach_view(
-            &mut commands,
-            entity,
-            building_view_transform(footprint),
-            "res://scenes/building_view.tscn",
-        );
-    }
-    for (entity, footprint) in &plain_buildings {
+    for (entity, footprint) in &buildings {
         attach_view(
             &mut commands,
             entity,
@@ -1160,28 +1094,24 @@ fn initialize_view_metadata(world: &mut World) {
         Entity,
         &Building,
         &Footprint,
-        Option<&ResourceSource>,
         &GodotNodeHandle,
     ), Without<ViewMetaInitialized>>();
-    #[allow(clippy::type_complexity)]
     let building_batch: Vec<(
         Entity,
         BuildingId,
         BuildingKind,
         TeamId,
         Footprint,
-        Option<(ResourceId, ResourceKind)>,
         GodotNodeHandle,
     )> = buildings
         .iter(world)
-        .map(|(entity, building, footprint, source, handle)| {
+        .map(|(entity, building, footprint, handle)| {
             (
                 entity,
                 building.id,
                 building.kind,
                 building.team,
                 *footprint,
-                source.map(|source| (source.id, source.kind)),
                 *handle,
             )
         })
@@ -1214,22 +1144,13 @@ fn initialize_view_metadata(world: &mut World) {
         node.set_visible(visible);
         world.entity_mut(entity).insert(ViewMetaInitialized);
     }
-    for (entity, id, kind, team, footprint, source, handle) in building_batch {
+    for (entity, id, kind, team, footprint, handle) in building_batch {
         let Some(mut node) = node_from_handle(handle) else {
             continue;
         };
         node.set_meta("building_id", &i64::from(id.0).to_variant());
         node.set_meta("building_kind", &debug_variant(kind));
         node.set_meta("team_id", &i64::from(team.0).to_variant());
-        // A completed Farm carries both its building identity and its
-        // renewable Food source on the same entity.
-        if let Some((source_id, source_kind)) = source {
-            node.set_meta("resource_id", &i64::from(source_id.0).to_variant());
-            node.set_meta("resource_kind", &debug_variant(source_kind));
-            world.entity_mut(entity).insert(ResourceMetaInitialized);
-        }
-        // Enemy Farms follow enemy-building visibility: the building branch
-        // owns the stamp, never the resource branch below.
         let visible = team == TeamId(1) || visible_to(world, TeamId(1), footprint);
         node.set_visible(visible);
         world.entity_mut(entity).insert(ViewMetaInitialized);
@@ -1257,8 +1178,8 @@ fn node_from_handle(handle: GodotNodeHandle) -> Option<Gd<Node3D>> {
 
 /// Maintains every gameplay view's `Node3D.visible` from the authoritative
 /// Team-1 visibility each Update: friendly units/buildings always visible,
-/// enemies only while currently visible (enemy Farms included — they ride
-/// the building branch), standalone resources once explored and staying.
+/// enemies only while currently visible, standalone resources once
+/// explored and staying.
 /// Exclusive for the same reason as `initialize_view_metadata`; the initial
 /// stamp happens there, this system only maintains the value.
 fn sync_view_visibility(world: &mut World) {
@@ -1310,24 +1231,9 @@ fn set_view_visible(handle: GodotNodeHandle, visible: bool) {
     }
 }
 
-/// A placed Farm only gains `ResourceSource` at construction completion,
-/// after its one-shot view metadata ran — so its view must be re-stamped
-/// with resource metadata when the source appears.
-fn stamp_late_resource_metadata(
-    mut commands: Commands,
-    sources: Query<(Entity, &ResourceSource, &GodotNodeHandle), Without<ResourceMetaInitialized>>,
-    mut godot: GodotAccess,
-) {
-    for (entity, source, handle) in &sources {
-        let Some(mut node) = godot.try_get::<Node3D>(*handle) else {
-            continue;
-        };
-        node.set_meta("resource_id", &i64::from(source.id.0).to_variant());
-        node.set_meta("resource_kind", &debug_variant(source.kind));
-        commands.entity(entity).insert(ResourceMetaInitialized);
-    }
-}
-
+/// All standalone `ResourceSource` entities are finite nodes spawned at seed
+/// time, so their one-shot view metadata lands in `initialize_view_metadata`
+/// and no late resource stamp is needed.
 /// Health bars ride the existing per-entity Godot node handles: every
 /// `Changed<Health>` tick forwards the ratio to the view script, which owns
 /// the bar's primitive geometry. No per-frame GDScript world polling.
@@ -1491,9 +1397,9 @@ fn format_command_result(result: &CommandResult) -> String {
         return format!("Destination unreachable for {unreachable} unit(s)");
     }
 
-    // Per-unit rejects outside the three counted kinds (e.g. FarmOccupied,
-    // Crowded, NotVillager) still name the first uncounted typed code instead
-    // of collapsing into a zero-count summary.
+    // Per-unit rejects outside the three counted kinds (e.g. Crowded,
+    // NotVillager) still name the first uncounted typed code instead of
+    // collapsing into a zero-count summary.
     let uncounted = result.rejected_units.len() - unreachable - not_owned - unknown;
     let mut text = format!(
         "Command: {} accepted, {} unreachable, {} not owned, {} missing",
@@ -1577,14 +1483,12 @@ fn drain_route_reject_feedback(world: &mut World) {
 fn job_seconds(job: &ProductionJob) -> f32 {
     match job.kind {
         ProductionKind::Unit(kind) => unit_spec(kind).train_seconds as f32,
-        ProductionKind::Age2 => AGE_TWO_SECONDS as f32,
     }
 }
 
 fn queue_head_label(job: &ProductionJob) -> String {
     match job.kind {
         ProductionKind::Unit(kind) => format!("{kind:?}"),
-        ProductionKind::Age2 => "Age2".to_string(),
     }
 }
 
@@ -1978,12 +1882,12 @@ mod tests {
         assert_eq!(
             format_command_result(&CommandResult {
                 rejected_units: vec![
-                    (UnitId(1), RejectReason::FarmOccupied),
-                    (UnitId(2), RejectReason::FarmOccupied),
+                    (UnitId(1), RejectReason::Crowded),
+                    (UnitId(2), RejectReason::Crowded),
                 ],
                 ..CommandResult::default()
             }),
-            "Command: 0 accepted, 0 unreachable, 0 not owned, 0 missing, 2 rejected (FarmOccupied)"
+            "Command: 0 accepted, 0 unreachable, 0 not owned, 0 missing, 2 rejected (Crowded)"
         );
     }
 
@@ -2140,7 +2044,7 @@ mod tests {
             "the missing session reads as Playing"
         );
 
-        // The mixed 100-vs-100 roster: 20/30/30/20 per team.
+        // The mixed 100-vs-100 roster: 20/40/40 per team.
         let count = |team: TeamId, kind: UnitKind| {
             world
                 .resource::<UnitIndex>()
@@ -2154,9 +2058,8 @@ mod tests {
         };
         for team in [TeamId(1), TeamId(2)] {
             assert_eq!(count(team, UnitKind::Villager), 20);
-            assert_eq!(count(team, UnitKind::Spearman), 30);
-            assert_eq!(count(team, UnitKind::Archer), 30);
-            assert_eq!(count(team, UnitKind::Cavalry), 20);
+            assert_eq!(count(team, UnitKind::Spearman), 40);
+            assert_eq!(count(team, UnitKind::Archer), 40);
         }
         assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
 

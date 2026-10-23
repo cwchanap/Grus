@@ -1,5 +1,5 @@
 use super::*;
-use crate::catalog::{Age, ResourceKind, unit_spec};
+use crate::catalog::unit_spec;
 use crate::combat::step_combat;
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
@@ -7,7 +7,7 @@ use crate::commands::{
 use crate::economy::{
     Carry, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
 };
-use crate::ids::{IdAllocator, ResourceId};
+use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
 use crate::session::{MatchPhase, MatchSession};
 use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
@@ -22,7 +22,6 @@ fn setup_build_test() -> (World, GridMap, Entity) {
             wood: 500,
             gold: 500,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
     world.insert_resource(IdAllocator::new(10, 10, 10));
@@ -643,8 +642,12 @@ fn completed_barracks_gains_an_empty_production_queue() {
 }
 
 #[test]
-fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
-    let (mut world, mut map, villager) = setup_build_test();
+fn completed_building_never_gains_a_resource_source() {
+    // Completion grants are Dropoff (Storehouse) and the producer queue —
+    // the Farm resource grant is deleted with the Farm kind, so a real
+    // completion must never leave a ResourceSource on the building entity
+    // or a new entry in the ResourceIndex.
+    let (mut world, mut map, _villager) = setup_build_test();
 
     let result = apply_player_command(
         &mut world,
@@ -652,25 +655,20 @@ fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::Farm,
+            kind: BuildingKind::Barracks,
             anchor: GridPos::new(13, 10),
         },
     );
-    assert_eq!(result.reject, None);
-    assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
-        440
-    );
-
-    let farm_entity = world
+    assert_eq!(result.reject, None, "Barracks placement rejected");
+    let barracks = world
         .resource::<BuildingIndex>()
         .entity(BuildingId(10))
-        .expect("building registered");
-    for _ in 0..1000 {
+        .expect("barracks registered");
+    for _ in 0..2000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
         if world
-            .get::<Building>(farm_entity)
+            .get::<Building>(barracks)
             .unwrap()
             .construction
             .complete
@@ -678,34 +676,25 @@ fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
             break;
         }
     }
+
     assert!(
         world
-            .get::<Building>(farm_entity)
+            .get::<Building>(barracks)
             .unwrap()
             .construction
-            .complete
+            .complete,
+        "Barracks never completed"
     );
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
-
-    // The completed Farm building entity carries its renewable source.
-    let source = world
-        .get::<ResourceSource>(farm_entity)
-        .expect("farm source");
-    assert_eq!(source.id, ResourceId(10));
-    assert_eq!(source.kind, ResourceKind::Food);
-    assert_eq!(source.remaining, None);
-    assert_eq!(source.assigned_worker, None);
-    assert_eq!(
-        world.resource::<ResourceIndex>().entity(source.id),
-        Some(farm_entity)
-    );
-    assert_eq!(world.resource::<IdAllocator>().next_resource, 11);
-
-    // Still exactly one entity, carrying both the building and the source.
-    let mut buildings = world.query::<&Building>();
-    assert_eq!(buildings.iter(&world).count(), 1);
+    assert!(world.get::<ResourceSource>(barracks).is_none());
     let mut sources = world.query::<&ResourceSource>();
-    assert_eq!(sources.iter(&world).count(), 1);
+    assert_eq!(sources.iter(&world).count(), 0);
+    assert_eq!(
+        world
+            .get_resource::<ResourceIndex>()
+            .map(|index| index.iter().count())
+            .unwrap_or(0),
+        0
+    );
 }
 
 #[test]

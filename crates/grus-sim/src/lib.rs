@@ -16,9 +16,8 @@ pub use buildings::{
     validate_placement,
 };
 pub use catalog::{
-    AGE_TWO_COST, AGE_TWO_GATHER_RATE, AGE_TWO_SECONDS, ATTACK_MOVE_RADIUS, Age, BASE_GATHER_RATE,
-    BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec, Cost, MAX_POPULATION, ResourceKind,
-    UnitKind, UnitSpec, resource_amount,
+    ATTACK_MOVE_RADIUS, BASE_GATHER_RATE, BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec,
+    Cost, MAX_POPULATION, ResourceKind, UnitKind, UnitSpec, resource_amount,
 };
 pub use combat::{
     AttackCooldown, CombatEvent, CombatEventTotal, CombatEvents, CombatOrder, CombatTarget, Health,
@@ -30,8 +29,8 @@ pub use commands::{
 };
 pub use economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
-    ResourceStockpile, TeamEconomy, TeamState, WorkerTask, gather_rate_for_age, idle_worker_ids,
-    is_idle_worker, step_economy,
+    ResourceStockpile, TeamEconomy, TeamState, WorkerTask, idle_worker_ids, is_idle_worker,
+    step_economy,
 };
 pub use fixture::{
     MapFixture, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
