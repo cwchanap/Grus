@@ -51,7 +51,7 @@ The runtime match is **human Team 1 against a passive, still-authored Team 2 bas
 
 ### Build and launch
 
-Install Godot 4.6.2 with export templates, then from the repository root:
+Install Godot 4.7.1 with export templates, then from the repository root:
 
 ```bash
 cargo build -p grus-godot

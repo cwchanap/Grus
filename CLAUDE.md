@@ -8,7 +8,7 @@ Grus is a 2.5D real-time strategy game: a Rust/Bevy ECS simulation driving a God
 
 ## Toolchain pins
 
-Everything is pinned exactly and CI builds `--locked`: Rust **1.95.0** (`rust-toolchain.toml`), Godot **4.6.2**, `bevy =0.19.1`, `godot =0.5.5`, `godot-bevy =0.12.0`, `pathfinding =4.16.0`. Edition 2024. Bump versions only deliberately — `bevy`/`godot`/`godot-bevy` are `=`-pinned because the bridge depends on version-specific behavior (see "Interpolation" below).
+Everything is pinned exactly and CI builds `--locked`: Rust **1.95.0** (`rust-toolchain.toml`), Godot **4.7.1**, `bevy =0.19.1`, `godot =0.5.5`, `godot-bevy =0.12.0`, `pathfinding =4.16.0`. Edition 2024. Bump versions only deliberately — `bevy`/`godot`/`godot-bevy` are `=`-pinned because the bridge depends on version-specific behavior (see "Interpolation" below).
 
 ## Build, run, verify
 
