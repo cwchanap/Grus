@@ -599,9 +599,9 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
         units_of_kind(world, attacker, UnitKind::Spearman).len() == 4
     });
 
-    // The last production leg — a Town Center Villager queued so the Result
-    // freeze has real production progress to hold still. Three villagers
-    // switch to Gold while the freed builder returns to Food.
+    // The freed villagers switch roles — three to Gold, the builder back
+    // to Food — so the march phase runs a live economy into the Result
+    // freeze snapshot.
     let gold = nearest_source(world, attacker, ResourceKind::Gold);
     let outcome = apply_player_command(
         world,
@@ -623,16 +623,6 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
         },
     );
     assert_eq!(outcome.reject, None, "food retask accepted");
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::EnqueueUnit {
-            issuer: attacker,
-            building: town_center_of(world, attacker),
-            kind: UnitKind::Villager,
-        },
-    );
-    assert_eq!(outcome.reject, None, "Villager enqueue accepted");
 
     // March + attack: the army attacks the enemy Town Center through the
     // combat step's pursuit and strikes; its destruction settles the Result.
@@ -647,6 +637,37 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
         },
     );
     assert_eq!(outcome.accepted_units.len(), 4, "the whole army attacks");
+
+    // The last production leg — a Town Center Villager queued once the
+    // enemy Town Center is nearly dead, so the job is genuinely still in
+    // flight when the Result lands and the freeze comparison has real
+    // queue state to hold still. Four Spearmen strike 40 damage per
+    // cooldown round: queued at <=120 hit points, only a few seconds of
+    // the 15-second train can elapse before the Result.
+    let enemy_tc_entity = world
+        .resource::<BuildingIndex>()
+        .entity(enemy_town_center)
+        .expect("enemy Town Center entity");
+    run_until(
+        world,
+        map,
+        "the enemy Town Center's last stretch",
+        |world| {
+            world
+                .get::<Health>(enemy_tc_entity)
+                .is_some_and(|health| health.current <= 120)
+        },
+    );
+    let outcome = apply_player_command(
+        world,
+        map,
+        PlayerCommand::EnqueueUnit {
+            issuer: attacker,
+            building: town_center_of(world, attacker),
+            kind: UnitKind::Villager,
+        },
+    );
+    assert_eq!(outcome.reject, None, "late Villager enqueue accepted");
 
     run_until_result(world, map, "the journey");
     assert_eq!(
@@ -752,6 +773,17 @@ pub(crate) fn assert_result_freezes_and_locks(
     issuer: TeamId,
 ) {
     let frozen = FreezeSnapshot::of(world);
+
+    // Premise: the journey must arrive at Result with a genuinely pending
+    // production job, or the production arm of the freeze comparison is
+    // vacuous — a queue that already drained has nothing to hold still.
+    assert!(
+        frozen
+            .production
+            .iter()
+            .any(|(_, jobs, progress, _)| *jobs > 0 || *progress > 0.0),
+        "no production job still pending at Result: the freeze proof is vacuous"
+    );
 
     for _ in 0..FREEZE_TICKS {
         step_match(world, map);

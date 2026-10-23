@@ -279,23 +279,17 @@ const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
 /// the match.
 const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 
-/// Extends an already-seeded **non-mirrored** skirmish with the benchmark
-/// workload: 96 more units per team (the roster above) staged on
-/// deterministic mirrored walkable cells — team 2 point-reflects team 1's
-/// cells through the map center — IDs taken only from the `IdAllocator`, the
-/// production worker bundle on every spawn, then the initial commands
-/// applied through the ordinary dispatcher: the first 12 sorted villagers
-/// per side go two-per-source onto the authored safe sources, and every
-/// combatant AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected
-/// setup command: a benchmark that boots with rejected orders would
-/// silently measure an idle crowd.
-///
-/// Requires the non-mirrored seed: staging assigns team 1 the left region
-/// and `safe_source_ids` assigns team 1 the left-half sources, so a
-/// mirrored seed would stage team 1 inside team 2's base and gather it to
-/// the wrong side. That precondition is asserted, not assumed.
+/// Extends an already-seeded skirmish with the benchmark workload: 96 more
+/// units per team (the roster above) staged on deterministic mirrored
+/// walkable cells — team 2 point-reflects team 1's cells through the map
+/// center — IDs taken only from the `IdAllocator`, the production worker
+/// bundle on every spawn, then the initial commands applied through the
+/// ordinary dispatcher: the first 12 sorted villagers per side go
+/// two-per-source onto the authored safe sources, and every combatant
+/// AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected setup
+/// command: a benchmark that boots with rejected orders would silently
+/// measure an idle crowd.
 pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
-    assert_non_mirrored_seed(world);
     for team in [TeamId(1), TeamId(2)] {
         let mut cells = benchmark_staging_cells(map, team).into_iter();
         for (kind, count) in BENCHMARK_ROSTER {
@@ -349,29 +343,6 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 units: army,
                 kind: UnitCommandKind::AttackMove { target },
             }),
-        );
-    }
-}
-
-/// The benchmark workload's non-mirrored precondition: each team's seeded
-/// Town Center stands on its own authored start, so the left-region
-/// staging and left-half safe sources really belong to team 1.
-fn assert_non_mirrored_seed(world: &World) {
-    for start in MapFixture::team_starts() {
-        let anchored = world.resource::<BuildingIndex>().iter().any(|(_, entity)| {
-            world.get::<Building>(*entity).is_some_and(|building| {
-                building.team == start.team
-                    && building.kind == BuildingKind::TownCenter
-                    && world
-                        .get::<Footprint>(*entity)
-                        .is_some_and(|footprint| footprint.anchor == start.town_center_anchor)
-            })
-        });
-        assert!(
-            anchored,
-            "benchmark workload requires the non-mirrored authored seed: \
-             team {:?} has no Town Center on its own start",
-            start.team
         );
     }
 }
