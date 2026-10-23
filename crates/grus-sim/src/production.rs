@@ -1,17 +1,13 @@
 //! FIFO production queues on completed producers, derived population, spawn
-//! clearance, rally points, and one-time Age 2 advancement. Production is the
-//! last system in the canonical fixed-step order, so an Age 2 completion here
-//! affects the next economy tick.
+//! clearance, and rally points. Production is the last system in the
+//! canonical fixed-step order.
 
 use std::collections::{HashSet, VecDeque};
 
 use bevy::prelude::{Component, Entity, World};
 
 use crate::buildings::{Building, BuildingIndex, commandable_building_entity};
-use crate::catalog::{
-    AGE_TWO_COST, AGE_TWO_SECONDS, Age, BuildingKind, Cost, MAX_POPULATION, UnitKind,
-    building_spec, unit_spec,
-};
+use crate::catalog::{BuildingKind, Cost, MAX_POPULATION, UnitKind, building_spec, unit_spec};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, assign_move_toward, spawn_unit};
 use crate::economy::{Carry, GatherProgress, TeamEconomy, WorkerTask};
 use crate::ids::{BuildingId, IdAllocator, TeamId};
@@ -19,12 +15,10 @@ use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
 
-/// What one production job trains: a catalogue unit or the one-time Age 2
-/// research. The Town Center produces both; other producers make one unit kind.
+/// What one production job trains: a catalogue unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProductionKind {
     Unit(UnitKind),
-    Age2,
 }
 
 impl ProductionKind {
@@ -32,15 +26,13 @@ impl ProductionKind {
     pub(crate) fn cost(self) -> Cost {
         match self {
             Self::Unit(kind) => unit_spec(kind).cost,
-            Self::Age2 => AGE_TWO_COST,
         }
     }
 
-    /// Train/research seconds for the queue head.
+    /// Train seconds for the queue head.
     pub(crate) fn seconds(self) -> f32 {
         match self {
             Self::Unit(kind) => unit_spec(kind).train_seconds as f32,
-            Self::Age2 => AGE_TWO_SECONDS as f32,
         }
     }
 }
@@ -67,27 +59,17 @@ pub struct RallyPoint(pub GridPos);
 
 /// Building kinds that own a production queue on completion.
 pub(crate) fn is_producer(kind: BuildingKind) -> bool {
-    matches!(
-        kind,
-        BuildingKind::TownCenter
-            | BuildingKind::Barracks
-            | BuildingKind::ArcheryRange
-            | BuildingKind::Stable
-    )
+    matches!(kind, BuildingKind::TownCenter | BuildingKind::Barracks)
 }
 
 /// Fixed producer compatibility.
 pub fn produces(kind: BuildingKind, job: ProductionKind) -> bool {
     match kind {
-        BuildingKind::TownCenter => {
-            matches!(
-                job,
-                ProductionKind::Unit(UnitKind::Villager) | ProductionKind::Age2
-            )
-        }
-        BuildingKind::Barracks => job == ProductionKind::Unit(UnitKind::Spearman),
-        BuildingKind::ArcheryRange => job == ProductionKind::Unit(UnitKind::Archer),
-        BuildingKind::Stable => job == ProductionKind::Unit(UnitKind::Cavalry),
+        BuildingKind::TownCenter => job == ProductionKind::Unit(UnitKind::Villager),
+        BuildingKind::Barracks => matches!(
+            job,
+            ProductionKind::Unit(UnitKind::Spearman) | ProductionKind::Unit(UnitKind::Archer)
+        ),
         _ => false,
     }
 }
@@ -175,67 +157,8 @@ pub(crate) fn apply_enqueue_unit(
     result
 }
 
-/// Applies an accepted `EnqueueAgeUp`: Town Center FIFO, once ever. The
-/// one-time lock is set on acceptance so a second command rejects immediately.
-pub(crate) fn apply_enqueue_age_up(
-    world: &mut World,
-    issuer: TeamId,
-    building: BuildingId,
-) -> CommandResult {
-    let mut result = CommandResult::default();
-    let building_entity = match validate_enqueue(world, issuer, building, ProductionKind::Age2) {
-        Ok(entity) => entity,
-        Err(reason) => {
-            result.reject = Some(reason);
-            return result;
-        }
-    };
-
-    // One-time lock plus affordability, after the shared chain above.
-    let lock = world
-        .get_resource::<TeamEconomy>()
-        .and_then(|economy| economy.0.get(&issuer))
-        .map(|state| state.age_up_started || state.age == Age::Age2)
-        .unwrap_or(true);
-    if lock {
-        result.reject = Some(RejectReason::Locked);
-        return result;
-    }
-    let cost = ProductionKind::Age2.cost();
-    let affordable = world
-        .get_resource::<TeamEconomy>()
-        .and_then(|economy| economy.0.get(&issuer))
-        .is_some_and(|state| {
-            state.stockpile.food >= cost.food
-                && state.stockpile.wood >= cost.wood
-                && state.stockpile.gold >= cost.gold
-        });
-    if !affordable {
-        result.reject = Some(RejectReason::InsufficientResources);
-        return result;
-    }
-
-    if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
-        && let Some(state) = economy.0.get_mut(&issuer)
-    {
-        state.stockpile.food -= cost.food;
-        state.stockpile.wood -= cost.wood;
-        state.stockpile.gold -= cost.gold;
-        state.age_up_started = true;
-    }
-    push_job(
-        world,
-        building_entity,
-        ProductionJob {
-            kind: ProductionKind::Age2,
-        },
-    );
-    result
-}
-
 /// Shared enqueue chain: building exists (hidden enemy indistinguishable
-/// from absent, fog privacy) → owned → completed → producer compatibility →
-/// unit unlock (age jobs lock in `apply_enqueue_age_up`).
+/// from absent, fog privacy) → owned → completed → producer compatibility.
 fn validate_enqueue(
     world: &World,
     issuer: TeamId,
@@ -255,15 +178,6 @@ fn validate_enqueue(
     }
     if !produces(state.kind, job) {
         return Err(RejectReason::WrongProducer);
-    }
-    if let ProductionKind::Unit(kind) = job {
-        let team_age = world
-            .get_resource::<TeamEconomy>()
-            .and_then(|economy| economy.0.get(&issuer))
-            .map(|state| state.age);
-        if team_age.is_none_or(|age| age < unit_spec(kind).required_age) {
-            return Err(RejectReason::Locked);
-        }
     }
     Ok(building_entity)
 }
@@ -375,14 +289,6 @@ pub fn step_production(world: &mut World, map: &mut GridMap, seconds: f32) {
         }
 
         match job.kind {
-            ProductionKind::Age2 => {
-                if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
-                    && let Some(state) = economy.0.get_mut(&team)
-                {
-                    state.age = Age::Age2;
-                }
-                finish_head(world, entity);
-            }
             ProductionKind::Unit(kind) => {
                 if population_used(world, team) >= population_cap(world, team) {
                     if let Some(mut queue) = world.get_mut::<ProductionQueue>(entity) {

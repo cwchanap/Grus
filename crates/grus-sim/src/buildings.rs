@@ -7,12 +7,10 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
-use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec};
+use crate::catalog::{BuildingKind, UnitKind, building_spec};
 use crate::combat::{CombatOrder, Health, with_destination};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
-use crate::economy::{
-    Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_unit_activity,
-};
+use crate::economy::{Dropoff, ResourceIndex, TeamEconomy, WorkerTask, cancel_unit_activity};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -103,13 +101,9 @@ pub fn validate_placement(
         return Err(RejectReason::NotVillager);
     }
 
-    // 2. kind unlocked/buildable. Town Centers are seeded, never placed.
+    // 2. kind buildable. Town Centers are seeded, never placed.
     let spec = building_spec(kind);
-    let team_age = world
-        .get_resource::<TeamEconomy>()
-        .and_then(|economy| economy.0.get(&issuer))
-        .map(|state| state.age);
-    if kind == BuildingKind::TownCenter || team_age.is_some_and(|age| age < spec.required_age) {
+    if kind == BuildingKind::TownCenter {
         return Err(RejectReason::Locked);
     }
 
@@ -735,9 +729,8 @@ pub(crate) fn nearest_open_cell(
 /// `ToConstruction → Constructing` once its current cell equals the stored
 /// slot; each building then advances only while its single `active_builder` is
 /// the worker in `Constructing` state, so a second builder can never double
-/// the rate. Completion clears the assignment, idles the builder, grants a
-/// Storehouse its `Dropoff` marker, and grants a Farm its renewable
-/// `ResourceSource` under a fresh runtime `ResourceId` — each exactly once.
+/// the rate. Completion clears the assignment, idles the builder, and grants
+/// a Storehouse its `Dropoff` marker — each exactly once.
 pub fn step_construction(world: &mut World, seconds: f32) {
     if !gameplay_active(world) {
         return;
@@ -821,20 +814,6 @@ pub fn step_construction(world: &mut World, seconds: f32) {
             world
                 .entity_mut(building_entity)
                 .insert(ProductionQueue::default());
-        }
-        if kind == BuildingKind::Farm {
-            // The completed Farm gains a renewable Food source on the same
-            // building entity under a fresh runtime `ResourceId`.
-            let id = world.resource_mut::<IdAllocator>().allocate_resource();
-            world.entity_mut(building_entity).insert(ResourceSource {
-                id,
-                kind: ResourceKind::Food,
-                remaining: None,
-                assigned_worker: None,
-            });
-            world
-                .get_resource_or_insert_with(ResourceIndex::default)
-                .insert(id, building_entity);
         }
     }
 }

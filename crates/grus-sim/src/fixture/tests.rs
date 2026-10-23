@@ -3,7 +3,7 @@ use bevy::prelude::Entity;
 use std::collections::HashSet;
 
 use crate::buildings::Building;
-use crate::catalog::{Age, resource_amount};
+use crate::catalog::resource_amount;
 use crate::combat::CombatOrder;
 use crate::commands::UnitIndex;
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
@@ -48,12 +48,11 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     extend_with_benchmark_workload(&mut world, &mut map);
 
     // The mixed roster: the four authored villagers plus the workload make
-    // 20/30/30/20 per team — 200 units total.
+    // 20/40/40 per team — 200 units total.
     for team in [TeamId(1), TeamId(2)] {
         assert_eq!(units_of_kind(&world, team, UnitKind::Villager), 20);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Spearman), 30);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Archer), 30);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Cavalry), 20);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Spearman), 40);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Archer), 40);
         assert!(
             world.resource::<TeamEconomy>().0.contains_key(&team),
             "team {team:?} economy present"
@@ -276,7 +275,7 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
 
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // Both teams start solvent at Age 1.
+    // Both teams start solvent.
     for team in [TeamId(1), TeamId(2)] {
         let state = &world.resource::<TeamEconomy>().0[&team];
         assert_eq!(
@@ -287,7 +286,6 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
                 gold: 100
             }
         );
-        assert_eq!(state.age, Age::Age1);
     }
 
     // Two completed Town Center Buildings, each owning a 4×4 Footprint,
@@ -365,8 +363,7 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
     assert_eq!(sources.len(), 18);
     for (source, footprint) in &sources {
         assert_eq!((footprint.width, footprint.height), (1, 1));
-        assert_eq!(source.remaining, Some(resource_amount(source.kind)));
-        assert_eq!(source.assigned_worker, None);
+        assert_eq!(source.remaining, resource_amount(source.kind));
         assert!(
             !map.is_walkable(footprint.anchor),
             "source cell {:?} unblocked",

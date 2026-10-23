@@ -1,19 +1,17 @@
 extends Node
 
-## HPA-471 end-to-end economy smoke. Drives the real controller/UI paths —
+## HPA-448 end-to-end economy smoke. Drives the real controller/UI paths —
 ## selection, contextual right-clicks, build buttons with the placement
 ## preview, production buttons, rally points, and idle-worker navigation —
-## through a solvent script that stockpiles, builds, trains one of each
-## combat unit, and reaches Age 2. GrusBridge snapshots are used for
-## assertions only; every gameplay write rides the UI.
+## through a solvent script that stockpiles, builds, and trains one of each
+## combat unit on the single Barracks producer. GrusBridge snapshots are used
+## for assertions only; every gameplay write rides the UI.
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 ## RejectReason discriminant values (declaration order in
 ## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
-const REJECT_NONE := -1
-const REJECT_LOCKED := 7
-const REJECT_FARM_OCCUPIED := 12
+const REJECT_OCCUPIED := 10
 
 ## Authored fixture source ids (crates/grus-sim/src/fixture.rs).
 const BERRY_ID := 1
@@ -22,25 +20,24 @@ const GOLD_ID := 6
 ## Northeast expansion tree used for the Storehouse delivery proof.
 const FAR_TREE_ID := 14
 
-## Solvency targets before any spending: 615 total Wood spend against 300
-## starting Wood, 480 Food for Spearman+Archer+Age2+Cavalry plus 50 for the
-## rally-proof Villager, and 260 Gold for Age2+Cavalry.
-const TARGET_WOOD := 615
-const TARGET_FOOD := 530
-const TARGET_GOLD := 260
+## Solvency targets before any spending: deposit-driven, so reaching them
+## proves real gather cycles (starts are 200 Food / 300 Wood / 100 Gold).
+const TARGET_WOOD := 400
+const TARGET_FOOD := 320
+const TARGET_GOLD := 160
 
 const HOUSE_ANCHOR := Vector2i(9, 44)
 const STOREHOUSE_ANCHOR := Vector2i(38, 22)
-const FARM_ANCHOR := Vector2i(18, 52)
 const BARRACKS_ANCHOR := Vector2i(17, 41)
-const RANGE_ANCHOR := Vector2i(9, 52)
-const STABLE_ANCHOR := Vector2i(8, 41)
 
 ## Open ground west of the base; villagers parked here stay well outside the
 ## 20 px unit-priority click radius of every building origin.
 const STAGING_CELL := Vector2i(5, 47)
 ## Town Center rally cell for the rally-point proof.
 const RALLY_CELL := Vector2i(20, 58)
+## A cell inside the seeded Town Center footprint (anchor 12,46 + 4x4): the
+## read-only placement preview must answer Occupied there.
+const OCCUPIED_CELL := Vector2i(13, 47)
 
 var _camera: Camera3D
 var _start_ms := 0
@@ -320,20 +317,29 @@ func _run() -> void:
 		_fail("starting stockpile is not 200/300/100: %s" % [boot])
 		return
 	# The catalogue snapshot is the only gameplay-data source for the UI:
-	# prove it carries real cost/producer/unlock entries from the Rust table.
+	# prove it carries real cost/producer entries from the Rust table — and
+	# none of the deleted PvP-roster kinds.
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var catalogue_units: Dictionary = catalogue.get("units", {})
 	var villager_entry: Dictionary = catalogue_units.get("Villager", {})
 	if int(villager_entry.get("food", -1)) != 50 or str(villager_entry.get("producer", "")) != "TownCenter":
 		_fail("catalogue snapshot is missing Villager cost/producer: %s" % [catalogue])
 		return
-	var stable_entry: Dictionary = catalogue_units.get("Cavalry", {})
-	if int(stable_entry.get("age", -1)) != 2 or str(stable_entry.get("producer", "")) != "Stable":
-		_fail("catalogue snapshot is missing the Cavalry age gate/producer: %s" % [catalogue])
+	var spearman_entry: Dictionary = catalogue_units.get("Spearman", {})
+	if int(spearman_entry.get("food", -1)) != 60 or str(spearman_entry.get("producer", "")) != "Barracks":
+		_fail("catalogue snapshot does not produce Spearmen at the Barracks: %s" % [catalogue])
 		return
-	var age_up_entry: Dictionary = catalogue.get("age_up", {})
-	if int(age_up_entry.get("food", -1)) != 300 or int(age_up_entry.get("gold", -1)) != 200:
-		_fail("catalogue snapshot is missing the Age-2 cost: %s" % [catalogue])
+	var archer_entry: Dictionary = catalogue_units.get("Archer", {})
+	if int(archer_entry.get("food", -1)) != 40 or int(archer_entry.get("wood", -1)) != 40 \
+			or str(archer_entry.get("producer", "")) != "Barracks":
+		_fail("catalogue snapshot does not produce Archers at the Barracks: %s" % [catalogue])
+		return
+	for removed in ["Cavalry", "Farm", "ArcheryRange", "Stable"]:
+		if catalogue_units.has(removed) or catalogue.get("buildings", {}).has(removed):
+			_fail("catalogue still advertises the deleted %s" % removed)
+			return
+	if catalogue.has("age_up"):
+		_fail("catalogue still advertises the deleted Age-up job")
 		return
 	if absf(float(boot.get("gather_rate", 0.0)) - 2.0) > 0.0001:
 		_fail("starting gather rate is not 2.0: %s" % [boot])
@@ -341,8 +347,8 @@ func _run() -> void:
 	if int(boot.get("population_used", -1)) != 4 or int(boot.get("population_cap", -1)) != 10:
 		_fail("starting population is not 4/10: %s" % [boot])
 		return
-	if int(boot.get("age", -1)) != 1:
-		_fail("starting age is not 1: %s" % [boot])
+	if boot.has("age"):
+		_fail("economy snapshot still carries the deleted age field: %s" % [boot])
 		return
 	var town_center := _building_view(1)
 	if town_center == null:
@@ -391,7 +397,7 @@ func _run() -> void:
 		return
 
 	# Step 4: House raises the population cap 10 -> 20; its construction
-	# progress ramps through snapshots (Step 13 evidence).
+	# progress ramps through snapshots (Step 10 evidence).
 	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/HouseButton") as Button, HOUSE_ANCHOR)
 	var house := await _wait_building("House", 20.0)
 	if house == null:
@@ -454,38 +460,27 @@ func _run() -> void:
 	# later click target, so parking in place is safe.
 	await _stop_unit(wood_worker)
 
-	# Step 6: the completed Farm serves exactly one worker; the second
-	# assignment rejects with the numeric FarmOccupied code.
-	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/FarmButton") as Button, FARM_ANCHOR)
-	var farm := await _wait_building("Farm", 20.0)
-	if farm == null:
+	# Reject-code pin: the read-only placement preview reports the numeric
+	# Occupied code for a footprint inside the seeded Town Center — the same
+	# RejectReason discriminant the bridge emits on real rejects.
+	var occupied_preview: Dictionary = GrusBridge.placement_preview(4, "House", OCCUPIED_CELL.x, OCCUPIED_CELL.y)
+	if int(occupied_preview.get("reject_code", -1)) != REJECT_OCCUPIED:
+		_fail("placement preview inside the Town Center did not report Occupied (%d): %s" % [REJECT_OCCUPIED, occupied_preview])
 		return
-	var farm_id := int(farm.get_meta("building_id"))
-	if not await _wait_until(_building_complete_at.bind(farm_id), 30.0, "Farm never completed"):
-		return
-	if not await _wait_until(func(): return int(farm.get_meta("resource_id", -1)) > 0, 10.0,
-			"completed Farm never gained its resource metadata"):
-		return
+
+	# Retire the food and gold gatherers: the finite sources deplete at 20x
+	# virtual time and would otherwise idle a worker inside the Town Center
+	# click zone. Park both on the staging ground.
 	var food_worker := _unit_view(2)
 	var gold_worker := _unit_view(3)
 	if food_worker == null or gold_worker == null:
 		_fail("villagers 2/3 views are missing")
 		return
-	await _click_view(food_worker, MOUSE_BUTTON_LEFT)
-	await _click_view(farm, MOUSE_BUTTON_RIGHT)
-	await _click_view(gold_worker, MOUSE_BUTTON_LEFT)
-	await _click_view(farm, MOUSE_BUTTON_RIGHT)
-	if not await _wait_until(
-			func(): return int(GrusBridge.economy_snapshot().get("last_reject_code", -1)) == REJECT_FARM_OCCUPIED,
-			10.0, "second farm worker did not reject with FarmOccupied (%d)" % REJECT_FARM_OCCUPIED):
-		return
-	# Retire the food and gold gatherers: the finite gold patch depletes at
-	# 20x virtual time and would otherwise idle a worker inside the Town
-	# Center click zone. Park both on the staging ground.
 	await _park_at_staging(food_worker)
 	await _park_at_staging(gold_worker)
 
-	# Step 7: Barracks trains a Spearman; queue label/progress via snapshots.
+	# Step 6: the Barracks is the single military producer — it accepts both
+	# Spearman and Archer on one FIFO queue, each charged once at acceptance.
 	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/BarracksButton") as Button, BARRACKS_ANCHOR)
 	var barracks := await _wait_building("Barracks", 25.0)
 	if barracks == null:
@@ -498,7 +493,10 @@ func _run() -> void:
 		return
 	await _move_unit_away(builder, barracks.global_position, 2.5)
 	await _select_building(barracks)
+	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
+	var wood_before := int(GrusBridge.economy_snapshot().get("wood", -1))
 	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/SpearmanButton") as Button)
+	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/ArcherButton") as Button)
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "Spearman", 10.0,
 			"Spearman never entered the Barracks queue"):
 		return
@@ -509,91 +507,34 @@ func _run() -> void:
 	if mid_queue < 1.0 and not await _wait_until(func(): return _queue_progress(barracks_id) > mid_queue, 10.0,
 			"Spearman queue progress never advanced"):
 		return
+	# Both jobs charged once at enqueue: 60f Spearman + 40f/40w Archer (the
+	# second click lands on the next command tick, so poll briefly).
+	if not await _wait_until(
+			func():
+				var charged: Dictionary = GrusBridge.economy_snapshot()
+				return int(charged.get("food", -1)) == food_before - 100 \
+					and int(charged.get("wood", -1)) == wood_before - 40,
+			10.0, "Barracks enqueue did not charge Spearman+Archer exactly once"):
+		return
 	var spearman_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Spearman", 9, spearman_box), 30.0,
 			"trained Spearman view never appeared"):
 		return
-	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 15.0,
-			"Spearman job never left the Barracks queue"):
-		return
-
-	# Step 8: Archery Range trains an Archer.
-	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/ArcheryRangeButton") as Button, RANGE_ANCHOR)
-	var range_building := await _wait_building("ArcheryRange", 25.0)
-	if range_building == null:
-		return
-	var range_id := int(range_building.get_meta("building_id"))
-	if not await _wait_until(_building_complete_at.bind(range_id), 40.0, "Archery Range never completed"):
-		return
-	if _blocked_reason(range_id) != 0:
-		_fail("fresh Archery Range reported a blocked queue")
-		return
-	await _move_unit_away(builder, range_building.global_position, 2.5)
-	await _select_building(range_building)
-	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/ArcherButton") as Button)
-	if not await _wait_until(func(): return _queue_label(range_id) == "Archer", 10.0,
-			"Archer never entered the Archery Range queue"):
+	if not await _wait_until(func(): return _queue_label(barracks_id) == "Archer", 15.0,
+			"Archer never became the FIFO head after the Spearman spawned"):
 		return
 	var archer_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Archer", 9, archer_box), 30.0,
+	if not await _wait_until(_unit_of_kind_present.bind("Archer", 9, archer_box), 35.0,
 			"trained Archer view never appeared"):
 		return
+	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 15.0,
+			"Archer job never left the Barracks queue"):
+		return
+	# Park both combatants clear of the Town Center click zone below.
+	for unit in [spearman_box["view"], archer_box["view"]]:
+		await _move_unit_away(unit as Node3D, town_center.global_position, 4.0)
 
-	# Step 9: Age 2. The read-only placement preview reports Locked before the
-	# age flip and valid after; the catalogue maps Age 2 to the 2.2/s gather
-	# rate, which the unlock flip exercises end to end.
-	var locked_preview: Dictionary = GrusBridge.placement_preview(4, "Stable", STABLE_ANCHOR.x, STABLE_ANCHOR.y)
-	if int(locked_preview.get("reject_code", -1)) != REJECT_LOCKED:
-		_fail("Stable placement before Age 2 did not report Locked (%d): %s" % [REJECT_LOCKED, locked_preview])
-		return
-	await _select_building(town_center)
-	var age_button := get_node("Main/HUD/CommandPanel/TrainGrid/AgeButton") as Button
-	if not await _wait_until(func(): return not age_button.disabled, 10.0,
-			"Age button never enabled for the selected Town Center"):
-		return
-	await _click_button(age_button)
-	if not await _wait_until(func(): return _queue_label(town_center_id) == "Age2", 10.0,
-			"Age 2 research never entered the Town Center queue"):
-		return
-	if not await _wait_until(func(): return int(GrusBridge.economy_snapshot().get("age", 1)) == 2, 30.0,
-			"Age 2 never completed"):
-		return
-	# The Age-2 2.2/s gather rate, observed directly through the snapshot.
-	var age_two_rate := float(GrusBridge.economy_snapshot().get("gather_rate", 0.0))
-	if absf(age_two_rate - 2.2) > 0.0001:
-		_fail("Age 2 gather rate is not 2.2: %f" % age_two_rate)
-		return
-	var unlocked_preview: Dictionary = GrusBridge.placement_preview(4, "Stable", STABLE_ANCHOR.x, STABLE_ANCHOR.y)
-	if not bool(unlocked_preview.get("valid", false)) or int(unlocked_preview.get("reject_code", 0)) != REJECT_NONE:
-		_fail("Stable placement after Age 2 is not unlocked: %s" % [unlocked_preview])
-		return
-
-	# Step 10: build the unlocked Stable and train a Cavalry.
-	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/StableButton") as Button, STABLE_ANCHOR)
-	var stable := await _wait_building("Stable", 30.0)
-	if stable == null:
-		return
-	var stable_id := int(stable.get_meta("building_id"))
-	if not await _wait_until(_building_complete_at.bind(stable_id), 45.0, "Stable never completed"):
-		return
-	if _blocked_reason(stable_id) != 0:
-		_fail("fresh Stable reported a blocked queue")
-		return
-	await _move_unit_away(builder, stable.global_position, 2.5)
-	await _select_building(stable)
-	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/CavalryButton") as Button)
-	if not await _wait_until(func(): return _queue_label(stable_id) == "Cavalry", 10.0,
-			"Cavalry never entered the Stable queue"):
-		return
-	var cavalry_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Cavalry", 9, cavalry_box), 30.0,
-			"trained Cavalry view never appeared"):
-		return
-	# Clear the Stable perimeter before the Town Center clicks below.
-	var cavalry: Node3D = cavalry_box["view"]
-	await _move_unit_away(cavalry, town_center.global_position, 4.0)
-
-	# Step 11: a Town Center rally point; the next trained unit walks to it.
+	# Step 7: a Town Center rally point; the next trained unit walks to it.
 	await _select_building(town_center)
 	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(_rally_stored.bind(town_center_id), 10.0,
@@ -611,7 +552,7 @@ func _run() -> void:
 			15.0, "rallied villager never moved toward the rally point"):
 		return
 
-	# Step 12: idle-worker navigation selects a live idle_worker_ids member.
+	# Step 8: idle-worker navigation selects a live idle_worker_ids member.
 	if int(GrusBridge.economy_snapshot().get("idle_workers", 0)) < 1:
 		_fail("no idle workers before idle navigation")
 		return
@@ -620,16 +561,15 @@ func _run() -> void:
 			"idle navigation did not select an idle_worker_ids member"):
 		return
 
-	# Step 13 recap: construction ramp (House), queue ramps (Spearman/Archer/
-	# Cavalry/Age2), FarmOccupied and Locked reject codes, and the blocked
-	# fields were all asserted at their stages above; finish with the final
-	# economy state and unblocked producers.
+	# Step 9 recap: construction ramp (House), queue ramps (Spearman/Archer),
+	# the Occupied reject code, and the blocked fields were all asserted at
+	# their stages above; finish with the final economy state and unblocked
+	# producers.
 	var final: Dictionary = GrusBridge.economy_snapshot()
-	if int(final.get("age", 1)) != 2 or int(final.get("population_cap", -1)) != 20 \
-			or int(final.get("population_used", -1)) != 8:
-		_fail("final economy state is not age 2 / population 8 of 20: %s" % [final])
+	if int(final.get("population_cap", -1)) != 20 or int(final.get("population_used", -1)) != 7:
+		_fail("final economy state is not population 7 of 20: %s" % [final])
 		return
-	for producer_id in [town_center_id, barracks_id, range_id, stable_id]:
+	for producer_id in [town_center_id, barracks_id]:
 		if _blocked_reason(producer_id) != 0:
 			_fail("producer %d ended with a blocked queue" % producer_id)
 			return
@@ -638,7 +578,7 @@ func _run() -> void:
 		_fail("failed to restore Bevy virtual time")
 		return
 
-	print("GRUS_ECONOMY_SMOKE_OK food=%d wood=%d gold=%d age=2 cap=20 units=8 buildings=8 elapsed_ms=%d" % [
+	print("GRUS_ECONOMY_SMOKE_OK food=%d wood=%d gold=%d cap=20 units=7 buildings=5 elapsed_ms=%d" % [
 		int(final.get("food", 0)),
 		int(final.get("wood", 0)),
 		int(final.get("gold", 0)),

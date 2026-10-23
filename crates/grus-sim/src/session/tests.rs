@@ -5,9 +5,7 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, step_construction};
-use crate::catalog::{
-    AGE_TWO_COST, Age, BuildingKind, CARRY_LIMIT, ResourceKind, UnitKind, building_spec, unit_spec,
-};
+use crate::catalog::{BuildingKind, CARRY_LIMIT, ResourceKind, UnitKind, building_spec, unit_spec};
 use crate::combat::{AttackCooldown, CombatOrder, CombatTarget, Health, step_combat};
 use crate::commands::{
     PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
@@ -601,10 +599,9 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
         units_of_kind(world, attacker, UnitKind::Spearman).len() == 4
     });
 
-    // The last production leg — Age 2. Three villagers switch to Gold while
-    // the freed builder returns to Food until the one-time research is
-    // affordable; it then runs alongside the march below, so the Result
-    // freeze has real age-up progress to hold still.
+    // The last production leg — a Town Center Villager queued so the Result
+    // freeze has real production progress to hold still. Three villagers
+    // switch to Gold while the freed builder returns to Food.
     let gold = nearest_source(world, attacker, ResourceKind::Gold);
     let outcome = apply_player_command(
         world,
@@ -626,19 +623,16 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
         },
     );
     assert_eq!(outcome.reject, None, "food retask accepted");
-    run_until(world, map, "the Age 2 affordability", |world| {
-        let stockpile = &world.resource::<TeamEconomy>().0[&attacker].stockpile;
-        stockpile.food >= AGE_TWO_COST.food && stockpile.gold >= AGE_TWO_COST.gold
-    });
     let outcome = apply_player_command(
         world,
         map,
-        PlayerCommand::EnqueueAgeUp {
+        PlayerCommand::EnqueueUnit {
             issuer: attacker,
             building: town_center_of(world, attacker),
+            kind: UnitKind::Villager,
         },
     );
-    assert_eq!(outcome.reject, None, "Age 2 research accepted");
+    assert_eq!(outcome.reject, None, "Villager enqueue accepted");
 
     // March + attack: the army attacks the enemy Town Center through the
     // combat step's pursuit and strikes; its destruction settles the Result.
@@ -672,7 +666,7 @@ pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: T
 /// Everything the Result freeze contract names, captured for equality.
 #[derive(Debug, PartialEq)]
 struct FreezeSnapshot {
-    economies: Vec<(u8, ResourceStockpile, Age, bool)>,
+    economies: Vec<(u8, ResourceStockpile)>,
     positions: Vec<(UnitId, Vec2, Vec2)>,
     cooldowns: Vec<(UnitId, f32)>,
     constructions: Vec<(BuildingId, f32, bool, Option<UnitId>)>,
@@ -685,7 +679,7 @@ impl FreezeSnapshot {
             .resource::<TeamEconomy>()
             .0
             .iter()
-            .map(|(team, state)| (team.0, state.stockpile, state.age, state.age_up_started))
+            .map(|(team, state)| (team.0, state.stockpile))
             .collect();
         economies.sort_by_key(|entry| entry.0);
 
@@ -749,7 +743,7 @@ impl FreezeSnapshot {
 }
 
 /// Post-Result freeze + lock battery: stockpiles, positions, construction,
-/// production, cooldowns and age-up progress survive subsequent full match
+/// production and cooldowns survive subsequent full match
 /// ticks unchanged, and every player command kind rejects `SessionLocked`
 /// without mutating anything.
 pub(crate) fn assert_result_freezes_and_locks(
@@ -765,7 +759,7 @@ pub(crate) fn assert_result_freezes_and_locks(
     assert_eq!(
         FreezeSnapshot::of(world),
         frozen,
-        "Result must freeze stockpiles, positions, construction, production, cooldowns and age-up progress"
+        "Result must freeze stockpiles, positions, construction, production and cooldowns"
     );
 
     // Every command kind hits the same session gate: rejected wholesale,

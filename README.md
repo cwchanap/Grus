@@ -10,11 +10,13 @@ The simulation runs on an explicitly configured **20 Hz Bevy fixed clock**. Godo
 
 Occupancy changes use one shared `GridMap::set_blocked` seam. The map revision changes only when walkability actually changes, and active move orders replan once when they observe a newer revision instead of pathfinding every tick. This is the construction-facing occupancy contract consumed by later MVP work.
 
-The first recorded desktop target is **Linux x86_64** with **Godot 4.6.2** and the repository-pinned **Rust 1.89.0** toolchain.
+The first recorded desktop target is **Linux x86_64** with **Godot 4.7.1** and the repository-pinned **Rust 1.95.0** toolchain.
 
 ## HPA-471 economy skirmish
 
-The runtime fixture is now the authored skirmish seed: 8 villagers (4 per team), 2 completed Town Centers, 18 finite resource sources (berries/trees/gold, plus southwest/northeast expansion nodes), and starting stockpiles of 200 Food / 300 Wood / 100 Gold at Age 1.
+The runtime fixture is now the authored skirmish seed: 8 villagers (4 per team), 2 completed Town Centers, 18 finite resource sources (berries/trees/gold, plus southwest/northeast expansion nodes), and starting stockpiles of 200 Food / 300 Wood / 100 Gold.
+
+The active catalogue is the post-HPA-448 deletion roster: **Villager / Spearman / Archer** units and **Town Center / House / Storehouse / Barracks** buildings. The Barracks is the single military producer (Spearman and Archer); the Town Center trains Villagers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
 
 ### Economy architecture
 
@@ -22,14 +24,14 @@ Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-s
 
 - **commands** — player command application, ownership validation, `RejectReason` codes, unit spawning
 - **economy** — worker tasks, gather/carry/deposit, resource sources, drop-off routing
-- **buildings** — placement validation, construction, completion grants (Dropoff, queues, Farm sources)
-- **production** — FIFO queues, population caps, spawn clearance, rally points, one-time Age 2
+- **buildings** — placement validation, construction, completion grants (Dropoff, production queues)
+- **production** — FIFO queues, population caps, spawn clearance, rally points
 
-Systems tick in a fixed order (commands → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, age, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+Systems tick in a fixed order (commands → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
 ## HPA-472 combat and match lifecycle
 
-Combat runs in `grus-sim` on the same fixed tick: melee/ranged range and cooldowns, the Spearman → Cavalry → Archer counter triangle, attack-move acquisition with pursuit, and building attacks that path to the nearest walkable perimeter and range-check against `Footprint::closest_point`. Godot stays presentational: contextual right-click attacks on enemy units/buildings, `A`-armed attack-move, health bars and role markers on unit/building views, and transient tracer/hit/death effects with a generated audio blip — all driven by Playing-gated `CombatEvents` drained from the bridge.
+Combat runs in `grus-sim` on the same fixed tick: melee/ranged range and cooldowns, attack-move acquisition with pursuit, and building attacks that path to the nearest walkable perimeter and range-check against `Footprint::closest_point`. Godot stays presentational: contextual right-click attacks on enemy units/buildings, `A`-armed attack-move, health bars and role markers on unit/building views, and transient tracer/hit/death effects with a generated audio blip — all driven by Playing-gated `CombatEvents` drained from the bridge.
 
 The match lifecycle is simulated-side: the skirmish boots into **Start** (gameplay orders reject with `SessionLocked`), the Start button moves to **Playing**, `Esc` or the Pause button toggles **Paused** (sim and cosmetics freeze; interpolation collapses `previous = current` so nothing oscillates), and destroying one side's last Town Center settles **Result** (Victory!/Defeat overlay; later gameplay mutation is rejected). Restart/Quit belong to Result: Restart reseeds one fresh match — no duplicate nodes, stale ids, leftover selection/control groups, or lingering effects; Quit exits the app. Workers, buildings, and construction sites die with full economy/occupancy/queue cleanup.
 
@@ -78,7 +80,7 @@ godot --headless --path godot res://scenes/economy_smoke_test.tscn
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. It then runs a human-scout fog/minimap leg: a villager reveals a hidden resource and the passive enemy start, marches out of vision to prove explored fog persists while enemy views/markers and the fog-gated building snapshot hide again, a stale enemy selection clears itself, and a minimap click recenters the camera without queuing a command. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full HPA-471 loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, Farm with the `FarmOccupied` reject, Barracks/Archery Range/Stable training Spearman/Archer/Cavalry, Age 2 unlocking the Stable, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence, and interpolated presentation against the ECS-backed skirmish views. It then runs a human-scout fog/minimap leg: a villager reveals a hidden resource and the passive enemy start, marches out of vision to prove explored fog persists while enemy views/markers and the fog-gated building snapshot hide again, a stale enemy selection clears itself, and a minimap click recenters the camera without queuing a command. The reset smoke despawns/reseeds the skirmish fixture and requires it to settle back to exactly 8 unit views / 2 building views / 18 resource views with unique stable ids and the starting 200/300/100 stockpile. The economy smoke runs the full economy loop through the real UI paths — gathering until every spend is solvent, House (cap 10 → 20), Storehouse delivery proof, an `Occupied` placement-preview reject code, the Barracks training both Spearman and Archer on one FIFO queue, a Town Center rally point followed by a trained unit, and idle-worker navigation — at 20× virtual time, asserting construction/queue progress and numeric reject/blocked codes from snapshots throughout. The combat lifecycle smoke drives the full HPA-472 journey at 20× virtual time — Start-phase `SessionLocked` rejection, `start_match`, invalid attack-target rejection, role/health presentation, Barracks → Spearman production, attack/attack-move damage through health bars, death and effects, pause freeze, Victory Result with Restart/Quit (Restart/Quit stay Result-only) and Result-phase rejection, and restart freshness.
 
 ### Controls
 
@@ -108,9 +110,8 @@ The full reference:
 - Mouse wheel: zoom
 - Middle drag: pan the camera
 - Minimap (bottom right): left-click recenters the camera on that map cell (view only — no commands, no reveal)
-- Build buttons (bottom panel): arm placement for House/Storehouse/Farm/Barracks/Archery Range/Stable; the ground preview renders green when valid and red when blocked; left-click places, right-click or `Esc` cancels
-- Train buttons: queue Villager/Spearman (Barracks), Archer (Archery Range), Cavalry (Stable) on the selected building
-- Advance Age: research Age 2 on the selected Town Center (300 Food, 200 Gold); gather rates rise to 2.2/s and the Stable unlocks
+- Build buttons (bottom panel): arm placement for House/Storehouse/Barracks; the ground preview renders green when valid and red when blocked; left-click places, right-click or `Esc` cancels
+- Train buttons: queue Villager on a selected Town Center, or Spearman/Archer on a selected Barracks
 - Idle button (top right): selects and navigates to the next idle worker
 
 HUD controls consume their mouse events so UI interaction does not leak into world commands.
@@ -118,7 +119,7 @@ HUD controls consume their mouse events so UI interaction does not leak into wor
 ### Reset modes
 
 - **Fixture reset** (`reset_fixture`, used by `reset_test.tscn`): despawns gameplay and reseeds the 8-unit/2-building/18-resource skirmish with starting stockpiles.
-- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the **session-free mixed 100-vs-100 skirmish** — the normal fixture seed plus a workload of 96 added units per team (16 Villagers, 30 Spearmen, 30 Archers, 20 Cavalry) with initial gather and attack-move orders, running under fog of war with **no match session** (a missing session reads as Playing, so the load can never freeze). It is never used by the runtime skirmish or its smokes.
+- **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds the **session-free mixed 100-vs-100 skirmish** — the normal fixture seed plus a workload of 96 added units per team (16 Villagers, 40 Spearmen, 40 Archers) with initial gather and attack-move orders, running under fog of war with **no match session** (a missing session reads as Playing, so the load can never freeze). It is never used by the runtime skirmish or its smokes.
 
 ### Linux x86_64 export
 

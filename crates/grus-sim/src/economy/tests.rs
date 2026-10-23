@@ -3,8 +3,7 @@ use std::collections::HashSet;
 use bevy::math::Vec2;
 
 use super::*;
-use crate::buildings::{ConstructionState, step_construction};
-use crate::catalog::{BuildingKind, building_spec, unit_spec};
+use crate::catalog::unit_spec;
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
@@ -22,7 +21,6 @@ fn test_economy(world: &mut World) {
             wood: 300,
             gold: 100,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
 }
@@ -62,52 +60,6 @@ fn skirmish_world() -> (World, GridMap) {
 fn reveal(world: &mut World, map: &GridMap) {
     world.insert_resource(VisibilityMap::default());
     refresh_visibility(world, map);
-}
-
-/// Spawns a completed Farm with a renewable Food source at `anchor`, fully
-/// registered (footprint blocked, indexes updated) — the manual shape of the
-/// step_construction completion grants, for fog knowledge tests.
-fn spawn_completed_farm(
-    world: &mut World,
-    map: &mut GridMap,
-    team: TeamId,
-    anchor: GridPos,
-) -> (Entity, ResourceId) {
-    let spec = building_spec(BuildingKind::Farm);
-    let footprint = Footprint::new(anchor, spec.width, spec.height);
-    for cell in footprint.cells() {
-        map.set_blocked(cell, true);
-    }
-    let id = BuildingId(50);
-    let entity = world
-        .spawn((
-            Building {
-                id,
-                team,
-                kind: BuildingKind::Farm,
-                construction: ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            footprint,
-        ))
-        .id();
-    world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(id, entity);
-    let source_id = ResourceId(99);
-    world.entity_mut(entity).insert(ResourceSource {
-        id: source_id,
-        kind: ResourceKind::Food,
-        remaining: None,
-        assigned_worker: None,
-    });
-    world
-        .get_resource_or_insert_with(ResourceIndex::default)
-        .insert(source_id, entity);
-    (entity, source_id)
 }
 
 #[test]
@@ -353,7 +305,7 @@ fn ten_gather_ticks_transfer_one_whole_food() {
             .get::<ResourceSource>(source_entity)
             .unwrap()
             .remaining,
-        Some(599)
+        599
     );
 }
 
@@ -467,133 +419,20 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
 }
 
 #[test]
-fn farm_allows_one_worker_until_retasked_or_stopped() {
-    let (mut world, mut map) = skirmish_world();
-
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        PlayerCommand::PlaceBuilding {
-            issuer: TeamId(1),
-            builder: UnitId(2),
-            kind: crate::catalog::BuildingKind::Farm,
-            anchor: GridPos::new(11, 41),
-        },
-    );
-    assert_eq!(outcome.reject, None, "farm placement rejected: {outcome:?}");
-    let farm = world
-        .resource::<BuildingIndex>()
-        .entity(BuildingId(3))
-        .unwrap();
-    for _ in 0..2000 {
-        step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
-        if world.get::<Building>(farm).unwrap().construction.complete {
-            break;
-        }
-    }
-    assert!(world.get::<Building>(farm).unwrap().construction.complete);
-    let farm_source = world.get::<ResourceSource>(farm).unwrap();
-    let farm_source_id = farm_source.id;
-    assert_eq!(farm_source.kind, ResourceKind::Food);
-    assert_eq!(farm_source.remaining, None, "farms are renewable");
-    assert_eq!(farm_source.assigned_worker, None);
-
-    // First worker reserves; the second rejects FarmOccupied.
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(1), UnitId(3)], farm_source_id),
-    );
-    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-    assert_eq!(
-        outcome.rejected_units,
-        vec![(UnitId(3), RejectReason::FarmOccupied)]
-    );
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        Some(UnitId(1))
-    );
-
-    // Stop releases the assignment.
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units: vec![UnitId(1)],
-            kind: UnitCommandKind::Stop,
-        }),
-    );
-    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        None
-    );
-
-    // The freed farm accepts the next worker; an accepted retask releases.
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(3)], farm_source_id),
-    );
-    assert_eq!(outcome.accepted_units, vec![UnitId(3)]);
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        Some(UnitId(3))
-    );
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units: vec![UnitId(3)],
-            kind: UnitCommandKind::Move {
-                target: Vec2::new(2.5, 2.5),
-            },
-        }),
-    );
-    assert_eq!(outcome.accepted_units, vec![UnitId(3)]);
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        None
-    );
-}
-
-#[test]
-fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
+fn walled_in_gatherer_idles_through_cleanup_preserving_carry() {
     let mut world = World::new();
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
 
-    // A completed Farm serving villager 1, plus a Town Center drop-off.
-    let farm = world
-        .spawn((
-            Building {
-                id: BuildingId(1),
-                team: TeamId(1),
-                kind: crate::catalog::BuildingKind::Farm,
-                construction: crate::buildings::ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            Footprint::new(GridPos::new(4, 16), 2, 2),
-            ResourceSource {
-                id: ResourceId(1),
-                kind: ResourceKind::Food,
-                remaining: None,
-                assigned_worker: Some(UnitId(1)),
-            },
-        ))
-        .id();
-    world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(1), farm);
-    world
-        .get_resource_or_insert_with(ResourceIndex::default)
-        .insert(ResourceId(1), farm);
+    // A standalone finite Food source, plus a Town Center drop-off.
+    spawn_resource_source(
+        &mut world,
+        &mut map,
+        ResourceId(1),
+        ResourceKind::Food,
+        GridPos::new(4, 16),
+        400,
+    );
     let town_center = world
         .spawn((
             Building {
@@ -614,8 +453,8 @@ fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(BuildingId(2), town_center);
 
-    // The assigned gatherer sits walled in with a full carry, so its
-    // drop-off route is impossible.
+    // The gatherer sits walled in with a full carry, so its drop-off route
+    // is impossible.
     let worker = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(4, 4)));
     for cell in [
         GridPos::new(3, 3),
@@ -644,11 +483,6 @@ fn walled_in_gatherer_idles_through_cleanup_and_releases_the_farm() {
 
     assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
     assert!(world.get::<MoveOrder>(worker).is_none());
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        None,
-        "route failure must release the Farm assignment"
-    );
     assert_eq!(
         world.get::<Carry>(worker),
         Some(&Carry::Holding {
@@ -1002,120 +836,6 @@ fn explored_source_stays_gatherable_after_vision_is_lost() {
     ));
 }
 
-/// Fog knowledge gate: own completed Farms are always valid gather
-/// knowledge — the own-farm branch never consults exploration state.
-#[test]
-fn own_completed_farm_is_always_valid_gather_knowledge() {
-    let (mut world, mut map) = skirmish_world();
-    reveal(&mut world, &map);
-    // Spawned after the reveal and never refreshed: the farm is in the
-    // ResourceIndex but its ground was never explored.
-    let (_, farm_source) =
-        spawn_completed_farm(&mut world, &mut map, TeamId(1), GridPos::new(45, 40));
-    assert!(!explored_by(&world, TeamId(1), GridPos::new(45, 40)));
-
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
-    );
-
-    assert_eq!(
-        outcome.reject, None,
-        "own completed farm needs no exploration: {outcome:?}"
-    );
-    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-}
-
-/// Fog knowledge gate: an enemy Farm is an enemy building — it needs
-/// current visibility and is never admitted as a last-seen ghost merely
-/// because it sits in the ResourceIndex.
-#[test]
-fn enemy_farm_is_never_an_own_gather_source_through_fog() {
-    let (mut world, mut map) = skirmish_world();
-    reveal(&mut world, &map);
-    let (_, farm_source) =
-        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
-
-    // Scout the enemy farm, then fall back home: its ground stays explored
-    // but the building leaves current vision.
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    world
-        .entity_mut(villager)
-        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 43))));
-    refresh_visibility(&mut world, &map);
-    assert!(explored_by(&world, TeamId(1), GridPos::new(45, 40)));
-    world
-        .entity_mut(villager)
-        .insert(SimPosition::new(map.cell_center(GridPos::new(20, 19))));
-    refresh_visibility(&mut world, &map);
-    assert!(explored_by(&world, TeamId(1), GridPos::new(45, 40)));
-    assert!(!visible_to(&world, TeamId(1), GridPos::new(45, 40)));
-
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
-    );
-
-    assert_eq!(
-        outcome.reject,
-        Some(RejectReason::SourceMissing),
-        "an enemy farm is not admitted as a last-seen ghost — and a hidden one is indistinguishable from a missing id"
-    );
-}
-
-/// Ownership: current vision makes an enemy Farm *known*, but it is still
-/// never an own economic source — the command authority rejects it where
-/// the Godot picker never offers it. The same unconditional rule covers
-/// full-information worlds (no `VisibilityMap`).
-#[test]
-fn visible_enemy_farm_is_rejected_not_gathered() {
-    let (mut world, mut map) = skirmish_world();
-    reveal(&mut world, &map);
-    let (_, farm_source) =
-        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
-
-    // Stand next to the farm: its footprint is currently visible.
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    world
-        .entity_mut(villager)
-        .insert(SimPosition::new(map.cell_center(GridPos::new(45, 43))));
-    refresh_visibility(&mut world, &map);
-    assert!(visible_to(&world, TeamId(1), GridPos::new(45, 40)));
-
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
-    );
-
-    assert_eq!(
-        outcome.reject,
-        Some(RejectReason::NotOwned),
-        "a visible enemy farm is known but never gatherable: {outcome:?}"
-    );
-    assert!(outcome.accepted_units.is_empty());
-}
-
-/// The same ownership rule without fog: a full-information world refuses
-/// the foreign Farm too — ownership is not a visibility artifact.
-#[test]
-fn full_information_enemy_farm_is_still_not_gatherable() {
-    let (mut world, mut map) = skirmish_world();
-    let (_, farm_source) =
-        spawn_completed_farm(&mut world, &mut map, TeamId(2), GridPos::new(45, 40));
-
-    let outcome = apply_player_command(
-        &mut world,
-        &mut map,
-        gather_command(TeamId(1), vec![UnitId(1)], farm_source),
-    );
-
-    assert_eq!(outcome.reject, Some(RejectReason::NotOwned));
-    assert!(outcome.accepted_units.is_empty());
-}
-
 #[test]
 fn gather_replaces_an_active_move_order_and_frees_its_goal() {
     let mut world = World::new();
@@ -1224,39 +944,22 @@ fn deposits_bank_into_the_matching_stockpile_arm() {
 }
 
 #[test]
-fn farm_cycle_reclaims_the_farm_for_its_holder_and_idles_everyone_else() {
+fn deposited_workers_route_back_to_their_finite_source() {
     let mut world = World::new();
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
 
-    // A completed Farm assigned to villager 1, plus a Town Center drop-off.
-    let farm = world
-        .spawn((
-            Building {
-                id: BuildingId(1),
-                team: TeamId(1),
-                kind: crate::catalog::BuildingKind::Farm,
-                construction: crate::buildings::ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            Footprint::new(GridPos::new(4, 16), 2, 2),
-            ResourceSource {
-                id: ResourceId(1),
-                kind: ResourceKind::Food,
-                remaining: None,
-                assigned_worker: Some(UnitId(1)),
-            },
-        ))
-        .id();
-    world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(1), farm);
-    world
-        .get_resource_or_insert_with(ResourceIndex::default)
-        .insert(ResourceId(1), farm);
+    // A standalone finite Food source, plus a Town Center drop-off. Finite
+    // nodes keep no exclusive holder: every worker returning from a deposit
+    // routes back to the node while it has remaining yield.
+    spawn_resource_source(
+        &mut world,
+        &mut map,
+        ResourceId(1),
+        ResourceKind::Food,
+        GridPos::new(4, 16),
+        400,
+    );
     let town_center = world
         .spawn((
             Building {
@@ -1277,9 +980,10 @@ fn farm_cycle_reclaims_the_farm_for_its_holder_and_idles_everyone_else() {
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(BuildingId(2), town_center);
 
-    // The holder deposits at the Town Center and routes back to his farm.
-    let holder = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(6, 17)));
-    world.entity_mut(holder).insert((
+    // The first worker deposits at the Town Center and routes back to the
+    // source it was working.
+    let first = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(6, 17)));
+    world.entity_mut(first).insert((
         WorkerTask::ToDropoff {
             source: ResourceId(1),
             dropoff: BuildingId(2),
@@ -1294,22 +998,27 @@ fn farm_cycle_reclaims_the_farm_for_its_holder_and_idles_everyone_else() {
 
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    match world.get::<WorkerTask>(holder).unwrap() {
+    match world.get::<WorkerTask>(first).unwrap() {
         WorkerTask::ToSource { source, .. } => {
-            assert_eq!(*source, ResourceId(1), "the holder routes back to his farm")
+            assert_eq!(
+                *source,
+                ResourceId(1),
+                "the worker routes back to its source"
+            )
         }
         other => panic!("expected ToSource, got {other:?}"),
     }
-    assert_eq!(world.get::<Carry>(holder), Some(&Carry::Empty));
+    assert_eq!(world.get::<Carry>(first), Some(&Carry::Empty));
     assert_eq!(
         world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.food,
         210,
         "the deposit banks the carried food"
     );
 
-    // A second worker delivering to the same farm cannot reclaim it.
-    let late = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(6, 17)));
-    world.entity_mut(late).insert((
+    // A second worker delivering from the same node gets the same
+    // return leg — finite sources share, they do not reserve.
+    let second = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(6, 17)));
+    world.entity_mut(second).insert((
         WorkerTask::ToDropoff {
             source: ResourceId(1),
             dropoff: BuildingId(2),
@@ -1324,13 +1033,13 @@ fn farm_cycle_reclaims_the_farm_for_its_holder_and_idles_everyone_else() {
 
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    assert_eq!(world.get::<WorkerTask>(late), Some(&WorkerTask::Idle));
-    assert!(world.get::<MoveOrder>(late).is_none());
-    assert_eq!(
-        world.get::<ResourceSource>(farm).unwrap().assigned_worker,
-        Some(UnitId(1)),
-        "the farm keeps serving only its assigned holder"
-    );
+    match world.get::<WorkerTask>(second).unwrap() {
+        WorkerTask::ToSource { source, .. } => {
+            assert_eq!(*source, ResourceId(1), "the second worker returns too")
+        }
+        other => panic!("expected ToSource, got {other:?}"),
+    }
+    assert_eq!(world.get::<Carry>(second), Some(&Carry::Empty));
 }
 
 #[test]
