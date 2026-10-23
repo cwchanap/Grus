@@ -12,6 +12,7 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 ## RejectReason discriminant values (declaration order in
 ## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
 const REJECT_OCCUPIED := 10
+const REJECT_INSUFFICIENT := 8
 
 ## Authored fixture source ids (crates/grus-sim/src/fixture.rs).
 const BERRY_ID := 1
@@ -574,14 +575,76 @@ func _run() -> void:
 			_fail("producer %d ended with a blocked queue" % producer_id)
 			return
 
+	# Step 10: the same UI train path that accepted solvent enqueues now
+	# runs the Food stockpile dry. Every gatherer is retired, so each real
+	# SpearmanButton click charges exactly the 60f catalogue cost until the
+	# stockpile cannot pay; the identical next click must reject
+	# InsufficientResources and leave stockpiles, the producer queue and
+	# the building census untouched.
+	await _select_building(barracks)
+	var spearman_button := get_node("Main/HUD/CommandPanel/TrainGrid/SpearmanButton") as Button
+	var insufficient := false
+	var attempts := 6
+	for _attempt in attempts:
+		var revision: int = GrusBridge.command_feedback_revision()
+		var before_click := {
+			"food": int(GrusBridge.economy_snapshot().get("food", -1)),
+			"wood": int(GrusBridge.economy_snapshot().get("wood", -1)),
+			"gold": int(GrusBridge.economy_snapshot().get("gold", -1)),
+			"queue": _queue_label(barracks_id),
+			"blocked": _blocked_reason(barracks_id),
+			"buildings": get_tree().get_nodes_in_group("building_views").size(),
+		}
+		await _click_button(spearman_button)
+		if not await _wait_until(
+				func(): return GrusBridge.command_feedback_revision() != revision,
+				10.0, "Spearman enqueue command was never processed"):
+			return
+		var after_click: Dictionary = GrusBridge.economy_snapshot()
+		var reject_code := int(after_click.get("last_reject_code", -1))
+		if reject_code == -1:
+			# A solvent click is accepted and charged exactly once.
+			if int(after_click.get("food", -1)) != before_click["food"] - 60:
+				_fail("accepted Spearman enqueue did not charge exactly 60 food: %s -> %s" % [before_click, after_click])
+				return
+			continue
+		if reject_code != REJECT_INSUFFICIENT:
+			_fail("Spearman enqueue rejected with unexpected code %d (expected %d)" % [reject_code, REJECT_INSUFFICIENT])
+			return
+		# The rejected click changed nothing: identical stockpiles, queue
+		# and building census — the enqueue was refused before any state
+		# was touched.
+		if int(after_click.get("food", -1)) != before_click["food"] \
+				or int(after_click.get("wood", -1)) != before_click["wood"] \
+				or int(after_click.get("gold", -1)) != before_click["gold"]:
+			_fail("rejected Spearman enqueue still moved the stockpile")
+			return
+		if _queue_label(barracks_id) != before_click["queue"] \
+				or _blocked_reason(barracks_id) != before_click["blocked"]:
+			_fail("rejected Spearman enqueue still touched the Barracks queue")
+			return
+		if get_tree().get_nodes_in_group("building_views").size() != before_click["buildings"]:
+			_fail("rejected Spearman enqueue still changed the building census")
+			return
+		insufficient = true
+		break
+	if not insufficient:
+		_fail("%d Spearman enqueue(s) never hit InsufficientResources" % attempts)
+		return
+
 	if not GrusBridge.set_sim_speed(1.0):
 		_fail("failed to restore Bevy virtual time")
 		return
 
-	print("GRUS_ECONOMY_SMOKE_OK food=%d wood=%d gold=%d cap=20 units=7 buildings=5 elapsed_ms=%d" % [
-		int(final.get("food", 0)),
-		int(final.get("wood", 0)),
-		int(final.get("gold", 0)),
+	var end: Dictionary = GrusBridge.economy_snapshot()
+	print("GRUS_ECONOMY_SMOKE_OK food=%d wood=%d gold=%d cap=%d units=%d buildings=%d unaffordable_reject=%d elapsed_ms=%d" % [
+		int(end.get("food", 0)),
+		int(end.get("wood", 0)),
+		int(end.get("gold", 0)),
+		int(end.get("population_cap", 0)),
+		get_tree().get_nodes_in_group("unit_views").size(),
+		get_tree().get_nodes_in_group("building_views").size(),
+		REJECT_INSUFFICIENT,
 		Time.get_ticks_msec() - _start_ms,
 	])
 	get_tree().quit(0)
