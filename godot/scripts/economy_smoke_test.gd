@@ -364,6 +364,28 @@ func _run() -> void:
 		if not economy_label.text.contains(shown):
 			_fail("economy HUD does not show live %s (want \"%s\"): \"%s\"" % [currency, shown, economy_label.text])
 			return
+	# Rendered bounds, not just text: after the layout settles, the label's
+	# laid-out extent (rect grown to the minimum text size — wrapping is
+	# off, so a wide line expands past the authored offsets) must stay
+	# inside EconomyPanel and the baseline viewport.
+	await get_tree().process_frame
+	var rendered := economy_label.get_global_rect()
+	rendered.size = rendered.size.max(economy_label.get_minimum_size())
+	var panel_rect := (get_node("Main/HUD/EconomyPanel") as Control).get_global_rect()
+	if not panel_rect.encloses(rendered):
+		_fail("economy HUD label rendered bounds %s escape EconomyPanel %s" % [rendered, panel_rect])
+		return
+	var viewport_rect := Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size)
+	if not viewport_rect.encloses(rendered):
+		_fail("economy HUD label rendered bounds %s escape the %s viewport" % [rendered, viewport_rect])
+		return
+	# Crystals rides the Population line so the first currency line stays
+	# narrow enough for the authored rectangle.
+	var hud_lines := economy_label.text.split("\n")
+	if hud_lines.size() != 2 or hud_lines[0].contains("Crystals") \
+			or not hud_lines[1].contains("Crystals") or not hud_lines[1].contains("Population"):
+		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_label.text)
+		return
 	var research_center := _building_view(1)
 	if research_center == null:
 		_fail("Research Center view 1 is missing")

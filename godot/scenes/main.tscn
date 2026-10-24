@@ -75,7 +75,7 @@ offset_left = 8.0
 offset_top = 6.0
 offset_right = 258.0
 offset_bottom = 64.0
-text = "Food 0   Scrap 0   Coal 0   Crystals 0"
+text = "Food 0   Scrap 0   Coal 0\nCrystals 0   Population 0/0"
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0

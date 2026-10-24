@@ -161,7 +161,7 @@ func _reconcile_selection() -> void:
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	economy_label.text = "Food %d   Scrap %d   Coal %d   Crystals %d\nPopulation %d/%d" % [
+	economy_label.text = "Food %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d" % [
 		int(economy.get("food", 0)),
 		int(economy.get("scrap", 0)),
 		int(economy.get("coal", 0)),
