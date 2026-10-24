@@ -103,6 +103,10 @@ jobs:
         # into every strictly gated .so, surfacing only as an intermittent
         # exit 139. The e2e build is the positive control: it must still
         # show the feature, otherwise this check can no longer fail.
+        # Not covered: the async-io crate is also linked through bevy_asset
+        # in both builds (its only Timer user compiles under bevy_asset's
+        # multi_threaded feature, off in both), so that feature has no
+        # positive control here; revisit if it is ever enabled.
         run: |
           pat='^bevy_(platform|tasks) .*async-io'
           plain=$(cargo tree --locked -p grus-godot -e normal --prefix none -f '{p} [{f}]')
