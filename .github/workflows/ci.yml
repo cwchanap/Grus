@@ -96,6 +96,22 @@ jobs:
         # separately at the end of the job for the bevy-e2e harness only,
         # which never asserts its exported child's exit status.
         run: cargo build -p grus-godot --locked
+      - name: Guard strict-exit build against the async-io driver
+        # Regression guard for the build split above: a dependency or
+        # feature change that re-enables bevy's async-io driver in the
+        # non-e2e build would silently put the suspected teardown fault back
+        # into every strictly gated .so, surfacing only as an intermittent
+        # exit 139. The e2e build is the positive control: it must still
+        # show the feature, otherwise this check can no longer fail.
+        run: |
+          pat='^bevy_(platform|tasks) .*async-io'
+          plain=$(cargo tree --locked -p grus-godot -e normal --prefix none -f '{p} [{f}]')
+          if grep -Eq "$pat" <<<"$plain"; then
+            echo "::error::non-e2e grus-godot enables async-io on bevy_platform/bevy_tasks"
+            exit 1
+          fi
+          e2e=$(cargo tree --locked -p grus-godot -e normal --features e2e --prefix none -f '{p} [{f}]')
+          grep -Eq "$pat" <<<"$e2e" || { echo "::error::e2e build no longer shows async-io; update this guard"; exit 1; }
       - name: Clippy with e2e feature
         run: cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings
       - name: Stage Godot extension
