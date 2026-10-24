@@ -1801,6 +1801,55 @@ fn attack_move_ignores_a_hidden_target_and_reacquires_on_reveal() {
     );
 }
 
+/// The unit arm of the same fog gate: AttackMove never acquires an enemy
+/// unit it cannot see, even one inside `ATTACK_MOVE_RADIUS`. The existing
+/// hidden-unit test moves the enemy outside the radius, so it never reaches
+/// the visibility check; a fog map that lags the attacker does.
+#[test]
+fn attack_move_ignores_an_in_radius_hidden_unit_until_revealed() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(25.5, 25.5),
+        UnitKind::Worker,
+    );
+    reveal(&mut world, &map);
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+
+    // Teleport within reach of the enemy without refreshing the fog map.
+    world.get_mut::<SimPosition>(attacker).unwrap().current = Vec2::new(21.5, 24.5);
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(25, 25)));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        None,
+        "a hidden unit inside the radius is not acquired"
+    );
+
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(25, 25)));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        Some(CombatTarget::Unit(UnitId(2))),
+        "the revealed unit is acquired"
+    );
+}
+
 /// AttackMove never acquires an enemy building it cannot see, even one
 /// inside `ATTACK_MOVE_RADIUS`. Vision outreaches that radius, so the only
 /// way to put a hidden building in reach is a fog map that lags the
