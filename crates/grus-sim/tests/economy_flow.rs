@@ -11,10 +11,11 @@ use grus_sim::{
 };
 
 const TEAM: TeamId = TeamId(1);
-/// Authored team-1 tree at (20, 45).
-const TREE: ResourceId = ResourceId(3);
+/// Authored team-1 salvage ruin (a safe Scrap source on the central city's
+/// gather ring).
+const SALVAGE: ResourceId = ResourceId(3);
 /// Stockpile after placing the Depot and delivering the whole 400-scrap
-/// tree: 300 starting - 75 depot cost + 400 harvested.
+/// salvage: 300 starting - 75 depot cost + 400 harvested.
 const FINAL_SCRAP: u32 = 300 - 75 + 400;
 
 fn scrap(world: &World) -> u32 {
@@ -43,22 +44,22 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
     seed_skirmish(&mut world, &mut map, &fixture);
 
     let worker_entity = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    let gather_tree = |world: &mut World, map: &mut GridMap| {
+    let gather_salvage = |world: &mut World, map: &mut GridMap| {
         let outcome = apply_player_command(
             world,
             map,
             PlayerCommand::Gather {
                 issuer: TEAM,
                 workers: vec![UnitId(1)],
-                source: TREE,
+                source: SALVAGE,
             },
         );
         assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
     };
 
-    // 1. Gather the tree; the first delivery lands at the starting Town
-    //    Center, the only Dropoff in the world so far.
-    gather_tree(&mut world, &mut map);
+    // 1. Gather the salvage; the first delivery lands at the starting
+    //    Research Center, the only Dropoff in the world so far.
+    gather_salvage(&mut world, &mut map);
     let mut first_delivery = None;
     drive(&mut world, &mut map, 4000, |world| {
         if let Some(WorkerTask::ToDropoff { dropoff, .. }) = world.get::<WorkerTask>(worker_entity)
@@ -74,14 +75,21 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         "the first delivery must reach the starting Research Center"
     );
 
-    // 2. Wait until the worker is parked at the tree, then place and
-    //    complete a Depot near it (footprint guaranteed free of units).
+    // 2. Wait until the worker is parked at the salvage, then place and
+    //    complete a Depot nearer to it than the Research Center — anchored
+    //    two cells south-west of the authored source so the footprint stays
+    //    free of the parked gatherer.
     drive(&mut world, &mut map, 4000, |world| {
         matches!(
             world.get::<WorkerTask>(worker_entity),
             Some(WorkerTask::Gathering { .. })
         )
     });
+    let salvage_cell = MapFixture::starting_resources()
+        .into_iter()
+        .find(|spawn| spawn.id == SALVAGE)
+        .expect("the authored salvage ruin")
+        .cell;
     let outcome = apply_player_command(
         &mut world,
         &mut map,
@@ -89,7 +97,7 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
             issuer: TEAM,
             builder: UnitId(2),
             kind: BuildingKind::Depot,
-            anchor: GridPos::new(17, 43),
+            anchor: GridPos::new(salvage_cell.x - 2, salvage_cell.y + 2),
         },
     );
     assert_eq!(outcome.reject, None, "depot placement rejected");
@@ -105,9 +113,9 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         Some(&Dropoff { team: TEAM })
     );
 
-    // 3. Retask the worker onto the tree; a delivery must reach the nearer,
+    // 3. Retask the worker onto the salvage; a delivery must reach the nearer,
     //    reachable Depot.
-    gather_tree(&mut world, &mut map);
+    gather_salvage(&mut world, &mut map);
     let mut saw_depot_delivery = false;
     let mut scrap_when_seen = None;
     for _ in 0..8000 {
@@ -131,13 +139,13 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         "a delivery never reached the Depot"
     );
 
-    // 4. Fully deplete the tree; the worker delivers its final load and idles.
+    // 4. Fully deplete the salvage; the worker delivers its final load and idles.
     drive(&mut world, &mut map, 60000, |world| {
-        world.resource::<ResourceIndex>().entity(TREE).is_none()
+        world.resource::<ResourceIndex>().entity(SALVAGE).is_none()
     });
     assert!(
-        map.is_walkable(GridPos::new(20, 45)),
-        "depleted tree cell must be unblocked"
+        map.is_walkable(salvage_cell),
+        "depleted salvage cell must be unblocked"
     );
     drive(&mut world, &mut map, 4000, |world| {
         world.get::<WorkerTask>(worker_entity) == Some(&WorkerTask::Idle)

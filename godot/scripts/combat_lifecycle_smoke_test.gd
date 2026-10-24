@@ -14,9 +14,9 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 ## numeric codes only (last_reject_code) and reports "no rejection" as -1.
 const REJECT_SESSION_LOCKED := 17
 
-## Proven-open Barracks anchor for the Team 1 base
-## (crates/grus-sim/src/fixture.rs layout).
-const BARRACKS_ANCHOR := Vector2i(17, 41)
+## Proven-open Barracks anchor: the authored ring slot west of the central
+## Research Center (crates/grus-sim/src/fixture.rs TeamStart table).
+const BARRACKS_ANCHOR := Vector2i(58, 46)
 ## Walkable ground beside the enemy Research Center footprint (112..115, 46..49);
 ## attack-move here must acquire the Research Center within the 8-unit radius.
 const ENEMY_RESEARCH_CENTER_CELL := Vector2(118.5, 44.5)

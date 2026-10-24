@@ -33,7 +33,7 @@ pub use economy::{
     step_economy,
 };
 pub use fixture::{
-    MapFixture, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
+    MapFixture, RUINS, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
 };
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};

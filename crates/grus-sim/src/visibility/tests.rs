@@ -5,8 +5,8 @@ use super::*;
 use crate::buildings::ConstructionState;
 use crate::catalog::{BuildingKind, unit_spec};
 use crate::commands::spawn_unit;
-use crate::fixture::{MapFixture, seed_skirmish};
-use crate::ids::UnitId;
+use crate::fixture::{MapFixture, ResourceSpawn, seed_skirmish};
+use crate::ids::{ResourceId, UnitId};
 
 /// The authored skirmish seed with no visibility inserted: pure-sim tests run
 /// with full information until they opt in.
@@ -44,19 +44,21 @@ fn initial_reveal_marks_own_start_visible_and_enemy_start_unknown() {
     refresh_visibility(&mut world, &map);
 
     let visibility = world.resource::<VisibilityMap>();
+    let [own_start, enemy_start] = MapFixture::team_starts();
     assert_eq!(
-        visibility.cell_state(TeamId(1), GridPos::new(12, 46)),
+        visibility.cell_state(TeamId(1), own_start.research_center_anchor),
         CellVisibility::Visible,
         "own Research Center footprint is visible after initial reveal"
     );
     assert_eq!(
-        visibility.cell_state(TeamId(1), GridPos::new(112, 46)),
+        visibility.cell_state(TeamId(1), enemy_start.research_center_anchor),
         CellVisibility::Unexplored,
         "the enemy Research Center is unknown to team 1"
     );
     assert_eq!(
-        visibility.cell_state(TeamId(2), GridPos::new(12, 46)),
+        visibility.cell_state(TeamId(2), own_start.research_center_anchor),
         CellVisibility::Unexplored,
+        "the central human city is unknown to the eastern opponent"
     );
     assert_eq!(visibility.revision, 1, "initial reveal changes state");
 }
@@ -68,41 +70,37 @@ fn authored_start_resources_are_explored_and_expansions_are_not() {
 
     refresh_visibility(&mut world, &map);
 
-    // Premise for the x<64 attribution below: the authored starts really
-    // split at the midline — team 1's Research Center sits west of x=64, team
-    // 2's east of it, and every starting resource shares its attributed
-    // team's side. A fixture shift fails loudly here instead of silently
-    // mis-owning the reveal assertions.
-    let starts = MapFixture::team_starts();
-    let research_center_anchor = |team: TeamId| {
-        starts
-            .iter()
-            .find(|start| start.team == team)
-            .expect("an authored start for every team")
-            .research_center_anchor
-    };
-    assert!(
-        research_center_anchor(TeamId(1)).x < 64 && research_center_anchor(TeamId(2)).x >= 64,
-        "the authored Research Centers must sit on opposite sides of the x=64 split"
-    );
-    for spawn in MapFixture::starting_resources() {
-        let team = if spawn.cell.x < 64 {
-            TeamId(1)
-        } else {
+    // Safe-source ownership is the authored TeamStart membership — never an
+    // x<64 side inference: the central human city's safe ring may straddle
+    // the midline. Each team sees exactly its own six safe sources; the
+    // opponent's ring and every expansion stay Unexplored.
+    let resources: std::collections::HashMap<ResourceId, ResourceSpawn> =
+        MapFixture::starting_resources()
+            .into_iter()
+            .chain(MapFixture::expansion_resources())
+            .map(|spawn| (spawn.id, spawn))
+            .collect();
+    for start in MapFixture::team_starts() {
+        let other = if start.team == TeamId(1) {
             TeamId(2)
+        } else {
+            TeamId(1)
         };
-        assert_eq!(
-            research_center_anchor(team).x < 64,
-            spawn.cell.x < 64,
-            "starting resource at {:?} must share team {team:?}'s side of the x=64 split",
-            spawn.cell
-        );
-        assert!(
-            visible_to(&world, team, spawn.cell),
-            "starting resource at {:?} must be visible to {team:?}",
-            spawn.cell
-        );
-        assert!(explored_by(&world, team, spawn.cell));
+        for id in MapFixture::safe_source_ids(start.team) {
+            let spawn = resources[&id];
+            assert!(
+                visible_to(&world, start.team, spawn.cell),
+                "safe source at {:?} must be visible to its owner {team:?}",
+                spawn.cell,
+                team = start.team
+            );
+            assert!(explored_by(&world, start.team, spawn.cell));
+            assert!(
+                !explored_by(&world, other, spawn.cell),
+                "safe source at {:?} must stay unknown to {other:?}",
+                spawn.cell
+            );
+        }
     }
     for spawn in MapFixture::expansion_resources() {
         assert!(

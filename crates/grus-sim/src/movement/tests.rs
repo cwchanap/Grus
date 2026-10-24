@@ -440,15 +440,17 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
         }
     }
 
+    // The march destination derives from the authored team-2 start — the
+    // first east-side worker cell — instead of a duplicated spawn constant.
+    let east_goal = MapFixture::team_starts()[1].workers[0];
+    let target = fixture.map.cell_center(east_goal);
     let outcome = apply_player_command(
         &mut world,
         &mut fixture.map,
         PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units: ids,
-            kind: UnitCommandKind::Move {
-                target: fixture.right_spawn,
-            },
+            kind: UnitCommandKind::Move { target },
         }),
     );
     assert_eq!(outcome.accepted_units.len(), 100);
@@ -472,12 +474,13 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
             .is_walkable(fixture.map.world_to_cell(*position))
     }));
     // Units must actually arrive near the commanded destination, not just
-    // shed their MoveOrders: assigned slots cluster within ~7 units of
-    // right_spawn, while the spawn block sits ~95 units away.
+    // shed their MoveOrders: assigned slots cluster near the east-side
+    // worker cell, while the spawn block sits far away.
+    let goal = fixture.map.cell_center(east_goal);
     assert!(
         final_positions
             .iter()
-            .all(|position| position.distance(fixture.right_spawn) < 12.0),
+            .all(|position| position.distance(goal) < 12.0),
         "100-unit group did not arrive near the commanded destination"
     );
     let final_cells = final_positions

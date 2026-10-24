@@ -1,4 +1,3 @@
-use bevy::math::Vec2;
 use bevy::prelude::World;
 
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
@@ -16,13 +15,18 @@ use crate::economy::{
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 
-/// Authored starting position of one team: Research Center anchor plus the
-/// four worker spawn cells. All values are cells on the 128×96 battlefield.
+/// Authored starting layout of one team: Research Center anchor, the four
+/// worker spawn cells, the team's authored Barracks/Depot build anchors,
+/// and the six safe starting resource ids. All values are cells on the
+/// 128×96 battlefield; every per-team coordinate lives on this one table.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TeamStart {
     pub team: TeamId,
     pub research_center_anchor: GridPos,
     pub workers: [GridPos; 4],
+    pub barracks_anchor: GridPos,
+    pub depot_anchor: GridPos,
+    pub safe_sources: [ResourceId; 6],
 }
 
 /// One authored finite resource node with a deterministic `ResourceId`.
@@ -34,28 +38,59 @@ pub struct ResourceSpawn {
     pub amount: u32,
 }
 
+/// The single authored blocker table for the battlefield — sparse ruins
+/// around the central city, each pair a rectangle's minimum and INCLUSIVE
+/// maximum cell. `MapFixture::battlefield` loops exactly this data through
+/// `GridMap::set_blocked_rect`, and the Godot bridge hands the same
+/// rectangles to the presentation layer: nothing may copy the coordinates.
+/// Every rect stays clear of the central construction/gather ring, the
+/// N/E/S/W access lanes, both bases' authored occupants, and the two
+/// benchmark staging regions (x 26..=53 y 20..=75 and its point
+/// reflection) — the fixture tests prove each of those invariants.
+pub const RUINS: &[(GridPos, GridPos)] = &[
+    (GridPos::new(48, 12), GridPos::new(51, 14)),
+    (GridPos::new(64, 24), GridPos::new(66, 26)),
+    (GridPos::new(78, 10), GridPos::new(81, 12)),
+    (GridPos::new(16, 30), GridPos::new(19, 33)),
+    (GridPos::new(56, 30), GridPos::new(58, 33)),
+    (GridPos::new(34, 82), GridPos::new(37, 85)),
+    (GridPos::new(84, 80), GridPos::new(88, 83)),
+];
+
 #[derive(Clone, Debug)]
 pub struct MapFixture {
     pub map: GridMap,
-    pub left_spawn: Vec2,
-    pub right_spawn: Vec2,
     /// Authored finite resource nodes for the skirmish seed.
     pub resources: Vec<ResourceSpawn>,
 }
 
 impl MapFixture {
-    /// The single authored team-start table. Anchors and worker cells come
-    /// from the HPA-471 design; Research Centers are 4×4 footprints.
+    /// The single authored team-start table. Team 1's Research Center
+    /// anchors the central city: the (62,46) 4×4 footprint centers exactly
+    /// on the map midpoint (64,48), its four workers occupy the free
+    /// diagonal-corner cells, and its Barracks/Depot build anchors hug the
+    /// safe ring. Team 2 keeps the passive eastern base; every per-team
+    /// coordinate lives here — nothing mirrors the human site.
     pub fn team_starts() -> [TeamStart; 2] {
         [
             TeamStart {
                 team: TeamId(1),
-                research_center_anchor: GridPos::new(12, 46),
+                research_center_anchor: GridPos::new(62, 46),
                 workers: [
-                    GridPos::new(11, 45),
-                    GridPos::new(11, 50),
-                    GridPos::new(16, 45),
-                    GridPos::new(16, 50),
+                    GridPos::new(61, 45),
+                    GridPos::new(61, 50),
+                    GridPos::new(66, 45),
+                    GridPos::new(66, 50),
+                ],
+                barracks_anchor: GridPos::new(58, 46),
+                depot_anchor: GridPos::new(63, 51),
+                safe_sources: [
+                    ResourceId(1),
+                    ResourceId(2),
+                    ResourceId(3),
+                    ResourceId(4),
+                    ResourceId(5),
+                    ResourceId(6),
                 ],
             },
             TeamStart {
@@ -67,31 +102,42 @@ impl MapFixture {
                     GridPos::new(111, 45),
                     GridPos::new(111, 50),
                 ],
+                barracks_anchor: GridPos::new(108, 51),
+                depot_anchor: GridPos::new(117, 51),
+                safe_sources: [
+                    ResourceId(7),
+                    ResourceId(8),
+                    ResourceId(9),
+                    ResourceId(10),
+                    ResourceId(11),
+                    ResourceId(12),
+                ],
             },
         ]
     }
 
-    /// Safe resources around each Research Center, mirrored between teams.
-    /// The only resource-position table in the codebase; IDs are
-    /// deterministic (team 1 safe, then team 2 safe).
+    /// The safe sources ringing each Research Center — ration caches,
+    /// salvage ruins, and a coal seam within each base's vision. The only
+    /// resource-position table in the codebase; IDs are deterministic
+    /// (team 1 safe 1-6 near the central city, then team 2 safe 7-12 east).
     pub fn starting_resources() -> Vec<ResourceSpawn> {
         vec![
-            spawn(ResourceId(1), ResourceKind::Food, 22, 42),
-            spawn(ResourceId(2), ResourceKind::Food, 22, 54),
-            spawn(ResourceId(3), ResourceKind::Scrap, 20, 45),
-            spawn(ResourceId(4), ResourceKind::Scrap, 20, 48),
-            spawn(ResourceId(5), ResourceKind::Scrap, 20, 51),
-            spawn(ResourceId(6), ResourceKind::Coal, 25, 48),
-            spawn(ResourceId(7), ResourceKind::Food, 105, 42),
-            spawn(ResourceId(8), ResourceKind::Food, 105, 54),
-            spawn(ResourceId(9), ResourceKind::Scrap, 107, 45),
-            spawn(ResourceId(10), ResourceKind::Scrap, 107, 48),
-            spawn(ResourceId(11), ResourceKind::Scrap, 107, 51),
-            spawn(ResourceId(12), ResourceKind::Coal, 102, 48),
+            spawn(ResourceId(1), ResourceKind::Food, 58, 42),
+            spawn(ResourceId(2), ResourceKind::Food, 69, 42),
+            spawn(ResourceId(3), ResourceKind::Scrap, 56, 52),
+            spawn(ResourceId(4), ResourceKind::Scrap, 71, 52),
+            spawn(ResourceId(5), ResourceKind::Scrap, 64, 55),
+            spawn(ResourceId(6), ResourceKind::Coal, 64, 41),
+            spawn(ResourceId(7), ResourceKind::Food, 108, 42),
+            spawn(ResourceId(8), ResourceKind::Food, 117, 42),
+            spawn(ResourceId(9), ResourceKind::Scrap, 107, 52),
+            spawn(ResourceId(10), ResourceKind::Scrap, 120, 52),
+            spawn(ResourceId(11), ResourceKind::Scrap, 113, 55),
+            spawn(ResourceId(12), ResourceKind::Coal, 113, 41),
         ]
     }
 
-    /// Southwest and northeast expansion resources; IDs continue after the
+    /// Northwest and southeast expansion resources; IDs continue after the
     /// safe sources.
     pub fn expansion_resources() -> Vec<ResourceSpawn> {
         vec![
@@ -107,15 +153,13 @@ impl MapFixture {
     pub fn battlefield() -> Self {
         let mut map = GridMap::new(128, 96);
 
-        // Mirrored central blockers leave a northern and southern route.
-        map.set_blocked_rect(GridPos::new(54, 20), GridPos::new(61, 75));
-        map.set_blocked_rect(GridPos::new(66, 20), GridPos::new(73, 75));
-        map.set_blocked_rect(GridPos::new(62, 38), GridPos::new(65, 57));
+        // The authored ruins are the only static blockers.
+        for &(min, max) in RUINS {
+            map.set_blocked_rect(min, max);
+        }
 
         Self {
             map,
-            left_spawn: Vec2::new(14.5, 48.5),
-            right_spawn: Vec2::new(113.5, 48.5),
             resources: Self::starting_resources()
                 .into_iter()
                 .chain(Self::expansion_resources())
@@ -123,35 +167,37 @@ impl MapFixture {
         }
     }
 
+    /// The `TeamStart` row for a team, falling back to the human team's row
+    /// for ids outside the authored table.
+    fn team_start(team: TeamId) -> TeamStart {
+        let starts = Self::team_starts();
+        starts
+            .into_iter()
+            .find(|start| start.team == team)
+            .unwrap_or(starts[0])
+    }
+
     /// The authored Barracks anchor of one team's base layout (3×3
-    /// footprint): clear of every authored start cell and resource node on
-    /// both starts. Team 2 mirrors the team-1 anchor on the
-    /// vertical center line (footprint-width aware).
+    /// footprint), read from the `TeamStart` table.
     pub fn barracks_anchor(team: TeamId) -> GridPos {
-        let anchor = GridPos::new(17, 51);
-        if team == TeamId(2) {
-            mirror_anchor(anchor, building_spec(BuildingKind::Barracks).width)
-        } else {
-            anchor
-        }
+        Self::team_start(team).barracks_anchor
     }
 
     /// The authored safe Depot anchor of one team's base layout (2×2
-    /// footprint), beside the Research Center's resource line. Team 2 mirrors
-    /// the team-1 anchor on the vertical center line (footprint-width
-    /// aware).
+    /// footprint), read from the `TeamStart` table.
     pub fn depot_anchor(team: TeamId) -> GridPos {
-        let anchor = GridPos::new(21, 46);
-        if team == TeamId(2) {
-            mirror_anchor(anchor, building_spec(BuildingKind::Depot).width)
-        } else {
-            anchor
-        }
+        Self::team_start(team).depot_anchor
+    }
+
+    /// The authored safe (starting) source ids of one team, read from the
+    /// `TeamStart` table — explicit membership, never a side inference.
+    pub fn safe_source_ids(team: TeamId) -> [ResourceId; 6] {
+        Self::team_start(team).safe_sources
     }
 }
 
-/// The default skirmish seed: Team 1 at the authored left start, Team 2 at
-/// the authored right start. The pure simulation skirmish seed for one
+/// The default skirmish seed: Team 1 at the authored central start, Team 2
+/// at the authored eastern start. The pure simulation skirmish seed for one
 /// normal match: real completed Research Center Buildings (4×4 Footprints +
 /// `Dropoff` from birth), four Workers per team with fresh worker
 /// components, both teams' economies (200 Food / 300 Scrap / 150 Coal /
@@ -247,14 +293,9 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 19));
 }
 
-/// Horizontal mirror of a `width`-wide footprint anchor on the 128-wide
-/// battlefield: cells `x..x+w` map to `127-(x+w-1)..127-x`.
-fn mirror_anchor(anchor: GridPos, width: u8) -> GridPos {
-    GridPos::new(127 - anchor.x - i32::from(width) + 1, anchor.y)
-}
-
-/// Point reflection through the map center — the axis pair the battlefield
-/// blockers and the expansion resources are symmetric under.
+/// Point reflection through the map center — used only to stage the east
+/// benchmark army's cells from the west scan (local staging reflection,
+/// not a map-symmetry contract).
 fn point_reflect(cell: GridPos) -> GridPos {
     GridPos::new(127 - cell.x, 95 - cell.y)
 }
@@ -276,21 +317,20 @@ const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
 ];
 
 /// The shared AttackMove target: the authored northern midfield corridor
-/// waypoint (team-1 scout route leg) — walkable, center-map, and never a
-/// Research Center, so the benchmark load fights in the field instead of
-/// ending the match.
+/// waypoint — walkable, center-map, and never a Research Center, so the
+/// benchmark load fights in the field instead of ending the match.
 const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 
 /// Extends an already-seeded skirmish with the benchmark workload: 96 more
-/// units per team (the roster above) staged on deterministic mirrored
-/// walkable cells — team 2 point-reflects team 1's cells through the map
-/// center — IDs taken only from the `IdAllocator`, the production worker
-/// bundle on every spawn, then the initial commands applied through the
-/// ordinary dispatcher: the first 12 sorted workers per side go
-/// two-per-source onto the authored safe sources, and every combatant
-/// AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected setup
-/// command: a benchmark that boots with rejected orders would silently
-/// measure an idle crowd.
+/// units per team (the roster above) staged on deterministic walkable cells —
+/// team 2 point-reflects team 1's scanned cells through the map center
+/// after checking every reflected cell stays walkable — IDs taken only
+/// from the `IdAllocator`, the production worker bundle on every spawn,
+/// then the initial commands applied through the ordinary dispatcher: the
+/// first 12 sorted workers per side go two-per-source onto that team's
+/// authored `safe_sources`, and every combatant AttackMoves to
+/// `BENCHMARK_MIDFIELD`. Panics on any rejected setup command: a benchmark
+/// that boots with rejected orders would silently measure an idle crowd.
 pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
     for team in [TeamId(1), TeamId(2)] {
         let mut cells = benchmark_staging_cells(map, team).into_iter();
@@ -322,7 +362,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
             .into_iter()
             .take(12)
             .collect();
-        for (pair, source) in workers.chunks(2).zip(safe_source_ids(team)) {
+        for (pair, source) in workers.chunks(2).zip(MapFixture::safe_source_ids(team)) {
             accept(
                 world,
                 map,
@@ -361,19 +401,18 @@ fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
 
 /// The first `BENCHMARK_ROSTER` units per team stage on the first 96
 /// row-major walkable cells of x 26..=53, y 20..=75 — a region holding no
-/// authored blocker, Research Center or source — and team 2 mirrors them by
-/// point reflection through the map center (the axis the authored map is
-/// symmetric under).
+/// authored blocker, Research Center or source — and team 2's cells are
+/// the local point reflection of the west scan through the map center,
+/// re-checked against the live map so a fixture retune fails loudly here
+/// instead of spawning team 2 into terrain.
 fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
     if team == TeamId(2) {
         let cells: Vec<GridPos> = benchmark_staging_cells(map, TeamId(1))
             .into_iter()
             .map(point_reflect)
             .collect();
-        // The reflected cells are walkable only while the map keeps the
-        // authored point-reflection symmetry — check instead of assuming
-        // so a fixture retune fails loudly here instead of spawning team 2
-        // into terrain.
+        // The reflected cells are only staging candidates: check them
+        // against the live map instead of assuming any symmetry.
         assert!(
             cells.iter().all(|cell| map.is_walkable(*cell)),
             "team-2 staging reflected a walkable team-1 cell onto blocked ground"
@@ -399,18 +438,6 @@ fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
         "the staging region lost walkable cells"
     );
     cells
-}
-
-/// The authored safe (starting) sources of one team's half, in ID order.
-fn safe_source_ids(team: TeamId) -> Vec<ResourceId> {
-    MapFixture::starting_resources()
-        .into_iter()
-        .filter(|spawn| {
-            let left_half = spawn.cell.x < 64;
-            left_half == (team == TeamId(1))
-        })
-        .map(|spawn| spawn.id)
-        .collect()
 }
 
 #[cfg(test)]
