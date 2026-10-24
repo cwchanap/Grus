@@ -1469,6 +1469,71 @@ fn attack_move_never_acquires_a_target_killed_earlier_in_the_step() {
     );
 }
 
+/// The building arm of the mid-step kill rule. A non-Research-Center kill
+/// neither settles the match nor stops the step, so later attackers keep
+/// scanning — and must see the destroyed depot as dead, not read it from
+/// the stale per-tick candidate table.
+#[test]
+fn attack_move_never_acquires_a_building_destroyed_earlier_in_the_step() {
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    let depot = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::Depot,
+        GridPos::new(6, 5),
+    );
+    world.get_mut::<Health>(depot).unwrap().current = 1;
+    let scavenger = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(5.5, 9.5),
+        UnitKind::Guard,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(
+            TeamId(1),
+            &[UnitId(1)],
+            CombatTarget::Building(BuildingId(1)),
+        ),
+    );
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(3)], Vec2::new(20.5, 9.5)),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    // Unit 1 acts first and destroys the depot; unit 3 then scans with the
+    // depot the only enemy inside its radius.
+    assert!(
+        world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .is_none()
+    );
+    assert_eq!(events(&world).len(), 1, "only the killing blow landed");
+    assert!(events(&world)[0].killed && events(&world)[0].attacker == UnitId(1));
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(scavenger)),
+        None,
+        "the just-destroyed building is never acquired this step"
+    );
+}
+
 fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
     let mut world = World::new();
     let mut map = open_map();
@@ -1733,6 +1798,56 @@ fn attack_move_ignores_a_hidden_target_and_reacquires_on_reveal() {
         attack_move_target(world.get::<CombatOrder>(attacker)),
         Some(CombatTarget::Unit(UnitId(2))),
         "a later visible target is reacquired"
+    );
+}
+
+/// AttackMove never acquires an enemy building it cannot see, even one
+/// inside `ATTACK_MOVE_RADIUS`. Vision outreaches that radius, so the only
+/// way to put a hidden building in reach is a fog map that lags the
+/// attacker's position; refreshing the map then reveals and acquires it.
+#[test]
+fn attack_move_ignores_an_in_radius_hidden_building_until_revealed() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::Depot,
+        GridPos::new(25, 25),
+    );
+    reveal(&mut world, &map);
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 5.5)),
+    );
+
+    // Teleport within reach of the depot without refreshing the fog map.
+    world.get_mut::<SimPosition>(attacker).unwrap().current = Vec2::new(20.5, 24.5);
+    assert!(!visible_to(&world, TeamId(1), GridPos::new(25, 25)));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        None,
+        "a hidden building inside the radius is not acquired"
+    );
+
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), GridPos::new(25, 25)));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        Some(CombatTarget::Building(BuildingId(1))),
+        "the revealed building is acquired"
     );
 }
 

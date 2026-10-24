@@ -419,18 +419,20 @@ fn acquire_target(
         Some(map) => map.subject_visible(attacker_team, &subject),
     };
     let mut candidates: Vec<(f32, u8, u32, CombatTarget)> = Vec::new();
+    // Radius first: the visibility lookup only runs for the few candidates
+    // actually in reach.
     for unit in &acquisition.units {
-        if unit.alive && unit.team != attacker_team && visible(unit.cell.into()) {
+        if unit.alive && unit.team != attacker_team {
             let distance = position.distance(unit.position);
-            if distance <= ATTACK_MOVE_RADIUS {
+            if distance <= ATTACK_MOVE_RADIUS && visible(unit.cell.into()) {
                 candidates.push((distance, 0, unit.id.0, CombatTarget::Unit(unit.id)));
             }
         }
     }
     for building in &acquisition.buildings {
-        if building.alive && building.team != attacker_team && visible(building.footprint.into()) {
+        if building.alive && building.team != attacker_team {
             let distance = position.distance(building.footprint.closest_point(position));
-            if distance <= ATTACK_MOVE_RADIUS {
+            if distance <= ATTACK_MOVE_RADIUS && visible(building.footprint.into()) {
                 candidates.push((
                     distance,
                     1,
