@@ -7,12 +7,10 @@ use std::collections::{HashMap, HashSet};
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
-use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec};
+use crate::catalog::{BuildingKind, UnitKind, building_spec};
 use crate::combat::{CombatOrder, Health, with_destination};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
-use crate::economy::{
-    Dropoff, ResourceIndex, ResourceSource, TeamEconomy, WorkerTask, cancel_unit_activity,
-};
+use crate::economy::{Dropoff, ResourceIndex, TeamEconomy, WorkerTask, cancel_unit_activity};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -69,7 +67,7 @@ pub struct PlacementPlan {
     pub route: Vec<Vec2>,
 }
 
-/// Authoritative placement validation. Checks, in order: owned villager →
+/// Authoritative placement validation. Checks, in order: owned worker →
 /// kind unlocked/buildable → footprint in bounds → every footprint cell
 /// explored → footprint cells walkable and free of any unit's current cell
 /// or claimed `MoveOrder` goal the issuer can see, with fully hidden
@@ -94,22 +92,18 @@ pub fn validate_placement(
     kind: BuildingKind,
     anchor: GridPos,
 ) -> Result<PlacementPlan, RejectReason> {
-    // 1. owned villager.
+    // 1. owned worker.
     let entity = owned_unit_entity(world, builder, issuer)?;
     if !world
         .get::<Unit>(entity)
-        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        .is_some_and(|unit| unit.kind == UnitKind::Worker)
     {
-        return Err(RejectReason::NotVillager);
+        return Err(RejectReason::NotWorker);
     }
 
-    // 2. kind unlocked/buildable. Town Centers are seeded, never placed.
+    // 2. kind buildable. Research Centers are seeded, never placed.
     let spec = building_spec(kind);
-    let team_age = world
-        .get_resource::<TeamEconomy>()
-        .and_then(|economy| economy.0.get(&issuer))
-        .map(|state| state.age);
-    if kind == BuildingKind::TownCenter || team_age.is_some_and(|age| age < spec.required_age) {
+    if kind == BuildingKind::ResearchCenter {
         return Err(RejectReason::Locked);
     }
 
@@ -195,15 +189,12 @@ pub fn validate_placement(
         return Err(RejectReason::Occupied);
     }
 
-    // 6. affordable.
+    // 6. affordable — the immutable all-four-field check; the preview
+    // never spends.
     let affordable = world
         .get_resource::<TeamEconomy>()
         .and_then(|economy| economy.0.get(&issuer))
-        .is_some_and(|state| {
-            state.stockpile.food >= spec.cost.food
-                && state.stockpile.wood >= spec.cost.wood
-                && state.stockpile.gold >= spec.cost.gold
-        });
+        .is_some_and(|state| state.stockpile.can_afford(spec.cost));
     if !affordable {
         return Err(RejectReason::InsufficientResources);
     }
@@ -226,10 +217,11 @@ pub fn validate_placement(
     })
 }
 
-/// Applies an accepted `PlaceBuilding`: validates first, then cancels the
-/// builder's old activity, deducts the cost once, allocates the `BuildingId`,
-/// blocks the footprint, spawns `Building + Footprint`, and routes the builder
-/// to its stored approach slot.
+/// Applies an accepted `PlaceBuilding`: validates first, re-checks real
+/// occupancy, then spends the cost atomically — all before cancelling the
+/// builder's old activity — and finally allocates the `BuildingId`, blocks
+/// the footprint, spawns `Building + Footprint`, and routes the builder to
+/// its stored approach slot.
 pub(crate) fn apply_place_building(
     world: &mut World,
     map: &mut GridMap,
@@ -263,18 +255,23 @@ pub(crate) fn apply_place_building(
         return result;
     }
 
-    cancel_unit_activity(world, plan.builder);
-
+    // Spend before any side effect: a failed `try_spend` here (validation
+    // passed but the stockpile moved between preview and apply, or a caller
+    // drove apply on a changed world) must leave the builder's task, the
+    // map, and every currency field untouched.
     let spec = building_spec(kind);
     {
         let mut economy = world
             .get_resource_mut::<TeamEconomy>()
             .expect("validated economy");
         let state = economy.0.get_mut(&issuer).expect("validated team");
-        state.stockpile.food -= spec.cost.food;
-        state.stockpile.wood -= spec.cost.wood;
-        state.stockpile.gold -= spec.cost.gold;
+        if !state.stockpile.try_spend(spec.cost) {
+            result.reject = Some(RejectReason::InsufficientResources);
+            return result;
+        }
     }
+
+    cancel_unit_activity(world, plan.builder);
 
     let id = world.resource_mut::<IdAllocator>().allocate_building();
 
@@ -442,7 +439,7 @@ pub(crate) fn commandable_building_entity(
     Ok(entity)
 }
 
-/// Resume validation: owned villager → building exists → owned → incomplete.
+/// Resume validation: owned worker → building exists → owned → incomplete.
 fn validate_resume(
     world: &World,
     issuer: TeamId,
@@ -452,9 +449,9 @@ fn validate_resume(
     let entity = owned_unit_entity(world, builder, issuer)?;
     if !world
         .get::<Unit>(entity)
-        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        .is_some_and(|unit| unit.kind == UnitKind::Worker)
     {
-        return Err(RejectReason::NotVillager);
+        return Err(RejectReason::NotWorker);
     }
 
     let building_entity = commandable_building_entity(world, issuer, building)?;
@@ -735,9 +732,8 @@ pub(crate) fn nearest_open_cell(
 /// `ToConstruction → Constructing` once its current cell equals the stored
 /// slot; each building then advances only while its single `active_builder` is
 /// the worker in `Constructing` state, so a second builder can never double
-/// the rate. Completion clears the assignment, idles the builder, grants a
-/// Storehouse its `Dropoff` marker, and grants a Farm its renewable
-/// `ResourceSource` under a fresh runtime `ResourceId` — each exactly once.
+/// the rate. Completion clears the assignment, idles the builder, and grants
+/// a Depot its `Dropoff` marker — each exactly once.
 pub fn step_construction(world: &mut World, seconds: f32) {
     if !gameplay_active(world) {
         return;
@@ -813,7 +809,7 @@ pub fn step_construction(world: &mut World, seconds: f32) {
             building.construction.active_builder = None;
         }
         world.entity_mut(builder_entity).insert(WorkerTask::Idle);
-        if kind == BuildingKind::Storehouse {
+        if kind == BuildingKind::Depot {
             world.entity_mut(building_entity).insert(Dropoff { team });
         }
         if is_producer(kind) {
@@ -821,20 +817,6 @@ pub fn step_construction(world: &mut World, seconds: f32) {
             world
                 .entity_mut(building_entity)
                 .insert(ProductionQueue::default());
-        }
-        if kind == BuildingKind::Farm {
-            // The completed Farm gains a renewable Food source on the same
-            // building entity under a fresh runtime `ResourceId`.
-            let id = world.resource_mut::<IdAllocator>().allocate_resource();
-            world.entity_mut(building_entity).insert(ResourceSource {
-                id,
-                kind: ResourceKind::Food,
-                remaining: None,
-                assigned_worker: None,
-            });
-            world
-                .get_resource_or_insert_with(ResourceIndex::default)
-                .insert(id, building_entity);
         }
     }
 }

@@ -5,14 +5,13 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{Age, BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
+use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, apply_player_command,
     spawn_unit,
 };
 use crate::economy::{
-    Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
-    ResourceStockpile, TeamEconomy, WorkerTask,
+    Carry, Dropoff, GatherProgress, LastRouteReject, ResourceStockpile, TeamEconomy, WorkerTask,
 };
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
@@ -122,14 +121,14 @@ fn melee_attacker_in_range_hits_without_pathing() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     let outcome = issue(
@@ -179,14 +178,14 @@ fn combat_event_total_counts_strikes_across_buffer_rewinds() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     issue(
         &mut world,
@@ -220,14 +219,14 @@ fn melee_attacker_out_of_range_pursues_without_striking() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(8.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -244,7 +243,7 @@ fn melee_attacker_out_of_range_pursues_without_striking() {
 }
 
 #[test]
-fn archer_strikes_at_ranged_range_without_moving() {
+fn rifleman_strikes_at_ranged_range_without_moving() {
     let mut world = World::new();
     let mut map = open_map();
     let attacker = spawn_combatant(
@@ -252,14 +251,14 @@ fn archer_strikes_at_ranged_range_without_moving() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Archer,
+        UnitKind::Rifleman,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(10.5, 5.5),
-        UnitKind::Cavalry,
+        UnitKind::Guard,
     );
 
     issue(
@@ -269,17 +268,18 @@ fn archer_strikes_at_ranged_range_without_moving() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Cavalry takes the archer's base damage: its counter bonus names Spearman.
-    assert_eq!(world.get::<Health>(defender).unwrap().current, 132);
+    // Counter bonuses were deleted with the PvP roster: every kind takes the
+    // attacker's base damage.
+    assert_eq!(world.get::<Health>(defender).unwrap().current, 92);
     assert!(world.get::<MoveOrder>(attacker).is_none());
     let recorded = events(&world);
     assert_eq!(recorded.len(), 1);
-    assert!(recorded[0].ranged, "archer hits are ranged");
+    assert!(recorded[0].ranged, "rifleman hits are ranged");
     assert_eq!(recorded[0].damage, 8);
 }
 
 #[test]
-fn counter_bonus_applies_only_to_the_named_kind() {
+fn strikes_deal_only_base_damage_to_every_kind() {
     let mut world = World::new();
     let mut map = open_map();
     spawn_combatant(
@@ -287,14 +287,14 @@ fn counter_bonus_applies_only_to_the_named_kind() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    let cavalry = spawn_combatant(
+    let rifleman = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Cavalry,
+        UnitKind::Rifleman,
     );
 
     issue(
@@ -304,9 +304,9 @@ fn counter_bonus_applies_only_to_the_named_kind() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Spearman base 10 + counter bonus 10 vs Cavalry.
-    assert_eq!(world.get::<Health>(cavalry).unwrap().current, 120);
-    assert_eq!(events(&world)[0].damage, 20);
+    // Guard base 10; no counter bonus survives the PvP-roster deletion.
+    assert_eq!(world.get::<Health>(rifleman).unwrap().current, 60);
+    assert_eq!(events(&world)[0].damage, 10);
 }
 
 #[test]
@@ -318,14 +318,14 @@ fn cooldown_gates_repeat_strikes_until_elapsed() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -367,14 +367,14 @@ fn frozen_ticks_clear_combat_events_so_nothing_replays_after_resume() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -425,17 +425,17 @@ fn result_ticks_preserve_the_settle_events_until_the_bridge_drains() {
         UnitId(1),
         TeamId(1),
         Vec2::new(11.5, 48.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    let town_center = spawn_building(
+    let research_center = spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 46),
     );
-    world.get_mut::<Health>(town_center).unwrap().current = 10;
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
 
     issue(
         &mut world,
@@ -449,7 +449,7 @@ fn result_ticks_preserve_the_settle_events_until_the_bridge_drains() {
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         matches!(active_phase(&world), MatchPhase::Result(_)),
-        "the Town Center kill resolves the match in the same tick"
+        "the Research Center kill resolves the match in the same tick"
     );
     assert_eq!(events(&world).len(), 1);
     assert!(events(&world)[0].killed);
@@ -475,14 +475,14 @@ fn killing_blow_atomically_destroys_a_building() {
         UnitId(1),
         TeamId(1),
         Vec2::new(11.5, 48.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    let town_center = spawn_building(
+    let research_center = spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 46),
     );
 
@@ -498,7 +498,7 @@ fn killing_blow_atomically_destroys_a_building() {
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
     // Base damage only: buildings never take a counter bonus.
-    assert_eq!(world.get::<Health>(town_center).unwrap().current, 790);
+    assert_eq!(world.get::<Health>(research_center).unwrap().current, 790);
     let recorded = events(&world);
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].target, CombatTarget::Building(BuildingId(1)));
@@ -511,10 +511,10 @@ fn killing_blow_atomically_destroys_a_building() {
     // lands now.
     let attacker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world.get_mut::<AttackCooldown>(attacker).unwrap().0 = 0.0;
-    world.get_mut::<Health>(town_center).unwrap().current = 10;
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(events(&world)[0].killed);
-    assert!(world.get::<Health>(town_center).is_none(), "despawned");
+    assert!(world.get::<Health>(research_center).is_none(), "despawned");
     assert!(
         world
             .resource::<BuildingIndex>()
@@ -540,23 +540,21 @@ fn killing_blow_atomically_destroys_a_building() {
 fn destroying_a_dropoff_reroutes_the_carrying_worker() {
     let mut world = World::new();
     let mut map = open_map();
-    let storehouse = spawn_building(
+    let depot = spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(1),
-        BuildingKind::Storehouse,
+        BuildingKind::Depot,
         GridPos::new(8, 10),
     );
-    world
-        .entity_mut(storehouse)
-        .insert(Dropoff { team: TeamId(1) });
+    world.entity_mut(depot).insert(Dropoff { team: TeamId(1) });
     let backup = spawn_building(
         &mut world,
         &mut map,
         BuildingId(2),
         TeamId(1),
-        BuildingKind::Storehouse,
+        BuildingKind::Depot,
         GridPos::new(16, 10),
     );
     world.entity_mut(backup).insert(Dropoff { team: TeamId(1) });
@@ -566,11 +564,11 @@ fn destroying_a_dropoff_reroutes_the_carrying_worker() {
         UnitId(2),
         TeamId(1),
         Vec2::new(7.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.entity_mut(worker).insert((
         Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(5).unwrap(),
         },
         GatherProgress::default(),
@@ -585,9 +583,9 @@ fn destroying_a_dropoff_reroutes_the_carrying_worker() {
         UnitId(1),
         TeamId(2),
         Vec2::new(7.5, 9.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    world.get_mut::<Health>(storehouse).unwrap().current = 10;
+    world.get_mut::<Health>(depot).unwrap().current = 10;
     issue(
         &mut world,
         &mut map,
@@ -636,7 +634,7 @@ fn destroying_a_dropoff_reroutes_the_carrying_worker() {
     assert_eq!(
         world.get::<Carry>(worker),
         Some(&Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(5).unwrap(),
         }),
         "the reroute preserves Carry"
@@ -647,39 +645,37 @@ fn destroying_a_dropoff_reroutes_the_carrying_worker() {
 fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
     let mut world = World::new();
     let mut map = open_map();
-    let town_center = spawn_building(
+    let research_center = spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(1),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 10),
     );
     world
-        .entity_mut(town_center)
+        .entity_mut(research_center)
         .insert(Dropoff { team: TeamId(1) });
-    let storehouse = spawn_building(
+    let depot = spawn_building(
         &mut world,
         &mut map,
         BuildingId(2),
         TeamId(1),
-        BuildingKind::Storehouse,
+        BuildingKind::Depot,
         GridPos::new(24, 10),
     );
-    world
-        .entity_mut(storehouse)
-        .insert(Dropoff { team: TeamId(1) });
+    world.entity_mut(depot).insert(Dropoff { team: TeamId(1) });
 
     let worker = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(1),
         Vec2::new(4.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.entity_mut(worker).insert((
         Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(10).unwrap(),
         },
         GatherProgress::default(),
@@ -690,7 +686,7 @@ fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
         },
     ));
     // Box the worker in so neither the destroyed drop-off's freed footprint
-    // nor the surviving storehouse is pathable.
+    // nor the surviving depot is pathable.
     for cell in [
         GridPos::new(3, 9),
         GridPos::new(4, 9),
@@ -708,9 +704,9 @@ fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
         UnitId(1),
         TeamId(2),
         Vec2::new(11.5, 13.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    world.get_mut::<Health>(town_center).unwrap().current = 10;
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
     issue(
         &mut world,
         &mut map,
@@ -728,7 +724,7 @@ fn destroying_the_last_reachable_dropoff_idles_the_worker_preserving_carry() {
     assert_eq!(
         world.get::<Carry>(worker),
         Some(&Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(10).unwrap(),
         }),
         "the idle never discards Carry"
@@ -763,7 +759,7 @@ fn destroying_a_construction_site_cancels_every_tasking_worker() {
         UnitId(2),
         TeamId(1),
         Vec2::new(11.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.entity_mut(walker).insert((
         GatherProgress::default(),
@@ -784,7 +780,7 @@ fn destroying_a_construction_site_cancels_every_tasking_worker() {
         UnitId(3),
         TeamId(1),
         Vec2::new(11.5, 14.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.entity_mut(builder).insert((
         GatherProgress::default(),
@@ -803,7 +799,7 @@ fn destroying_a_construction_site_cancels_every_tasking_worker() {
         UnitId(1),
         TeamId(2),
         Vec2::new(11.5, 9.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     world.get_mut::<Health>(site).unwrap().current = 10;
     issue(
@@ -833,150 +829,6 @@ fn destroying_a_construction_site_cancels_every_tasking_worker() {
 }
 
 #[test]
-fn destroying_a_farm_idles_its_workers_in_every_phase_preserving_carry() {
-    let mut world = World::new();
-    let mut map = open_map();
-    let farm = spawn_building(
-        &mut world,
-        &mut map,
-        BuildingId(1),
-        TeamId(1),
-        BuildingKind::Farm,
-        GridPos::new(8, 10),
-    );
-    let farm_source = ResourceId(1);
-    world.entity_mut(farm).insert(ResourceSource {
-        id: farm_source,
-        kind: ResourceKind::Food,
-        remaining: None,
-        assigned_worker: Some(UnitId(3)),
-    });
-    world
-        .get_resource_or_insert_with(ResourceIndex::default)
-        .insert(farm_source, farm);
-    let town_center = spawn_building(
-        &mut world,
-        &mut map,
-        BuildingId(2),
-        TeamId(1),
-        BuildingKind::TownCenter,
-        GridPos::new(16, 10),
-    );
-    world
-        .entity_mut(town_center)
-        .insert(Dropoff { team: TeamId(1) });
-
-    // Moving to the farm, gathering from it, and returning a Farm-sourced
-    // load to the (surviving) Town Center.
-    let to_farm = spawn_combatant(
-        &mut world,
-        UnitId(2),
-        TeamId(1),
-        Vec2::new(7.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(to_farm).insert((
-        Carry::Empty,
-        GatherProgress::default(),
-        WorkerTask::ToSource {
-            source: farm_source,
-            slot: GridPos::new(7, 10),
-        },
-    ));
-    let gatherer = spawn_combatant(
-        &mut world,
-        UnitId(3),
-        TeamId(1),
-        Vec2::new(6.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(gatherer).insert((
-        Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(5).unwrap(),
-        },
-        GatherProgress(0.5),
-        WorkerTask::Gathering {
-            source: farm_source,
-        },
-    ));
-    let returning = spawn_combatant(
-        &mut world,
-        UnitId(4),
-        TeamId(1),
-        Vec2::new(15.5, 10.5),
-        UnitKind::Villager,
-    );
-    world.entity_mut(returning).insert((
-        Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(10).unwrap(),
-        },
-        GatherProgress::default(),
-        WorkerTask::ToDropoff {
-            source: farm_source,
-            dropoff: BuildingId(2),
-            slot: GridPos::new(15, 10),
-        },
-    ));
-
-    spawn_combatant(
-        &mut world,
-        UnitId(1),
-        TeamId(2),
-        Vec2::new(7.5, 9.5),
-        UnitKind::Spearman,
-    );
-    world.get_mut::<Health>(farm).unwrap().current = 10;
-    issue(
-        &mut world,
-        &mut map,
-        attack_command(
-            TeamId(2),
-            &[UnitId(1)],
-            CombatTarget::Building(BuildingId(1)),
-        ),
-    );
-
-    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
-
-    for worker in [to_farm, gatherer, returning] {
-        assert_eq!(
-            world.get::<WorkerTask>(worker),
-            Some(&WorkerTask::Idle),
-            "the destroyed Farm idles its worker in every phase"
-        );
-        assert!(world.get::<MoveOrder>(worker).is_none());
-    }
-    assert_eq!(
-        world.get::<Carry>(gatherer),
-        Some(&Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(5).unwrap(),
-        })
-    );
-    assert_eq!(
-        world.get::<Carry>(returning),
-        Some(&Carry::Holding {
-            kind: ResourceKind::Food,
-            amount: NonZeroU32::new(10).unwrap(),
-        }),
-        "Carry is preserved through the idle"
-    );
-    assert!(
-        world
-            .resource::<ResourceIndex>()
-            .entity(farm_source)
-            .is_none(),
-        "the Farm's resource identity leaves the ResourceIndex"
-    );
-    assert!(world.get::<Building>(farm).is_none(), "the Farm despawned");
-    for cell in Footprint::new(GridPos::new(8, 10), 2, 2).cells() {
-        assert!(map.is_walkable(cell), "farm cell {cell:?} freed");
-    }
-}
-
-#[test]
 fn destroying_a_producer_drops_its_queue_without_refund() {
     let mut world = World::new();
     let mut map = open_map();
@@ -993,10 +845,10 @@ fn destroying_a_producer_drops_its_queue_without_refund() {
         TeamId(1),
         ResourceStockpile {
             food: 1000,
-            wood: 1000,
-            gold: 1000,
+            scrap: 1000,
+            coal: 1000,
+            crystals: 0,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
     let result = issue(
@@ -1005,7 +857,7 @@ fn destroying_a_producer_drops_its_queue_without_refund() {
         PlayerCommand::EnqueueUnit {
             issuer: TeamId(1),
             building: BuildingId(1),
-            kind: UnitKind::Spearman,
+            kind: UnitKind::Guard,
         },
     );
     assert_eq!(result.reject, None, "enqueue accepted");
@@ -1020,7 +872,7 @@ fn destroying_a_producer_drops_its_queue_without_refund() {
         UnitId(1),
         TeamId(2),
         Vec2::new(11.5, 9.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     world.get_mut::<Health>(barracks).unwrap().current = 10;
     issue(
@@ -1060,7 +912,7 @@ fn attack_rejects_missing_friendly_and_dead_targets() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     // A friendly teammate exists for the friendly-fire rejection below.
     spawn_combatant(
@@ -1068,14 +920,14 @@ fn attack_rejects_missing_friendly_and_dead_targets() {
         UnitId(3),
         TeamId(1),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let dead = spawn_combatant(
         &mut world,
         UnitId(4),
         TeamId(2),
         Vec2::new(7.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     world.get_mut::<Health>(dead).unwrap().current = 0;
 
@@ -1119,7 +971,7 @@ fn attack_move_rejects_unreachable_destinations() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     map.set_blocked(GridPos::new(10, 5), true);
 
@@ -1154,14 +1006,14 @@ fn attack_move_rejects_walled_off_destinations_without_disturbing_prior_orders()
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let enemy = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
 
     // Prior intent: a direct Attack plus an active route, and no WorkerTask
@@ -1227,7 +1079,7 @@ fn attack_move_rejects_walled_off_destinations_without_disturbing_prior_orders()
     );
     assert_eq!(
         world.get::<Health>(enemy).unwrap().current,
-        unit_spec(UnitKind::Villager).max_health,
+        unit_spec(UnitKind::Worker).max_health,
         "the rejected command must not touch the target"
     );
 
@@ -1270,21 +1122,21 @@ fn attack_move_targets_the_nearest_enemy_within_radius() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 12.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(7.5, 12.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     spawn_combatant(
         &mut world,
         UnitId(3),
         TeamId(2),
         Vec2::new(12.5, 12.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
 
     issue(
@@ -1314,21 +1166,21 @@ fn attack_move_tie_breaks_by_lower_stable_id() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 12.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(3),
         TeamId(2),
         Vec2::new(8.5, 14.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(8.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
 
     issue(
@@ -1360,14 +1212,14 @@ fn attack_move_ignores_enemies_beyond_the_radius() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 12.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(13.5, 12.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
 
     issue(
@@ -1402,14 +1254,14 @@ fn attack_move_acquires_buildings() {
         UnitId(1),
         TeamId(1),
         Vec2::new(16.5, 48.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 46),
     );
 
@@ -1437,14 +1289,14 @@ fn attack_move_diverts_to_an_acquired_stationary_unit() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 12.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(7.5, 12.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
 
     issue(
@@ -1476,14 +1328,14 @@ fn attack_move_diverts_to_an_acquired_building() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 48.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 46),
     );
 
@@ -1559,26 +1411,18 @@ fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
 }
 
 #[test]
-fn spearman_survives_the_symmetric_cavalry_duel() {
+fn guard_survives_the_symmetric_rifleman_duel() {
     assert_eq!(
-        run_symmetric_duel(UnitKind::Spearman, UnitKind::Cavalry),
-        Some(UnitKind::Spearman)
+        run_symmetric_duel(UnitKind::Guard, UnitKind::Rifleman),
+        Some(UnitKind::Guard)
     );
 }
 
 #[test]
-fn archer_survives_the_symmetric_spearman_duel() {
+fn rifleman_loses_the_symmetric_guard_duel() {
     assert_eq!(
-        run_symmetric_duel(UnitKind::Archer, UnitKind::Spearman),
-        Some(UnitKind::Archer)
-    );
-}
-
-#[test]
-fn cavalry_survives_the_symmetric_archer_duel() {
-    assert_eq!(
-        run_symmetric_duel(UnitKind::Cavalry, UnitKind::Archer),
-        Some(UnitKind::Cavalry)
+        run_symmetric_duel(UnitKind::Rifleman, UnitKind::Guard),
+        Some(UnitKind::Guard)
     );
 }
 
@@ -1591,14 +1435,14 @@ fn dead_later_attacker_is_skipped_in_the_same_combat_step() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let right = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     world.get_mut::<Health>(left).unwrap().current = 10;
     world.get_mut::<Health>(right).unwrap().current = 10;
@@ -1651,14 +1495,14 @@ fn direct_attack_ends_when_the_target_dies() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.get_mut::<Health>(defender).unwrap().current = 10;
 
@@ -1689,14 +1533,14 @@ fn direct_attack_clears_when_the_target_leaves_vision() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(8.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     reveal(&mut world, &map);
 
@@ -1744,14 +1588,14 @@ fn attack_move_ignores_a_hidden_target_and_reacquires_on_reveal() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Archer,
+        UnitKind::Rifleman,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(12.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     reveal(&mut world, &map);
 
@@ -1807,14 +1651,14 @@ fn runtime_fog_hides_missing_and_hidden_targets_behind_one_reject_code() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(25.5, 25.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     reveal(&mut world, &map);
     assert!(!visible_to(&world, TeamId(1), GridPos::new(25, 25)));
@@ -1850,14 +1694,14 @@ fn attack_move_clears_the_dead_target_and_resumes_destination() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Archer,
+        UnitKind::Rifleman,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.get_mut::<Health>(defender).unwrap().current = 8;
 
@@ -1894,14 +1738,14 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 12.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let target = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(7.5, 12.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
     world.get_mut::<Health>(target).unwrap().current = 5;
 
@@ -1910,8 +1754,8 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
         &mut map,
         attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 12.5)),
     );
-    // Acquire the villager; its move then triggers a pursuit replan, so a
-    // real pursuit leg (beside the villager, not the destination) is active.
+    // Acquire the worker; its move then triggers a pursuit replan, so a
+    // real pursuit leg (beside the worker, not the destination) is active.
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     world
         .entity_mut(target)
@@ -1920,7 +1764,7 @@ fn attack_move_resumes_destination_when_the_pursued_target_dies_mid_route() {
     assert_eq!(
         world.get::<MoveOrder>(attacker).unwrap().goal,
         GridPos::new(6, 12),
-        "a pursuit leg toward the villager is active"
+        "a pursuit leg toward the worker is active"
     );
 
     // The pursuit leg ended at range (it must not outlive engagement), so
@@ -1953,7 +1797,7 @@ fn attack_move_drops_a_stale_route_once_the_unit_stands_on_the_destination() {
         UnitId(1),
         TeamId(1),
         Vec2::new(20.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     // Attack-moving onto the unit's own cell is accepted with no route:
@@ -2013,7 +1857,7 @@ fn attack_move_drops_a_stale_route_when_the_destination_replan_fails() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -2049,14 +1893,14 @@ fn grouped_attack_move_does_not_replan_assigned_destination_legs() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let second = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(1),
         Vec2::new(4.5, 6.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -2100,33 +1944,29 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let worker = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(6.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
     );
-    let source = crate::economy::spawn_resource_source(
+    let _source = crate::economy::spawn_resource_source(
         &mut world,
         &mut map,
         ResourceId(1),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(9, 5),
         100,
     );
-    world
-        .get_mut::<ResourceSource>(source)
-        .unwrap()
-        .assigned_worker = Some(UnitId(2));
     world.entity_mut(worker).insert((
         WorkerTask::Gathering {
             source: ResourceId(1),
         },
         Carry::Holding {
-            kind: crate::catalog::ResourceKind::Wood,
+            kind: crate::catalog::ResourceKind::Scrap,
             amount: std::num::NonZeroU32::new(5).unwrap(),
         },
     ));
@@ -2148,11 +1988,6 @@ fn destroy_unit_releases_worker_state_and_index_entry() {
         world.get::<Health>(worker).is_none(),
         "the entity is despawned"
     );
-    assert_eq!(
-        world.get::<ResourceSource>(source).unwrap().assigned_worker,
-        None,
-        "the source reservation dies with the worker"
-    );
 }
 
 #[test]
@@ -2164,14 +1999,14 @@ fn unit_pursuit_refreshes_only_when_the_target_moves_or_the_route_ends() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     let target = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(8.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
 
     issue(
@@ -2218,14 +2053,14 @@ fn building_pursuit_repaths_only_when_the_route_ends_and_picks_the_nearest_perim
         UnitId(1),
         TeamId(1),
         Vec2::new(8.5, 48.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(12, 46),
     );
 
@@ -2272,16 +2107,16 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 5.5),
-        UnitKind::Archer,
+        UnitKind::Rifleman,
     );
     let defender = spawn_combatant(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(16.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
-    let range = unit_spec(UnitKind::Archer).combat.unwrap().attack_range;
+    let range = unit_spec(UnitKind::Rifleman).combat.unwrap().attack_range;
 
     issue(
         &mut world,
@@ -2291,11 +2126,11 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         world.get::<MoveOrder>(attacker).is_some(),
-        "an out-of-range archer pursues"
+        "an out-of-range rifleman pursues"
     );
 
     // March until combat first sees attack range: the pursuit leg must end
-    // exactly there so the archer stops closing and fights from range.
+    // exactly there so the rifleman stops closing and fights from range.
     let mut settled = None;
     for _ in 0..200 {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -2306,7 +2141,7 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
             break;
         }
     }
-    let settled = settled.expect("the archer must reach attack range");
+    let settled = settled.expect("the rifleman must reach attack range");
     // The first combat tick that sees the in-range position ends the leg.
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
@@ -2315,13 +2150,12 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
     );
     let health_at_range = world.get::<Health>(defender).unwrap().current;
     assert!(
-        health_at_range < unit_spec(UnitKind::Spearman).max_health,
-        "the archer already fired on reaching range"
+        health_at_range < unit_spec(UnitKind::Guard).max_health,
+        "the rifleman already fired on reaching range"
     );
 
     // Holding position: no closing into melee, and the next shot still
-    // lands once the cooldown elapses (20 = 8 base + 12 counter vs
-    // Spearman).
+    // lands once the cooldown elapses (8 base; no counter bonus survives).
     let mut rearmed = false;
     for _ in 0..30 {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -2337,31 +2171,31 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
             break;
         }
     }
-    assert!(rearmed, "the settled archer keeps attacking on cooldown");
+    assert!(rearmed, "the settled rifleman keeps attacking on cooldown");
     assert_eq!(
         world.get::<Health>(defender).unwrap().current,
-        health_at_range - 20
+        health_at_range - 8
     );
 }
 
 #[test]
-fn bounded_victory_journey_destroys_the_enemy_town_center_through_real_systems() {
+fn bounded_victory_journey_destroys_the_enemy_research_center_through_real_systems() {
     let (mut world, mut map) = journeys::live_match();
 
     journeys::run_army_journey(&mut world, &mut map, TeamId(1));
 
     // Combat-level journey facts: the winning blow is a recorded combat
-    // event against team 2's authored Town Center, and the passive opponent
+    // event against team 2's authored Research Center, and the passive opponent
     // never scratched the army.
     let events = &world.resource::<CombatEvents>().0;
     assert!(
         events
             .iter()
             .any(|event| event.target == CombatTarget::Building(BuildingId(2)) && event.killed),
-        "the Town Center's killing blow is a recorded combat event"
+        "the Research Center's killing blow is a recorded combat event"
     );
     assert_eq!(
-        journeys::units_of_kind(&world, TeamId(1), UnitKind::Spearman).len(),
+        journeys::units_of_kind(&world, TeamId(1), UnitKind::Guard).len(),
         4,
         "the passive opponent never damages the army"
     );
@@ -2383,14 +2217,14 @@ fn runtime_fog_hides_missing_and_hidden_buildings_behind_one_reject_code() {
         UnitId(1),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
     );
     spawn_building(
         &mut world,
         &mut map,
         BuildingId(1),
         TeamId(2),
-        BuildingKind::TownCenter,
+        BuildingKind::ResearchCenter,
         GridPos::new(25, 25),
     );
     reveal(&mut world, &map);

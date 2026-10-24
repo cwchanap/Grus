@@ -11,7 +11,6 @@ const ZOOM_STEP := 6.0
 @onready var economy_label: Label = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
-@onready var age_button: Button = $HUD/CommandPanel/TrainGrid/AgeButton
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
@@ -34,8 +33,8 @@ var _placement_kind := ""
 var _idle_cursor := 0
 var _session_phase := ""
 var _attack_move_armed := false
-## Producer building kinds and the Age-up cost come from the Rust catalogue
-## via catalogue_snapshot — GDScript hardcodes no gameplay data.
+## Producer building kinds come from the Rust catalogue via
+## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
 
 func _ready() -> void:
@@ -46,20 +45,12 @@ func _ready() -> void:
 		producers[str(units[kind].get("producer", ""))] = true
 	_producer_kinds.assign(producers.keys())
 	_producer_kinds.sort()
-	var age_up: Dictionary = catalogue.get("age_up", {})
-	age_button.text = "Advance Age (%df %dg)" % [
-		int(age_up.get("food", 0)),
-		int(age_up.get("gold", 0)),
-	]
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
 	for button in _build_grid.get_children():
 		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
 	for button in _train_grid.get_children():
-		if button.has_meta("kind"):
-			button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
-		else:
-			button.pressed.connect(_on_age_pressed)
+		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
 	idle_button.pressed.connect(_on_idle_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	resume_button.pressed.connect(_on_resume_pressed)
@@ -170,20 +161,18 @@ func _reconcile_selection() -> void:
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	economy_label.text = "Food %d   Wood %d   Gold %d\nPopulation %d/%d   Age %d" % [
+	economy_label.text = "Food %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d" % [
 		int(economy.get("food", 0)),
-		int(economy.get("wood", 0)),
-		int(economy.get("gold", 0)),
+		int(economy.get("scrap", 0)),
+		int(economy.get("coal", 0)),
+		int(economy.get("crystals", 0)),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
-		int(economy.get("age", 1)),
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	var building: Dictionary = {}
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)
-	age_button.disabled = int(economy.get("age", 1)) >= 2 \
-		or str(building.get("kind", "")) != "TownCenter"
 	_refresh_selection(building)
 
 func _refresh_selection(building: Dictionary) -> void:
@@ -363,7 +352,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	var armed := _attack_move_armed
 	_attack_move_armed = false
 	# An armed attack-move is a modal order: it outranks every contextual
-	# pick (villager gather/construction, enemy attack, rally, move).
+	# pick (worker gather/construction, enemy attack, rally, move).
 	if armed and not selected_ids.is_empty():
 		var target = _ground_target(screen_position)
 		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
@@ -371,11 +360,11 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		else:
 			command_status.text = "Attack-move rejected"
 		return
-	var villagers := _selected_villager_ids()
-	if not villagers.is_empty():
+	var workers := _selected_worker_ids()
+	if not workers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
 		if resource_id > 0:
-			if GrusBridge.gather(PackedInt32Array(villagers), resource_id):
+			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
 				command_status.text = "Gather command queued"
 			else:
 				command_status.text = "Gather command rejected"
@@ -384,7 +373,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		if building != null and int(building.get_meta("team_id", -1)) == 1:
 			var building_id := int(building.get_meta("building_id", -1))
 			if not _building_complete(building_id):
-				if GrusBridge.resume_construction(villagers[0], building_id):
+				if GrusBridge.resume_construction(workers[0], building_id):
 					command_status.text = "Construction resume queued"
 				else:
 					command_status.text = "Construction resume rejected"
@@ -533,29 +522,22 @@ func _restart_match() -> void:
 	_cancel_placement()
 	_fx.clear_all()
 
-func _selected_villager_ids() -> Array[int]:
-	var villagers: Array[int] = []
+func _selected_worker_ids() -> Array[int]:
+	var workers: Array[int] = []
 	for id in selected_ids:
-		if _unit_kind(id) == "Villager":
-			villagers.append(id)
-	villagers.sort()
-	return villagers
+		if _unit_kind(id) == "Worker":
+			workers.append(id)
+	workers.sort()
+	return workers
 
-func _lowest_selected_villager_id() -> int:
-	var villagers := _selected_villager_ids()
-	return villagers[0] if not villagers.is_empty() else 0
+func _lowest_selected_worker_id() -> int:
+	var workers := _selected_worker_ids()
+	return workers[0] if not workers.is_empty() else 0
 
 func _gatherable_resource_id(screen_position: Vector2) -> int:
+	# Only standalone finite sources are gatherable; buildings never carry
+	# resource metadata.
 	var resource := _nearest_view("resource_views", screen_position)
-	var building := _nearest_view("building_views", screen_position)
-	if building != null and (int(building.get_meta("team_id", -1)) != 1 \
-			or not building.has_meta("resource_id")):
-		building = null
-	# A Farm body under the cursor outranks a neighbouring source when it is
-	# the nearer view — the building's footprint centre is the click target.
-	if building != null and (resource == null \
-			or _view_distance(building, screen_position) < _view_distance(resource, screen_position)):
-		return int(building.get_meta("resource_id", -1))
 	if resource != null:
 		return int(resource.get_meta("resource_id", -1))
 	return -1
@@ -590,7 +572,7 @@ func _update_placement_preview(screen_position: Vector2) -> void:
 		_preview_box.visible = false
 		return
 	var preview: Dictionary = GrusBridge.placement_preview(
-		_lowest_selected_villager_id(), _placement_kind, floori(target.x), floori(target.y))
+		_lowest_selected_worker_id(), _placement_kind, floori(target.x), floori(target.y))
 	if preview.is_empty():
 		_preview_box.visible = false
 		return
@@ -614,9 +596,9 @@ func _try_placement(screen_position: Vector2) -> void:
 	var target = _ground_target(screen_position)
 	if target == null:
 		return
-	var builder := _lowest_selected_villager_id()
+	var builder := _lowest_selected_worker_id()
 	if builder <= 0:
-		command_status.text = "Select a villager to build"
+		command_status.text = "Select a worker to build"
 		return
 	var anchor_x := floori(target.x)
 	var anchor_y := floori(target.y)
@@ -642,18 +624,6 @@ func _on_train_pressed(kind: String) -> void:
 	else:
 		command_status.text = "Training rejected"
 
-func _on_age_pressed() -> void:
-	if not _playing():
-		command_status.text = "Match is not playing"
-		return
-	if selected_building_id <= 0:
-		command_status.text = "Select the Town Center to advance"
-		return
-	if GrusBridge.enqueue_age_up(selected_building_id):
-		command_status.text = "Age advancement queued"
-	else:
-		command_status.text = "Age advancement rejected"
-
 func _on_idle_pressed() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	var ids: PackedInt32Array = economy.get("idle_worker_ids", PackedInt32Array())
@@ -675,4 +645,4 @@ func _on_idle_pressed() -> void:
 		camera.position.x = view.global_position.x
 		camera.position.z = view.global_position.z
 		break
-	command_status.text = "Selected idle villager #%d" % worker_id
+	command_status.text = "Selected idle worker #%d" % worker_id

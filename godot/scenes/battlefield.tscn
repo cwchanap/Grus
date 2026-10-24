@@ -1,6 +1,7 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://scripts/fog_of_war.gd" id="1_fog"]
+[ext_resource type="Script" path="res://scripts/ruins.gd" id="2_ruins"]
 
 [sub_resource type="StandardMaterial3D" id="Material_ground"]
 albedo_color = Color(0.23, 0.34, 0.22, 1)
@@ -9,16 +10,6 @@ roughness = 0.95
 [sub_resource type="BoxMesh" id="BoxMesh_ground"]
 size = Vector3(128, 0.2, 96)
 
-[sub_resource type="StandardMaterial3D" id="Material_obstacle"]
-albedo_color = Color(0.28, 0.29, 0.31, 1)
-roughness = 0.9
-
-[sub_resource type="BoxMesh" id="BoxMesh_obstacle_a"]
-size = Vector3(8, 2, 56)
-
-[sub_resource type="BoxMesh" id="BoxMesh_obstacle_b"]
-size = Vector3(4, 2, 20)
-
 [node name="Battlefield" type="Node3D"]
 
 [node name="Ground" type="MeshInstance3D" parent="."]
@@ -26,20 +17,8 @@ position = Vector3(64, -0.1, 48)
 mesh = SubResource("BoxMesh_ground")
 material_override = SubResource("Material_ground")
 
-[node name="WestBarrier" type="MeshInstance3D" parent="."]
-position = Vector3(58, 1, 48)
-mesh = SubResource("BoxMesh_obstacle_a")
-material_override = SubResource("Material_obstacle")
-
-[node name="EastBarrier" type="MeshInstance3D" parent="."]
-position = Vector3(70, 1, 48)
-mesh = SubResource("BoxMesh_obstacle_a")
-material_override = SubResource("Material_obstacle")
-
-[node name="CenterBarrier" type="MeshInstance3D" parent="."]
-position = Vector3(64, 1, 48)
-mesh = SubResource("BoxMesh_obstacle_b")
-material_override = SubResource("Material_obstacle")
+[node name="Ruins" type="Node3D" parent="."]
+script = ExtResource("2_ruins")
 
 [node name="FogOfWar" type="Node3D" parent="."]
 script = ExtResource("1_fog")

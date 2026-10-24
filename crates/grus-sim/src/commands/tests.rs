@@ -49,7 +49,7 @@ fn enemy_units_are_rejected_without_mutating_their_order() {
         UnitId(9),
         TeamId(2),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -81,7 +81,7 @@ fn replacement_move_discards_the_previous_route() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -109,7 +109,7 @@ fn stop_removes_an_active_move_order() {
         UnitId(2),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -136,7 +136,7 @@ fn unreachable_units_return_terminal_rejection_without_an_order() {
         UnitId(3),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
 
@@ -163,7 +163,7 @@ fn group_targets_distinct_walkable_destination_slots() {
             UnitId(id),
             TeamId(1),
             Vec2::new(2.5, id as f32 + 1.5),
-            UnitKind::Villager,
+            UnitKind::Worker,
             6.0,
         );
     }
@@ -213,7 +213,7 @@ fn sequential_commands_do_not_collapse_onto_occupied_destination() {
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
     let second = spawn_unit(
@@ -221,7 +221,7 @@ fn sequential_commands_do_not_collapse_onto_occupied_destination() {
         UnitId(2),
         TeamId(1),
         Vec2::new(2.5, 4.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
 
@@ -284,7 +284,7 @@ fn destination_slots_keep_scanning_past_reserved_candidates() {
             UnitId(100 + i as u32),
             TeamId(2),
             map.cell_center(*cell),
-            UnitKind::Villager,
+            UnitKind::Worker,
             6.0,
         );
     }
@@ -293,7 +293,7 @@ fn destination_slots_keep_scanning_past_reserved_candidates() {
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
 
@@ -323,7 +323,7 @@ fn unreachable_move_preserves_an_active_order() {
         UnitId(4),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -358,7 +358,7 @@ fn unreachable_route_preserves_an_active_order() {
         UnitId(5),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -394,7 +394,7 @@ fn rejected_unit_keeps_its_destination_reserved_from_accepted_sibling() {
         UnitId(1),
         TeamId(1),
         Vec2::new(18.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     // Unit B is walled into a pocket on the left so it is Unreachable, but
@@ -413,7 +413,7 @@ fn rejected_unit_keeps_its_destination_reserved_from_accepted_sibling() {
         UnitId(2),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     world.entity_mut(b).insert(MoveOrder {
@@ -479,7 +479,7 @@ fn stop_rejects_foreign_units_and_preserves_their_orders() {
         UnitId(9),
         TeamId(2),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world
@@ -512,7 +512,7 @@ fn move_never_assigns_a_non_commanded_units_existing_goal() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let other = spawn_unit(
@@ -520,7 +520,7 @@ fn move_never_assigns_a_non_commanded_units_existing_goal() {
         UnitId(2),
         TeamId(1),
         Vec2::new(4.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let claimed = GridPos::new(12, 12);
@@ -557,7 +557,7 @@ fn group_move_never_targets_a_cell_another_commanded_unit_stands_on() {
         UnitId(1),
         TeamId(1),
         Vec2::new(10.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let b = spawn_unit(
@@ -565,7 +565,7 @@ fn group_move_never_targets_a_cell_another_commanded_unit_stands_on() {
         UnitId(2),
         TeamId(1),
         Vec2::new(12.5, 10.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let b_cell = GridPos::new(12, 10);
@@ -595,60 +595,65 @@ fn group_move_never_targets_a_cell_another_commanded_unit_stands_on() {
 #[test]
 fn spawn_unit_attaches_catalogue_health_and_ready_cooldown() {
     let mut world = World::new();
-    let villager = spawn_unit(
+    let worker = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
-    let spearman = spawn_unit(
+    let guard = spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(1),
         Vec2::new(2.5, 1.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
 
-    let villager_health = world.get::<Health>(villager).expect("villager health");
+    let worker_health = world.get::<Health>(worker).expect("worker health");
     assert_eq!(
-        villager_health,
+        worker_health,
         &Health {
             current: 50,
             max: 50
         }
     );
-    let spearman_health = world.get::<Health>(spearman).expect("spearman health");
+    let guard_health = world.get::<Health>(guard).expect("guard health");
     assert_eq!(
-        spearman_health,
+        guard_health,
         &Health {
             current: 100,
             max: 100
         }
     );
     assert_eq!(
-        world.get::<AttackCooldown>(villager),
+        world.get::<AttackCooldown>(worker),
         Some(&AttackCooldown::default())
     );
     assert_eq!(
-        world.get::<AttackCooldown>(spearman),
+        world.get::<AttackCooldown>(guard),
         Some(&AttackCooldown::default())
     );
 }
 
 #[test]
 fn reject_reason_variants_stay_append_ordered() {
-    // `RejectReason` is append-only and its discriminants leak to Godot as
-    // numeric reject codes (`reason as i32`). `SessionLocked` (the newest
-    // variant) must keep a higher discriminant than every pre-existing
-    // variant and must not reuse `Locked`.
+    // `RejectReason` discriminants leak to Godot as numeric reject codes
+    // (`reason as i32`). Deleting `FarmOccupied` (formerly index 12) renumbered
+    // every later variant down by one; these pins lock the post-deletion wire
+    // values asserted by the GDScript smokes.
+    assert_eq!(RejectReason::Locked as i32, 7);
+    assert_eq!(RejectReason::PopulationFull as i32, 12);
+    assert_eq!(RejectReason::NoSpawnSpace as i32, 13);
+    assert_eq!(RejectReason::NotCombatant as i32, 14);
+    assert_eq!(RejectReason::TargetMissing as i32, 15);
+    assert_eq!(RejectReason::InvalidTarget as i32, 16);
+    assert_eq!(RejectReason::SessionLocked as i32, 17);
+    assert_eq!(RejectReason::Unexplored as i32, 18);
     assert!(RejectReason::SessionLocked as i32 > RejectReason::NoSpawnSpace as i32);
     assert!(RejectReason::SessionLocked as i32 > RejectReason::UnknownUnit as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::NotCombatant as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::TargetMissing as i32);
-    assert!(RejectReason::SessionLocked as i32 > RejectReason::InvalidTarget as i32);
     assert_ne!(RejectReason::SessionLocked, RejectReason::Locked);
 }
 
@@ -658,12 +663,12 @@ fn rejected_attack_commands_leave_unit_state_untouched() {
     // the unit's whole worker/movement/combat state.
     let mut world = World::new();
     let mut map = open_map();
-    let spearman = spawn_unit(
+    let guard = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
     let teammate = spawn_unit(
@@ -671,18 +676,18 @@ fn rejected_attack_commands_leave_unit_state_untouched() {
         UnitId(3),
         TeamId(1),
         Vec2::new(3.5, 2.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
-    let villager = spawn_unit(
+    let worker = spawn_unit(
         &mut world,
         UnitId(4),
         TeamId(1),
         Vec2::new(4.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
-    world.entity_mut(spearman).insert((
+    world.entity_mut(guard).insert((
         WorkerTask::Idle,
         CombatOrder::Attack {
             target: CombatTarget::Unit(UnitId(2)),
@@ -709,7 +714,7 @@ fn rejected_attack_commands_leave_unit_state_untouched() {
             target: CombatTarget::Unit(UnitId(3)),
         },
     );
-    let villager_attack = apply_player_command(
+    let worker_attack = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::Attack {
@@ -718,7 +723,7 @@ fn rejected_attack_commands_leave_unit_state_untouched() {
             target: CombatTarget::Unit(UnitId(9)),
         },
     );
-    let villager_attack_move = apply_player_command(
+    let worker_attack_move = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::Units(UnitCommand {
@@ -740,43 +745,43 @@ fn rejected_attack_commands_leave_unit_state_untouched() {
         vec![(UnitId(1), RejectReason::InvalidTarget)]
     );
     assert_eq!(
-        villager_attack.rejected_units,
+        worker_attack.rejected_units,
         vec![(UnitId(4), RejectReason::NotCombatant)]
     );
     assert_eq!(
-        villager_attack_move.rejected_units,
+        worker_attack_move.rejected_units,
         vec![(UnitId(4), RejectReason::NotCombatant)]
     );
     assert!(
-        world.get::<WorkerTask>(spearman).is_some(),
+        world.get::<WorkerTask>(guard).is_some(),
         "a rejected attack must not clear the task"
     );
     assert!(
-        world.get::<MoveOrder>(spearman).is_some(),
+        world.get::<MoveOrder>(guard).is_some(),
         "a rejected attack must not clear the route"
     );
     assert_eq!(
-        world.get::<CombatOrder>(spearman),
+        world.get::<CombatOrder>(guard),
         Some(&CombatOrder::Attack {
             target: CombatTarget::Unit(UnitId(2)),
             last_target_cell: None,
         }),
         "a rejected attack must not touch combat intent"
     );
-    assert!(world.get::<CombatOrder>(villager).is_none());
+    assert!(world.get::<CombatOrder>(worker).is_none());
     assert!(world.get::<CombatOrder>(teammate).is_none());
 }
 
 #[test]
-fn villagers_reject_attack_commands_as_noncombatants() {
+fn workers_reject_attack_commands_as_noncombatants() {
     let mut world = World::new();
     let mut map = open_map();
-    let villager = spawn_unit(
+    let worker = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let enemy = spawn_unit(
@@ -784,7 +789,7 @@ fn villagers_reject_attack_commands_as_noncombatants() {
         UnitId(2),
         TeamId(2),
         Vec2::new(10.5, 10.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
 
@@ -817,8 +822,8 @@ fn villagers_reject_attack_commands_as_noncombatants() {
         attack_move.rejected_units,
         vec![(UnitId(1), RejectReason::NotCombatant)]
     );
-    assert!(world.get::<CombatOrder>(villager).is_none());
-    assert!(world.get::<MoveOrder>(villager).is_none());
+    assert!(world.get::<CombatOrder>(worker).is_none());
+    assert!(world.get::<MoveOrder>(worker).is_none());
     assert!(world.get::<Health>(enemy).is_some());
 }
 
@@ -826,12 +831,12 @@ fn villagers_reject_attack_commands_as_noncombatants() {
 fn accepted_attack_cancels_prior_activity_and_installs_combat_order() {
     let mut world = World::new();
     let mut map = open_map();
-    let spearman = spawn_unit(
+    let guard = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
     let enemy = spawn_unit(
@@ -839,11 +844,11 @@ fn accepted_attack_cancels_prior_activity_and_installs_combat_order() {
         UnitId(2),
         TeamId(2),
         Vec2::new(10.5, 10.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
     world
-        .entity_mut(spearman)
+        .entity_mut(guard)
         .insert(test_order(&map, Vec2::new(3.5, 2.5)));
 
     let outcome = apply_player_command(
@@ -859,14 +864,14 @@ fn accepted_attack_cancels_prior_activity_and_installs_combat_order() {
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
     assert!(outcome.rejected_units.is_empty());
     assert_eq!(
-        world.get::<CombatOrder>(spearman),
+        world.get::<CombatOrder>(guard),
         Some(&CombatOrder::Attack {
             target: CombatTarget::Unit(UnitId(2)),
             last_target_cell: None,
         })
     );
     assert!(
-        world.get::<MoveOrder>(spearman).is_none(),
+        world.get::<MoveOrder>(guard).is_none(),
         "acceptance cancels the unit's prior route"
     );
     assert!(world.get::<MoveOrder>(enemy).is_none());
@@ -876,12 +881,12 @@ fn accepted_attack_cancels_prior_activity_and_installs_combat_order() {
 fn accepted_attack_move_installs_destination_and_combat_order() {
     let mut world = World::new();
     let mut map = open_map();
-    let spearman = spawn_unit(
+    let guard = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
 
@@ -899,7 +904,7 @@ fn accepted_attack_move_installs_destination_and_combat_order() {
 
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
     assert_eq!(
-        world.get::<CombatOrder>(spearman),
+        world.get::<CombatOrder>(guard),
         Some(&CombatOrder::AttackMove {
             destination: GridPos::new(18, 18),
             target: None,
@@ -907,7 +912,7 @@ fn accepted_attack_move_installs_destination_and_combat_order() {
         })
     );
     let order = world
-        .get::<MoveOrder>(spearman)
+        .get::<MoveOrder>(guard)
         .expect("an accepted attack-move routes toward its destination");
     assert_eq!(order.goal, GridPos::new(18, 18));
 }
@@ -943,7 +948,7 @@ fn hidden_units_do_not_reserve_move_destinations() {
         UnitId(1),
         TeamId(1),
         map.cell_center(GridPos::new(0, 0)),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     spawn_unit(
@@ -951,7 +956,7 @@ fn hidden_units_do_not_reserve_move_destinations() {
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(3, 3)),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     // Runtime fog with no reveal: cell (3,3) is invisible to Team 1, so the
@@ -987,7 +992,7 @@ fn hidden_units_do_not_reserve_move_destinations() {
         UnitId(3),
         TeamId(1),
         map.cell_center(GridPos::new(2, 0)),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let target = map.cell_center(GridPos::new(3, 3));
@@ -1021,7 +1026,7 @@ fn hidden_enemy_move_goal_does_not_reserve_a_visible_destination() {
         UnitId(1),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     let enemy = spawn_unit(
@@ -1029,7 +1034,7 @@ fn hidden_enemy_move_goal_does_not_reserve_a_visible_destination() {
         UnitId(2),
         TeamId(2),
         Vec2::new(20.5, 20.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world.entity_mut(enemy).insert(MoveOrder {

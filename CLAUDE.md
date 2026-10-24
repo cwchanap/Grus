@@ -8,7 +8,7 @@ Grus is a 2.5D real-time strategy game: a Rust/Bevy ECS simulation driving a God
 
 ## Toolchain pins
 
-Everything is pinned exactly and CI builds `--locked`: Rust **1.95.0** (`rust-toolchain.toml`), Godot **4.6.2**, `bevy =0.19.1`, `godot =0.5.5`, `godot-bevy =0.12.0`, `pathfinding =4.16.0`. Edition 2024. Bump versions only deliberately — `bevy`/`godot`/`godot-bevy` are `=`-pinned because the bridge depends on version-specific behavior (see "Interpolation" below).
+Everything is pinned exactly and CI builds `--locked`: Rust **1.95.0** (`rust-toolchain.toml`), Godot **4.7.1**, `bevy =0.19.1`, `godot =0.5.5`, `godot-bevy =0.12.0`, `pathfinding =4.16.0`. Edition 2024. Bump versions only deliberately — `bevy`/`godot`/`godot-bevy` are `=`-pinned because the bridge depends on version-specific behavior (see "Interpolation" below).
 
 ## Build, run, verify
 
@@ -31,7 +31,7 @@ cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings
 cargo test --workspace
 
 # single test / module
-cargo test -p grus-sim age_two_completes            # by name substring
+cargo test -p grus-sim barracks_trains            # by name substring
 cargo test -p grus-sim --test system_order          # one integration target
 cargo test -p grus-sim economy::tests               # one inline module
 
@@ -69,7 +69,7 @@ refresh_visibility(&mut world, &map)
 
 This is deliberate: sim tests build `World::new()` + `seed_skirmish` and call the steps directly, with no app, no schedule, and no engine. Keep new gameplay in this shape.
 
-Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally, one-time Age 2), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `fixture` (authored skirmish + benchmark seeds), `ids`.
+Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `fixture` (authored skirmish + benchmark seeds — the `TeamStart` table and `RUINS` table are the only layout coordinate sources), `ids`.
 
 **`crates/grus-godot`** — the GDExtension. `build_app` (`#[bevy_app]`) registers the godot-bevy plugins, sets `Time::<Fixed>` to `SIM_STEP_SECONDS` (0.05 → 20 Hz), and chains `FixedUpdate` in a fixed order:
 
@@ -77,9 +77,9 @@ Modules: `catalog` (the single source of costs, build/train seconds, footprints,
 apply_pending_commands → advance_combat → advance_movement → advance_economy → advance_construction → advance_production → advance_visibility → drain_route_reject_feedback
 ```
 
-Order is a contract, not an accident: arrival is visible to economy/construction in the same tick, and production runs last so an Age 2 completion does not retroactively change that tick's gather rate; `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
+Order is a contract, not an accident: arrival is visible to economy/construction in the same tick, and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick; `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
 
-**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `enqueue_age_up`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
+**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
 
 ### Non-obvious invariants
 
@@ -87,6 +87,7 @@ Order is a contract, not an accident: arrival is visible to economy/construction
 - **Interpolation is hand-rolled.** godot-bevy 0.12 pins `Time<Fixed>::overstep_fraction()` to 0 and syncs transforms once per tick, so `sync_interpolated_unit_transforms` writes each unit view's `Node3D` transform directly every `Update` using `Engine::get_physics_interpolation_fraction()`. Don't route unit positions through `GodotTransformSyncPlugin` expecting smoothing.
 - **Coordinates:** sim is a flat 2D plane (`Vec2 { x, y }`); Godot is 3D with sim `y` → world `z`, `y = 0`.
 - **Occupancy** mutates only through `GridMap::set_blocked`. The map revision changes only when walkability actually changes; active `MoveOrder`s replan once on a newer revision rather than pathing every tick, and `last_failed_replan` suppresses re-running A* toward a known-unreachable goal until the map changes again.
+- **Layout coordinates are single-sourced:** `MapFixture::team_starts()` returns the `TeamStart` table (Research Center anchor, 4 worker cells, Barracks/Depot anchors, `safe_sources: [ResourceId; 6]` per team) and `fixture::RUINS` is the only static-blocker table — `battlefield()` applies it through `set_blocked_rect`, `GrusBridge.obstacle_rects()` exposes the same inclusive rectangles, and `ruins.gd` stamps one `BoxMesh` per rect. Never copy ruin or start coordinates into tests, `.tscn`, or GDScript — read the table or the live views. Team 1's start is the central city (RC center = map midpoint); team membership and safe-source ids come from the table, never from an `x < 64` style side test.
 - **Two reset modes, do not mix:** `reset_fixture` reseeds the 8-unit/2-building/18-resource skirmish (runtime + smokes); `reset_benchmark_fixture` reseeds the session-free mixed 100-vs-100 benchmark (normal seed + 96 added units per team with initial gather/attack-move orders under fog of war, **no `MatchSession`** — a missing session reads as Playing) used only by `benchmark_200.tscn`. Both share the single non-mirrored `seed_skirmish` path — the mirrored seed / `GRUS_MIRRORED_START` launch mode was removed in HPA-445.
 - **Sim speed** is `Engine.time_scale` (godot-bevy's fixed driver derives its delta from `_physics_process`), not `Time<Virtual>` alone — `set_sim_speed` writes both; the economy smoke runs at 20×.
 - `setup_fixture` is guarded on `UnitIndex` already existing, so a bridge reset before the first fixed tick does not double-seed.

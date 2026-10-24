@@ -9,9 +9,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex, worker_at_slot};
-use crate::catalog::{
-    AGE_TWO_GATHER_RATE, Age, BASE_GATHER_RATE, CARRY_LIMIT, ResourceKind, UnitKind,
-};
+use crate::catalog::{BASE_GATHER_RATE, CARRY_LIMIT, Cost, ResourceKind, UnitKind};
 use crate::combat::CombatOrder;
 use crate::commands::{
     CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity, release_slot,
@@ -21,9 +19,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
-use crate::visibility::{
-    explored_by, move_goal_counts_as_occupancy, unit_counts_as_occupancy, visible_to,
-};
+use crate::visibility::{explored_by, move_goal_counts_as_occupancy, unit_counts_as_occupancy};
 
 /// Carried load of a worker. Invariant: never empty while `Holding`, never
 /// mixes resource kinds, never holds zero.
@@ -46,14 +42,13 @@ impl Carry {
     }
 }
 
-/// One gatherable node: a standalone 1×1 berry bush, tree, or gold deposit, or
-/// the renewable Food source added to a completed Farm building.
+/// One gatherable node: a standalone 1×1 ration cache, salvage ruin, or
+/// coal seam with a finite remaining amount.
 #[derive(Component, Debug)]
 pub struct ResourceSource {
     pub id: ResourceId,
     pub kind: ResourceKind,
-    pub remaining: Option<u32>,
-    pub assigned_worker: Option<UnitId>,
+    pub remaining: u32,
 }
 
 /// Stable lookup from `ResourceId` to its entity, mirroring `UnitIndex`.
@@ -94,8 +89,7 @@ pub(crate) fn spawn_resource_source(
             ResourceSource {
                 id,
                 kind,
-                remaining: Some(amount),
-                assigned_worker: None,
+                remaining: amount,
             },
             Footprint::new(cell, 1, 1),
         ))
@@ -137,33 +131,52 @@ pub enum WorkerTask {
     },
 }
 
+/// One team's stock in the four currencies. `crystals` is stockpile surface
+/// only for now: no gatherable source produces it and no catalogue price
+/// charges it yet.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ResourceStockpile {
     pub food: u32,
-    pub wood: u32,
-    pub gold: u32,
+    pub scrap: u32,
+    pub coal: u32,
+    pub crystals: u32,
+}
+
+impl ResourceStockpile {
+    /// Immutable affordability check over all four fields. Used by the
+    /// read-only placement preview; mutates nothing.
+    pub fn can_afford(&self, cost: Cost) -> bool {
+        self.food >= cost.food
+            && self.scrap >= cost.scrap
+            && self.coal >= cost.coal
+            && self.crystals >= cost.crystals
+    }
+    /// Atomic all-or-nothing deduction: compares every field first, then
+    /// deducts all four once. A failure on any currency leaves every field
+    /// unchanged, so a rejected spend can never partially charge.
+    pub fn try_spend(&mut self, cost: Cost) -> bool {
+        if !self.can_afford(cost) {
+            return false;
+        }
+        self.food -= cost.food;
+        self.scrap -= cost.scrap;
+        self.coal -= cost.coal;
+        self.crystals -= cost.crystals;
+        true
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct TeamState {
     pub stockpile: ResourceStockpile,
-    pub age: Age,
-    pub age_up_started: bool,
 }
 
 #[derive(Debug, Default, Resource)]
 pub struct TeamEconomy(pub HashMap<TeamId, TeamState>);
 
 impl TeamEconomy {
-    pub fn insert_team(&mut self, team: TeamId, stockpile: ResourceStockpile, age: Age) {
-        self.0.insert(
-            team,
-            TeamState {
-                stockpile,
-                age,
-                age_up_started: false,
-            },
-        );
+    pub fn insert_team(&mut self, team: TeamId, stockpile: ResourceStockpile) {
+        self.0.insert(team, TeamState { stockpile });
     }
 }
 
@@ -174,10 +187,10 @@ pub struct Dropoff {
 }
 
 /// The one unit-activity cleanup path: clears any construction assignment
-/// and Farm reservation the unit held, resets its gather progress, returns
-/// it to `Idle`, and drops its route and any combat order. Replacement
-/// commands cancel only after validating, and rejected commands never reach
-/// this. `Carry` is never touched.
+/// the unit held, resets its gather progress, returns it to `Idle`, and
+/// drops its route and any combat order. Replacement commands cancel only
+/// after validating, and rejected commands never reach this. `Carry` is
+/// never touched.
 pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
     let building = match world.get::<WorkerTask>(entity) {
         Some(WorkerTask::ToConstruction { building, .. })
@@ -195,24 +208,6 @@ pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
             state.construction.active_builder = None;
         }
     }
-    let source = match world.get::<WorkerTask>(entity) {
-        Some(WorkerTask::ToSource { source, .. })
-        | Some(WorkerTask::Gathering { source })
-        | Some(WorkerTask::ToDropoff { source, .. }) => Some(*source),
-        _ => None,
-    };
-    if let Some(source) = source {
-        let unit_id = world.get::<Unit>(entity).map(|unit| unit.id);
-        if let Some(source_entity) = world
-            .get_resource::<ResourceIndex>()
-            .and_then(|index| index.entity(source))
-            && let Some(unit_id) = unit_id
-            && let Some(mut state) = world.get_mut::<ResourceSource>(source_entity)
-            && state.assigned_worker == Some(unit_id)
-        {
-            state.assigned_worker = None;
-        }
-    }
     world.entity_mut(entity).insert(WorkerTask::Idle);
     world.entity_mut(entity).insert(GatherProgress::default());
     world.entity_mut(entity).remove::<MoveOrder>();
@@ -227,9 +222,8 @@ pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
 pub struct LastRouteReject(pub HashMap<TeamId, RejectReason>);
 
 /// Terminal cleanup when a worker's required route becomes impossible: the
-/// full `cancel_unit_activity` semantics (Farm assignment released,
-/// active-builder cleared, progress reset, order and combat intent dropped,
-/// `Idle`) plus the
+/// full `cancel_unit_activity` semantics (active-builder cleared, progress
+/// reset, order and combat intent dropped, `Idle`) plus the
 /// typed reject recorded for bridge feedback. `Carry` is never touched.
 pub(crate) fn idle_worker_on_route_failure(
     world: &mut World,
@@ -292,18 +286,18 @@ pub(crate) fn reroute_dropoff_worker(
     }
 }
 
-/// The one idle-villager definition: Villager + `WorkerTask::Idle` + no
+/// The one idle-worker definition: Worker + `WorkerTask::Idle` + no
 /// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count reads the
 /// same truth.
 pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
     world
         .get::<Unit>(entity)
-        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        .is_some_and(|unit| unit.kind == UnitKind::Worker)
         && world.get::<WorkerTask>(entity) == Some(&WorkerTask::Idle)
         && world.get::<MoveOrder>(entity).is_none()
 }
 
-/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD.
+/// Stable-ID-sorted idle workers of one team; consumed by the bridge HUD.
 pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
     let mut ids: Vec<UnitId> = world
         .get_resource::<UnitIndex>()
@@ -321,27 +315,17 @@ pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
     ids
 }
 
-pub fn gather_rate_for_age(age: Age) -> f32 {
-    match age {
-        Age::Age1 => BASE_GATHER_RATE,
-        Age::Age2 => AGE_TWO_GATHER_RATE,
-    }
-}
-
-/// Applies an accepted `Gather`: validates source knowledge, then source
-/// ownership — a foreign Farm, even while currently visible, is never an
-/// own economic source — plus owned villagers, Farm availability, and
-/// shared reservation state; then assigns unique immediate-perimeter slots.
+/// Applies an accepted `Gather`: validates source knowledge, then owned
+/// workers and shared reservation state; then assigns unique
+/// immediate-perimeter slots.
 /// A worker carrying resources routes to a reachable same-team Dropoff
 /// first (depositing) and only then to the requested source, so Carry never
 /// mixes kinds. Validation precedes any cancellation: a rejected worker
 /// keeps its old task and order.
 ///
 /// Fog privacy: an id the issuer does not know — an unexplored standalone
-/// source or a hidden enemy Farm — answers `SourceMissing` exactly like an
-/// absent id, so probing ids can never enumerate enemy Farms or watch a
-/// hidden source deplete. A *visible* enemy Farm stays honest (`NotOwned`)
-/// because current vision already reveals it.
+/// source — answers `SourceMissing` exactly like an absent id, so probing
+/// ids can never enumerate hidden sources or watch a hidden source deplete.
 pub(crate) fn apply_gather(
     world: &mut World,
     map: &mut GridMap,
@@ -364,38 +348,14 @@ pub(crate) fn apply_gather(
         .get::<Footprint>(source_entity)
         .copied()
         .expect("registered resource source footprint");
-    let is_farm = world.get::<Building>(source_entity).is_some();
-    // Knowledge gate, called unconditionally (both predicates pass through
+    // Knowledge gate, called unconditionally (the predicate passes through
     // when no VisibilityMap exists, so pure-sim full information is kept):
     // standalone sources are known once their cell was explored and stay
-    // known after vision is lost; own completed Farms are always valid
-    // knowledge; an enemy Farm is an enemy building and needs current
-    // visibility merely to be *known* — it is never admitted merely by
-    // sitting in the `ResourceIndex`.
-    let source_known = if is_farm {
-        world
-            .get::<Building>(source_entity)
-            .is_some_and(|building| building.team == issuer)
-            || visible_to(world, issuer, footprint)
-    } else {
-        explored_by(world, issuer, footprint)
-    };
-    if !source_known {
+    // known after vision is lost.
+    if !explored_by(world, issuer, footprint) {
         // Unknown and absent ids share one reject: distinct codes would let
-        // a caller probe ids to count hidden enemy Farms.
+        // a caller probe ids to count hidden sources.
         outcome.reject = Some(RejectReason::SourceMissing);
-        return outcome;
-    }
-    // Ownership: a foreign Farm stayed `SourceMissing` while hidden (fog
-    // privacy), but once visible the command authority refuses it — the
-    // Godot picker never offers enemy Farm views, and the Rust rule is the
-    // same: an enemy Farm is never gathered as an own economic source.
-    if is_farm
-        && !world
-            .get::<Building>(source_entity)
-            .is_some_and(|building| building.team == issuer)
-    {
-        outcome.reject = Some(RejectReason::NotOwned);
         return outcome;
     }
 
@@ -438,23 +398,10 @@ pub(crate) fn apply_gather(
         };
         if !world
             .get::<Unit>(entity)
-            .is_some_and(|unit| unit.kind == UnitKind::Villager)
+            .is_some_and(|unit| unit.kind == UnitKind::Worker)
         {
-            outcome.rejected_units.push((id, RejectReason::NotVillager));
+            outcome.rejected_units.push((id, RejectReason::NotWorker));
             continue;
-        }
-        // A Farm serves exactly one worker: the first accepted command
-        // reserves it, later commands reject until a retask or Stop releases.
-        if is_farm {
-            let assigned = world
-                .get::<ResourceSource>(source_entity)
-                .and_then(|state| state.assigned_worker);
-            if assigned.is_some_and(|holder| holder != id) {
-                outcome
-                    .rejected_units
-                    .push((id, RejectReason::FarmOccupied));
-                continue;
-            }
         }
         let Some(position) = world.get::<SimPosition>(entity).copied() else {
             outcome.rejected_units.push((id, RejectReason::UnknownUnit));
@@ -502,8 +449,8 @@ pub(crate) fn apply_gather(
             }
         };
 
-        // Fully validated: cancel the old activity (releasing any Farm
-        // reservation it held) before installing the gather task.
+        // Fully validated: cancel the old activity before installing the
+        // gather task.
         cancel_unit_activity(world, entity);
         world.entity_mut(entity).insert(task);
         if !route.is_empty() {
@@ -516,9 +463,6 @@ pub(crate) fn apply_gather(
             });
         }
         reserve_slot(&mut used, slot);
-        if is_farm && let Some(mut state) = world.get_mut::<ResourceSource>(source_entity) {
-            state.assigned_worker = Some(id);
-        }
         outcome.accepted_units.push(id);
     }
 
@@ -692,13 +636,7 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             }
         }
     }
-    for (entity, source, carry, team) in gatherers {
-        let team_age = world
-            .get_resource::<TeamEconomy>()
-            .and_then(|economy| economy.0.get(&team))
-            .map(|state| state.age)
-            .unwrap_or(Age::Age1);
-
+    for (entity, source, carry, _team) in gatherers {
         let source_entity = world
             .get_resource::<ResourceIndex>()
             .and_then(|index| index.entity(source));
@@ -758,11 +696,10 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             }
         };
 
-        let mut progress = progress + gather_rate_for_age(team_age) * seconds;
+        let mut progress = progress + BASE_GATHER_RATE * seconds;
         let whole = progress.floor() as u32;
         let carry_space = CARRY_LIMIT - carry.amount_or_zero();
-        let source_available = remaining.unwrap_or(u32::MAX);
-        let transferred = whole.min(carry_space).min(source_available);
+        let transferred = whole.min(carry_space).min(remaining);
 
         let mut carried = carry;
         if transferred > 0 {
@@ -779,7 +716,7 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             };
             progress -= transferred as f32;
         }
-        let depleted = remaining.is_some_and(|remaining| transferred >= remaining);
+        let depleted = transferred >= remaining;
 
         // Write phase: progress, carry, and remaining all move together.
         if let Some(mut state) = world.get_mut::<GatherProgress>(entity) {
@@ -789,10 +726,8 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
             if let Some(mut state) = world.get_mut::<Carry>(entity) {
                 *state = carried.clone();
             }
-            if let Some(remaining) = remaining
-                && let Some(mut state) = world.get_mut::<ResourceSource>(source_entity)
-            {
-                state.remaining = Some(remaining - transferred);
+            if let Some(mut state) = world.get_mut::<ResourceSource>(source_entity) {
+                state.remaining = remaining - transferred;
             }
         }
 
@@ -842,20 +777,6 @@ fn route_back_to_source(
         .get::<Footprint>(source_entity)
         .copied()
         .ok_or(RejectReason::Unreachable)?;
-    // A Farm keeps serving its assigned worker only.
-    if world.get::<Building>(source_entity).is_some() {
-        let unit_id = world
-            .get::<Unit>(worker)
-            .map(|unit| unit.id)
-            .ok_or(RejectReason::Unreachable)?;
-        let Some(mut state) = world.get_mut::<ResourceSource>(source_entity) else {
-            return Err(RejectReason::Unreachable);
-        };
-        match state.assigned_worker {
-            Some(holder) if holder != unit_id => return Err(RejectReason::Unreachable),
-            _ => state.assigned_worker = Some(unit_id),
-        }
-    }
     let position = world
         .get::<SimPosition>(worker)
         .ok_or(RejectReason::Unreachable)?;
@@ -925,8 +846,8 @@ fn deposit_carry(world: &mut World, worker: Entity) {
     {
         match kind {
             ResourceKind::Food => state.stockpile.food += amount,
-            ResourceKind::Wood => state.stockpile.wood += amount,
-            ResourceKind::Gold => state.stockpile.gold += amount,
+            ResourceKind::Scrap => state.stockpile.scrap += amount,
+            ResourceKind::Coal => state.stockpile.coal += amount,
         }
     }
     world.entity_mut(worker).insert(Carry::Empty);

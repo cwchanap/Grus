@@ -57,34 +57,34 @@ pub fn attach_selectors(world: &mut World) {
     }
 
     let mut buildings = world.query::<(Entity, &Building)>();
-    let town_centers: Vec<(Entity, TeamId)> = buildings
+    let research_centers: Vec<(Entity, TeamId)> = buildings
         .iter(world)
-        .filter(|(_, building)| building.kind == BuildingKind::TownCenter)
+        .filter(|(_, building)| building.kind == BuildingKind::ResearchCenter)
         .map(|(entity, building)| (entity, building.team))
         .collect();
-    for (entity, team) in town_centers {
+    for (entity, team) in research_centers {
         let selector = if team == PLAYER_TEAM {
-            "player.town-center"
+            "player.research-center"
         } else if team == ENEMY_TEAM {
-            "enemy.town-center"
+            "enemy.research-center"
         } else {
             continue;
         };
         world.entity_mut(entity).insert(E2eId::new(selector));
     }
 
-    // The fixture authors four equivalent starting villagers per team; the
+    // The fixture authors four equivalent starting workers per team; the
     // selector names the first-authored one (smallest authored `UnitId`).
     let mut units = world.query::<(Entity, &Unit)>();
-    let first_villager = units
+    let first_worker = units
         .iter(world)
-        .filter(|(_, unit)| unit.team == PLAYER_TEAM && unit.kind == UnitKind::Villager)
+        .filter(|(_, unit)| unit.team == PLAYER_TEAM && unit.kind == UnitKind::Worker)
         .min_by_key(|(_, unit)| unit.id)
         .map(|(entity, _)| entity);
-    if let Some(entity) = first_villager {
+    if let Some(entity) = first_worker {
         world
             .entity_mut(entity)
-            .insert(E2eId::new("player.starting-villager"));
+            .insert(E2eId::new("player.starting-worker"));
     }
 
     let mut ready = world.query::<&E2eId>();
@@ -175,9 +175,9 @@ mod tests {
 
         for selector in [
             "grus.ready",
-            "player.town-center",
-            "enemy.town-center",
-            "player.starting-villager",
+            "player.research-center",
+            "enemy.research-center",
+            "player.starting-worker",
         ] {
             assert_eq!(
                 by_id.get(selector).map(Vec::len),
@@ -193,22 +193,22 @@ mod tests {
 
         // Selectors sit on the right gameplay entities, not just any entity.
         let player = world
-            .entity(by_id["player.town-center"][0])
+            .entity(by_id["player.research-center"][0])
             .get::<Building>()
             .unwrap();
         assert_eq!(player.team, PLAYER_TEAM);
         let enemy = world
-            .entity(by_id["enemy.town-center"][0])
+            .entity(by_id["enemy.research-center"][0])
             .get::<Building>()
             .unwrap();
         assert_eq!(enemy.team, ENEMY_TEAM);
-        let villager = world
-            .entity(by_id["player.starting-villager"][0])
+        let worker = world
+            .entity(by_id["player.starting-worker"][0])
             .get::<Unit>()
             .unwrap();
-        assert_eq!(villager.team, PLAYER_TEAM);
-        assert_eq!(villager.kind, UnitKind::Villager);
-        assert_eq!(villager.id, UnitId(1), "first authored player villager");
+        assert_eq!(worker.team, PLAYER_TEAM);
+        assert_eq!(worker.kind, UnitKind::Worker);
+        assert_eq!(worker.id, UnitId(1), "first authored player worker");
     }
 
     /// `reset_fixture` despawns every gameplay entity — the selector-bearing
@@ -237,9 +237,9 @@ mod tests {
 
         for selector in [
             "grus.ready",
-            "player.town-center",
-            "enemy.town-center",
-            "player.starting-villager",
+            "player.research-center",
+            "enemy.research-center",
+            "player.starting-worker",
         ] {
             assert_eq!(
                 by_id.get(selector).map(Vec::len),
@@ -254,19 +254,19 @@ mod tests {
         );
 
         let player = world
-            .entity(by_id["player.town-center"][0])
+            .entity(by_id["player.research-center"][0])
             .get::<Building>()
             .unwrap();
         assert_eq!(player.team, PLAYER_TEAM);
         let enemy = world
-            .entity(by_id["enemy.town-center"][0])
+            .entity(by_id["enemy.research-center"][0])
             .get::<Building>()
             .unwrap();
         assert_eq!(enemy.team, ENEMY_TEAM);
-        let villager = world
-            .entity(by_id["player.starting-villager"][0])
+        let worker = world
+            .entity(by_id["player.starting-worker"][0])
             .get::<Unit>()
             .unwrap();
-        assert_eq!(villager.id, UnitId(1), "first authored player villager");
+        assert_eq!(worker.id, UnitId(1), "first authored player worker");
     }
 }

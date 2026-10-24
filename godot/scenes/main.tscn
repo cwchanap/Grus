@@ -75,7 +75,7 @@ offset_left = 8.0
 offset_top = 6.0
 offset_right = 258.0
 offset_bottom = 64.0
-text = "Food 0   Wood 0   Gold 0"
+text = "Food 0   Scrap 0   Coal 0\nCrystals 0   Population 0/0"
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
@@ -116,41 +116,23 @@ offset_right = 584.0
 offset_bottom = 84.0
 columns = 3
 
-[node name="HouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+[node name="BunkhouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
-text = "House"
-metadata/kind = "House"
+text = "Bunkhouse"
+metadata/kind = "Bunkhouse"
 
-[node name="StorehouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+[node name="DepotButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
-text = "Storehouse"
-metadata/kind = "Storehouse"
-
-[node name="FarmButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
-layout_mode = 2
-text = "Farm"
-metadata/kind = "Farm"
+text = "Depot"
+metadata/kind = "Depot"
 
 [node name="BarracksButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
 text = "Barracks"
 metadata/kind = "Barracks"
-
-[node name="ArcheryRangeButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
-layout_mode = 2
-text = "Archery Range"
-metadata/kind = "ArcheryRange"
-
-[node name="StableButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
-layout_mode = 2
-text = "Stable"
-metadata/kind = "Stable"
 
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
@@ -160,34 +142,23 @@ offset_right = 584.0
 offset_bottom = 168.0
 columns = 3
 
-[node name="VillagerButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
+[node name="WorkerButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
-text = "Villager"
-metadata/kind = "Villager"
+text = "Worker"
+metadata/kind = "Worker"
 
-[node name="SpearmanButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
+[node name="GuardButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
-text = "Spearman"
-metadata/kind = "Spearman"
+text = "Guard"
+metadata/kind = "Guard"
 
-[node name="ArcherButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
+[node name="RiflemanButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
 custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
-text = "Archer"
-metadata/kind = "Archer"
-
-[node name="CavalryButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
-layout_mode = 2
-text = "Cavalry"
-metadata/kind = "Cavalry"
-
-[node name="AgeButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
-layout_mode = 2
-text = "Advance Age (300f 200g)"
+text = "Rifleman"
+metadata/kind = "Rifleman"
 
 [node name="PauseButton" type="Button" parent="HUD"]
 offset_left = 930.0

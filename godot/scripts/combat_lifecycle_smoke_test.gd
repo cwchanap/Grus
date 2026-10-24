@@ -10,16 +10,13 @@ extends Node
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 ## RejectReason declaration order (crates/grus-sim/src/commands.rs):
-## SessionLocked is the 19th variant (0-based 18). The bridge exposes
+## SessionLocked is the 18th variant (0-based 17). The bridge exposes
 ## numeric codes only (last_reject_code) and reports "no rejection" as -1.
-const REJECT_SESSION_LOCKED := 18
+const REJECT_SESSION_LOCKED := 17
 
-## Proven-open Barracks anchor for the Team 1 base
-## (crates/grus-sim/src/fixture.rs layout).
-const BARRACKS_ANCHOR := Vector2i(17, 41)
-## Walkable ground beside the enemy Town Center footprint (112..115, 46..49);
-## attack-move here must acquire the Town Center within the 8-unit radius.
-const ENEMY_TOWN_CENTER_CELL := Vector2(118.5, 44.5)
+## Proven-open Barracks anchor: the authored ring slot west of the central
+## Research Center (crates/grus-sim/src/fixture.rs TeamStart table).
+const BARRACKS_ANCHOR := Vector2i(58, 46)
 
 var _main: Node3D
 var _fx: Node3D
@@ -112,8 +109,8 @@ func _assert_input_gated(where: String) -> bool:
 		return false
 	return true
 
-## The restart is only settled when every seeded villager 1..8 is present
-## with no stale views (e.g. the dead Spearman's node still alive) mixed in.
+## The restart is only settled when every seeded worker 1..8 is present
+## with no stale views (e.g. the dead Guard's node still alive) mixed in.
 func _restart_settled() -> bool:
 	if not _fixture_views_settled():
 		return false
@@ -207,7 +204,7 @@ func _run() -> void:
 	var unit_view_script := preload("res://scripts/unit_view.gd")
 	var role_specs: Dictionary = unit_view_script.ROLE_SPECS
 	var presentations := {}
-	for kind in ["Villager", "Spearman", "Archer", "Cavalry"]:
+	for kind in ["Worker", "Guard", "Rifleman"]:
 		if not role_specs.has(kind):
 			_fail("role spec missing for %s" % kind)
 			return
@@ -217,14 +214,14 @@ func _run() -> void:
 			_fail("role presentation duplicated between kinds: %s" % presentation)
 			return
 		presentations[presentation] = kind
-	var villager := _unit_view(1)
-	var villager_body := villager.get_node("Body") as MeshInstance3D
-	if absf(villager_body.scale.x - 0.8) > 0.0001 \
-			or (villager.get_node("RoleMarker") as Node3D).get_child_count() != 0:
-		_fail("villager role presentation is not the small unmarked body")
+	var worker := _unit_view(1)
+	var worker_body := worker.get_node("Body") as MeshInstance3D
+	if absf(worker_body.scale.x - 0.8) > 0.0001 \
+			or (worker.get_node("RoleMarker") as Node3D).get_child_count() != 0:
+		_fail("worker role presentation is not the small unmarked body")
 		return
 
-	# Combat journey: produce a combatant, then attack enemy villager 5.
+	# Combat journey: produce a combatant, then attack enemy worker 5.
 	if not GrusBridge.place_building(4, "Barracks", BARRACKS_ANCHOR.x, BARRACKS_ANCHOR.y):
 		_fail("Barracks placement was rejected")
 		return
@@ -241,29 +238,29 @@ func _run() -> void:
 			func(): return bool(GrusBridge.building_snapshot(barracks_id).get("complete", false)), 40.0,
 			"Barracks never completed"):
 		return
-	if not GrusBridge.enqueue_unit(barracks_id, "Spearman"):
-		_fail("Spearman training was rejected")
+	if not GrusBridge.enqueue_unit(barracks_id, "Guard"):
+		_fail("Guard training was rejected")
 		return
 	var spear_box := {"view": null}
-	if not await _wait_until(func(): return _first_kind_view("unit_views", "unit_kind", "Spearman", spear_box), 30.0,
-			"Spearman never trained"):
+	if not await _wait_until(func(): return _first_kind_view("unit_views", "unit_kind", "Guard", spear_box), 30.0,
+			"Guard never trained"):
 		return
-	var spearman: Node3D = spear_box["view"]
-	var spear_id := int(spearman.get_meta("unit_id"))
+	var guard: Node3D = spear_box["view"]
+	var spear_id := int(guard.get_meta("unit_id"))
 	if spear_id < 9:
-		_fail("trained Spearman reused a seeded id: %d" % spear_id)
+		_fail("trained Guard reused a seeded id: %d" % spear_id)
 		return
-	var spear_body := spearman.get_node("Body") as MeshInstance3D
+	var spear_body := guard.get_node("Body") as MeshInstance3D
 	if absf(spear_body.scale.x - 1.0) > 0.0001 \
-			or (spearman.get_node("RoleMarker") as Node3D).get_child_count() != 1:
-		_fail("Spearman role presentation is not the marked full-size body")
+			or (guard.get_node("RoleMarker") as Node3D).get_child_count() != 1:
+		_fail("Guard role presentation is not the marked full-size body")
 		return
 
 	# Controller-level attack-move: arm through the A-key handler, then
 	# right-click open ground in the north corridor — the arm must clear and
-	# the Spearman must march (movement-observed AttackMove). This runs while
-	# the Spearman is still beside the home Barracks: issued next to the
-	# enemy Town Center it would correctly acquire the building inside
+	# the Guard must march (movement-observed AttackMove). This runs while
+	# the Guard is still beside the home Barracks: issued next to the
+	# enemy Research Center it would correctly acquire the building inside
 	# ATTACK_MOVE_RADIUS and fight in place instead of marching.
 	var ground_click := _screen_of(Vector3(62.5, 0.0, 12.5))
 	var march_selection: Array[int] = [spear_id]
@@ -278,21 +275,26 @@ func _run() -> void:
 		_fail("armed ground click did not queue an attack-move: %s"
 				% _main.command_status.text)
 		return
-	var spear_before := spearman.global_position
+	var spear_before := guard.global_position
 	if not await _wait_until(
-			func(): return spearman.global_position.distance_to(spear_before) > 2.0, 15.0,
-			"A-armed attack-move never moved the Spearman"):
+			func(): return guard.global_position.distance_to(spear_before) > 2.0, 15.0,
+			"A-armed attack-move never moved the Guard"):
 		return
 
 	var victim := _unit_view(5)
 	if victim == null:
-		_fail("enemy villager 5 view is missing before the attack")
+		_fail("enemy worker 5 view is missing before the attack")
 		return
 	# Fog retarget (HPA-473): the enemy start boots hidden, so the pickers
-	# would rightly ignore villager 5 — march the Spearman into vision first.
+	# would rightly ignore worker 5 — march the Guard into vision first.
+	# The waypoint derives from the live victim view (a hidden enemy view
+	# still tracks its authoritative position): ground west of the enemy
+	# worker, never a copied fixture coordinate.
 	# A queued bridge call is not acceptance: assert the sim's own feedback.
 	var march_revision := int(GrusBridge.command_feedback_revision())
-	if not GrusBridge.move_units(PackedInt32Array([spear_id]), Vector2(108.5, 44.5)):
+	var scout_waypoint := Vector2(
+		victim.global_position.x - 8.0, victim.global_position.z - 1.0)
+	if not GrusBridge.move_units(PackedInt32Array([spear_id]), scout_waypoint):
 		_fail("bridge refused to queue the scouting march")
 		return
 	if not await _wait_until(
@@ -302,10 +304,10 @@ func _run() -> void:
 		return
 	if not await _wait_until(
 			func(): return victim.is_visible_in_tree(), 60.0,
-			"the march never scouted enemy villager 5 into vision"):
+			"the march never scouted enemy worker 5 into vision"):
 		return
-	# Controller-level right-click attack: select the Spearman and drive
-	# _issue_context_command with the screen position of enemy villager 5 —
+	# Controller-level right-click attack: select the Guard and drive
+	# _issue_context_command with the screen position of enemy worker 5 —
 	# the enemy-picking path must queue the same bridge attack.
 	var enemy_click := _screen_of(victim.global_position)
 	var attack_selection: Array[int] = [spear_id]
@@ -346,17 +348,25 @@ func _run() -> void:
 			"dead unit 5 was never reconciled out of selection/control groups"):
 		return
 
-	# Attack-move onto the enemy Town Center: acquisition must pick it up
-	# and drop its health through the building health bar.
-	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), ENEMY_TOWN_CENTER_CELL):
-		_fail("attack_move_units refused the Town Center push")
-		return
+	# Attack-move onto the enemy Research Center: the waypoint derives from
+	# the live BuildingId-2 view (its footprint center) — never a copied
+	# fixture coordinate — and must sit inside the 8-unit acquisition
+	# radius so the march ends beside the building.
 	var enemy_tc := _building_view(2)
 	if enemy_tc == null:
-		_fail("enemy Town Center view 2 is missing")
+		_fail("enemy Research Center view 2 is missing")
+		return
+	var rc_waypoint := Vector2(
+		enemy_tc.global_position.x + 4.0, enemy_tc.global_position.z - 4.0)
+	if Vector2(enemy_tc.global_position.x, enemy_tc.global_position.z) \
+			.distance_to(rc_waypoint) > 8.0:
+		_fail("derived Research Center waypoint escaped acquisition radius: %s" % rc_waypoint)
+		return
+	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), rc_waypoint):
+		_fail("attack_move_units refused the Research Center push")
 		return
 	if not await _wait_until(func(): return float(enemy_tc.call("health_ratio")) < 1.0, 30.0,
-			"attack-move never damaged the enemy Town Center"):
+			"attack-move never damaged the enemy Research Center"):
 		return
 
 	# Pause freezes the world and the cosmetics: the last Playing tick's
@@ -394,10 +404,10 @@ func _run() -> void:
 			"session never resumed to Playing"):
 		return
 
-	# First Town Center destruction settles the Result: overlay shows
+	# First Research Center destruction settles the Result: overlay shows
 	# Victory with Restart/Quit for the local team.
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 60.0,
-			"enemy Town Center destruction never reached Result"):
+			"enemy Research Center destruction never reached Result"):
 		return
 	var result: Dictionary = GrusBridge.session_snapshot()
 	if int(result.get("winner_team", -1)) != 1:
@@ -423,15 +433,15 @@ func _run() -> void:
 	if not _assert_input_gated("Result"):
 		return
 
-	# The destroyed Town Center reconciles out of selected_building_id the
+	# The destroyed Research Center reconciles out of selected_building_id the
 	# same way — the settle tick's preserved kill event is cosmetic only.
 	_main.selected_building_id = 2
 	if not await _wait_until(
 			func(): return int(_main.selected_building_id) == -1, 5.0,
-			"destroyed Town Center 2 was never reconciled out of selected_building_id"):
+			"destroyed Research Center 2 was never reconciled out of selected_building_id"):
 		return
 
-	# Restart hygiene: dead stable ids (the slain villager 5 and Spearman)
+	# Restart hygiene: dead stable ids (the slain worker 5 and Guard)
 	# sit in selection/control groups, a live effect is on the stage, then
 	# the restart must clear all of it while the bridge reseeds fresh ids.
 	var dead_ids: Array[int] = [5, spear_id]
@@ -474,6 +484,6 @@ func _run() -> void:
 		_fail("restart left transient combat effects on the stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=4 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result selection_reconciled=true restart_cleared=true")
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh start_reject=session_locked invalid_target_kinds=3 role_kinds=3 hp_decreased=true death_removed=true effects=spawned pause_frozen=true overlay=victory result_reject=session_locked controller_attack=queued controller_attack_move=marched input_gated=start_paused_result selection_reconciled=true restart_cleared=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)

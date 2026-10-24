@@ -10,9 +10,7 @@ use bevy::prelude::{Component, Entity, Resource, World};
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, unit_spec};
 use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
-use crate::economy::{
-    ResourceIndex, ResourceSource, WorkerTask, cancel_unit_activity, reroute_dropoff_worker,
-};
+use crate::economy::{WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -181,7 +179,7 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     attacker_ids.sort_unstable();
 
     for id in attacker_ids {
-        // A Town Center death mid-step settles the Result and freezes combat
+        // A Research Center death mid-step settles the Result and freezes combat
         // for every later attacker in this same tick — first destruction wins.
         if !gameplay_active(world) {
             break;
@@ -601,12 +599,12 @@ fn strike(
         match target {
             CombatTarget::Unit(_) => destroy_unit(world, target_entity),
             CombatTarget::Building(_) => {
-                // Result resolves immediately on Town Center destruction.
-                let town_center = world
+                // Result resolves immediately on Research Center destruction.
+                let research_center = world
                     .get::<Building>(target_entity)
-                    .is_some_and(|building| building.kind == BuildingKind::TownCenter);
+                    .is_some_and(|building| building.kind == BuildingKind::ResearchCenter);
                 destroy_building(world, map, target_entity);
-                if town_center {
+                if research_center {
                     resolve_result(world, unit.team);
                 }
             }
@@ -614,7 +612,7 @@ fn strike(
     }
 }
 
-/// Atomic unit destruction: releases every worker/building/Farm assignment
+/// Atomic unit destruction: releases every worker/building assignment
 /// through the shared cleanup helper (carried resources die with the
 /// entity), removes the stable index entry, and despawns.
 pub(crate) fn destroy_unit(world: &mut World, entity: Entity) {
@@ -628,24 +626,22 @@ pub(crate) fn destroy_unit(world: &mut World, entity: Entity) {
 }
 
 /// Atomic building/site destruction (completed buildings and construction
-/// sites share one transaction; sites simply lack production/farm extras):
-/// capture footprint and Farm resource identity, free the footprint cells,
-/// remove the `BuildingIndex` and Farm `ResourceIndex` entries, retask every
-/// live worker whose task references the destroyed identity, then despawn —
-/// the production queue and derived population capacity fall out with the
-/// entity, and living units above a reduced cap are never deleted.
+/// sites share one transaction; sites simply lack production extras):
+/// capture the footprint, free its cells, remove the `BuildingIndex` entry,
+/// retask every live worker whose task references the destroyed identity,
+/// then despawn — the production queue and derived population capacity fall
+/// out with the entity, and living units above a reduced cap are never
+/// deleted.
 ///
 /// Worker retasking: `ToConstruction`/`Constructing` cancel to Idle through
-/// the existing cancellation; a destroyed Farm idles its workers with Carry
-/// preserved in every phase (never standalone `deplete_source()`); a
-/// destroyed drop-off reroutes carrying workers immediately through the
-/// economy's narrow routing seam, else idles them preserving Carry.
+/// the existing cancellation; a destroyed drop-off reroutes carrying
+/// workers immediately through the economy's narrow routing seam, else
+/// idles them preserving Carry.
 pub(crate) fn destroy_building(world: &mut World, map: &mut GridMap, entity: Entity) {
     let Some(footprint) = world.get::<Footprint>(entity).copied() else {
         return;
     };
     let building_id = world.get::<Building>(entity).map(|building| building.id);
-    let farm_source = world.get::<ResourceSource>(entity).map(|source| source.id);
 
     for cell in footprint.cells() {
         map.set_blocked(cell, false);
@@ -655,15 +651,10 @@ pub(crate) fn destroy_building(world: &mut World, map: &mut GridMap, entity: Ent
     {
         index.remove(id);
     }
-    if let Some(source) = farm_source
-        && let Some(mut index) = world.get_resource_mut::<ResourceIndex>()
-    {
-        index.remove(source);
-    }
 
     // Scan every live WorkerTask referencing the destroyed identity — not
-    // just active-builder or assigned-worker bookkeeping. Collect first so
-    // the retasking mutations never fight the query borrow.
+    // just active-builder bookkeeping. Collect first so the retasking
+    // mutations never fight the query borrow.
     let mut affected: Vec<(Entity, WorkerTask)> = Vec::new();
     {
         let mut query = world.query::<(Entity, &WorkerTask)>();
@@ -671,13 +662,10 @@ pub(crate) fn destroy_building(world: &mut World, map: &mut GridMap, entity: Ent
             let references_destroyed = match *task {
                 WorkerTask::ToConstruction { building, .. }
                 | WorkerTask::Constructing { building } => Some(building) == building_id,
-                WorkerTask::ToDropoff {
-                    source, dropoff, ..
-                } => Some(dropoff) == building_id || Some(source) == farm_source,
-                WorkerTask::ToSource { source, .. } | WorkerTask::Gathering { source } => {
-                    Some(source) == farm_source
+                WorkerTask::ToDropoff { dropoff, .. } => Some(dropoff) == building_id,
+                WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } | WorkerTask::Idle => {
+                    false
                 }
-                WorkerTask::Idle => false,
             };
             if references_destroyed {
                 affected.push((worker, task.clone()));
@@ -689,17 +677,10 @@ pub(crate) fn destroy_building(world: &mut World, map: &mut GridMap, entity: Ent
             WorkerTask::ToConstruction { .. } | WorkerTask::Constructing { .. } => {
                 cancel_unit_activity(world, worker);
             }
-            WorkerTask::ToDropoff { source, .. } if Some(source) == farm_source => {
-                // Returning a destroyed Farm's load: idle, Carry preserved.
-                cancel_unit_activity(world, worker);
-            }
             WorkerTask::ToDropoff { source, .. } => {
                 reroute_dropoff_worker(world, map, worker, source);
             }
-            WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } => {
-                cancel_unit_activity(world, worker);
-            }
-            WorkerTask::Idle => {}
+            WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } | WorkerTask::Idle => {}
         }
     }
 

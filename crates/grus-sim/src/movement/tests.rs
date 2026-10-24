@@ -36,7 +36,7 @@ fn fixed_step_moves_by_speed_times_delta() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     world
@@ -59,7 +59,7 @@ fn route_finishes_and_removes_move_order() {
         UnitId(2),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
     world
@@ -85,7 +85,7 @@ fn units_do_not_enter_static_blocked_cells() {
         UnitId(3),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
     world.entity_mut(entity).insert((
@@ -114,7 +114,7 @@ fn blocked_cached_step_replans_around_obstacle() {
         UnitId(6),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     // Stale cached route that would step straight through the blocked cell.
@@ -168,7 +168,7 @@ fn failed_forced_replan_waits_for_map_change_instead_of_recomputing() {
         UnitId(7),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     // Stale cached route whose first step lands on the blocked cell (2, 1),
@@ -244,7 +244,7 @@ fn failed_revision_replan_preserves_order_until_route_reopens() {
         UnitId(8),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     world.entity_mut(entity).insert(MoveOrder {
@@ -305,50 +305,35 @@ fn failed_revision_replan_preserves_order_until_route_reopens() {
 }
 
 #[test]
-fn failed_route_idles_an_active_worker_and_releases_its_farm() {
+fn failed_route_idles_an_active_worker_and_preserves_carry() {
     let mut world = World::new();
     let mut map = GridMap::new(16, 16);
-    // A completed Farm whose assignment is held by the traveling worker.
-    let farm = world
+    // A standalone finite source the traveling worker is heading for.
+    let source = world
         .spawn((
-            crate::buildings::Building {
-                id: crate::ids::BuildingId(1),
-                team: TeamId(1),
-                kind: crate::catalog::BuildingKind::Farm,
-                construction: crate::buildings::ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            Footprint::new(GridPos::new(8, 8), 2, 2),
             crate::economy::ResourceSource {
                 id: crate::ids::ResourceId(1),
                 kind: crate::catalog::ResourceKind::Food,
-                remaining: None,
-                assigned_worker: Some(UnitId(1)),
+                remaining: 400,
             },
+            Footprint::new(GridPos::new(8, 8), 1, 1),
         ))
         .id();
     world
-        .get_resource_or_insert_with(crate::buildings::BuildingIndex::default)
-        .insert(crate::ids::BuildingId(1), farm);
-    world
         .get_resource_or_insert_with(crate::economy::ResourceIndex::default)
-        .insert(crate::ids::ResourceId(1), farm);
+        .insert(crate::ids::ResourceId(1), source);
 
     let worker = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world.entity_mut(worker).insert((
-        crate::economy::WorkerTask::ToDropoff {
+        crate::economy::WorkerTask::ToSource {
             source: crate::ids::ResourceId(1),
-            dropoff: crate::ids::BuildingId(1),
             slot: GridPos::new(7, 7),
         },
         crate::economy::Carry::Holding {
@@ -382,14 +367,6 @@ fn failed_route_idles_an_active_worker_and_releases_its_farm() {
     assert!(world.get::<MoveOrder>(worker).is_none());
     assert_eq!(
         world
-            .get::<crate::economy::ResourceSource>(farm)
-            .unwrap()
-            .assigned_worker,
-        None,
-        "route failure releases the Farm assignment"
-    );
-    assert_eq!(
-        world
             .get::<crate::economy::Carry>(worker)
             .cloned()
             .unwrap_or(crate::economy::Carry::Empty)
@@ -415,7 +392,7 @@ fn neighboring_units_separate_instead_of_collapsing() {
         UnitId(4),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     let second = spawn_unit(
@@ -423,7 +400,7 @@ fn neighboring_units_separate_instead_of_collapsing() {
         UnitId(5),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     for entity in [first, second] {
@@ -457,21 +434,23 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
                 id,
                 TeamId(1),
                 Vec2::new(10.5 + column as f32, 43.5 + row as f32),
-                UnitKind::Villager,
+                UnitKind::Worker,
                 12.0,
             );
         }
     }
 
+    // The march destination derives from the authored team-2 start — the
+    // first east-side worker cell — instead of a duplicated spawn constant.
+    let east_goal = MapFixture::team_starts()[1].workers[0];
+    let target = fixture.map.cell_center(east_goal);
     let outcome = apply_player_command(
         &mut world,
         &mut fixture.map,
         PlayerCommand::Units(UnitCommand {
             issuer: TeamId(1),
             units: ids,
-            kind: UnitCommandKind::Move {
-                target: fixture.right_spawn,
-            },
+            kind: UnitCommandKind::Move { target },
         }),
     );
     assert_eq!(outcome.accepted_units.len(), 100);
@@ -495,12 +474,13 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
             .is_walkable(fixture.map.world_to_cell(*position))
     }));
     // Units must actually arrive near the commanded destination, not just
-    // shed their MoveOrders: assigned slots cluster within ~7 units of
-    // right_spawn, while the spawn block sits ~95 units away.
+    // shed their MoveOrders: assigned slots cluster near the east-side
+    // worker cell, while the spawn block sits far away.
+    let goal = fixture.map.cell_center(east_goal);
     assert!(
         final_positions
             .iter()
-            .all(|position| position.distance(fixture.right_spawn) < 12.0),
+            .all(|position| position.distance(goal) < 12.0),
         "100-unit group did not arrive near the commanded destination"
     );
     let final_cells = final_positions

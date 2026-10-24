@@ -1,5 +1,5 @@
 use super::*;
-use crate::catalog::{Age, ResourceKind, unit_spec};
+use crate::catalog::unit_spec;
 use crate::combat::step_combat;
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
@@ -7,7 +7,7 @@ use crate::commands::{
 use crate::economy::{
     Carry, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
 };
-use crate::ids::{IdAllocator, ResourceId};
+use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
 use crate::session::{MatchPhase, MatchSession};
 use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
@@ -19,27 +19,27 @@ fn setup_build_test() -> (World, GridMap, Entity) {
         TeamId(1),
         ResourceStockpile {
             food: 500,
-            wood: 500,
-            gold: 500,
+            scrap: 500,
+            coal: 500,
+            crystals: 0,
         },
-        Age::Age1,
     );
     world.insert_resource(economy);
     world.insert_resource(IdAllocator::new(10, 10, 10));
 
     let map = GridMap::new(64, 64);
-    let villager = spawn_unit(
+    let worker = spawn_unit(
         &mut world,
         UnitId(1),
         TeamId(1),
         Vec2::new(10.5, 10.5),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
-    (world, map, villager)
+    (world, map, worker)
 }
 
 /// Opts the world into runtime fog and stamps the initial reveal.
@@ -48,10 +48,43 @@ fn reveal(world: &mut World, map: &GridMap) {
     refresh_visibility(world, map);
 }
 
-/// Places a House next to the test villager and drives the production API
-/// until the villager is actively constructing it.
-fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
-    let (mut world, mut map, villager) = setup_build_test();
+/// Placement preview (`validate_placement`, the same function the bridge's
+/// `placement_preview` calls on mouse motion) is read-only: a fully valid
+/// validation leaves every stockpile field untouched. Spending belongs to
+/// `apply_place_building` alone.
+#[test]
+fn placement_validation_never_spends() {
+    let (world, map, _) = setup_build_test();
+    let before = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    let plan = validate_placement(
+        &world,
+        &map,
+        TeamId(1),
+        UnitId(1),
+        BuildingKind::Bunkhouse,
+        GridPos::new(13, 10),
+    );
+    match plan {
+        Ok(_) => {}
+        Err(reason) => panic!("validation rejected: {reason:?}"),
+    }
+    let after = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    assert_eq!(before, after, "read-only validation moved the stockpile");
+}
+
+/// An insufficient-resources placement rejects before ANY effect: no
+/// deduction on any currency field, the builder keeps its current task
+/// (the atomic spend happens before cancellation), and no building is
+/// allocated.
+#[test]
+fn unaffordable_placement_preserves_builder_state_and_stockpile() {
+    let (mut world, mut map, worker, _site) = setup_active_builder();
+    let task = world.get::<WorkerTask>(worker).unwrap().clone();
+    {
+        let mut economy = world.resource_mut::<TeamEconomy>();
+        economy.0.get_mut(&TeamId(1)).unwrap().stockpile = ResourceStockpile::default();
+    }
+    let building_count = world.resource::<BuildingIndex>().iter().count();
 
     let result = apply_player_command(
         &mut world,
@@ -59,7 +92,41 @@ fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Barracks,
+            anchor: GridPos::new(20, 10),
+        },
+    );
+
+    assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+    assert_eq!(
+        world.get::<WorkerTask>(worker),
+        Some(&task),
+        "rejected placement must not cancel the builder's task"
+    );
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        ResourceStockpile::default(),
+        "rejected placement spent resources"
+    );
+    assert_eq!(
+        world.resource::<BuildingIndex>().iter().count(),
+        building_count,
+        "rejected placement allocated a building"
+    );
+}
+
+/// Places a Bunkhouse next to the test worker and drives the production API
+/// until the worker is actively constructing it.
+fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
+    let (mut world, mut map, worker) = setup_build_test();
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -73,7 +140,7 @@ fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
         if matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing { .. })
         ) {
             break;
@@ -81,14 +148,14 @@ fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
     }
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing {
                 building: BuildingId(10)
             })
         ),
         "builder never reached Constructing"
     );
-    (world, map, villager, building)
+    (world, map, worker, building)
 }
 
 /// Drives movement + construction until the given worker is Constructing.
@@ -108,8 +175,8 @@ fn run_until_constructing(world: &mut World, map: &GridMap, worker: Entity) {
 
 #[test]
 fn rejected_move_preserves_active_builder() {
-    let (mut world, mut map, villager, building) = setup_active_builder();
-    let old_task = world.get::<WorkerTask>(villager).unwrap().clone();
+    let (mut world, mut map, worker, building) = setup_active_builder();
+    let old_task = world.get::<WorkerTask>(worker).unwrap().clone();
     let blocked = GridPos::new(20, 20);
     map.set_blocked(blocked, true);
     let target = map.cell_center(blocked);
@@ -128,7 +195,7 @@ fn rejected_move_preserves_active_builder() {
         result.rejected_units,
         vec![(UnitId(1), RejectReason::Unreachable)]
     );
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&old_task));
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&old_task));
     assert_eq!(
         world
             .get::<Building>(building)
@@ -141,51 +208,51 @@ fn rejected_move_preserves_active_builder() {
 
 #[test]
 fn invalid_placement_never_charges_or_reserves() {
-    let (mut world, mut map, _villager) = setup_build_test();
-    // Not a villager. Parked away from every footprint used below.
+    let (mut world, mut map, _worker) = setup_build_test();
+    // Not a worker. Parked away from every footprint used below.
     spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Spearman,
-        unit_spec(UnitKind::Spearman).speed,
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
     );
 
-    // Not a villager.
+    // Not a worker.
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(2),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
-    assert_eq!(result.reject, Some(RejectReason::NotVillager));
+    assert_eq!(result.reject, Some(RejectReason::NotWorker));
 
-    // Town Centers are seeded, never placed.
+    // Research Centers are seeded, never placed.
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::TownCenter,
+            kind: BuildingKind::ResearchCenter,
             anchor: GridPos::new(13, 10),
         },
     );
     assert_eq!(result.reject, Some(RejectReason::Locked));
 
-    // Footprint out of bounds (2×2 house at the map edge).
+    // Footprint out of bounds (2×2 bunkhouse at the map edge).
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(63, 63),
         },
     );
@@ -199,7 +266,7 @@ fn invalid_placement_never_charges_or_reserves() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -212,14 +279,14 @@ fn invalid_placement_never_charges_or_reserves() {
         .get_mut(&TeamId(1))
         .unwrap()
         .stockpile
-        .wood = 10;
+        .scrap = 10;
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(20, 20),
         },
     );
@@ -233,7 +300,7 @@ fn invalid_placement_never_charges_or_reserves() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -245,8 +312,9 @@ fn invalid_placement_never_charges_or_reserves() {
         state,
         ResourceStockpile {
             food: 500,
-            wood: 10,
-            gold: 500
+            scrap: 10,
+            coal: 500,
+            crystals: 0,
         }
     );
     let mut buildings = world.query::<&Building>();
@@ -262,8 +330,8 @@ fn invalid_placement_never_charges_or_reserves() {
 }
 
 #[test]
-fn accepted_house_deducts_fifty_wood_and_blocks_four_cells() {
-    let (mut world, mut map, villager) = setup_build_test();
+fn accepted_bunkhouse_deducts_fifty_scrap_and_blocks_four_cells() {
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
 
     let result = apply_player_command(
@@ -272,7 +340,7 @@ fn accepted_house_deducts_fifty_wood_and_blocks_four_cells() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -280,9 +348,9 @@ fn accepted_house_deducts_fifty_wood_and_blocks_four_cells() {
     assert_eq!(result.reject, None);
 
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
-    assert_eq!(state.stockpile.wood, 450);
+    assert_eq!(state.stockpile.scrap, 450);
     assert_eq!(state.stockpile.food, 500);
-    assert_eq!(state.stockpile.gold, 500);
+    assert_eq!(state.stockpile.coal, 500);
 
     let footprint = Footprint::new(anchor, 2, 2);
     for cell in footprint.cells() {
@@ -296,19 +364,19 @@ fn accepted_house_deducts_fifty_wood_and_blocks_four_cells() {
     let building = world.get::<Building>(building_entity).unwrap();
     assert_eq!(building.id, BuildingId(10));
     assert_eq!(building.team, TeamId(1));
-    assert_eq!(building.kind, BuildingKind::House);
+    assert_eq!(building.kind, BuildingKind::Bunkhouse);
     assert_eq!(building.construction.active_builder, Some(UnitId(1)));
     assert!(!building.construction.complete);
     assert_eq!(world.get::<Footprint>(building_entity), Some(&footprint));
 
     // The builder is tasked to an immediate-perimeter slot with a route.
-    let task = world.get::<WorkerTask>(villager).unwrap();
+    let task = world.get::<WorkerTask>(worker).unwrap();
     let WorkerTask::ToConstruction { building: id, slot } = task else {
         panic!("expected ToConstruction, got {task:?}");
     };
     assert_eq!(*id, BuildingId(10));
     assert!(footprint.is_immediately_adjacent(*slot));
-    let order = world.get::<MoveOrder>(villager).expect("route installed");
+    let order = world.get::<MoveOrder>(worker).expect("route installed");
     assert_eq!(order.goal, *slot);
     assert_eq!(
         order.waypoints.last().copied(),
@@ -326,8 +394,8 @@ fn two_builders_never_double_speed() {
         UnitId(2),
         TeamId(1),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world
         .entity_mut(second)
@@ -384,14 +452,14 @@ fn two_builders_never_double_speed() {
 /// looked up, so the about-to-be-cancelled order still reserved its goal.
 #[test]
 fn resume_releases_the_previous_builders_goal_for_the_replacement() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -406,7 +474,7 @@ fn resume_releases_the_previous_builders_goal_for_the_replacement() {
     // Builder 1 is still en route; its order claims the site's only free
     // approach slot once every other perimeter cell is blocked.
     let claimed = world
-        .get::<MoveOrder>(villager)
+        .get::<MoveOrder>(worker)
         .expect("route installed")
         .goal;
     assert!(footprint.is_immediately_adjacent(claimed));
@@ -421,8 +489,8 @@ fn resume_releases_the_previous_builders_goal_for_the_replacement() {
         UnitId(2),
         TeamId(1),
         Vec2::new(9.5, 9.5),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world
         .entity_mut(second)
@@ -439,8 +507,8 @@ fn resume_releases_the_previous_builders_goal_for_the_replacement() {
     );
 
     assert_eq!(result.reject, None);
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
-    assert!(world.get::<MoveOrder>(villager).is_none());
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+    assert!(world.get::<MoveOrder>(worker).is_none());
     let task = world.get::<WorkerTask>(second).unwrap().clone();
     let WorkerTask::ToConstruction { building, slot } = task else {
         panic!("expected ToConstruction, got {task:?}");
@@ -455,7 +523,7 @@ fn resume_releases_the_previous_builders_goal_for_the_replacement() {
 
 #[test]
 fn resume_keeps_accumulated_progress() {
-    let (mut world, mut map, villager, building) = setup_active_builder();
+    let (mut world, mut map, worker, building) = setup_active_builder();
     let building_id = world.get::<Building>(building).unwrap().id;
     // setup_active_builder's arrival tick already advanced one step.
     let baseline = world
@@ -486,7 +554,7 @@ fn resume_keeps_accumulated_progress() {
         }),
     );
     assert_eq!(result.accepted_units, vec![UnitId(1)]);
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
     assert_eq!(
         world
             .get::<Building>(building)
@@ -513,7 +581,7 @@ fn resume_keeps_accumulated_progress() {
     );
     assert_eq!(result.reject, None);
 
-    run_until_constructing(&mut world, &map, villager);
+    run_until_constructing(&mut world, &map, worker);
     // The arrival tick already advanced one step; 59 more completes the
     // same 60-tick batch as before the pause.
     for _ in 0..59 {
@@ -539,8 +607,8 @@ fn resume_keeps_accumulated_progress() {
 }
 
 #[test]
-fn completed_storehouse_gains_dropoff_exactly_once() {
-    let (mut world, mut map, villager) = setup_build_test();
+fn completed_depot_gains_dropoff_exactly_once() {
+    let (mut world, mut map, worker) = setup_build_test();
 
     let result = apply_player_command(
         &mut world,
@@ -548,13 +616,15 @@ fn completed_storehouse_gains_dropoff_exactly_once() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::Storehouse,
+            kind: BuildingKind::Depot,
             anchor: GridPos::new(13, 10),
         },
     );
     assert_eq!(result.reject, None);
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
         425
     );
 
@@ -581,7 +651,7 @@ fn completed_storehouse_gains_dropoff_exactly_once() {
         world.get::<Dropoff>(building_entity),
         Some(&Dropoff { team: TeamId(1) })
     );
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
 
     // Further ticks never grant a second marker or restart work.
     for _ in 0..10 {
@@ -591,12 +661,12 @@ fn completed_storehouse_gains_dropoff_exactly_once() {
         world.get::<Dropoff>(building_entity),
         Some(&Dropoff { team: TeamId(1) })
     );
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
 }
 
 #[test]
 fn completed_barracks_gains_an_empty_production_queue() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
 
     let result = apply_player_command(
         &mut world,
@@ -643,8 +713,12 @@ fn completed_barracks_gains_an_empty_production_queue() {
 }
 
 #[test]
-fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
-    let (mut world, mut map, villager) = setup_build_test();
+fn completed_building_never_gains_a_resource_source() {
+    // Completion grants are Dropoff (Depot) and the producer queue —
+    // the Farm resource grant is deleted with the Farm kind, so a real
+    // completion must never leave a ResourceSource on the building entity
+    // or a new entry in the ResourceIndex.
+    let (mut world, mut map, _worker) = setup_build_test();
 
     let result = apply_player_command(
         &mut world,
@@ -652,25 +726,20 @@ fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::Farm,
+            kind: BuildingKind::Barracks,
             anchor: GridPos::new(13, 10),
         },
     );
-    assert_eq!(result.reject, None);
-    assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
-        440
-    );
-
-    let farm_entity = world
+    assert_eq!(result.reject, None, "Barracks placement rejected");
+    let barracks = world
         .resource::<BuildingIndex>()
         .entity(BuildingId(10))
-        .expect("building registered");
-    for _ in 0..1000 {
+        .expect("barracks registered");
+    for _ in 0..2000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_construction(&mut world, SIM_STEP_SECONDS);
         if world
-            .get::<Building>(farm_entity)
+            .get::<Building>(barracks)
             .unwrap()
             .construction
             .complete
@@ -678,39 +747,30 @@ fn completed_farm_gains_a_renewable_food_source_on_the_same_entity() {
             break;
         }
     }
+
     assert!(
         world
-            .get::<Building>(farm_entity)
+            .get::<Building>(barracks)
             .unwrap()
             .construction
-            .complete
+            .complete,
+        "Barracks never completed"
     );
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
-
-    // The completed Farm building entity carries its renewable source.
-    let source = world
-        .get::<ResourceSource>(farm_entity)
-        .expect("farm source");
-    assert_eq!(source.id, ResourceId(10));
-    assert_eq!(source.kind, ResourceKind::Food);
-    assert_eq!(source.remaining, None);
-    assert_eq!(source.assigned_worker, None);
-    assert_eq!(
-        world.resource::<ResourceIndex>().entity(source.id),
-        Some(farm_entity)
-    );
-    assert_eq!(world.resource::<IdAllocator>().next_resource, 11);
-
-    // Still exactly one entity, carrying both the building and the source.
-    let mut buildings = world.query::<&Building>();
-    assert_eq!(buildings.iter(&world).count(), 1);
+    assert!(world.get::<ResourceSource>(barracks).is_none());
     let mut sources = world.query::<&ResourceSource>();
-    assert_eq!(sources.iter(&world).count(), 1);
+    assert_eq!(sources.iter(&world).count(), 0);
+    assert_eq!(
+        world
+            .get_resource::<ResourceIndex>()
+            .map(|index| index.iter().count())
+            .unwrap_or(0),
+        0
+    );
 }
 
 #[test]
 fn placement_rejects_a_footprint_under_a_standing_unit() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     // A live unit stands inside the would-be footprint.
     spawn_unit(
@@ -718,8 +778,8 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
         UnitId(2),
         TeamId(1),
         map.cell_center(GridPos::new(13, 10)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
 
     let result = apply_player_command(
@@ -728,7 +788,7 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -737,7 +797,9 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
 
     // No cost was charged and no footprint cell was blocked.
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
         500
     );
     for cell in Footprint::new(anchor, 2, 2).cells() {
@@ -757,14 +819,14 @@ fn placement_rejects_a_footprint_under_a_standing_unit() {
 /// `Occupied`, which would leak the hidden unit/goal through the preview.
 #[test]
 fn unexplored_footprint_rejects_unexplored_never_occupied() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let scout = spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(2),
         Vec2::new(24.5, 10.5),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world.entity_mut(scout).insert(MoveOrder {
         waypoints: vec![],
@@ -785,7 +847,7 @@ fn unexplored_footprint_rejects_unexplored_never_occupied() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(24, 10),
         },
     );
@@ -803,7 +865,7 @@ fn unexplored_footprint_rejects_unexplored_never_occupied() {
 /// footprint instead of entombing it under blocked cells.
 #[test]
 fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
     assert!(explored_by(&world, TeamId(1), anchor));
@@ -811,7 +873,7 @@ fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
     // Vision withdraws: the footprint stays explored but leaves current
     // visibility, so an enemy standing on it is genuinely hidden.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
     refresh_visibility(&mut world, &map);
     assert!(
@@ -824,8 +886,8 @@ fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(14, 11)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
 
     assert!(
@@ -834,7 +896,7 @@ fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
             &map,
             TeamId(1),
             UnitId(1),
-            BuildingKind::House,
+            BuildingKind::Bunkhouse,
             anchor
         )
         .is_ok(),
@@ -847,7 +909,7 @@ fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -866,11 +928,11 @@ fn hidden_enemy_inside_footprint_does_not_block_and_is_displaced() {
 /// preserved route can never strand on blocked cells.
 #[test]
 fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
     refresh_visibility(&mut world, &map);
     assert!(!visible_to(&world, TeamId(1), anchor));
@@ -881,8 +943,8 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(40, 40)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world.entity_mut(enemy).insert(MoveOrder {
         waypoints: vec![],
@@ -898,7 +960,7 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
             &map,
             TeamId(1),
             UnitId(1),
-            BuildingKind::House,
+            BuildingKind::Bunkhouse,
             anchor
         )
         .is_ok()
@@ -909,7 +971,7 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -935,7 +997,7 @@ fn hidden_enemy_goal_inside_footprint_is_retargeted_on_acceptance() {
 /// identical empty ground; the covered goal still retargets on acceptance.
 #[test]
 fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
     assert!(visible_to(&world, TeamId(1), GridPos::new(14, 11)));
@@ -947,8 +1009,8 @@ fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(50, 50)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world.entity_mut(enemy).insert(MoveOrder {
         waypoints: vec![],
@@ -965,7 +1027,7 @@ fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
             &map,
             TeamId(1),
             UnitId(1),
-            BuildingKind::House,
+            BuildingKind::Bunkhouse,
             anchor
         )
         .is_ok(),
@@ -977,7 +1039,7 @@ fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -1005,16 +1067,16 @@ fn hidden_enemy_goal_on_visible_ground_does_not_reject_placement() {
 /// lives forever.
 #[test]
 fn hidden_attack_move_destination_retargets_with_the_route() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
     refresh_visibility(&mut world, &map);
 
     // The hidden enemy attack-moves toward a cell the footprint will
-    // cover. A Spearman, not a Villager: `step_combat` skips units whose
+    // cover. A Guard, not a Worker: `step_combat` skips units whose
     // kind has no combat spec, so only a combatant exercises the
     // `resume_destination` interaction under test.
     world.insert_resource(MatchSession {
@@ -1025,8 +1087,8 @@ fn hidden_attack_move_destination_retargets_with_the_route() {
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(40, 40)),
-        UnitKind::Spearman,
-        unit_spec(UnitKind::Spearman).speed,
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
     );
     world.entity_mut(enemy).insert(MoveOrder {
         waypoints: vec![],
@@ -1047,7 +1109,7 @@ fn hidden_attack_move_destination_retargets_with_the_route() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -1093,15 +1155,15 @@ fn hidden_attack_move_destination_retargets_with_the_route() {
 /// what the issuer genuinely cannot see.
 #[test]
 fn visible_enemy_inside_footprint_still_rejects_occupied() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(2),
         map.cell_center(GridPos::new(14, 11)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     reveal(&mut world, &map);
     assert!(visible_to(&world, TeamId(1), GridPos::new(14, 11)));
@@ -1112,14 +1174,14 @@ fn visible_enemy_inside_footprint_still_rejects_occupied() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
     assert_eq!(result.reject, Some(RejectReason::Occupied));
 }
 
-/// A completed 2×2 House of `team` standing on `anchor`, fully registered
+/// A completed 2×2 Bunkhouse of `team` standing on `anchor`, fully registered
 /// (cells blocked, index updated) — the manual shape of an applied
 /// placement, for knowledge-gate tests.
 fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anchor: GridPos) {
@@ -1133,7 +1195,7 @@ fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anch
             Building {
                 id,
                 team,
-                kind: BuildingKind::House,
+                kind: BuildingKind::Bunkhouse,
                 construction: ConstructionState {
                     progress_seconds: 0.0,
                     complete: true,
@@ -1154,7 +1216,7 @@ fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anch
 /// command stays honest: two real buildings can never overlap.
 #[test]
 fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
 
@@ -1166,7 +1228,7 @@ fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
     // Vision withdraws: the footprint stays explored but leaves current
     // visibility, so the building is genuinely hidden.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
     refresh_visibility(&mut world, &map);
     assert!(
@@ -1180,7 +1242,7 @@ fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
             &map,
             TeamId(1),
             UnitId(1),
-            BuildingKind::House,
+            BuildingKind::Bunkhouse,
             anchor
         )
         .is_ok(),
@@ -1194,13 +1256,15 @@ fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
     assert_eq!(result.reject, Some(RejectReason::Occupied));
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
         500
     );
 }
@@ -1210,7 +1274,7 @@ fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
 /// issuer genuinely cannot see.
 #[test]
 fn visible_enemy_building_footprint_still_rejects_occupied() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     reveal(&mut world, &map);
     spawn_enemy_building(&mut world, &mut map, TeamId(2), anchor);
@@ -1223,7 +1287,7 @@ fn visible_enemy_building_footprint_still_rejects_occupied() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -1237,12 +1301,12 @@ fn visible_enemy_building_footprint_still_rejects_occupied() {
 /// pretending to be free ground that flips to `Occupied` at apply time.
 #[test]
 fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let building_anchor = GridPos::new(18, 16);
 
     // Scout the ground so every relevant cell is explored.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(map.cell_center(GridPos::new(17, 12))));
     reveal(&mut world, &map);
     spawn_enemy_building(&mut world, &mut map, TeamId(2), building_anchor);
@@ -1252,7 +1316,7 @@ fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
     // the building is on screen (the predicate is any-cell) while its
     // far cells are explored fog.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(10.5, 10.5)));
     refresh_visibility(&mut world, &map);
     assert!(visible_to(
@@ -1273,7 +1337,7 @@ fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
                 &map,
                 TeamId(1),
                 UnitId(1),
-                BuildingKind::House,
+                BuildingKind::Bunkhouse,
                 GridPos::new(19, 16)
             ),
             Err(RejectReason::Occupied)
@@ -1286,7 +1350,7 @@ fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(19, 16),
         },
     );
@@ -1298,15 +1362,15 @@ fn partially_visible_enemy_building_exposes_whole_footprint_as_occupied() {
 /// unit on a preserved order that can never replan onto blocked cells.
 #[test]
 fn placement_rejects_a_footprint_over_a_reserved_goal() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
     let sibling = spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(1),
         map.cell_center(GridPos::new(8, 8)),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world.entity_mut(sibling).insert(MoveOrder {
         waypoints: vec![map.cell_center(GridPos::new(13, 10))],
@@ -1322,14 +1386,16 @@ fn placement_rejects_a_footprint_over_a_reserved_goal() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
 
     assert_eq!(result.reject, Some(RejectReason::Occupied));
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
         500
     );
     for cell in Footprint::new(anchor, 2, 2).cells() {
@@ -1347,9 +1413,9 @@ fn placement_rejects_a_footprint_over_a_reserved_goal() {
 /// assigned perimeter slot.
 #[test]
 fn placement_ignores_the_builders_own_old_goal() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
-    world.entity_mut(villager).insert(MoveOrder {
+    world.entity_mut(worker).insert(MoveOrder {
         waypoints: vec![map.cell_center(GridPos::new(13, 10))],
         next: 0,
         goal: GridPos::new(13, 10),
@@ -1363,13 +1429,13 @@ fn placement_ignores_the_builders_own_old_goal() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
 
     assert_eq!(result.reject, None);
-    let order = world.get::<MoveOrder>(villager).expect("route installed");
+    let order = world.get::<MoveOrder>(worker).expect("route installed");
     assert!(
         Footprint::new(anchor, 2, 2).is_immediately_adjacent(order.goal),
         "builder goal {goal:?} is the assigned slot, not the cancelled one",
@@ -1379,7 +1445,7 @@ fn placement_ignores_the_builders_own_old_goal() {
 
 #[test]
 fn placement_slot_is_not_assigned_onto_a_live_unit() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     // An idle unit squats on the footprint's first perimeter candidate,
     // which an empty reservation set would hand to the builder.
     let squatter_cell = GridPos::new(12, 9);
@@ -1388,8 +1454,8 @@ fn placement_slot_is_not_assigned_onto_a_live_unit() {
         UnitId(2),
         TeamId(1),
         map.cell_center(squatter_cell),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world.entity_mut(squatter).insert(WorkerTask::Idle);
 
@@ -1399,13 +1465,13 @@ fn placement_slot_is_not_assigned_onto_a_live_unit() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
     assert_eq!(result.reject, None);
 
-    let task = world.get::<WorkerTask>(villager).unwrap().clone();
+    let task = world.get::<WorkerTask>(worker).unwrap().clone();
     let WorkerTask::ToConstruction {
         building: BuildingId(10),
         slot,
@@ -1420,7 +1486,7 @@ fn placement_slot_is_not_assigned_onto_a_live_unit() {
 
     // With an unoccupied slot the builder actually reaches the site and
     // starts building instead of being separated off its slot forever.
-    run_until_constructing(&mut world, &map, villager);
+    run_until_constructing(&mut world, &map, worker);
 }
 
 /// A footprint that plugs the only corridor between the builder and the
@@ -1431,13 +1497,13 @@ fn placement_slot_is_not_assigned_onto_a_live_unit() {
 /// builder idled next to a paid, unbuildable site.
 #[test]
 fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(8.5, 6.5)));
 
     // Solid wall at x = 10 with a two-cell gap at (10, 5)–(10, 6). The
-    // 2×2 House footprint covers the whole gap plus one column past it,
+    // 2×2 Bunkhouse footprint covers the whole gap plus one column past it,
     // so every free approach slot lies on the far side.
     for y in 0..64 {
         if y != 5 && y != 6 {
@@ -1458,8 +1524,8 @@ fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
             UnitId(id),
             TeamId(1),
             map.cell_center(cell),
-            UnitKind::Villager,
-            unit_spec(UnitKind::Villager).speed,
+            UnitKind::Worker,
+            unit_spec(UnitKind::Worker).speed,
         );
     }
 
@@ -1469,7 +1535,7 @@ fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(10, 5),
         },
     );
@@ -1478,7 +1544,9 @@ fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
 
     // Nothing was charged, spawned, blocked, or routed.
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
         500
     );
     let mut buildings = world.query::<&Building>();
@@ -1487,20 +1555,20 @@ fn placement_rejects_when_the_footprint_plugs_the_only_corridor() {
     for cell in Footprint::new(GridPos::new(10, 5), 2, 2).cells() {
         assert!(map.is_walkable(cell), "footprint cell {cell:?} blocked");
     }
-    assert!(world.get::<MoveOrder>(villager).is_none());
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
+    assert!(world.get::<MoveOrder>(worker).is_none());
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
 }
 
 #[test]
 fn abandoned_site_never_progresses_without_a_builder() {
-    let (mut world, mut map, _villager) = setup_build_test();
+    let (mut world, mut map, _worker) = setup_build_test();
     let result = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -1550,11 +1618,11 @@ fn abandoned_site_never_progresses_without_a_builder() {
 
 #[test]
 fn placement_ignores_the_builders_own_move_goal() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     let anchor = GridPos::new(13, 10);
-    // The villager is en route to a cell the new House will cover; his own
+    // The worker is en route to a cell the new Bunkhouse will cover; his own
     // goal is exempt from the occupancy check because acceptance cancels it.
-    world.entity_mut(villager).insert(MoveOrder {
+    world.entity_mut(worker).insert(MoveOrder {
         waypoints: vec![map.cell_center(anchor)],
         next: 0,
         goal: anchor,
@@ -1568,7 +1636,7 @@ fn placement_ignores_the_builders_own_move_goal() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor,
         },
     );
@@ -1579,12 +1647,12 @@ fn placement_ignores_the_builders_own_move_goal() {
     );
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::ToConstruction { .. })
         ),
         "an accepted placement retasks the builder to the site"
     );
-    let order = world.get::<MoveOrder>(villager).expect("route to the site");
+    let order = world.get::<MoveOrder>(worker).expect("route to the site");
     assert_ne!(
         order.goal, anchor,
         "the cancelled route is replaced by the approach route"
@@ -1593,15 +1661,15 @@ fn placement_ignores_the_builders_own_move_goal() {
 
 #[test]
 fn resume_construction_reject_codes_are_deterministic() {
-    let (mut world, mut map, villager, building) = setup_active_builder();
+    let (mut world, mut map, worker, building) = setup_active_builder();
 
-    // A non-villager worker cannot resume.
+    // A non-worker worker cannot resume.
     spawn_unit(
         &mut world,
         UnitId(2),
         TeamId(1),
         Vec2::new(8.5, 8.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
     let result = apply_player_command(
@@ -1613,7 +1681,7 @@ fn resume_construction_reject_codes_are_deterministic() {
             building: BuildingId(10),
         },
     );
-    assert_eq!(result.reject, Some(RejectReason::NotVillager));
+    assert_eq!(result.reject, Some(RejectReason::NotWorker));
 
     // A building owned by another team cannot be resumed.
     let enemy_site = world
@@ -1621,7 +1689,7 @@ fn resume_construction_reject_codes_are_deterministic() {
             Building {
                 id: BuildingId(11),
                 team: TeamId(2),
-                kind: BuildingKind::House,
+                kind: BuildingKind::Bunkhouse,
                 construction: ConstructionState {
                     progress_seconds: 0.0,
                     complete: false,
@@ -1658,7 +1726,7 @@ fn resume_construction_reject_codes_are_deterministic() {
     assert_eq!(result.reject, Some(RejectReason::BuildingMissing));
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing { .. })
         ),
         "every rejection leaves the active builder untouched"
@@ -1674,7 +1742,7 @@ fn resume_construction_reject_codes_are_deterministic() {
             .unwrap()
             .construction
             .complete,
-        "the actively built House should finish within 20 simulated seconds"
+        "the actively built Bunkhouse should finish within 20 simulated seconds"
     );
     let result = apply_player_command(
         &mut world,
@@ -1698,7 +1766,7 @@ fn placed_buildings_start_at_full_catalogue_health() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -1734,8 +1802,8 @@ fn hidden_enemy_worker_with_site(
         UnitId(5),
         TeamId(2),
         Vec2::new(30.5, 30.5),
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     let site_footprint = Footprint::new(site_anchor, 2, 2);
     let site = world
@@ -1743,7 +1811,7 @@ fn hidden_enemy_worker_with_site(
             Building {
                 id: BuildingId(50),
                 team: TeamId(2),
-                kind: BuildingKind::House,
+                kind: BuildingKind::Bunkhouse,
                 construction: ConstructionState {
                     progress_seconds: 0.0,
                     complete: false,
@@ -1771,16 +1839,16 @@ fn hidden_enemy_worker_with_site(
 /// worker reaches `Constructing`.
 #[test]
 fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     // Walk the builder over the future anchor first so the ground is
     // explored, then park it far away: the anchor must be explored fog, not
     // current vision, or the placement would honestly see the enemy goal.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(13.5, 10.5)));
     reveal(&mut world, &map);
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(4.5, 40.5)));
     refresh_visibility(&mut world, &map);
     assert!(explored_by(&world, TeamId(1), GridPos::new(13, 10)));
@@ -1792,7 +1860,7 @@ fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
 
     // The enemy site at (15,10) has its 2x2 footprint beside the placement;
     // the worker's approach slot (14,10) is on that site's perimeter AND
-    // inside the House footprint about to block (13..14, 10..11).
+    // inside the Bunkhouse footprint about to block (13..14, 10..11).
     let site_footprint = Footprint::new(GridPos::new(15, 10), 2, 2);
     let slot = GridPos::new(14, 10);
     let revision = map.revision();
@@ -1821,13 +1889,13 @@ fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
     assert!(result.reject.is_none(), "placement rejected: {result:?}");
 
-    let house_cells = Footprint::new(GridPos::new(13, 10), 2, 2).cells();
+    let bunkhouse_cells = Footprint::new(GridPos::new(13, 10), 2, 2).cells();
     let WorkerTask::ToConstruction { slot: new_slot, .. } =
         world.get::<WorkerTask>(worker).unwrap().clone()
     else {
@@ -1839,7 +1907,7 @@ fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
         "the retargeted goal and task slot must stay in lockstep"
     );
     assert!(
-        !house_cells.contains(&new_slot),
+        !bunkhouse_cells.contains(&new_slot),
         "the task slot must leave the blocked footprint"
     );
     assert!(
@@ -1875,13 +1943,13 @@ fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
 /// from up to seven cells away.
 #[test]
 fn displacement_reroutes_a_constructing_worker_to_an_adjacent_slot() {
-    let (mut world, mut map, villager) = setup_build_test();
+    let (mut world, mut map, worker) = setup_build_test();
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(13.5, 10.5)));
     reveal(&mut world, &map);
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(4.5, 40.5)));
     refresh_visibility(&mut world, &map);
 
@@ -1915,7 +1983,7 @@ fn displacement_reroutes_a_constructing_worker_to_an_adjacent_slot() {
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::House,
+            kind: BuildingKind::Bunkhouse,
             anchor: GridPos::new(13, 10),
         },
     );
@@ -1965,7 +2033,7 @@ fn resume_on_a_hidden_enemy_building_answers_building_missing() {
             Building {
                 id: BuildingId(60),
                 team: TeamId(2),
-                kind: BuildingKind::House,
+                kind: BuildingKind::Bunkhouse,
                 construction: ConstructionState {
                     progress_seconds: 0.0,
                     complete: false,

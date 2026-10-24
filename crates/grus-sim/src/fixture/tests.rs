@@ -1,9 +1,10 @@
 use super::*;
+use bevy::math::Vec2;
 use bevy::prelude::Entity;
 use std::collections::HashSet;
 
 use crate::buildings::Building;
-use crate::catalog::{Age, resource_amount};
+use crate::catalog::resource_amount;
 use crate::combat::CombatOrder;
 use crate::commands::UnitIndex;
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
@@ -11,24 +12,167 @@ use crate::ids::IdAllocator;
 use crate::map::Footprint;
 use crate::movement::{SimPosition, Unit};
 
+/// Team-1's Research Center anchors the authored central city: its 4×4
+/// footprint center must sit on the map midpoint (64, 48), within half a
+/// footprint of slack so a one-cell anchor shift still fails loudly.
 #[test]
-fn retained_battlefield_has_multiple_routes_between_base_zones() {
+fn central_research_center_centers_on_the_map_midpoint() {
+    let start = MapFixture::team_starts()
+        .into_iter()
+        .find(|start| start.team == TeamId(1))
+        .expect("an authored team-1 start");
+    let center = Footprint::new(start.research_center_anchor, 4, 4).center();
+
+    assert!(
+        center.distance(Vec2::new(64.0, 48.0)) <= 2.0,
+        "team-1 Research Center center {center:?} is not the map midpoint (64,48)"
+    );
+}
+
+/// The `RUINS` table is the ONLY authored blocker source: a fresh
+/// battlefield must block exactly the union of its rectangles — nothing
+/// more, nothing less, and every rect min/max in bounds.
+#[test]
+fn ruins_are_the_only_authored_blocked_cells() {
+    let map = MapFixture::battlefield().map;
+
+    let mut ruined: HashSet<GridPos> = HashSet::new();
+    for (min, max) in RUINS {
+        assert!(
+            map.in_bounds(*min) && map.in_bounds(*max),
+            "ruin rect {min:?}..={max:?} leaves the battlefield"
+        );
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                ruined.insert(GridPos::new(x, y));
+            }
+        }
+    }
+
+    for y in 0..map.height() {
+        for x in 0..map.width() {
+            let cell = GridPos::new(x, y);
+            assert_eq!(
+                map.is_walkable(cell),
+                !ruined.contains(&cell),
+                "cell {cell:?}: walkability and the RUINS table disagree"
+            );
+        }
+    }
+}
+
+/// Ruins decorate the outskirts of the central city: they may not sit on
+/// any authored start, worker, resource, or either benchmark staging
+/// region, and the central construction/gather ring around the city stays
+/// clear.
+#[test]
+fn ruins_avoid_every_authored_occupant_and_staging_region() {
+    let fixture = MapFixture::battlefield();
+    let starts = MapFixture::team_starts();
+    let mut off_limits: HashSet<GridPos> = starts
+        .iter()
+        .flat_map(|start| Footprint::new(start.research_center_anchor, 4, 4).cells())
+        .chain(starts.iter().flat_map(|start| start.workers))
+        .chain(fixture.resources.iter().map(|spawn| spawn.cell))
+        .collect();
+    // The row-major west staging scan (x 26..=53, y 20..=75) and its local
+    // point reflection used for the east benchmark side.
+    for y in 20..=75 {
+        for x in 26..=53 {
+            off_limits.insert(GridPos::new(x, y));
+            off_limits.insert(GridPos::new(127 - x, 95 - y));
+        }
+    }
+    // The city's own construction/gather ring: a generous rectangle around
+    // the midpoint that holds the base, its safe sources, and build sites.
+    for y in 38..=58 {
+        for x in 52..=75 {
+            off_limits.insert(GridPos::new(x, y));
+        }
+    }
+
+    for (min, max) in RUINS {
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                let cell = GridPos::new(x, y);
+                assert!(
+                    !off_limits.contains(&cell),
+                    "ruin cell {cell:?} overlaps authored geometry or staging"
+                );
+            }
+        }
+    }
+}
+
+/// Reachability proofs for the central-city layout: every map border
+/// reaches the city, the east side (the passive opponent) is reachable for
+/// the Victory journey, and blocking one route cell always leaves an
+/// alternate route.
+#[test]
+fn battlefield_connects_every_border_and_the_east_side_to_the_city() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map;
-    let start = map.world_to_cell(fixture.left_spawn);
-    let goal = map.world_to_cell(fixture.right_spawn);
-    let direct_manhattan = start.x.abs_diff(goal.x) + start.y.abs_diff(goal.y);
-    let route = map.find_path(start, goal).expect("base zones must connect");
+    let starts = MapFixture::team_starts();
+    // Block the seeded Research Centers the way the runtime seed does, so
+    // routes must skirt the actual building footprints.
+    for start in &starts {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
+            map.set_blocked(cell, true);
+        }
+    }
+    for resource in &fixture.resources {
+        map.set_blocked(resource.cell, true);
+    }
 
-    assert!(route.len() as u32 > direct_manhattan + 1);
+    let city = starts
+        .iter()
+        .find(|start| start.team == TeamId(1))
+        .expect("the central city start");
+    // A free west-face cell immediately beside the central Research Center.
+    let city_gate = GridPos::new(city.research_center_anchor.x - 1, 47);
+    assert!(map.is_walkable(city_gate));
 
-    // Blocking an interior route cell must leave an alternate route: the
-    // base zones stay connected through more than one corridor.
+    for (name, border) in [
+        ("west", GridPos::new(0, 48)),
+        ("east", GridPos::new(127, 48)),
+        ("north", GridPos::new(64, 0)),
+        ("south", GridPos::new(64, 95)),
+    ] {
+        assert!(map.is_walkable(border), "{name} border probe is blocked");
+        assert!(
+            map.find_path(border, city_gate).is_some(),
+            "no path from the {name} border to the central city"
+        );
+    }
+
+    // The passive eastern base stays reachable: a team-1 worker cell can
+    // path to a free cell adjacent to team 2's Research Center — the
+    // attack-move/Victory journey has a real route.
+    let east = starts
+        .iter()
+        .find(|start| start.team == TeamId(2))
+        .expect("the eastern start");
+    let east_gate = east
+        .workers
+        .iter()
+        .copied()
+        .find(|cell| map.is_walkable(*cell))
+        .expect("a free worker cell beside the enemy Research Center");
+    assert!(
+        map.find_path(city.workers[0], east_gate).is_some(),
+        "the eastern side is unreachable from the central city"
+    );
+
+    // One blocked cell on a main route must leave an alternate route: the
+    // open field offers more than one corridor.
+    let route = map
+        .find_path(city.workers[0], east_gate)
+        .expect("the cross-map route exists");
     let interior = route[route.len() / 2];
-    assert!(interior != start && interior != goal);
+    assert!(interior != city.workers[0] && interior != east_gate);
     assert!(map.set_blocked(interior, true));
     let alternate = map
-        .find_path(start, goal)
+        .find_path(city.workers[0], east_gate)
         .expect("an alternate route must exist");
     assert!(!alternate.contains(&interior));
 }
@@ -47,13 +191,12 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     seed_skirmish(&mut world, &mut map, &fixture);
     extend_with_benchmark_workload(&mut world, &mut map);
 
-    // The mixed roster: the four authored villagers plus the workload make
-    // 20/30/30/20 per team — 200 units total.
+    // The mixed roster: the four authored workers plus the workload make
+    // 20/40/40 per team — 200 units total.
     for team in [TeamId(1), TeamId(2)] {
-        assert_eq!(units_of_kind(&world, team, UnitKind::Villager), 20);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Spearman), 30);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Archer), 30);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Cavalry), 20);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Worker), 20);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Guard), 40);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Rifleman), 40);
         assert!(
             world.resource::<TeamEconomy>().0.contains_key(&team),
             "team {team:?} economy present"
@@ -64,23 +207,23 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     // IDs flowed only through the allocator: 8 authored + 192 allocated.
     assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
 
-    // The two starting Town Centers still stand completed, one per team.
-    let town_centers = world
+    // The two starting Research Centers still stand completed, one per team.
+    let research_centers = world
         .resource::<BuildingIndex>()
         .iter()
         .filter(|(_, entity)| {
             world.get::<Building>(**entity).is_some_and(|building| {
-                building.kind == BuildingKind::TownCenter && building.construction.complete
+                building.kind == BuildingKind::ResearchCenter && building.construction.complete
             })
         })
         .count();
-    assert_eq!(town_centers, 2);
+    assert_eq!(research_centers, 2);
 
     // The authored standalone resources are untouched.
     assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
 
     // Every added unit stands in bounds on a walkable (non-authored-blocked)
-    // cell — staging never parks a unit inside terrain, a Town Center or a
+    // cell — staging never parks a unit inside terrain, a Research Center or a
     // resource.
     for (_, entity) in world.resource::<UnitIndex>().iter() {
         let position = world.get::<SimPosition>(*entity).unwrap().current;
@@ -92,7 +235,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     }
 
     // The initial Gather/AttackMove commands were applied through the
-    // ordinary dispatcher and accepted: the first 12 sorted villagers per
+    // ordinary dispatcher and accepted: the first 12 sorted workers per
     // side are tasked two-per-source to the authored safe sources, and both
     // armies hold one AttackMove order toward the shared midfield corridor.
     for team in [TeamId(1), TeamId(2)] {
@@ -111,7 +254,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
         assert_eq!(
             tasked.len(),
             12,
-            "team {team:?}: twelve villagers tasked by the setup gathers"
+            "team {team:?}: twelve workers tasked by the setup gathers"
         );
         let marching = world
             .resource::<UnitIndex>()
@@ -119,7 +262,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
             .filter(|(_, entity)| {
                 world
                     .get::<Unit>(**entity)
-                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Villager)
+                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Worker)
                     && matches!(
                         world.get::<CombatOrder>(**entity),
                         Some(CombatOrder::AttackMove { .. })
@@ -133,57 +276,99 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     }
 }
 
-/// The two authored anchor accessors are the one shared base-coordinate
-/// table left for session/system-order choreography: each team's slot must
-/// sit in-bounds, walkable and clear of both starts and every resource, and
-/// team 2 must be the exact horizontal mirror of team 1.
+/// The staging scan must produce 96 unique cells per side that are free on
+/// the fully seeded map — no ruin, Research Center, resource, or authored
+/// worker may sit on a staging cell.
 #[test]
-fn authored_anchor_accessors_mirror_between_team_halves() {
+fn benchmark_staging_cells_are_free_unique_and_clear_of_authored_occupancy() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+
+    let authored_units: HashSet<GridPos> = MapFixture::team_starts()
+        .iter()
+        .flat_map(|start| start.workers)
+        .collect();
+
+    for team in [TeamId(1), TeamId(2)] {
+        let cells = benchmark_staging_cells(&map, team);
+        assert_eq!(cells.len(), 96, "team {team:?} staging capacity");
+        let unique: HashSet<GridPos> = cells.iter().copied().collect();
+        assert_eq!(unique.len(), cells.len(), "staging cells must be unique");
+        for cell in &cells {
+            assert!(map.in_bounds(*cell) && map.is_walkable(*cell));
+            assert!(
+                !authored_units.contains(cell),
+                "staging cell {cell:?} coincides with an authored worker"
+            );
+        }
+    }
+}
+
+/// The authored build anchors now live on the `TeamStart` table itself:
+/// each team's Barracks/Depot slots must equal the table fields, sit
+/// in-bounds, walkable and clear of both starts and every resource — and
+/// the eastern team's sites must be real east-side anchors, not horizontal
+/// reflections of the central human city.
+#[test]
+fn authored_anchor_accessors_read_the_team_start_table() {
     let fixture = MapFixture::battlefield();
     let map = &fixture.map;
     let starts = MapFixture::team_starts();
     let occupied: HashSet<GridPos> = starts
         .iter()
-        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
-        .chain(starts.iter().flat_map(|start| start.villagers))
+        .flat_map(|start| Footprint::new(start.research_center_anchor, 4, 4).cells())
+        .chain(starts.iter().flat_map(|start| start.workers))
         .chain(fixture.resources.iter().map(|spawn| spawn.cell))
         .collect();
 
-    for team in [TeamId(1), TeamId(2)] {
-        for (name, anchor, width) in [
+    for start in &starts {
+        assert_eq!(
+            MapFixture::barracks_anchor(start.team),
+            start.barracks_anchor,
+            "barracks_anchor must read the TeamStart table"
+        );
+        assert_eq!(
+            MapFixture::depot_anchor(start.team),
+            start.depot_anchor,
+            "depot_anchor must read the TeamStart table"
+        );
+        for (name, anchor, spec) in [
             (
                 "barracks",
-                MapFixture::barracks_anchor(team),
-                building_spec(BuildingKind::Barracks).width,
+                start.barracks_anchor,
+                building_spec(BuildingKind::Barracks),
             ),
             (
-                "storehouse",
-                MapFixture::safe_storehouse_anchor(team),
-                building_spec(BuildingKind::Storehouse).width,
+                "depot",
+                start.depot_anchor,
+                building_spec(BuildingKind::Depot),
             ),
         ] {
-            for cell in Footprint::new(anchor, width, width).cells() {
+            for cell in Footprint::new(anchor, spec.width, spec.height).cells() {
                 assert!(
                     map.in_bounds(cell) && map.is_walkable(cell) && !occupied.contains(&cell),
-                    "team {team:?} {name} cell {cell:?} must be in-bounds, walkable and clear"
+                    "team {:?} {name} cell {cell:?} must be in-bounds, walkable and clear",
+                    start.team
                 );
             }
         }
     }
 
-    assert_eq!(
+    // No accidental reflection: the passive east team's Barracks site must
+    // sit east of the midline, next to its own base — never a mirror of the
+    // central human site into the wrong half.
+    let team_two = starts
+        .iter()
+        .find(|start| start.team == TeamId(2))
+        .expect("the eastern start");
+    assert!(team_two.barracks_anchor.x >= 64);
+    assert!(team_two.depot_anchor.x >= 64);
+    assert_ne!(
         MapFixture::barracks_anchor(TeamId(2)),
-        mirror_anchor(
-            MapFixture::barracks_anchor(TeamId(1)),
-            building_spec(BuildingKind::Barracks).width
-        )
-    );
-    assert_eq!(
-        MapFixture::safe_storehouse_anchor(TeamId(2)),
-        mirror_anchor(
-            MapFixture::safe_storehouse_anchor(TeamId(1)),
-            building_spec(BuildingKind::Storehouse).width
-        )
+        MapFixture::barracks_anchor(TeamId(1)),
+        "the two teams must not share one authored build site"
     );
 }
 
@@ -195,14 +380,14 @@ fn authored_team_and_resource_cells_are_in_bounds() {
         .chain(MapFixture::expansion_resources());
 
     for start in MapFixture::team_starts() {
-        for cell in Footprint::new(start.town_center_anchor, 4, 4).cells() {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
             assert!(
                 map.in_bounds(cell),
-                "town center cell {cell:?} out of bounds"
+                "research center cell {cell:?} out of bounds"
             );
         }
-        for cell in start.villagers {
-            assert!(map.in_bounds(cell), "villager cell {cell:?} out of bounds");
+        for cell in start.workers {
+            assert!(map.in_bounds(cell), "worker cell {cell:?} out of bounds");
         }
     }
     for resource in resources {
@@ -214,89 +399,247 @@ fn authored_team_and_resource_cells_are_in_bounds() {
     }
 }
 
+/// Every authored resource cell is unique and avoids the seeded
+/// buildings, the worker starts, and the ruins table.
 #[test]
-fn resources_never_overlap_town_center_footprints() {
-    let town_center_cells: HashSet<GridPos> = MapFixture::team_starts()
+fn resources_never_overlap_buildings_workers_or_ruins() {
+    let starts = MapFixture::team_starts();
+    let research_center_cells: HashSet<GridPos> = starts
         .iter()
-        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
+        .flat_map(|start| Footprint::new(start.research_center_anchor, 4, 4).cells())
+        .collect();
+    let worker_cells: HashSet<GridPos> = starts.iter().flat_map(|start| start.workers).collect();
+    let ruin_cells: HashSet<GridPos> = RUINS
+        .iter()
+        .flat_map(|(min, max)| {
+            (min.y..=max.y).flat_map(|y| (min.x..=max.x).map(move |x| GridPos::new(x, y)))
+        })
         .collect();
     let resources = MapFixture::starting_resources()
         .into_iter()
         .chain(MapFixture::expansion_resources());
 
+    let mut seen: HashSet<GridPos> = HashSet::new();
     for resource in resources {
+        assert!(seen.insert(resource.cell), "duplicate resource cell");
         assert!(
-            !town_center_cells.contains(&resource.cell),
-            "resource {:?} overlaps a town center",
+            !research_center_cells.contains(&resource.cell),
+            "resource {:?} overlaps a research center",
+            resource.cell
+        );
+        assert!(
+            !worker_cells.contains(&resource.cell),
+            "resource {:?} overlaps a worker start",
+            resource.cell
+        );
+        assert!(
+            !ruin_cells.contains(&resource.cell),
+            "resource {:?} overlaps a ruin",
             resource.cell
         );
     }
 }
 
+/// Safe-source membership is authored on the `TeamStart` table — never an
+/// `x < 64` side inference. Each team's six ids must resolve to real
+/// source records, cover all three gatherable kinds, and sit near the
+/// team's own base.
 #[test]
-fn safe_source_counts_are_mirrored_between_team_halves() {
-    let safe = MapFixture::starting_resources();
-    let left = safe.iter().filter(|spawn| spawn.cell.x < 64);
-    let right = safe.iter().filter(|spawn| spawn.cell.x >= 64);
+fn safe_source_membership_is_explicit_and_complete() {
+    let resources: std::collections::HashMap<ResourceId, ResourceSpawn> =
+        MapFixture::starting_resources()
+            .into_iter()
+            .chain(MapFixture::expansion_resources())
+            .map(|spawn| (spawn.id, spawn))
+            .collect();
 
-    for kind in [ResourceKind::Food, ResourceKind::Wood, ResourceKind::Gold] {
+    for start in MapFixture::team_starts() {
+        let resolved: Vec<ResourceSpawn> = MapFixture::safe_source_ids(start.team)
+            .into_iter()
+            .map(|id| {
+                *resources
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("{id:?} not authored"))
+            })
+            .collect();
         assert_eq!(
-            left.clone().filter(|spawn| spawn.kind == kind).count(),
-            right.clone().filter(|spawn| spawn.kind == kind).count(),
-            "unmirrored count for {kind:?}"
+            resolved.len(),
+            6,
+            "team {:?} safe membership must hold six sources",
+            start.team
         );
-    }
-}
-
-#[test]
-fn villager_starts_stay_walkable_after_town_center_blocking() {
-    let fixture = MapFixture::battlefield();
-    let mut map = fixture.map;
-    for start in MapFixture::team_starts() {
-        for cell in Footprint::new(start.town_center_anchor, 4, 4).cells() {
-            map.set_blocked(cell, true);
-        }
-    }
-
-    for start in MapFixture::team_starts() {
-        for cell in start.villagers {
+        for kind in [ResourceKind::Food, ResourceKind::Scrap, ResourceKind::Coal] {
             assert!(
-                map.is_walkable(cell),
-                "villager cell {cell:?} blocked by its town center"
+                resolved.iter().any(|spawn| spawn.kind == kind),
+                "team {:?} safe membership lacks {kind:?}",
+                start.team
+            );
+        }
+        // Membership is a set: no id may repeat, and the ids must equal the
+        // TeamStart table's own array.
+        let unique: HashSet<ResourceId> = resolved.iter().map(|spawn| spawn.id).collect();
+        assert_eq!(unique.len(), 6, "safe-source ids repeat");
+        assert_eq!(
+            unique,
+            start.safe_sources.into_iter().collect::<HashSet<_>>(),
+            "safe_source_ids must read the TeamStart table"
+        );
+        // Near the team's own base: every safe source inside vision range
+        // of the Research Center's edge.
+        let core = Footprint::new(start.research_center_anchor, 4, 4);
+        for spawn in resolved {
+            let near = core.edge_cells().iter().any(|edge| {
+                let dx = edge.x - spawn.cell.x;
+                let dy = edge.y - spawn.cell.y;
+                dx * dx + dy * dy <= crate::catalog::VISION_RADIUS_CELLS.pow(2)
+            });
+            assert!(
+                near,
+                "safe source {:?} is not near team {:?}'s base",
+                spawn.cell, start.team
             );
         }
     }
 }
 
 #[test]
-fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
+fn worker_starts_stay_walkable_and_adjacent_to_their_research_center() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map;
+    for start in MapFixture::team_starts() {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
+            map.set_blocked(cell, true);
+        }
+    }
+
+    for start in MapFixture::team_starts() {
+        let footprint = Footprint::new(start.research_center_anchor, 4, 4);
+        for cell in start.workers {
+            assert!(
+                map.is_walkable(cell),
+                "worker cell {cell:?} blocked by its research center or the ruins"
+            );
+            assert!(
+                footprint.is_immediately_adjacent(cell),
+                "worker cell {cell:?} is not adjacent to its Research Center"
+            );
+        }
+    }
+}
+
+/// Legal approaches and drop-offs on the fully seeded map: every authored
+/// source keeps a reachable, walkable perimeter cell from its owning
+/// team's workers; every drop-off/build anchor keeps a full ring of
+/// approach cells.
+#[test]
+fn every_authored_source_and_build_site_keeps_reachable_approaches() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+
+    let starts = MapFixture::team_starts();
+    let reachable_slots = |from: GridPos, footprint: Footprint| {
+        footprint
+            .perimeter_cells()
+            .into_iter()
+            .filter(|cell| map.is_walkable(*cell))
+            .filter(|cell| map.find_path(from, *cell).is_some())
+            .count()
+    };
+
+    // Safe sources: reachable from the owning team's first worker.
+    for start in &starts {
+        for id in MapFixture::safe_source_ids(start.team) {
+            let spawn = fixture
+                .resources
+                .iter()
+                .find(|spawn| spawn.id == id)
+                .expect("safe membership resolves");
+            let footprint = Footprint::new(spawn.cell, 1, 1);
+            let slots = reachable_slots(start.workers[0], footprint);
+            assert!(
+                slots >= 3,
+                "safe source {:?} keeps only {slots} reachable approach cells",
+                spawn.cell
+            );
+        }
+    }
+
+    // Expansions: reachable from the central city's workers.
+    let city_worker = starts[0].workers[0];
+    for spawn in MapFixture::expansion_resources() {
+        let footprint = Footprint::new(spawn.cell, 1, 1);
+        let slots = reachable_slots(city_worker, footprint);
+        assert!(
+            slots >= 3,
+            "expansion {:?} keeps only {slots} reachable approach cells",
+            spawn.cell
+        );
+    }
+
+    // Drop-offs: each Research Center and each authored Depot anchor keeps
+    // a healthy ring of reachable slots.
+    for start in &starts {
+        let core = Footprint::new(start.research_center_anchor, 4, 4);
+        let slots = reachable_slots(start.workers[0], core);
+        assert!(
+            slots >= 6,
+            "team {:?} Research Center keeps only {slots} reachable drop-off slots",
+            start.team
+        );
+        for (name, anchor, spec) in [
+            (
+                "barracks",
+                start.barracks_anchor,
+                building_spec(BuildingKind::Barracks),
+            ),
+            (
+                "depot",
+                start.depot_anchor,
+                building_spec(BuildingKind::Depot),
+            ),
+        ] {
+            let footprint = Footprint::new(anchor, spec.width, spec.height);
+            let slots = reachable_slots(start.workers[0], footprint);
+            assert!(
+                slots >= 4,
+                "team {:?} {name} site keeps only {slots} reachable approach cells",
+                start.team
+            );
+        }
+    }
+}
+
+#[test]
+fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
 
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // Both teams start solvent at Age 1.
+    // Both teams start solvent.
     for team in [TeamId(1), TeamId(2)] {
         let state = &world.resource::<TeamEconomy>().0[&team];
         assert_eq!(
             state.stockpile,
             ResourceStockpile {
                 food: 200,
-                wood: 300,
-                gold: 100
+                scrap: 300,
+                coal: 150,
+                crystals: 0,
             }
         );
-        assert_eq!(state.age, Age::Age1);
     }
 
-    // Two completed Town Center Buildings, each owning a 4×4 Footprint,
+    // Two completed Research Center Buildings, each owning a 4×4 Footprint,
     // a Dropoff marker, full catalogue Health, and blocked map cells.
-    let mut town_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
-    let town_centers: Vec<_> = town_centers.iter(&world).collect();
-    assert_eq!(town_centers.len(), 2);
-    for (building, footprint, dropoff, health) in &town_centers {
-        assert_eq!(building.kind, BuildingKind::TownCenter);
+    let mut research_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
+    let research_centers: Vec<_> = research_centers.iter(&world).collect();
+    assert_eq!(research_centers.len(), 2);
+    for (building, footprint, dropoff, health) in &research_centers {
+        assert_eq!(building.kind, BuildingKind::ResearchCenter);
         assert!(building.construction.complete);
         assert_eq!(building.construction.active_builder, None);
         assert_eq!((footprint.width, footprint.height), (4, 4));
@@ -310,53 +653,52 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
             }
         );
         for cell in footprint.cells() {
-            assert!(!map.is_walkable(cell), "TC cell {cell:?} unblocked");
+            assert!(
+                !map.is_walkable(cell),
+                "Research Center cell {cell:?} unblocked"
+            );
         }
     }
     assert_eq!(
-        town_centers
+        research_centers
             .iter()
             .map(|(b, ..)| b.team)
             .collect::<HashSet<_>>()
             .len(),
         2,
-        "one Town Center per team"
+        "one Research Center per team"
     );
 
     // Every Dropoff lives on a real Building entity — no temporary
-    // Dropoff-only Town Center exists.
+    // Dropoff-only Research Center exists.
     let mut dropoffs = world.query::<(Entity, &Dropoff)>();
     for (entity, _) in dropoffs.iter(&world) {
         assert!(world.get::<Building>(entity).is_some());
     }
 
-    // Four villagers per team with fresh worker components, standing on
+    // Four workers per team with fresh worker components, standing on
     // walkable authored cells.
-    let mut villagers =
-        world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
-    let villagers: Vec<_> = villagers
+    let mut workers = world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
+    let workers: Vec<_> = workers
         .iter(&world)
-        .filter(|(unit, ..)| unit.kind == UnitKind::Villager)
+        .filter(|(unit, ..)| unit.kind == UnitKind::Worker)
         .collect();
-    assert_eq!(villagers.len(), 8);
+    assert_eq!(workers.len(), 8);
     for team in [TeamId(1), TeamId(2)] {
         assert_eq!(
-            villagers
+            workers
                 .iter()
                 .filter(|(unit, ..)| unit.team == team)
                 .count(),
             4
         );
     }
-    assert!(
-        villagers
-            .iter()
-            .all(|(_, position, carry, progress, task)| map
-                .is_walkable(map.world_to_cell(position.current))
-                && **carry == Carry::Empty
-                && progress.0 == 0.0
-                && **task == WorkerTask::Idle)
-    );
+    assert!(workers.iter().all(|(_, position, carry, progress, task)| {
+        map.is_walkable(map.world_to_cell(position.current))
+            && **carry == Carry::Empty
+            && progress.0 == 0.0
+            && **task == WorkerTask::Idle
+    }));
 
     // Eighteen authored finite sources: 1×1 blocked footprints, full
     // authored amounts, registered in the index.
@@ -365,8 +707,7 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
     assert_eq!(sources.len(), 18);
     for (source, footprint) in &sources {
         assert_eq!((footprint.width, footprint.height), (1, 1));
-        assert_eq!(source.remaining, Some(resource_amount(source.kind)));
-        assert_eq!(source.assigned_worker, None);
+        assert_eq!(source.remaining, resource_amount(source.kind));
         assert!(
             !map.is_walkable(footprint.anchor),
             "source cell {:?} unblocked",

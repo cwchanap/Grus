@@ -14,7 +14,7 @@ fn active_move_replans_when_new_obstacle_intersects_route() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 3.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         4.0,
     );
 
