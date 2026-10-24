@@ -17,9 +17,6 @@ const REJECT_SESSION_LOCKED := 17
 ## Proven-open Barracks anchor: the authored ring slot west of the central
 ## Research Center (crates/grus-sim/src/fixture.rs TeamStart table).
 const BARRACKS_ANCHOR := Vector2i(58, 46)
-## Walkable ground beside the enemy Research Center footprint (112..115, 46..49);
-## attack-move here must acquire the Research Center within the 8-unit radius.
-const ENEMY_RESEARCH_CENTER_CELL := Vector2(118.5, 44.5)
 
 var _main: Node3D
 var _fx: Node3D
@@ -290,9 +287,14 @@ func _run() -> void:
 		return
 	# Fog retarget (HPA-473): the enemy start boots hidden, so the pickers
 	# would rightly ignore worker 5 — march the Guard into vision first.
+	# The waypoint derives from the live victim view (a hidden enemy view
+	# still tracks its authoritative position): ground west of the enemy
+	# worker, never a copied fixture coordinate.
 	# A queued bridge call is not acceptance: assert the sim's own feedback.
 	var march_revision := int(GrusBridge.command_feedback_revision())
-	if not GrusBridge.move_units(PackedInt32Array([spear_id]), Vector2(108.5, 44.5)):
+	var scout_waypoint := Vector2(
+		victim.global_position.x - 8.0, victim.global_position.z - 1.0)
+	if not GrusBridge.move_units(PackedInt32Array([spear_id]), scout_waypoint):
 		_fail("bridge refused to queue the scouting march")
 		return
 	if not await _wait_until(
@@ -346,14 +348,22 @@ func _run() -> void:
 			"dead unit 5 was never reconciled out of selection/control groups"):
 		return
 
-	# Attack-move onto the enemy Research Center: acquisition must pick it up
-	# and drop its health through the building health bar.
-	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), ENEMY_RESEARCH_CENTER_CELL):
-		_fail("attack_move_units refused the Research Center push")
-		return
+	# Attack-move onto the enemy Research Center: the waypoint derives from
+	# the live BuildingId-2 view (its footprint center) — never a copied
+	# fixture coordinate — and must sit inside the 8-unit acquisition
+	# radius so the march ends beside the building.
 	var enemy_tc := _building_view(2)
 	if enemy_tc == null:
 		_fail("enemy Research Center view 2 is missing")
+		return
+	var rc_waypoint := Vector2(
+		enemy_tc.global_position.x + 4.0, enemy_tc.global_position.z - 4.0)
+	if Vector2(enemy_tc.global_position.x, enemy_tc.global_position.z) \
+			.distance_to(rc_waypoint) > 8.0:
+		_fail("derived Research Center waypoint escaped acquisition radius: %s" % rc_waypoint)
+		return
+	if not GrusBridge.attack_move_units(PackedInt32Array([spear_id]), rc_waypoint):
+		_fail("attack_move_units refused the Research Center push")
 		return
 	if not await _wait_until(func(): return float(enemy_tc.call("health_ratio")) < 1.0, 30.0,
 			"attack-move never damaged the enemy Research Center"):
