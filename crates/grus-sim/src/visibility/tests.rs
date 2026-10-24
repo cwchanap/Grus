@@ -25,8 +25,8 @@ fn lone_unit_world(team: TeamId, cell: GridPos) -> (World, GridMap) {
         UnitId(1),
         team,
         Vec2::new(cell.x as f32 + 0.5, cell.y as f32 + 0.5),
-        crate::catalog::UnitKind::Villager,
-        unit_spec(crate::catalog::UnitKind::Villager).speed,
+        crate::catalog::UnitKind::Worker,
+        unit_spec(crate::catalog::UnitKind::Worker).speed,
     );
     (world, GridMap::new(128, 96))
 }
@@ -47,12 +47,12 @@ fn initial_reveal_marks_own_start_visible_and_enemy_start_unknown() {
     assert_eq!(
         visibility.cell_state(TeamId(1), GridPos::new(12, 46)),
         CellVisibility::Visible,
-        "own Town Center footprint is visible after initial reveal"
+        "own Research Center footprint is visible after initial reveal"
     );
     assert_eq!(
         visibility.cell_state(TeamId(1), GridPos::new(112, 46)),
         CellVisibility::Unexplored,
-        "the enemy Town Center is unknown to team 1"
+        "the enemy Research Center is unknown to team 1"
     );
     assert_eq!(
         visibility.cell_state(TeamId(2), GridPos::new(12, 46)),
@@ -69,21 +69,21 @@ fn authored_start_resources_are_explored_and_expansions_are_not() {
     refresh_visibility(&mut world, &map);
 
     // Premise for the x<64 attribution below: the authored starts really
-    // split at the midline — team 1's Town Center sits west of x=64, team
+    // split at the midline — team 1's Research Center sits west of x=64, team
     // 2's east of it, and every starting resource shares its attributed
     // team's side. A fixture shift fails loudly here instead of silently
     // mis-owning the reveal assertions.
     let starts = MapFixture::team_starts();
-    let town_center_anchor = |team: TeamId| {
+    let research_center_anchor = |team: TeamId| {
         starts
             .iter()
             .find(|start| start.team == team)
             .expect("an authored start for every team")
-            .town_center_anchor
+            .research_center_anchor
     };
     assert!(
-        town_center_anchor(TeamId(1)).x < 64 && town_center_anchor(TeamId(2)).x >= 64,
-        "the authored Town Centers must sit on opposite sides of the x=64 split"
+        research_center_anchor(TeamId(1)).x < 64 && research_center_anchor(TeamId(2)).x >= 64,
+        "the authored Research Centers must sit on opposite sides of the x=64 split"
     );
     for spawn in MapFixture::starting_resources() {
         let team = if spawn.cell.x < 64 {
@@ -92,7 +92,7 @@ fn authored_start_resources_are_explored_and_expansions_are_not() {
             TeamId(2)
         };
         assert_eq!(
-            town_center_anchor(team).x < 64,
+            research_center_anchor(team).x < 64,
             spawn.cell.x < 64,
             "starting resource at {:?} must share team {team:?}'s side of the x=64 split",
             spawn.cell
@@ -206,7 +206,7 @@ fn construction_site_reveals_nothing_until_complete() {
             Building {
                 id: crate::ids::BuildingId(1),
                 team: TeamId(1),
-                kind: BuildingKind::TownCenter,
+                kind: BuildingKind::ResearchCenter,
                 construction: ConstructionState {
                     progress_seconds: 0.0,
                     complete: false,

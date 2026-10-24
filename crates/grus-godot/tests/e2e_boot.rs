@@ -37,14 +37,17 @@ fn boot_ready_and_fixture_markers() {
 
     bevy_e2e::run(options, |game| {
         game.wait_for("grus.ready")?;
-        game.find("player.town-center")?;
-        game.find("enemy.town-center")?;
-        game.find("player.starting-villager")?;
+        game.find("player.research-center")?;
+        game.find("enemy.research-center")?;
+        game.find("player.starting-worker")?;
 
         // Cheap reflected-state round-trip: read the marker entity's own
         // `E2eId` component over BRP and assert the selector value survives.
-        let id = game.component_json("player.town-center", bevy_e2e::E2eId::type_path())?;
-        assert_eq!(id["value"], "player.town-center", "E2eId must round-trip");
+        let id = game.component_json("player.research-center", bevy_e2e::E2eId::type_path())?;
+        assert_eq!(
+            id["value"], "player.research-center",
+            "E2eId must round-trip"
+        );
 
         Ok(())
     })

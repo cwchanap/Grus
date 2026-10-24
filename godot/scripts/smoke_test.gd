@@ -6,7 +6,7 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 ## (crates/grus-sim/src/fixture.rs).
 const EXPANSION_TREE_ID := 14
 const TREE_CELL := Vector2i(43, 18)
-const ENEMY_TOWN_CENTER_CELL := Vector2i(112, 46)
+const ENEMY_RESEARCH_CENTER_CELL := Vector2i(112, 46)
 
 ## March destinations: the expansion tree at (43,18), a vantage inside
 ## vision of the enemy start, and open ground back out of vision.
@@ -182,10 +182,10 @@ func _run() -> void:
 	for id in range(1, 5):
 		var member := _find_unit(units, id)
 		if member == null or int(member.get_meta("team_id", -1)) != 1:
-			_fail("Team 1 villager %d is missing or has the wrong team metadata" % id)
+			_fail("Team 1 worker %d is missing or has the wrong team metadata" % id)
 			return
 	if int(enemy.get_meta("team_id", -1)) != 2:
-		_fail("Team 2 villager does not start at UnitId 5")
+		_fail("Team 2 worker does not start at UnitId 5")
 		return
 
 	# Normal skirmish boots into Start; gameplay opens only via start_match.
@@ -364,7 +364,7 @@ func _run() -> void:
 		return
 
 	# HPA-445 fog/minimap contract (moved out of the removed scouting-AI
-	# smoke): a human scout — villager 4, untouched by the choreography
+	# smoke): a human scout — worker 4, untouched by the choreography
 	# above — reveals a hidden resource and the passive enemy start, then
 	# leaves again. Presentation must track sim fog throughout: enemy views
 	# and the HUD data path open only under current vision, explored
@@ -388,15 +388,15 @@ func _run() -> void:
 		_fail("visibility snapshot payload is not 128x96: %d" % pre_states.size())
 		return
 	if _cell_state(pre_states, TREE_CELL) != 0 \
-			or _cell_state(pre_states, ENEMY_TOWN_CENTER_CELL) != 0:
+			or _cell_state(pre_states, ENEMY_RESEARCH_CENTER_CELL) != 0:
 		_fail("scout targets did not stay Unexplored before the leg")
 		return
 	for id in range(5, 9):
 		if not _hidden(_unit_view(id)):
-			_fail("enemy villager %d was not hidden before the scout leg" % id)
+			_fail("enemy worker %d was not hidden before the scout leg" % id)
 			return
 	if not _hidden(_building_view(2)):
-		_fail("enemy Town Center view was not hidden before the scout leg")
+		_fail("enemy Research Center view was not hidden before the scout leg")
 		return
 	if not _hidden(_resource_view(EXPANSION_TREE_ID)):
 		_fail("expansion tree view was not hidden before the scout leg")
@@ -423,18 +423,18 @@ func _run() -> void:
 	if not await _move_scout(4, ENEMY_VANTAGE, "enemy scout"):
 		return
 	if not await _wait_until(func(): return _shown(_building_view(2)) and _shown(_unit_view(5)), 60.0,
-			"scout never revealed the enemy Town Center/villagers"):
+			"scout never revealed the enemy Research Center/workers"):
 		return
 	var enemy_snap: Dictionary = GrusBridge.building_snapshot(2)
 	if enemy_snap.is_empty() or int(enemy_snap.get("team_id", -1)) != 2:
-		_fail("visible enemy Town Center snapshot is missing or wrong: %s" % [enemy_snap])
+		_fail("visible enemy Research Center snapshot is missing or wrong: %s" % [enemy_snap])
 		return
 	if int(minimap.enemy_marker_count) < 1:
 		_fail("minimap shows no enemy markers after the reveal")
 		return
 	# A visible enemy building may be selected, and reconcile keeps it.
 	# Deliberate test seam: the selection is poked directly because the
-	# enemy Town Center boots hidden under fog, and the real picking funnel
+	# enemy Research Center boots hidden under fog, and the real picking funnel
 	# (battlefield _select_at) rightly skips not-visible-in-tree views —
 	# selecting it through a real click would first require marching the
 	# scout into the enemy start, machinery the fog contract under test
@@ -476,7 +476,7 @@ func _run() -> void:
 		_fail("visibility snapshot lost its payload")
 		return
 	if _cell_state(fog_states, TREE_CELL) != 1 \
-			or _cell_state(fog_states, ENEMY_TOWN_CENTER_CELL) != 1:
+			or _cell_state(fog_states, ENEMY_RESEARCH_CENTER_CELL) != 1:
 		_fail("explored fog did not persist after the scout left")
 		return
 

@@ -161,10 +161,10 @@ func _reconcile_selection() -> void:
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	economy_label.text = "Food %d   Wood %d   Gold %d\nPopulation %d/%d" % [
+	economy_label.text = "Food %d   Scrap %d   Coal %d\nPopulation %d/%d" % [
 		int(economy.get("food", 0)),
-		int(economy.get("wood", 0)),
-		int(economy.get("gold", 0)),
+		int(economy.get("scrap", 0)),
+		int(economy.get("coal", 0)),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
 	]
@@ -351,7 +351,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	var armed := _attack_move_armed
 	_attack_move_armed = false
 	# An armed attack-move is a modal order: it outranks every contextual
-	# pick (villager gather/construction, enemy attack, rally, move).
+	# pick (worker gather/construction, enemy attack, rally, move).
 	if armed and not selected_ids.is_empty():
 		var target = _ground_target(screen_position)
 		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
@@ -359,11 +359,11 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		else:
 			command_status.text = "Attack-move rejected"
 		return
-	var villagers := _selected_villager_ids()
-	if not villagers.is_empty():
+	var workers := _selected_worker_ids()
+	if not workers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
 		if resource_id > 0:
-			if GrusBridge.gather(PackedInt32Array(villagers), resource_id):
+			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
 				command_status.text = "Gather command queued"
 			else:
 				command_status.text = "Gather command rejected"
@@ -372,7 +372,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		if building != null and int(building.get_meta("team_id", -1)) == 1:
 			var building_id := int(building.get_meta("building_id", -1))
 			if not _building_complete(building_id):
-				if GrusBridge.resume_construction(villagers[0], building_id):
+				if GrusBridge.resume_construction(workers[0], building_id):
 					command_status.text = "Construction resume queued"
 				else:
 					command_status.text = "Construction resume rejected"
@@ -521,17 +521,17 @@ func _restart_match() -> void:
 	_cancel_placement()
 	_fx.clear_all()
 
-func _selected_villager_ids() -> Array[int]:
-	var villagers: Array[int] = []
+func _selected_worker_ids() -> Array[int]:
+	var workers: Array[int] = []
 	for id in selected_ids:
-		if _unit_kind(id) == "Villager":
-			villagers.append(id)
-	villagers.sort()
-	return villagers
+		if _unit_kind(id) == "Worker":
+			workers.append(id)
+	workers.sort()
+	return workers
 
-func _lowest_selected_villager_id() -> int:
-	var villagers := _selected_villager_ids()
-	return villagers[0] if not villagers.is_empty() else 0
+func _lowest_selected_worker_id() -> int:
+	var workers := _selected_worker_ids()
+	return workers[0] if not workers.is_empty() else 0
 
 func _gatherable_resource_id(screen_position: Vector2) -> int:
 	# Only standalone finite sources are gatherable; buildings never carry
@@ -571,7 +571,7 @@ func _update_placement_preview(screen_position: Vector2) -> void:
 		_preview_box.visible = false
 		return
 	var preview: Dictionary = GrusBridge.placement_preview(
-		_lowest_selected_villager_id(), _placement_kind, floori(target.x), floori(target.y))
+		_lowest_selected_worker_id(), _placement_kind, floori(target.x), floori(target.y))
 	if preview.is_empty():
 		_preview_box.visible = false
 		return
@@ -595,9 +595,9 @@ func _try_placement(screen_position: Vector2) -> void:
 	var target = _ground_target(screen_position)
 	if target == null:
 		return
-	var builder := _lowest_selected_villager_id()
+	var builder := _lowest_selected_worker_id()
 	if builder <= 0:
-		command_status.text = "Select a villager to build"
+		command_status.text = "Select a worker to build"
 		return
 	var anchor_x := floori(target.x)
 	var anchor_y := floori(target.y)
@@ -644,4 +644,4 @@ func _on_idle_pressed() -> void:
 		camera.position.x = view.global_position.x
 		camera.position.z = view.global_position.z
 		break
-	command_status.text = "Selected idle villager #%d" % worker_id
+	command_status.text = "Selected idle worker #%d" % worker_id

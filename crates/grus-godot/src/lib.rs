@@ -473,7 +473,7 @@ impl GrusBridgeNode {
         .unwrap_or(-1)
     }
 
-    /// Team 1 economy state: stockpile, population, idle villagers, the
+    /// Team 1 economy state: stockpile, population, idle workers, the
     /// current gather rate, and the latest rejection code.
     /// `last_reject_code` follows `RejectReason` discriminant order (-1 =
     /// none); `gather_rate` is the team's current resources/second.
@@ -485,17 +485,11 @@ impl GrusBridgeNode {
             let state = world
                 .get_resource::<TeamEconomy>()
                 .and_then(|economy| economy.0.get(&TeamId(1)));
-            let (food, wood, gold) = match state {
-                Some(state) => (
-                    i64::from(state.stockpile.food),
-                    i64::from(state.stockpile.wood),
-                    i64::from(state.stockpile.gold),
-                ),
-                None => (0, 0, 0),
-            };
-            dict.set("food", food);
-            dict.set("wood", wood);
-            dict.set("gold", gold);
+            let stockpile = state.map(|state| state.stockpile).unwrap_or_default();
+            dict.set("food", i64::from(stockpile.food));
+            dict.set("scrap", i64::from(stockpile.scrap));
+            dict.set("coal", i64::from(stockpile.coal));
+            dict.set("crystals", i64::from(stockpile.crystals));
             dict.set(
                 "population_used",
                 i64::from(population_used(world, TeamId(1))),
@@ -671,42 +665,54 @@ impl GrusBridgeNode {
 
     /// Catalogue action data computed from the Rust catalogue, so GDScript
     /// never hardcodes gameplay costs or unlocks. Keys:
-    /// - "units": {kind -> {food, wood, gold, seconds, producer}} —
-    ///   train cost, train seconds, and the producing building kind name.
-    /// - "buildings": {kind -> {food, wood, gold, seconds, width, height,
-    ///   population}} — build cost, build seconds, footprint, and
-    ///   population capacity contribution.
+    /// - "units": {kind -> {food, scrap, coal, crystals, seconds,
+    ///   producer}} — train cost (all four currencies, always present),
+    ///   train seconds, and the producing building kind name.
+    /// - "buildings": {kind -> {food, scrap, coal, crystals, seconds,
+    ///   width, height, population}} — build cost, build seconds,
+    ///   footprint, and population capacity contribution.
     #[func]
     fn catalogue_snapshot(&self) -> VarDictionary {
-        let mut units = VarDictionary::new();
-        for kind in UnitKind::ALL {
-            let spec = unit_spec(kind);
-            let mut entry = VarDictionary::new();
-            entry.set("food", i64::from(spec.cost.food));
-            entry.set("wood", i64::from(spec.cost.wood));
-            entry.set("gold", i64::from(spec.cost.gold));
-            entry.set("seconds", i64::from(spec.train_seconds));
-            entry.set("producer", &producer_kind_name(kind));
-            units.set(&kind_name(kind), &entry.to_variant());
-        }
-        let mut buildings = VarDictionary::new();
-        for kind in BuildingKind::ALL {
-            let spec = building_spec(kind);
-            let mut entry = VarDictionary::new();
-            entry.set("food", i64::from(spec.cost.food));
-            entry.set("wood", i64::from(spec.cost.wood));
-            entry.set("gold", i64::from(spec.cost.gold));
-            entry.set("seconds", i64::from(spec.build_seconds));
-            entry.set("width", i64::from(spec.width));
-            entry.set("height", i64::from(spec.height));
-            entry.set("population", i64::from(spec.population_capacity));
-            buildings.set(&kind_name(kind), &entry.to_variant());
-        }
-        let mut catalogue = VarDictionary::new();
-        catalogue.set("units", &units.to_variant());
-        catalogue.set("buildings", &buildings.to_variant());
-        catalogue
+        catalogue_snapshot_dict()
     }
+}
+
+/// The one four-field cost serialization: every cost dict carries all four
+/// currencies so GDScript never has to guess which fields exist.
+fn cost_dict(cost: grus_sim::catalog::Cost) -> VarDictionary {
+    let mut dict = VarDictionary::new();
+    dict.set("food", i64::from(cost.food));
+    dict.set("scrap", i64::from(cost.scrap));
+    dict.set("coal", i64::from(cost.coal));
+    dict.set("crystals", i64::from(cost.crystals));
+    dict
+}
+
+/// Engine-free catalogue snapshot content, extracted so unit tests can
+/// drive it without a live Godot node.
+fn catalogue_snapshot_dict() -> VarDictionary {
+    let mut units = VarDictionary::new();
+    for kind in UnitKind::ALL {
+        let spec = unit_spec(kind);
+        let mut entry = cost_dict(spec.cost);
+        entry.set("seconds", i64::from(spec.train_seconds));
+        entry.set("producer", &producer_kind_name(kind));
+        units.set(&kind_name(kind), &entry.to_variant());
+    }
+    let mut buildings = VarDictionary::new();
+    for kind in BuildingKind::ALL {
+        let spec = building_spec(kind);
+        let mut entry = cost_dict(spec.cost);
+        entry.set("seconds", i64::from(spec.build_seconds));
+        entry.set("width", i64::from(spec.width));
+        entry.set("height", i64::from(spec.height));
+        entry.set("population", i64::from(spec.population_capacity));
+        buildings.set(&kind_name(kind), &entry.to_variant());
+    }
+    let mut catalogue = VarDictionary::new();
+    catalogue.set("units", &units.to_variant());
+    catalogue.set("buildings", &buildings.to_variant());
+    catalogue
 }
 
 #[bevy_app]
@@ -760,12 +766,15 @@ fn decode_unit_ids(packed_ids: &PackedInt32Array) -> Vec<UnitId> {
 }
 
 fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
-    match name.to_string().as_str() {
-        "Villager" => Some(UnitKind::Villager),
-        "Spearman" => Some(UnitKind::Spearman),
-        "Archer" => Some(UnitKind::Archer),
-        _ => None,
-    }
+    parse_unit_kind_str(name.to_string().as_str())
+}
+
+/// Engine-free `&str` core so unit tests can drive the parser (a `GString`
+/// needs a live Godot engine, which unit tests do not have).
+fn parse_unit_kind_str(name: &str) -> Option<UnitKind> {
+    UnitKind::ALL
+        .into_iter()
+        .find(|kind| format!("{kind:?}") == name)
 }
 
 /// Closed-string target kind beside the other parse helpers: only
@@ -791,13 +800,15 @@ fn parse_target_kind_str(kind: &str, target_id: i32) -> Option<CombatTarget> {
 }
 
 fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
-    match name.to_string().as_str() {
-        "House" => Some(BuildingKind::House),
-        "Storehouse" => Some(BuildingKind::Storehouse),
-        "Barracks" => Some(BuildingKind::Barracks),
-        // Town Centers are seeded, never placed.
-        _ => None,
-    }
+    parse_building_kind_str(name.to_string().as_str())
+}
+
+fn parse_building_kind_str(name: &str) -> Option<BuildingKind> {
+    // Every catalogue name parses — the seeded-only ResearchCenter included;
+    // its placement rejection lives in the sim (`Locked`), not the parser.
+    BuildingKind::ALL
+        .into_iter()
+        .find(|kind| format!("{kind:?}") == name)
 }
 
 fn debug_variant(value: impl std::fmt::Debug) -> Variant {
@@ -809,8 +820,8 @@ fn kind_name(value: impl std::fmt::Debug) -> GString {
 }
 
 /// The building kind that trains the given unit, per the fixed producer
-/// compatibility table (Town Center trains villagers, Barracks spearmen
-/// and archers).
+/// compatibility table (Research Center trains Workers, Barracks Guards
+/// and Riflemen).
 fn producer_kind_name(kind: UnitKind) -> GString {
     for building in BuildingKind::ALL {
         if produces(building, ProductionKind::Unit(kind)) {
@@ -1398,7 +1409,7 @@ fn format_command_result(result: &CommandResult) -> String {
     }
 
     // Per-unit rejects outside the three counted kinds (e.g. Crowded,
-    // NotVillager) still name the first uncounted typed code instead of
+    // NotWorker) still name the first uncounted typed code instead of
     // collapsing into a zero-count summary.
     let uncounted = result.rejected_units.len() - unreachable - not_owned - unknown;
     let mut text = format!(
@@ -1532,6 +1543,58 @@ mod tests {
 
     use super::*;
 
+    /// Parsers walk the authoritative `UnitKind::ALL`/`BuildingKind::ALL`
+    /// tables, so every catalogue name round-trips and every retired name
+    /// rejects. No hardcoded alias surface: the match is on the kind's own
+    /// `Debug` name. The tests run engine-free through the `&str` cores.
+    #[test]
+    fn unit_kind_parser_accepts_exactly_the_catalogue_names() {
+        for kind in UnitKind::ALL {
+            let name = format!("{kind:?}");
+            assert_eq!(parse_unit_kind_str(&name), Some(kind), "{name} must parse");
+        }
+        for retired in [
+            "Villager", "Spearman", "Archer", "Cavalry", "worker", "Worker ", "", "Cactus",
+        ] {
+            assert_eq!(
+                parse_unit_kind_str(retired),
+                None,
+                "retired/foreign name {retired} must reject"
+            );
+        }
+    }
+
+    /// Building names behave the same: every `BuildingKind::ALL` entry
+    /// parses — including the seeded-only ResearchCenter, whose placement
+    /// rejection lives in the sim (`Locked`), not the parser.
+    #[test]
+    fn building_kind_parser_accepts_exactly_the_catalogue_names() {
+        for kind in BuildingKind::ALL {
+            let name = format!("{kind:?}");
+            assert_eq!(
+                parse_building_kind_str(&name),
+                Some(kind),
+                "{name} must parse"
+            );
+        }
+        for retired in [
+            "House",
+            "Storehouse",
+            "TownCenter",
+            "Farm",
+            "ArcheryRange",
+            "Stable",
+            "bunkhouse",
+            "",
+        ] {
+            assert_eq!(
+                parse_building_kind_str(retired),
+                None,
+                "retired/foreign name {retired} must reject"
+            );
+        }
+    }
+
     #[test]
     fn parse_target_kind_accepts_only_the_closed_strings() {
         assert_eq!(
@@ -1619,17 +1682,17 @@ mod tests {
             revision >= 1,
             "initial refresh must have bumped the revision"
         );
-        let own_town_center = GridPos::new(12, 46);
-        let enemy_town_center = GridPos::new(112, 46);
+        let own_research_center = GridPos::new(12, 46);
+        let enemy_research_center = GridPos::new(112, 46);
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
         assert_eq!(
-            states[(own_town_center.y * 128 + own_town_center.x) as usize],
+            states[(own_research_center.y * 128 + own_research_center.x) as usize],
             2
         );
         assert_eq!(
-            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            states[(enemy_research_center.y * 128 + enemy_research_center.x) as usize],
             0,
             "the enemy start must boot Unexplored — runtime is not full-info"
         );
@@ -1657,18 +1720,18 @@ mod tests {
         setup_fixture(&mut world);
         let [left, right] = MapFixture::team_starts();
         assert_eq!(
-            town_center_anchor(&world, TeamId(1)),
-            left.town_center_anchor,
+            research_center_anchor(&world, TeamId(1)),
+            left.research_center_anchor,
             "boot: Team 1 seeds on the authored left start"
         );
         assert_eq!(
-            town_center_anchor(&world, TeamId(2)),
-            right.town_center_anchor,
+            research_center_anchor(&world, TeamId(2)),
+            right.research_center_anchor,
             "boot: Team 2 seeds on the authored right start"
         );
     }
 
-    fn town_center_anchor(world: &World, team: TeamId) -> GridPos {
+    fn research_center_anchor(world: &World, team: TeamId) -> GridPos {
         let entity = world
             .resource::<BuildingIndex>()
             .iter()
@@ -1676,11 +1739,11 @@ mod tests {
                 world
                     .get::<Building>(*entity)
                     .is_some_and(|building| {
-                        building.team == team && building.kind == BuildingKind::TownCenter
+                        building.team == team && building.kind == BuildingKind::ResearchCenter
                     })
                     .then_some(*entity)
             })
-            .expect("a seeded Town Center per team");
+            .expect("a seeded Research Center per team");
         world.get::<Footprint>(entity).unwrap().anchor
     }
 
@@ -1761,7 +1824,7 @@ mod tests {
         assert!(!building_hidden_from_local_player(&world, own));
         assert!(
             building_hidden_from_local_player(&world, enemy),
-            "the far enemy Town Center starts hidden"
+            "the far enemy Research Center starts hidden"
         );
 
         // A team-1 scout beside the enemy footprint clears it for presentation.
@@ -1782,7 +1845,7 @@ mod tests {
             UnitId(1),
             TeamId(1),
             Vec2::new(1.5, 1.5),
-            UnitKind::Villager,
+            UnitKind::Worker,
             6.0,
         );
         world
@@ -1793,7 +1856,7 @@ mod tests {
             UnitId(2),
             TeamId(1),
             Vec2::new(2.5, 1.5),
-            UnitKind::Villager,
+            UnitKind::Worker,
             6.0,
         );
         world.entity_mut(moving).insert((
@@ -1812,7 +1875,7 @@ mod tests {
             UnitId(3),
             TeamId(1),
             Vec2::new(3.5, 1.5),
-            UnitKind::Villager,
+            UnitKind::Worker,
             6.0,
         );
         world.entity_mut(gathering).insert((
@@ -1826,7 +1889,7 @@ mod tests {
             UnitId(4),
             TeamId(1),
             Vec2::new(4.5, 1.5),
-            UnitKind::Spearman,
+            UnitKind::Guard,
             6.0,
         );
 
@@ -1835,15 +1898,15 @@ mod tests {
 
     #[test]
     fn building_view_transform_centers_and_scales_to_the_footprint() {
-        // A 4×4 Town Center at (12, 46) renders around (14, 48) — not the
+        // A 4×4 Research Center at (12, 46) renders around (14, 48) — not the
         // anchor's cell center — and the unit box scales to the footprint.
-        let town_center = building_view_transform(&Footprint::new(GridPos::new(12, 46), 4, 4));
-        assert_eq!(town_center.translation, Vec3::new(14.0, 0.0, 48.0));
-        assert_eq!(town_center.scale, Vec3::new(4.0, 1.0, 4.0));
+        let research_center = building_view_transform(&Footprint::new(GridPos::new(12, 46), 4, 4));
+        assert_eq!(research_center.translation, Vec3::new(14.0, 0.0, 48.0));
+        assert_eq!(research_center.scale, Vec3::new(4.0, 1.0, 4.0));
 
-        let house = building_view_transform(&Footprint::new(GridPos::new(13, 10), 2, 2));
-        assert_eq!(house.translation, Vec3::new(14.0, 0.0, 11.0));
-        assert_eq!(house.scale, Vec3::new(2.0, 1.0, 2.0));
+        let bunkhouse = building_view_transform(&Footprint::new(GridPos::new(13, 10), 2, 2));
+        assert_eq!(bunkhouse.translation, Vec3::new(14.0, 0.0, 11.0));
+        assert_eq!(bunkhouse.scale, Vec3::new(2.0, 1.0, 2.0));
     }
 
     #[test]
@@ -1914,8 +1977,13 @@ mod tests {
         for team in [TeamId(1), TeamId(2)] {
             let stockpile = &world.resource::<TeamEconomy>().0[&team].stockpile;
             assert_eq!(
-                (stockpile.food, stockpile.wood, stockpile.gold),
-                (200, 300, 100)
+                (
+                    stockpile.food,
+                    stockpile.scrap,
+                    stockpile.coal,
+                    stockpile.crystals
+                ),
+                (200, 300, 150, 0)
             );
         }
         assert!(matches!(
@@ -1994,14 +2062,19 @@ mod tests {
         world
             .entity_mut(scout)
             .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
-        let enemy_town_center_entity = world
+        let enemy_research_center_entity = world
             .resource::<BuildingIndex>()
             .entity(BuildingId(2))
             .unwrap();
-        let enemy_town_center_footprint =
-            *world.get::<Footprint>(enemy_town_center_entity).unwrap();
+        let enemy_research_center_footprint = *world
+            .get::<Footprint>(enemy_research_center_entity)
+            .unwrap();
         refresh_visibility(&mut world, &map);
-        assert!(explored_by(&world, TeamId(1), enemy_town_center_footprint));
+        assert!(explored_by(
+            &world,
+            TeamId(1),
+            enemy_research_center_footprint
+        ));
 
         reset_fixture_world(&mut world);
 
@@ -2016,9 +2089,9 @@ mod tests {
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
-        let enemy_town_center = GridPos::new(112, 46);
+        let enemy_research_center = GridPos::new(112, 46);
         assert_eq!(
-            states[(enemy_town_center.y * 128 + enemy_town_center.x) as usize],
+            states[(enemy_research_center.y * 128 + enemy_research_center.x) as usize],
             0,
             "restart must return the used fog to boot Unexplored"
         );
@@ -2057,24 +2130,24 @@ mod tests {
                 .count()
         };
         for team in [TeamId(1), TeamId(2)] {
-            assert_eq!(count(team, UnitKind::Villager), 20);
-            assert_eq!(count(team, UnitKind::Spearman), 40);
-            assert_eq!(count(team, UnitKind::Archer), 40);
+            assert_eq!(count(team, UnitKind::Worker), 20);
+            assert_eq!(count(team, UnitKind::Guard), 40);
+            assert_eq!(count(team, UnitKind::Rifleman), 40);
         }
         assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
 
-        // The two starting Town Centers and all 18 authored sources survive
+        // The two starting Research Centers and all 18 authored sources survive
         // from the shared skirmish seed.
-        let town_centers = world
+        let research_centers = world
             .resource::<BuildingIndex>()
             .iter()
             .filter(|(_, entity)| {
                 world.get::<Building>(**entity).is_some_and(|building| {
-                    building.kind == BuildingKind::TownCenter && building.construction.complete
+                    building.kind == BuildingKind::ResearchCenter && building.construction.complete
                 })
             })
             .count();
-        assert_eq!(town_centers, 2);
+        assert_eq!(research_centers, 2);
         assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
     }
 

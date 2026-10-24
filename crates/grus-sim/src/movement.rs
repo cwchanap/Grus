@@ -57,7 +57,7 @@ struct MovementSnapshot {
     order: Option<MoveOrder>,
     /// True when the unit holds a worker task that depends on its route
     /// (ToSource/ToDropoff/ToConstruction). Plain Move orders — even on
-    /// villagers whose task is `Idle` — keep the HPA-470 preserve-and-wait
+    /// workers whose task is `Idle` — keep the HPA-470 preserve-and-wait
     /// policy instead.
     active_worker_task: bool,
 }

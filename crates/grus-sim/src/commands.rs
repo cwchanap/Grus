@@ -71,7 +71,7 @@ pub enum PlayerCommand {
 pub enum RejectReason {
     UnknownUnit,
     NotOwned,
-    NotVillager,
+    NotWorker,
     Unreachable,
     Crowded,
     SourceMissing,

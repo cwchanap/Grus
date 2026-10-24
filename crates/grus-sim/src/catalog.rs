@@ -4,43 +4,47 @@
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ResourceKind {
     Food,
-    Wood,
-    Gold,
+    Scrap,
+    Coal,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UnitKind {
-    Villager,
-    Spearman,
-    Archer,
+    Worker,
+    Guard,
+    Rifleman,
 }
 
 impl UnitKind {
-    pub const ALL: [UnitKind; 3] = [UnitKind::Villager, UnitKind::Spearman, UnitKind::Archer];
+    pub const ALL: [UnitKind; 3] = [UnitKind::Worker, UnitKind::Guard, UnitKind::Rifleman];
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BuildingKind {
-    TownCenter,
-    House,
-    Storehouse,
+    ResearchCenter,
+    Bunkhouse,
+    Depot,
     Barracks,
 }
 
 impl BuildingKind {
     pub const ALL: [BuildingKind; 4] = [
-        BuildingKind::TownCenter,
-        BuildingKind::House,
-        BuildingKind::Storehouse,
+        BuildingKind::ResearchCenter,
+        BuildingKind::Bunkhouse,
+        BuildingKind::Depot,
         BuildingKind::Barracks,
     ];
 }
 
+/// One price in the four team currencies. `crystals` is stockpile-and-cost
+/// surface only: nothing in the winter baseline charges it, and no
+/// gatherable source produces it yet.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Cost {
     pub food: u32,
-    pub wood: u32,
-    pub gold: u32,
+    pub scrap: u32,
+    pub coal: u32,
+    pub crystals: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,7 +53,7 @@ pub struct UnitSpec {
     pub train_seconds: u32,
     pub speed: f32,
     pub max_health: u32,
-    /// `None` for noncombatants (Villager).
+    /// `None` for noncombatants (Worker).
     pub combat: Option<CombatSpec>,
 }
 
@@ -90,7 +94,7 @@ pub const VISION_RADIUS_CELLS: i32 = 10;
 
 pub fn unit_spec(kind: UnitKind) -> UnitSpec {
     match kind {
-        UnitKind::Villager => UnitSpec {
+        UnitKind::Worker => UnitSpec {
             cost: Cost {
                 food: 50,
                 ..Cost::default()
@@ -100,7 +104,7 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             max_health: 50,
             combat: None,
         },
-        UnitKind::Spearman => UnitSpec {
+        UnitKind::Guard => UnitSpec {
             cost: Cost {
                 food: 60,
                 ..Cost::default()
@@ -112,16 +116,17 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
                 damage: 10,
                 attack_range: 1.5,
                 cooldown_seconds: 1.0,
-                counter_target: UnitKind::Archer,
+                counter_target: UnitKind::Rifleman,
                 counter_bonus: 0,
                 ranged: false,
             }),
         },
-        UnitKind::Archer => UnitSpec {
+        UnitKind::Rifleman => UnitSpec {
             cost: Cost {
                 food: 40,
-                wood: 40,
-                gold: 0,
+                scrap: 40,
+                coal: 0,
+                crystals: 0,
             },
             train_seconds: 25,
             speed: 6.0,
@@ -130,7 +135,7 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
                 damage: 8,
                 attack_range: 6.0,
                 cooldown_seconds: 1.25,
-                counter_target: UnitKind::Spearman,
+                counter_target: UnitKind::Guard,
                 counter_bonus: 0,
                 ranged: true,
             }),
@@ -140,7 +145,7 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
 
 pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
     match kind {
-        BuildingKind::TownCenter => BuildingSpec {
+        BuildingKind::ResearchCenter => BuildingSpec {
             cost: Cost::default(),
             build_seconds: 0,
             width: 4,
@@ -148,9 +153,9 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 10,
             max_health: 800,
         },
-        BuildingKind::House => BuildingSpec {
+        BuildingKind::Bunkhouse => BuildingSpec {
             cost: Cost {
-                wood: 50,
+                scrap: 50,
                 ..Cost::default()
             },
             build_seconds: 15,
@@ -159,9 +164,9 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 10,
             max_health: 250,
         },
-        BuildingKind::Storehouse => BuildingSpec {
+        BuildingKind::Depot => BuildingSpec {
             cost: Cost {
-                wood: 75,
+                scrap: 75,
                 ..Cost::default()
             },
             build_seconds: 20,
@@ -172,7 +177,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
-                wood: 120,
+                scrap: 120,
                 ..Cost::default()
             },
             build_seconds: 30,
@@ -184,12 +189,12 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
     }
 }
 
-/// Finite resource node amount for a standalone source: berries 600 Food,
-/// tree 400 Wood, gold deposit 600 Gold.
+/// Finite resource node amount for a standalone source: ration cache 600
+/// Food, salvage ruin 400 Scrap, coal seam 600 Coal.
 pub const fn resource_amount(kind: ResourceKind) -> u32 {
     match kind {
-        ResourceKind::Wood => 400,
-        ResourceKind::Food | ResourceKind::Gold => 600,
+        ResourceKind::Scrap => 400,
+        ResourceKind::Food | ResourceKind::Coal => 600,
     }
 }
 

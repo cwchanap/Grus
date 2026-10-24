@@ -59,16 +59,17 @@ pub struct RallyPoint(pub GridPos);
 
 /// Building kinds that own a production queue on completion.
 pub(crate) fn is_producer(kind: BuildingKind) -> bool {
-    matches!(kind, BuildingKind::TownCenter | BuildingKind::Barracks)
+    matches!(kind, BuildingKind::ResearchCenter | BuildingKind::Barracks)
 }
 
-/// Fixed producer compatibility.
+/// Fixed producer compatibility: the Research Center trains Workers; the
+/// Barracks trains Guards and Riflemen.
 pub fn produces(kind: BuildingKind, job: ProductionKind) -> bool {
     match kind {
-        BuildingKind::TownCenter => job == ProductionKind::Unit(UnitKind::Villager),
+        BuildingKind::ResearchCenter => job == ProductionKind::Unit(UnitKind::Worker),
         BuildingKind::Barracks => matches!(
             job,
-            ProductionKind::Unit(UnitKind::Spearman) | ProductionKind::Unit(UnitKind::Archer)
+            ProductionKind::Unit(UnitKind::Guard) | ProductionKind::Unit(UnitKind::Rifleman)
         ),
         _ => false,
     }
@@ -91,7 +92,7 @@ pub fn population_used(world: &World, team: TeamId) -> u32 {
         .unwrap_or(0)
 }
 
-/// Completed Town Center/House capacity for the team, clamped to 100.
+/// Completed Research Center/Bunkhouse capacity for the team, clamped to 100.
 pub fn population_cap(world: &World, team: TeamId) -> u32 {
     let capacity = world
         .get_resource::<BuildingIndex>()
@@ -104,7 +105,7 @@ pub fn population_cap(world: &World, team: TeamId) -> u32 {
                         && building.construction.complete
                         && matches!(
                             building.kind,
-                            BuildingKind::TownCenter | BuildingKind::House
+                            BuildingKind::ResearchCenter | BuildingKind::Bunkhouse
                         )
                 })
                 .map(|building| building_spec(building.kind).population_capacity)
@@ -132,27 +133,23 @@ pub(crate) fn apply_enqueue_unit(
         }
     };
 
+    // Atomic spend before the queue push: a failed `try_spend` leaves every
+    // currency field unchanged and nothing enqueued.
     let cost = job.cost();
-    let affordable = world
-        .get_resource::<TeamEconomy>()
-        .and_then(|economy| economy.0.get(&issuer))
-        .is_some_and(|state| {
-            state.stockpile.food >= cost.food
-                && state.stockpile.wood >= cost.wood
-                && state.stockpile.gold >= cost.gold
-        });
-    if !affordable {
+    let spent = world
+        .get_resource_mut::<TeamEconomy>()
+        .map(|mut economy| {
+            economy
+                .0
+                .get_mut(&issuer)
+                .is_some_and(|state| state.stockpile.try_spend(cost))
+        })
+        .unwrap_or(false);
+    if !spent {
         result.reject = Some(RejectReason::InsufficientResources);
         return result;
     }
 
-    if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
-        && let Some(state) = economy.0.get_mut(&issuer)
-    {
-        state.stockpile.food -= cost.food;
-        state.stockpile.wood -= cost.wood;
-        state.stockpile.gold -= cost.gold;
-    }
     push_job(world, building_entity, ProductionJob { kind: job });
     result
 }

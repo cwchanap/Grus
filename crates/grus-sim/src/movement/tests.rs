@@ -36,7 +36,7 @@ fn fixed_step_moves_by_speed_times_delta() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     world
@@ -59,7 +59,7 @@ fn route_finishes_and_removes_move_order() {
         UnitId(2),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
     world
@@ -85,7 +85,7 @@ fn units_do_not_enter_static_blocked_cells() {
         UnitId(3),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         20.0,
     );
     world.entity_mut(entity).insert((
@@ -114,7 +114,7 @@ fn blocked_cached_step_replans_around_obstacle() {
         UnitId(6),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     // Stale cached route that would step straight through the blocked cell.
@@ -168,7 +168,7 @@ fn failed_forced_replan_waits_for_map_change_instead_of_recomputing() {
         UnitId(7),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     // Stale cached route whose first step lands on the blocked cell (2, 1),
@@ -244,7 +244,7 @@ fn failed_revision_replan_preserves_order_until_route_reopens() {
         UnitId(8),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         12.0,
     );
     world.entity_mut(entity).insert(MoveOrder {
@@ -328,7 +328,7 @@ fn failed_route_idles_an_active_worker_and_preserves_carry() {
         UnitId(1),
         TeamId(1),
         Vec2::new(1.5, 1.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world.entity_mut(worker).insert((
@@ -392,7 +392,7 @@ fn neighboring_units_separate_instead_of_collapsing() {
         UnitId(4),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     let second = spawn_unit(
@@ -400,7 +400,7 @@ fn neighboring_units_separate_instead_of_collapsing() {
         UnitId(5),
         TeamId(1),
         Vec2::new(5.5, 5.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         2.0,
     );
     for entity in [first, second] {
@@ -434,7 +434,7 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
                 id,
                 TeamId(1),
                 Vec2::new(10.5 + column as f32, 43.5 + row as f32),
-                UnitKind::Villager,
+                UnitKind::Worker,
                 12.0,
             );
         }

@@ -65,7 +65,7 @@ pub fn set_paused(world: &mut World, paused: bool) {
     }
 }
 
-/// Records the winner at the first Town Center destruction; later callers —
+/// Records the winner at the first Research Center destruction; later callers —
 /// including same-step attackers — cannot overwrite a settled result.
 /// Session-free worlds (benchmark) have nothing to resolve into.
 pub fn resolve_result(world: &mut World, winner: TeamId) {
