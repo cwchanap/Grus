@@ -505,6 +505,10 @@ func _run() -> void:
 	if cadence_distance < 4.0 or cadence_distance > 8.0:
 		_fail("authoritative simulation is not running near 20 Hz: speed-6 unit moved %.2f units in one second" % cadence_distance)
 		return
+	# 0.25 is one frame of a speed-6 unit plus margin (about 0.1-0.2 healthy),
+	# so any frame hitch over ~40 ms trips it too: on a host under heavy CPU
+	# load this fails without an interpolation fault. Read the worst frame
+	# time before debugging interpolation.
 	if max_visual_step >= 0.25:
 		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
 		return
