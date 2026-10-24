@@ -135,6 +135,104 @@ func _move_scout(unit_id: int, target: Vector2, what: String) -> bool:
 func _cell_state(states: PackedInt32Array, cell: Vector2i) -> int:
 	return states[cell.y * 128 + cell.x]
 
+## Fog overlay buffers are authoritative only once the overlay's _process
+## consumed the same visibility revision the bridge reports; a marching
+## scout keeps the revision ticking ahead of it. Returns the snapshot the
+## overlay actually rendered, or {} after a loud failure.
+func _settled_fog_snapshot(where: String) -> Dictionary:
+	var fog := get_node("Main/Battlefield/FogOfWar")
+	for _attempt in range(8):
+		var synced := func() -> bool:
+			var revision := int(GrusBridge.visibility_revision())
+			return revision >= 0 and int(fog.get("_revision")) == revision
+		if not await _wait_until(synced, 30.0,
+				"%s: fog overlay never consumed the bridge visibility revision" % where):
+			return {}
+		var snap: Dictionary = GrusBridge.visibility_snapshot()
+		if int(snap.get("revision", -1)) == int(fog.get("_revision")):
+			return snap
+		# The revision moved during the read; the next attempt catches up.
+	_fail("%s: visibility snapshot never matched the consumed fog revision" % where)
+	return {}
+
+## Fog overlay contract: the two MultiMesh layers are discrete tiles
+## compacted in row-major order by state — Unexplored (opaque) and
+## Explored (translucent); Visible cells draw no tile. The buffers must
+## equal the snapshot exactly — instance count, packed per-tile transform
+## floats, layer visibility — and under the project's globally enabled
+## physics interpolation each layer must be explicitly non-interpolated:
+## a rebuild reassigns instance indices to different cells rather than
+## moving a mesh, so an interpolated tile is a wrong tile, and buffer
+## writes from _process trip the engine's outside-physics-transform
+## warning.
+func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
+	var fog := get_node("Main/Battlefield/FogOfWar")
+	var layers: Array[MultiMeshInstance3D] = [fog.get("_unexplored"), fog.get("_explored")]
+	if layers[0] == null or layers[1] == null:
+		_fail("%s: fog overlay layers are missing" % where)
+		return false
+	if not bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)):
+		_fail("%s: project physics interpolation is disabled — the non-interpolated overlay contract requires the global setting" % where)
+		return false
+	for layer in layers:
+		if layer.physics_interpolation_mode != Node.PHYSICS_INTERPOLATION_MODE_OFF:
+			_fail("%s: fog overlay layer is not explicitly non-interpolated (physics_interpolation_mode=%d)" % [where, layer.physics_interpolation_mode])
+			return false
+		if layer.is_physics_interpolated_and_enabled():
+			_fail("%s: fog overlay layer is still physics-interpolated — compacted tiles would lerp between unrelated cells" % where)
+			return false
+	var width := int(snap.get("width", 0))
+	var states: PackedInt32Array = snap.get("states", PackedInt32Array())
+	if width <= 0 or states.is_empty() or states.size() % width != 0:
+		_fail("%s: malformed visibility snapshot for the overlay check: %s" % [where, snap.keys()])
+		return false
+	for state in layers.size():
+		var layer := layers[state]
+		var multimesh := layer.multimesh
+		var expected := 0
+		for value in states:
+			if value == state:
+				expected += 1
+		if multimesh.instance_count != expected:
+			_fail("%s: fog layer %d drew %d tiles; snapshot has %d state-%d cells" % [where, state, multimesh.instance_count, expected, state])
+			return false
+		if layer.visible != (expected > 0):
+			_fail("%s: fog layer %d visibility is %s; expected %s for %d tiles" % [where, state, layer.visible, expected > 0, expected])
+			return false
+		if expected == 0:
+			continue
+		# Exact tile buffer: 12 floats per TRANSFORM_3D tile — identity
+		# basis (offsets 0/5/10) and the cell-center origin (offsets
+		# 3/7/11) in the same row-major compaction order _fill writes.
+		# get_buffer round-trips through the stored multimesh data on every
+		# renderer, including the headless dummy driver.
+		var buffer: PackedFloat32Array = multimesh.get_buffer()
+		if buffer.size() != expected * 12:
+			_fail("%s: fog layer %d buffer is %d floats; expected %d for %d tiles" % [where, state, buffer.size(), expected * 12, expected])
+			return false
+		var index := 0
+		var x := 0
+		var y := 0
+		for value in states:
+			if value == state:
+				var o := index * 12
+				var want_origin := Vector3(x + 0.5, float(fog.FOG_Y), y + 0.5)
+				var got_origin := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
+				var basis_ok := is_equal_approx(buffer[o], 1.0) and is_zero_approx(buffer[o + 1]) \
+						and is_zero_approx(buffer[o + 2]) and is_zero_approx(buffer[o + 4]) \
+						and is_equal_approx(buffer[o + 5], 1.0) and is_zero_approx(buffer[o + 6]) \
+						and is_zero_approx(buffer[o + 8]) and is_zero_approx(buffer[o + 9]) \
+						and is_equal_approx(buffer[o + 10], 1.0)
+				if not basis_ok or not got_origin.is_equal_approx(want_origin):
+					_fail("%s: fog layer %d tile %d origin %s != cell (%d, %d) at %s" % [where, state, index, got_origin, x, y, want_origin])
+					return false
+				index += 1
+			x += 1
+			if x >= width:
+				x = 0
+				y += 1
+	return true
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -476,6 +574,13 @@ func _run() -> void:
 		_fail("minimap lost friendly markers")
 		return
 
+	# The discrete tile overlay itself: buffers must mirror the fog states
+	# exactly and stay explicitly non-interpolated under the project's
+	# global physics interpolation — see _assert_fog_overlay.
+	var fog_snap_pre := await _settled_fog_snapshot("pre-scout")
+	if fog_snap_pre.is_empty() or not _assert_fog_overlay("pre-scout", fog_snap_pre):
+		return
+
 	# Scout leg 1: reveal the expansion salvage.
 	if not await _move_scout(4, salvage_vantage, "salvage scout"):
 		return
@@ -511,6 +616,13 @@ func _run() -> void:
 		_fail("reconcile dropped the selection of a visible enemy building")
 		return
 
+	# Reveal transition: the compacted buffers must track the live states
+	# with no lerped tiles — the scout may still be marching, so the check
+	# samples whatever settled revision the overlay actually consumed.
+	var fog_snap_revealed := await _settled_fog_snapshot("revealed")
+	if fog_snap_revealed.is_empty() or not _assert_fog_overlay("revealed", fog_snap_revealed):
+		return
+
 	# Scout leg 3: march home — vision shrinks, enemies hide, exploration
 	# persists. With a passive Team 2 nothing can wander back into vision,
 	# so the hidden enemies' marker count must return to exactly zero.
@@ -543,6 +655,12 @@ func _run() -> void:
 	if _cell_state(fog_states, salvage_cell) != 1 \
 			or _cell_state(fog_states, enemy_cell) != 1:
 		_fail("explored fog did not persist after the scout left")
+		return
+
+	# Hide transition: exploration persists as state 1 tiles — same exact
+	# buffer contract on the other side of the reveal.
+	var fog_snap_hidden := await _settled_fog_snapshot("hidden")
+	if fog_snap_hidden.is_empty() or not _assert_fog_overlay("hidden", fog_snap_hidden):
 		return
 
 	# Minimap click recenters the camera and never queues a command.

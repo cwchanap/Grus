@@ -36,6 +36,13 @@ func _process(_delta: float) -> void:
 
 func _make_layer(color: Color) -> MultiMeshInstance3D:
 	var instance := MultiMeshInstance3D.new()
+	# Discrete overlay, not moving objects: _fill compacts instance indices
+	# as cells change state, so a slot is reassigned to an unrelated cell
+	# rather than a mesh translating. The project enables physics
+	# interpolation globally; opt each layer out per-node or every _process
+	# rebuild reads as an outside-physics transform write (engine warning)
+	# and lerps tiles between unrelated cells.
+	instance.physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	var quad := QuadMesh.new()
 	quad.size = Vector2(1.0, 1.0)
 	quad.orientation = PlaneMesh.FACE_Y
@@ -70,16 +77,29 @@ func _fill(layer: MultiMeshInstance3D, states: PackedInt32Array, width: int, sta
 	var multimesh := layer.multimesh
 	# Resizing (re)allocates the instance buffer; fill it right after.
 	multimesh.instance_count = count
+	# One packed write per rebuild instead of a per-instance call per tile:
+	# 12 floats per TRANSFORM_3D instance — identity basis plus the
+	# cell-center origin. The buffer is also the contract the smokes
+	# verify; per-instance writes are no-ops under the headless dummy
+	# renderer, so there would be nothing to assert against.
+	var buffer := PackedFloat32Array()
+	buffer.resize(count * 12)
 	var index := 0
 	var x := 0
 	var y := 0
 	for value in states:
 		if value == state:
-			multimesh.set_instance_transform(
-				index, Transform3D(Basis.IDENTITY, Vector3(x + 0.5, FOG_Y, y + 0.5)))
+			var offset := index * 12
+			buffer[offset] = 1.0
+			buffer[offset + 3] = x + 0.5
+			buffer[offset + 5] = 1.0
+			buffer[offset + 7] = FOG_Y
+			buffer[offset + 10] = 1.0
+			buffer[offset + 11] = y + 0.5
 			index += 1
 		x += 1
 		if x >= width:
 			x = 0
 			y += 1
+	multimesh.set_buffer(buffer)
 	layer.visible = count > 0
