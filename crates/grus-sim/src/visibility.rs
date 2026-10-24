@@ -109,7 +109,7 @@ impl VisibilityMap {
         }
     }
 
-    fn subject_visible(&self, team: TeamId, subject: &VisibilitySubject) -> bool {
+    pub(crate) fn subject_visible(&self, team: TeamId, subject: &VisibilitySubject) -> bool {
         self.teams
             .get(&team)
             .is_some_and(|vision| subject.any_cell(|cell| vision.visible.contains(&cell)))
