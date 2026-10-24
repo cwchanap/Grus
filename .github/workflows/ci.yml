@@ -85,16 +85,16 @@ jobs:
         # Deliberately NON-e2e: this is the .so staged for every smoke, the
         # packaged export and the benchmark, all of which must gate on a
         # clean exit 0. The e2e feature pulls bevy_e2e → bevy_remote
-        # (default http) → bevy_tasks/async-io, which spawns a
-        # process-global, permanently parked self-waking "async-io" driver
-        # thread inside the .so. Godot's shutdown dlclose()s the extension
-        # while that eternal .so-resident thread exists — the observed
-        # post-marker exit 139. The non-e2e build has no async-io driver
-        # (block_on = futures_lite, workers park without self-waking), so
-        # anything staged from it can be held to strict exits. The e2e
-        # build is compiled and staged separately at the end of the job for
-        # the bevy-e2e harness only, which SIGKILLs its exported child and
-        # never asserts that child's exit status.
+        # (default http) → bevy_tasks/async-io (verified with cargo tree:
+        # the non-e2e build does not enable it), which spawns a process-wide
+        # "async-io" driver thread inside the .so. HYPOTHESIS, not yet
+        # confirmed on Linux: that thread outliving Godot's shutdown
+        # dlclose() of the extension caused the intermittent post-marker
+        # exit 139. The build split tests it — if a non-e2e .so still exits
+        # nonzero, the hypothesis is refuted and the gdb step below reports
+        # the faulting frame. The e2e build is compiled and staged
+        # separately at the end of the job for the bevy-e2e harness only,
+        # which never asserts its exported child's exit status.
         run: cargo build -p grus-godot --locked
       - name: Clippy with e2e feature
         run: cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings
@@ -118,10 +118,9 @@ jobs:
         run: timeout 30s godot --headless --path godot --editor --quit-after 120
       - name: Run Godot bridge smoke contract
         # Strict: the contract marker must print AND godot must exit 0. The
-        # former post-marker-139 tolerance tracked the e2e feature's
-        # bevy_remote→async-io driver thread racing extension dlclose() at
-        # shutdown; the staged .so is now a non-e2e build (see the build
-        # step), so any nonzero exit is a real failure.
+        # former post-marker-139 tolerance is removed; the staged .so is now
+        # a non-e2e build (see the build step for the hypothesis this
+        # tests), so any nonzero exit is a real failure.
         run: |
           set -o pipefail
           timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log || rc=$?
@@ -193,14 +192,12 @@ jobs:
         # contract is that scene's marker, printed only after real frames of
         # input/selection/move/HUD/cadence — not the load-time
         # "Initialize godot-rust" line, which a mid-run crash would survive.
-        # Exit 139 after the contract held was the known Linux teardown race
-        # (first appeared with the HPA-473 runtime-visibility commit): the
-        # e2e feature's dep chain — bevy_e2e → bevy_remote (default http) →
-        # bevy_tasks/async-io — spawns a process-global, permanently parked
-        # self-waking async-io driver thread inside the .so, and Godot's
-        # exit-path dlclose() of the extension faults that thread. The build
-        # split keeps the e2e .so out of this packaged binary entirely, so
-        # contract-held + nonzero exit is a real failure, never a warning.
+        # Exit 139 after the contract held was an intermittent Linux
+        # teardown fault with the e2e .so (first appeared with the HPA-473
+        # runtime-visibility commit); its cause is a hypothesis (see the
+        # build step). The build split keeps the e2e .so out of this
+        # packaged binary entirely, so contract-held + nonzero exit is a
+        # real failure, never a warning.
         run: |
           set -o pipefail
           timeout 90s ./build/GrusSmoke.x86_64 --headless 2>&1 | tee export-smoke.log || rc=$?
@@ -237,18 +234,19 @@ jobs:
       - name: Build e2e Godot extension
         # Built and staged only now that every strict-exit consumer has run.
         # The e2e feature (bevy_e2e → bevy_remote → bevy_tasks/async-io) is
-        # what adds the self-waking async-io driver thread behind the known
-        # dlclose teardown fault; the sole consumer of this .so is the
-        # bevy-e2e export below.
+        # what adds the async-io driver thread suspected of the teardown
+        # fault (see the first build step); the sole consumer of this .so
+        # is the bevy-e2e export below.
         run: |
           cargo build -p grus-godot --features e2e --locked
           cp target/debug/libgrus_godot.so godot/bin/libgrus_godot.so
       - name: Export Linux x86_64 bevy-e2e build
         # Exports the real-main-scene binary with the e2e .so staged. Only
-        # the bevy-e2e harness consumes it, and that harness SIGKILLs the
-        # child — its teardown exit status is unasserted, so the e2e .so's
-        # dlclose race cannot gate CI. project.godot was already restored by
-        # the smoke export, so the main scene is the real one.
+        # the bevy-e2e harness consumes it, and that harness shuts the child
+        # down with a timeout and never asserts its exit status, so a
+        # teardown fault in the e2e .so cannot gate CI. project.godot was
+        # already restored by the smoke export, so the main scene is the
+        # real one.
         run: |
           mkdir -p build
           godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64
