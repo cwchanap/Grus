@@ -770,11 +770,13 @@ fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
 }
 
 /// Engine-free `&str` core so unit tests can drive the parser (a `GString`
-/// needs a live Godot engine, which unit tests do not have).
+/// needs a live Godot engine, which unit tests do not have). The accepted
+/// spellings come from the same `kind_name_str` the outbound serializers
+/// use, so the wire name can never drift between directions.
 fn parse_unit_kind_str(name: &str) -> Option<UnitKind> {
     UnitKind::ALL
         .into_iter()
-        .find(|kind| format!("{kind:?}") == name)
+        .find(|kind| kind_name_str(kind) == name)
 }
 
 /// Closed-string target kind beside the other parse helpers: only
@@ -808,15 +810,22 @@ fn parse_building_kind_str(name: &str) -> Option<BuildingKind> {
     // its placement rejection lives in the sim (`Locked`), not the parser.
     BuildingKind::ALL
         .into_iter()
-        .find(|kind| format!("{kind:?}") == name)
+        .find(|kind| kind_name_str(kind) == name)
+}
+
+/// The single engine-free kind wire name: outbound serializers
+/// (`kind_name`, `debug_variant`) and both inbound `parse_*_kind_str`
+/// cores share it, so the accepted spellings are defined exactly once.
+fn kind_name_str(value: impl std::fmt::Debug) -> String {
+    format!("{value:?}")
 }
 
 fn debug_variant(value: impl std::fmt::Debug) -> Variant {
-    GString::from(format!("{value:?}").as_str()).to_variant()
+    GString::from(kind_name_str(value).as_str()).to_variant()
 }
 
 fn kind_name(value: impl std::fmt::Debug) -> GString {
-    GString::from(format!("{value:?}").as_str())
+    GString::from(kind_name_str(value).as_str())
 }
 
 /// The building kind that trains the given unit, per the fixed producer
@@ -1545,12 +1554,14 @@ mod tests {
 
     /// Parsers walk the authoritative `UnitKind::ALL`/`BuildingKind::ALL`
     /// tables, so every catalogue name round-trips and every retired name
-    /// rejects. No hardcoded alias surface: the match is on the kind's own
-    /// `Debug` name. The tests run engine-free through the `&str` cores.
+    /// rejects. No hardcoded alias surface: the expected name is the shared
+    /// `kind_name_str` the outbound serializers emit, so these tests prove
+    /// the inbound parsers accept exactly what the bridge sends out. The
+    /// tests run engine-free through the `&str` cores.
     #[test]
     fn unit_kind_parser_accepts_exactly_the_catalogue_names() {
         for kind in UnitKind::ALL {
-            let name = format!("{kind:?}");
+            let name = kind_name_str(kind);
             assert_eq!(parse_unit_kind_str(&name), Some(kind), "{name} must parse");
         }
         for retired in [
@@ -1570,7 +1581,7 @@ mod tests {
     #[test]
     fn building_kind_parser_accepts_exactly_the_catalogue_names() {
         for kind in BuildingKind::ALL {
-            let name = format!("{kind:?}");
+            let name = kind_name_str(kind);
             assert_eq!(
                 parse_building_kind_str(&name),
                 Some(kind),

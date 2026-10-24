@@ -351,6 +351,19 @@ func _run() -> void:
 	if boot.has("age"):
 		_fail("economy snapshot still carries the deleted age field: %s" % [boot])
 		return
+	# The HUD economy label must render all four currencies with the live
+	# boot values — Crystals included — straight off economy_snapshot. The
+	# session is still at Start, so the label cannot have drifted from the
+	# 200/300/150/0 seed; the placeholder's zero stocks differ on Food.
+	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label
+	if economy_label == null:
+		_fail("economy HUD label is missing")
+		return
+	for currency in ["Food", "Scrap", "Coal", "Crystals"]:
+		var shown := "%s %d" % [currency, int(boot.get(currency.to_lower(), -1))]
+		if not economy_label.text.contains(shown):
+			_fail("economy HUD does not show live %s (want \"%s\"): \"%s\"" % [currency, shown, economy_label.text])
+			return
 	var research_center := _building_view(1)
 	if research_center == null:
 		_fail("Research Center view 1 is missing")
