@@ -15,7 +15,7 @@ use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::{MatchPhase, active_phase, gameplay_active, resolve_result};
-use crate::visibility::visible_to;
+use crate::visibility::{VisibilityMap, VisibilitySubject, visible_to};
 
 /// Live and maximum hit points. Spawned units and seeded/placed buildings
 /// start at full health from their catalogue spec.
@@ -177,6 +177,12 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         .map(|index| index.iter().map(|(id, _)| *id).collect())
         .unwrap_or_default();
     attacker_ids.sort_unstable();
+    // One acquisition table for the whole step: re-resolving every
+    // candidate through the world per scanning attacker was the benchmark's
+    // dominant per-tick cost. Positions and footprints cannot change
+    // mid-step; liveness changes only through `strike`, which re-resolves
+    // the struck entry afterward.
+    let mut acquisition = AcquisitionSnapshot::build(world);
 
     for id in attacker_ids {
         // A Research Center death mid-step settles the Result and freezes combat
@@ -208,7 +214,7 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
             .get::<AttackCooldown>(entity)
             .is_some_and(|cooldown| cooldown.0 <= 0.0);
 
-        let order = match refresh_target(world, unit.team, position.current, order) {
+        let order = match refresh_target(world, &acquisition, unit.team, position.current, order) {
             Some(order) => order,
             None => {
                 // Direct Attack: the target died, vanished, or left vision —
@@ -242,6 +248,7 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
             world.entity_mut(entity).remove::<MoveOrder>();
             if cooldown_ready {
                 strike(world, map, entity, &unit, spec, target, point);
+                acquisition.refresh_struck(world, target);
             }
         } else {
             pursue(world, map, entity, &position, &order, target);
@@ -266,6 +273,7 @@ fn current_target(order: &CombatOrder) -> Option<CombatTarget> {
 /// still-active destination route must not read as an active pursuit leg.
 fn refresh_target(
     world: &World,
+    acquisition: &AcquisitionSnapshot,
     attacker_team: TeamId,
     attacker_position: Vec2,
     order: CombatOrder,
@@ -285,7 +293,7 @@ fn refresh_target(
             };
             let target = match target {
                 Some(target) => Some(target),
-                None => acquire_target(world, attacker_team, attacker_position),
+                None => acquire_target(world, acquisition, attacker_team, attacker_position),
             };
             let retained = input_target.is_some() && input_target == target;
             let last_target_cell = if retained { last_target_cell } else { None };
@@ -298,36 +306,142 @@ fn refresh_target(
     }
 }
 
+/// Per-tick table of every acquirable target, collected in one pass over
+/// the live indices at step start. `acquire_target` scans this pure data —
+/// eligibility (live, foreign, visible), distance key, and ordering are the
+/// exact `target_eligible`/`min_by` semantics — instead of re-resolving
+/// each candidate through `World` for every scanning attacker. `strike` is
+/// the step's only target-state mutation, so the struck entry alone is
+/// refreshed from live state after each strike.
+#[derive(Default)]
+struct AcquisitionSnapshot {
+    units: Vec<UnitCandidate>,
+    buildings: Vec<BuildingCandidate>,
+}
+
+struct UnitCandidate {
+    id: UnitId,
+    team: TeamId,
+    position: Vec2,
+    cell: GridPos,
+    alive: bool,
+}
+
+struct BuildingCandidate {
+    id: BuildingId,
+    team: TeamId,
+    footprint: Footprint,
+    alive: bool,
+}
+
+impl AcquisitionSnapshot {
+    /// Indexed entries only, mirroring `resolve_target`/`target_position`:
+    /// a unit missing `Unit`, `SimPosition`, or `Health` — or a building
+    /// missing `Building`, `Footprint`, or `Health` — never enters the
+    /// table, exactly as the live scans skipped it.
+    fn build(world: &World) -> Self {
+        let mut snapshot = Self::default();
+        if let Some(index) = world.get_resource::<UnitIndex>() {
+            for (id, entity) in index.iter() {
+                let (Some(unit), Some(position), Some(health)) = (
+                    world.get::<Unit>(*entity),
+                    world.get::<SimPosition>(*entity),
+                    world.get::<Health>(*entity),
+                ) else {
+                    continue;
+                };
+                snapshot.units.push(UnitCandidate {
+                    id: *id,
+                    team: unit.team,
+                    position: position.current,
+                    cell: world_to_cell(position.current),
+                    alive: health.current > 0,
+                });
+            }
+        }
+        if let Some(index) = world.get_resource::<BuildingIndex>() {
+            for (id, entity) in index.iter() {
+                let (Some(building), Some(footprint), Some(health)) = (
+                    world.get::<Building>(*entity),
+                    world.get::<Footprint>(*entity),
+                    world.get::<Health>(*entity),
+                ) else {
+                    continue;
+                };
+                snapshot.buildings.push(BuildingCandidate {
+                    id: *id,
+                    team: building.team,
+                    footprint: *footprint,
+                    alive: health.current > 0,
+                });
+            }
+        }
+        snapshot
+    }
+
+    /// Re-resolves one struck target against the live world: a destroyed or
+    /// zero-health entry is marked dead so no later attacker this step
+    /// acquires it — the same mid-step view the live-index scan gave.
+    fn refresh_struck(&mut self, world: &World, target: CombatTarget) {
+        let alive = resolve_target(world, target).is_some_and(|(_, _, health)| health.current > 0);
+        let entry = match target {
+            CombatTarget::Unit(id) => self
+                .units
+                .iter_mut()
+                .find(|unit| unit.id == id)
+                .map(|unit| &mut unit.alive),
+            CombatTarget::Building(id) => self
+                .buildings
+                .iter_mut()
+                .find(|building| building.id == id)
+                .map(|building| &mut building.alive),
+        };
+        if let Some(alive_flag) = entry {
+            *alive_flag = alive;
+        }
+    }
+}
+
 /// Nearest eligible target within `ATTACK_MOVE_RADIUS`: distance ties break
-/// by stable identity, units before buildings.
-fn acquire_target(world: &World, attacker_team: TeamId, position: Vec2) -> Option<CombatTarget> {
+/// by stable identity, units before buildings. Reads the per-tick
+/// `AcquisitionSnapshot`; the `VisibilityMap` resource fetch is hoisted to
+/// once per call, and the visibility check is the same `visible_to`
+/// contract (no map means everything is visible).
+fn acquire_target(
+    world: &World,
+    acquisition: &AcquisitionSnapshot,
+    attacker_team: TeamId,
+    position: Vec2,
+) -> Option<CombatTarget> {
+    let visibility = world.get_resource::<VisibilityMap>();
+    let visible = |subject: VisibilitySubject| match visibility {
+        None => true,
+        Some(map) => map.subject_visible(attacker_team, &subject),
+    };
     let mut candidates: Vec<(f32, u8, u32, CombatTarget)> = Vec::new();
-    if let Some(index) = world.get_resource::<UnitIndex>() {
-        for (id, _) in index.iter() {
-            let target = CombatTarget::Unit(*id);
-            if let Some(point) = target_position(world, position, target) {
-                candidates.push((position.distance(point), 0, id.0, target));
+    for unit in &acquisition.units {
+        if unit.alive && unit.team != attacker_team && visible(unit.cell.into()) {
+            let distance = position.distance(unit.position);
+            if distance <= ATTACK_MOVE_RADIUS {
+                candidates.push((distance, 0, unit.id.0, CombatTarget::Unit(unit.id)));
             }
         }
     }
-    if let Some(index) = world.get_resource::<BuildingIndex>() {
-        for (id, entity) in index.iter() {
-            let Some(footprint) = world.get::<Footprint>(*entity) else {
-                continue;
-            };
-            let point = footprint.closest_point(position);
-            candidates.push((
-                position.distance(point),
-                1,
-                id.0,
-                CombatTarget::Building(*id),
-            ));
+    for building in &acquisition.buildings {
+        if building.alive && building.team != attacker_team && visible(building.footprint.into()) {
+            let distance = position.distance(building.footprint.closest_point(position));
+            if distance <= ATTACK_MOVE_RADIUS {
+                candidates.push((
+                    distance,
+                    1,
+                    building.id.0,
+                    CombatTarget::Building(building.id),
+                ));
+            }
         }
     }
     candidates
         .into_iter()
-        .filter(|(_, _, _, target)| target_eligible(world, attacker_team, *target))
-        .filter(|(distance, ..)| *distance <= ATTACK_MOVE_RADIUS)
         .min_by(|a, b| {
             a.0.total_cmp(&b.0)
                 .then_with(|| a.1.cmp(&b.1))

@@ -1370,6 +1370,105 @@ fn attack_move_diverts_to_an_acquired_building() {
     );
 }
 
+/// An equidistant enemy unit and building tie on distance; the unit bucket
+/// sorts first, ahead of the stable-id tiebreak.
+#[test]
+fn attack_move_tie_prefers_units_over_buildings() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(10.5, 10.5),
+        UnitKind::Guard,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(14.0, 10.5),
+        UnitKind::Worker,
+    );
+    // Depot footprint x[14,16] y[10,12]: its closest point to the attacker
+    // is (14.0, 10.5) — exactly the enemy unit's distance, 3.5.
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(2),
+        BuildingKind::Depot,
+        GridPos::new(14, 10),
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(1)], Vec2::new(20.5, 10.5)),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(attacker)),
+        Some(CombatTarget::Unit(UnitId(2))),
+        "an equidistant unit beats a building before the id tiebreak"
+    );
+}
+
+/// A target destroyed by an earlier attacker in the same step is dead to
+/// later attackers' acquisition — the per-tick candidate table re-resolves
+/// every struck entry, so a mid-step kill is never re-acquired.
+#[test]
+fn attack_move_never_acquires_a_target_killed_earlier_in_the_step() {
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    let defender = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Guard,
+    );
+    world.get_mut::<Health>(defender).unwrap().current = 10;
+    let scavenger = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(7.5, 5.5),
+        UnitKind::Guard,
+    );
+
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    issue(
+        &mut world,
+        &mut map,
+        attack_move_command(TeamId(1), &[UnitId(3)], Vec2::new(20.5, 5.5)),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    // Unit 1 acts first and destroys unit 2; unit 3 then scans and must see
+    // that kill — the dead unit is the only enemy in its radius.
+    assert!(world.resource::<UnitIndex>().entity(UnitId(2)).is_none());
+    assert_eq!(events(&world).len(), 1, "only the killing blow landed");
+    assert!(events(&world)[0].killed && events(&world)[0].attacker == UnitId(1));
+    assert_eq!(
+        attack_move_target(world.get::<CombatOrder>(scavenger)),
+        None,
+        "the just-destroyed unit is never acquired this step"
+    );
+}
+
 fn run_symmetric_duel(left: UnitKind, right: UnitKind) -> Option<UnitKind> {
     let mut world = World::new();
     let mut map = open_map();
