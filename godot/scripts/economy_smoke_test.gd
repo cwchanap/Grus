@@ -578,9 +578,9 @@ func _run() -> void:
 	# Step 10: the same UI train path that accepted solvent enqueues now
 	# runs the Food stockpile dry. Every gatherer is retired, so each real
 	# SpearmanButton click charges exactly the 60f catalogue cost until the
-	# stockpile cannot pay; the identical next click must reject
-	# InsufficientResources and leave stockpiles, the producer queue and
-	# the building census untouched.
+	# stockpile cannot pay; an identical click on the drained-empty queue
+	# must then reject InsufficientResources and leave stockpiles, the
+	# queue and the building census untouched.
 	await _select_building(barracks)
 	var spearman_button := get_node("Main/HUD/CommandPanel/TrainGrid/SpearmanButton") as Button
 	var insufficient := false
@@ -630,6 +630,45 @@ func _run() -> void:
 		break
 	if not insufficient:
 		_fail("%d Spearman enqueue(s) never hit InsufficientResources" % attempts)
+		return
+
+	# The accepted drain jobs must leave the FIFO before the unaffordable
+	# click re-tests it: an empty head label with zero progress is the
+	# authoritative "no jobs" proof — the head label alone cannot see
+	# queued successors (building_snapshot exposes only the front job).
+	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 60.0,
+			"accepted drain jobs never emptied the Barracks queue"):
+		return
+	var reject_revision: int = GrusBridge.command_feedback_revision()
+	var unaffordable_before := {
+		"food": int(GrusBridge.economy_snapshot().get("food", -1)),
+		"wood": int(GrusBridge.economy_snapshot().get("wood", -1)),
+		"gold": int(GrusBridge.economy_snapshot().get("gold", -1)),
+		"blocked": _blocked_reason(barracks_id),
+		"buildings": get_tree().get_nodes_in_group("building_views").size(),
+	}
+	await _click_button(spearman_button)
+	if not await _wait_until(
+			func(): return GrusBridge.command_feedback_revision() != reject_revision,
+			10.0, "unaffordable Spearman enqueue was never processed"):
+		return
+	var unaffordable_after: Dictionary = GrusBridge.economy_snapshot()
+	if int(unaffordable_after.get("last_reject_code", -1)) != REJECT_INSUFFICIENT:
+		_fail("unaffordable Spearman enqueue did not reject InsufficientResources: %s" % unaffordable_after)
+		return
+	if int(unaffordable_after.get("food", -1)) != unaffordable_before["food"] \
+			or int(unaffordable_after.get("wood", -1)) != unaffordable_before["wood"] \
+			or int(unaffordable_after.get("gold", -1)) != unaffordable_before["gold"]:
+		_fail("rejected Spearman enqueue still moved the stockpile")
+		return
+	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0:
+		_fail("rejected Spearman enqueue still left a Barracks job: %s" % _queue_label(barracks_id))
+		return
+	if _blocked_reason(barracks_id) != unaffordable_before["blocked"]:
+		_fail("rejected Spearman enqueue changed the Barracks blocked state")
+		return
+	if get_tree().get_nodes_in_group("building_views").size() != unaffordable_before["buildings"]:
+		_fail("rejected Spearman enqueue still changed the building census")
 		return
 
 	if not GrusBridge.set_sim_speed(1.0):
