@@ -279,19 +279,25 @@ jobs:
             --locked \
             -- --test-threads=1
       - name: Capture teardown backtrace
-        # Best-effort postmortem: if any step above failed, rerun the bridge
-        # smoke under gdb and dump all thread backtraces so a recurring
-        # teardown fault reports the faulting frame in the job log. The
-        # staged .so is the e2e build by now, so first restore the pristine
-        # non-e2e copy the smokes/benchmark actually ran. The 60s cap keeps
-        # a wedged gdb/godot from hanging the job; failure here changes
-        # nothing (the job is already red).
+        # Best-effort postmortem: if any step above failed, rerun all four
+        # headless smokes under gdb and dump all thread backtraces so a
+        # recurring teardown fault reports the faulting frame. All four run
+        # because the 139 seen at 163bcc1 hit only some smokes (economy and
+        # combat), so rerunning just the bridge smoke would likely watch a
+        # clean exit. The staged .so is the e2e build by now, so first
+        # restore the pristine non-e2e copy the smokes/benchmark actually
+        # ran. `timeout -k` caps a wedged gdb/godot per scene; the output is
+        # also saved to gdb-teardown.log for the diagnostics artifact.
+        # Failure here changes nothing (the job is already red).
         if: failure()
         continue-on-error: true
         run: |
-          command -v gdb || sudo apt-get install -y gdb
+          command -v gdb || { sudo apt-get update -qq && sudo apt-get install -y gdb; }
           cp target/libgrus_godot_noe2e.so godot/bin/libgrus_godot.so
-          timeout 60s gdb -batch -ex run -ex 'thread apply all bt' --args godot --headless --path godot res://scenes/smoke_test.tscn
+          for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test; do
+            echo "=== gdb run: $scene" | tee -a gdb-teardown.log
+            timeout -k 10s 150s gdb -batch -ex run -ex 'thread apply all bt' --args godot --headless --path godot "res://scenes/$scene.tscn" 2>&1 | tee -a gdb-teardown.log || true
+          done
       - name: Upload failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -301,3 +307,4 @@ jobs:
             test_output/**
             *-smoke.log
             benchmark.log
+            gdb-teardown.log
