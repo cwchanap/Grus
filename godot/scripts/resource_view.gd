@@ -16,7 +16,7 @@ func _process(_delta: float) -> void:
 	match kind:
 		"Food":
 			body.material_override.albedo_color = Color(0.72, 0.32, 0.38, 1.0)
-		"Wood":
+		"Scrap":
 			body.material_override.albedo_color = Color(0.42, 0.3, 0.16, 1.0)
-		"Gold":
+		"Coal":
 			body.material_override.albedo_color = Color(0.92, 0.76, 0.2, 1.0)

@@ -179,7 +179,7 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     attacker_ids.sort_unstable();
 
     for id in attacker_ids {
-        // A Town Center death mid-step settles the Result and freezes combat
+        // A Research Center death mid-step settles the Result and freezes combat
         // for every later attacker in this same tick — first destruction wins.
         if !gameplay_active(world) {
             break;
@@ -599,12 +599,12 @@ fn strike(
         match target {
             CombatTarget::Unit(_) => destroy_unit(world, target_entity),
             CombatTarget::Building(_) => {
-                // Result resolves immediately on Town Center destruction.
-                let town_center = world
+                // Result resolves immediately on Research Center destruction.
+                let research_center = world
                     .get::<Building>(target_entity)
-                    .is_some_and(|building| building.kind == BuildingKind::TownCenter);
+                    .is_some_and(|building| building.kind == BuildingKind::ResearchCenter);
                 destroy_building(world, map, target_entity);
-                if town_center {
+                if research_center {
                     resolve_result(world, unit.team);
                 }
             }

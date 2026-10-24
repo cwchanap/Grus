@@ -18,21 +18,22 @@ fn test_economy(world: &mut World) {
         TeamId(1),
         ResourceStockpile {
             food: 200,
-            wood: 300,
-            gold: 100,
+            scrap: 300,
+            coal: 100,
+            crystals: 0,
         },
     );
     world.insert_resource(economy);
 }
 
-fn spawn_villager(world: &mut World, id: UnitId, position: Vec2) -> Entity {
+fn spawn_worker(world: &mut World, id: UnitId, position: Vec2) -> Entity {
     let entity = spawn_unit(
         world,
         id,
         TeamId(1),
         position,
-        UnitKind::Villager,
-        unit_spec(UnitKind::Villager).speed,
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
     );
     world
         .entity_mut(entity)
@@ -56,6 +57,86 @@ fn skirmish_world() -> (World, GridMap) {
     (world, map)
 }
 
+/// Winter spending contract: `can_afford` is an immutable all-four-field
+/// check; `try_spend` compares every field first and deducts all-or-nothing.
+/// A failure on ANY currency leaves every field — not just the gated one —
+/// untouched, so rejection can never partially charge.
+#[test]
+fn try_spend_is_atomic_across_all_four_fields() {
+    let full = ResourceStockpile {
+        food: 100,
+        scrap: 100,
+        coal: 100,
+        crystals: 0,
+    };
+    for cost in [
+        Cost {
+            food: 200,
+            scrap: 1,
+            coal: 1,
+            crystals: 0,
+        },
+        Cost {
+            food: 1,
+            scrap: 200,
+            coal: 1,
+            crystals: 0,
+        },
+        Cost {
+            food: 1,
+            scrap: 1,
+            coal: 200,
+            crystals: 0,
+        },
+        Cost {
+            food: 1,
+            scrap: 1,
+            coal: 1,
+            crystals: 1,
+        },
+    ] {
+        let mut stock = full;
+        assert!(!stock.can_afford(cost), "{cost:?} must be unaffordable");
+        assert!(!stock.try_spend(cost), "{cost:?} must fail");
+        assert_eq!(stock, full, "failed spend must not touch any field");
+    }
+
+    let mut stock = ResourceStockpile {
+        food: 100,
+        scrap: 100,
+        coal: 100,
+        crystals: 10,
+    };
+    let cost = Cost {
+        food: 10,
+        scrap: 20,
+        coal: 30,
+        crystals: 4,
+    };
+    // can_afford is read-only: it answers true and mutates nothing.
+    assert!(stock.can_afford(cost));
+    assert_eq!(
+        stock,
+        ResourceStockpile {
+            food: 100,
+            scrap: 100,
+            coal: 100,
+            crystals: 10,
+        },
+        "can_afford mutated the stockpile"
+    );
+    assert!(stock.try_spend(cost));
+    assert_eq!(
+        stock,
+        ResourceStockpile {
+            food: 90,
+            scrap: 80,
+            coal: 70,
+            crystals: 6,
+        }
+    );
+}
+
 /// Opts the skirmish world into runtime fog and stamps the initial reveal.
 fn reveal(world: &mut World, map: &GridMap) {
     world.insert_resource(VisibilityMap::default());
@@ -63,14 +144,14 @@ fn reveal(world: &mut World, map: &GridMap) {
 }
 
 #[test]
-fn gather_assigns_four_villagers_unique_immediate_slots() {
+fn gather_assigns_four_workers_unique_immediate_slots() {
     let mut world = World::new();
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
     world.insert_resource(IdAllocator::new(5, 1, 2));
     for id in 1..=4 {
         let offset = id - 1;
-        spawn_villager(
+        spawn_worker(
             &mut world,
             UnitId(id),
             Vec2::new(
@@ -83,7 +164,7 @@ fn gather_assigns_four_villagers_unique_immediate_slots() {
         &mut world,
         &mut map,
         ResourceId(1),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(12, 12),
         400,
     );
@@ -149,14 +230,14 @@ fn gather_beyond_perimeter_capacity_rejects_as_crowded() {
     world.insert_resource(IdAllocator::new(10, 1, 2));
     let footprint = Footprint::new(GridPos::new(12, 12), 1, 1);
     for (index, cell) in footprint.perimeter_cells().into_iter().enumerate() {
-        spawn_villager(&mut world, UnitId(index as u32 + 1), map.cell_center(cell));
+        spawn_worker(&mut world, UnitId(index as u32 + 1), map.cell_center(cell));
     }
-    let outsider = spawn_villager(&mut world, UnitId(9), Vec2::new(2.5, 2.5));
+    let outsider = spawn_worker(&mut world, UnitId(9), Vec2::new(2.5, 2.5));
     spawn_resource_source(
         &mut world,
         &mut map,
         ResourceId(1),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(12, 12),
         400,
     );
@@ -181,7 +262,7 @@ fn gather_beyond_perimeter_capacity_rejects_as_crowded() {
             }
         })
         .collect();
-    assert_eq!(slots.len(), 8, "accepted villagers keep unique slots");
+    assert_eq!(slots.len(), 8, "accepted workers keep unique slots");
     assert_eq!(world.get::<WorkerTask>(outsider), Some(&WorkerTask::Idle));
 }
 
@@ -189,14 +270,14 @@ fn gather_beyond_perimeter_capacity_rejects_as_crowded() {
 fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
     let (mut world, mut map) = skirmish_world();
 
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    // Park the villager away from both the berries and the Town Center so
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    // Park the worker away from both the berries and the Research Center so
     // the deposit leg is a real walk.
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(20.5, 42.5)));
-    world.entity_mut(villager).insert(Carry::Holding {
-        kind: ResourceKind::Wood,
+    world.entity_mut(worker).insert(Carry::Holding {
+        kind: ResourceKind::Scrap,
         amount: NonZeroU32::new(6).unwrap(),
     });
 
@@ -206,7 +287,7 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
         gather_command(TeamId(1), vec![UnitId(1)], ResourceId(1)),
     );
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-    match world.get::<WorkerTask>(villager).unwrap() {
+    match world.get::<WorkerTask>(worker).unwrap() {
         WorkerTask::ToDropoff {
             source, dropoff, ..
         } => {
@@ -214,7 +295,7 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
             assert_eq!(
                 *dropoff,
                 BuildingId(1),
-                "carrying workers route to the starting Town Center first"
+                "carrying workers route to the starting Research Center first"
             );
         }
         other => panic!("expected ToDropoff, got {other:?}"),
@@ -226,20 +307,24 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     }
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
-    assert_eq!(state.stockpile.wood, 300);
+    assert_eq!(state.stockpile.scrap, 300);
 
     for _ in 0..600 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        if world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.wood == 306 {
+        if world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap
+            == 306
+        {
             break;
         }
     }
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
-    assert_eq!(state.stockpile.wood, 306);
+    assert_eq!(state.stockpile.scrap, 306);
     assert_eq!(state.stockpile.food, 200, "no Food before gathering begins");
-    assert_eq!(world.get::<Carry>(villager), Some(&Carry::Empty));
-    match world.get::<WorkerTask>(villager).unwrap() {
+    assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
+    match world.get::<WorkerTask>(worker).unwrap() {
         WorkerTask::ToSource { source, slot } => {
             assert_eq!(*source, ResourceId(1));
             assert!(
@@ -255,10 +340,10 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
 fn ten_gather_ticks_transfer_one_whole_food() {
     let (mut world, mut map) = skirmish_world();
 
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    // Park the villager next to the 600-Food berry bush at (22, 42).
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    // Park the worker next to the 600-Food berry bush at (22, 42).
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
 
     let outcome = apply_player_command(
@@ -270,16 +355,16 @@ fn ten_gather_ticks_transfer_one_whole_food() {
 
     for _ in 0..400 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        if world.get::<MoveOrder>(villager).is_none() {
+        if world.get::<MoveOrder>(worker).is_none() {
             break;
         }
     }
-    assert!(world.get::<MoveOrder>(villager).is_none(), "never arrived");
+    assert!(world.get::<MoveOrder>(worker).is_none(), "never arrived");
 
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Gathering { .. })
         ),
         "arrival must transition into Gathering"
@@ -290,7 +375,7 @@ fn ten_gather_ticks_transfer_one_whole_food() {
     }
 
     assert_eq!(
-        world.get::<Carry>(villager),
+        world.get::<Carry>(worker),
         Some(&Carry::Holding {
             kind: ResourceKind::Food,
             amount: NonZeroU32::new(1).unwrap(),
@@ -313,15 +398,15 @@ fn ten_gather_ticks_transfer_one_whole_food() {
 fn rejected_gather_preserves_the_previous_task_and_route() {
     let (mut world, mut map) = skirmish_world();
 
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     let outcome = apply_player_command(
         &mut world,
         &mut map,
         gather_command(TeamId(1), vec![UnitId(1)], ResourceId(3)),
     );
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-    let old_task = world.get::<WorkerTask>(villager).unwrap().clone();
-    let old_route = world.get::<MoveOrder>(villager).unwrap().waypoints.clone();
+    let old_task = world.get::<WorkerTask>(worker).unwrap().clone();
+    let old_route = world.get::<MoveOrder>(worker).unwrap().waypoints.clone();
 
     // Unknown source: the whole command rejects before any cancellation.
     let outcome = apply_player_command(
@@ -330,29 +415,26 @@ fn rejected_gather_preserves_the_previous_task_and_route() {
         gather_command(TeamId(1), vec![UnitId(1)], ResourceId(99)),
     );
     assert_eq!(outcome.reject, Some(RejectReason::SourceMissing));
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&old_task));
-    assert_eq!(
-        world.get::<MoveOrder>(villager).unwrap().waypoints,
-        old_route
-    );
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&old_task));
+    assert_eq!(world.get::<MoveOrder>(worker).unwrap().waypoints, old_route);
 }
 
 #[test]
 fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
     let (mut world, mut map) = skirmish_world();
 
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    // A tiny finite wood source next to the villager's parked spot.
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    // A tiny finite scrap source next to the worker's parked spot.
     let source = spawn_resource_source(
         &mut world,
         &mut map,
         ResourceId(50),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(13, 43),
         2,
     );
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(map.cell_center(GridPos::new(13, 42))));
 
     let outcome = apply_player_command(
@@ -364,7 +446,7 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
 
     for _ in 0..400 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        if world.get::<MoveOrder>(villager).is_none() {
+        if world.get::<MoveOrder>(worker).is_none() {
             break;
         }
     }
@@ -372,7 +454,7 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
     for _ in 0..30 {
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         if matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::ToDropoff { .. })
         ) {
             break;
@@ -391,9 +473,9 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
     );
     assert!(map.is_walkable(GridPos::new(13, 43)), "footprint unblocked");
     assert_eq!(
-        world.get::<Carry>(villager),
+        world.get::<Carry>(worker),
         Some(&Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(2).unwrap(),
         })
     );
@@ -401,19 +483,20 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
     for _ in 0..400 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        if world.get::<WorkerTask>(villager) == Some(&WorkerTask::Idle) {
+        if world.get::<WorkerTask>(worker) == Some(&WorkerTask::Idle) {
             break;
         }
     }
-    assert_eq!(world.get::<WorkerTask>(villager), Some(&WorkerTask::Idle));
-    assert_eq!(world.get::<Carry>(villager), Some(&Carry::Empty));
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+    assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
     assert_eq!(
         state.stockpile,
         ResourceStockpile {
             food: 200,
-            wood: 302,
-            gold: 100,
+            scrap: 302,
+            coal: 150,
+            crystals: 0,
         }
     );
 }
@@ -424,7 +507,7 @@ fn walled_in_gatherer_idles_through_cleanup_preserving_carry() {
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
 
-    // A standalone finite Food source, plus a Town Center drop-off.
+    // A standalone finite Food source, plus a Research Center drop-off.
     spawn_resource_source(
         &mut world,
         &mut map,
@@ -433,12 +516,12 @@ fn walled_in_gatherer_idles_through_cleanup_preserving_carry() {
         GridPos::new(4, 16),
         400,
     );
-    let town_center = world
+    let research_center = world
         .spawn((
             Building {
                 id: BuildingId(2),
                 team: TeamId(1),
-                kind: crate::catalog::BuildingKind::TownCenter,
+                kind: crate::catalog::BuildingKind::ResearchCenter,
                 construction: crate::buildings::ConstructionState {
                     progress_seconds: 0.0,
                     complete: true,
@@ -451,11 +534,11 @@ fn walled_in_gatherer_idles_through_cleanup_preserving_carry() {
         .id();
     world
         .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(2), town_center);
+        .insert(BuildingId(2), research_center);
 
     // The gatherer sits walled in with a full carry, so its drop-off route
     // is impossible.
-    let worker = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(4, 4)));
+    let worker = spawn_worker(&mut world, UnitId(1), map.cell_center(GridPos::new(4, 4)));
     for cell in [
         GridPos::new(3, 3),
         GridPos::new(4, 3),
@@ -507,12 +590,12 @@ fn route_reject_feedback_is_team_aware() {
     let map = GridMap::new(16, 16);
     test_economy(&mut world);
 
-    let team_one = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(2, 2)));
-    let team_two = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(4, 2)));
+    let team_one = spawn_worker(&mut world, UnitId(1), map.cell_center(GridPos::new(2, 2)));
+    let team_two = spawn_worker(&mut world, UnitId(2), map.cell_center(GridPos::new(4, 2)));
     world.entity_mut(team_two).insert(Unit {
         id: UnitId(2),
         team: TeamId(2),
-        kind: UnitKind::Villager,
+        kind: UnitKind::Worker,
         speed: 6.0,
     });
 
@@ -532,23 +615,23 @@ fn route_reject_feedback_is_team_aware() {
 }
 
 /// Ordering must measure each drop-off's geometric center, not its anchor
-/// cell. Worker at (10.5, 44.5): the 4×4 Town Center's anchor cell center
-/// (12.5, 46.5) is 8 units² away while the 2×2 Storehouse's anchor cell
-/// center (13.5, 44.5) is 9 — anchor-based sorting picks the Town Center.
+/// cell. Worker at (10.5, 44.5): the 4×4 Research Center's anchor cell center
+/// (12.5, 46.5) is 8 units² away while the 2×2 Depot's anchor cell
+/// center (13.5, 44.5) is 9 — anchor-based sorting picks the Research Center.
 /// Geometric centers are (14, 48) at 24.5 vs (14, 45) at 12.5: the
-/// Storehouse is truly nearer and must win.
+/// Depot is truly nearer and must win.
 #[test]
 fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
     let mut world = World::new();
     let mut map = GridMap::new(24, 64);
     test_economy(&mut world);
 
-    let town_center = world
+    let research_center = world
         .spawn((
             Building {
                 id: BuildingId(1),
                 team: TeamId(1),
-                kind: crate::catalog::BuildingKind::TownCenter,
+                kind: crate::catalog::BuildingKind::ResearchCenter,
                 construction: crate::buildings::ConstructionState {
                     progress_seconds: 0.0,
                     complete: true,
@@ -561,13 +644,13 @@ fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
         .id();
     world
         .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(1), town_center);
-    let storehouse = world
+        .insert(BuildingId(1), research_center);
+    let depot = world
         .spawn((
             Building {
                 id: BuildingId(2),
                 team: TeamId(1),
-                kind: crate::catalog::BuildingKind::Storehouse,
+                kind: crate::catalog::BuildingKind::Depot,
                 construction: crate::buildings::ConstructionState {
                     progress_seconds: 0.0,
                     complete: true,
@@ -580,7 +663,7 @@ fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
         .id();
     world
         .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(2), storehouse);
+        .insert(BuildingId(2), depot);
     for cell in Footprint::new(GridPos::new(12, 46), 4, 4)
         .cells()
         .into_iter()
@@ -589,7 +672,7 @@ fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
         map.set_blocked(cell, true);
     }
 
-    let worker = spawn_villager(&mut world, UnitId(1), Vec2::new(10.5, 44.5));
+    let worker = spawn_worker(&mut world, UnitId(1), Vec2::new(10.5, 44.5));
     let used = seed_used_excluding(&world, &map, worker);
 
     let (dropoff, slot, _) = nearest_reachable_dropoff(&world, &map, worker, &used)
@@ -598,17 +681,17 @@ fn nearest_dropoff_orders_by_geometric_center_not_anchor() {
     assert_eq!(
         dropoff,
         BuildingId(2),
-        "the truly nearer Storehouse must win over the anchor-nearer Town Center"
+        "the truly nearer Depot must win over the anchor-nearer Research Center"
     );
     assert!(
         Footprint::new(GridPos::new(13, 44), 2, 2).is_immediately_adjacent(slot),
-        "assigned slot {slot:?} is on the Storehouse perimeter"
+        "assigned slot {slot:?} is on the Depot perimeter"
     );
 }
 
 /// Exact distance ties break on `BuildingId`, never on `BuildingIndex`'s
 /// arbitrary `HashMap` iteration order. Worker at (10.5, 10.5): the left
-/// Storehouse's geometric center (9, 10) and the right one's (12, 10) are
+/// Depot's geometric center (9, 10) and the right one's (12, 10) are
 /// both exactly 2.5 units² away, so the lower id must win every run. The
 /// higher id is inserted first so insertion order alone cannot explain
 /// the outcome.
@@ -622,12 +705,12 @@ fn nearest_dropoff_breaks_distance_ties_on_building_id() {
         (BuildingId(2), GridPos::new(8, 9)),
         (BuildingId(1), GridPos::new(11, 9)),
     ] {
-        let storehouse = world
+        let depot = world
             .spawn((
                 Building {
                     id,
                     team: TeamId(1),
-                    kind: crate::catalog::BuildingKind::Storehouse,
+                    kind: crate::catalog::BuildingKind::Depot,
                     construction: crate::buildings::ConstructionState {
                         progress_seconds: 0.0,
                         complete: true,
@@ -640,13 +723,13 @@ fn nearest_dropoff_breaks_distance_ties_on_building_id() {
             .id();
         world
             .get_resource_or_insert_with(BuildingIndex::default)
-            .insert(id, storehouse);
+            .insert(id, depot);
         for cell in Footprint::new(anchor, 2, 2).cells() {
             map.set_blocked(cell, true);
         }
     }
 
-    let worker = spawn_villager(&mut world, UnitId(1), Vec2::new(10.5, 10.5));
+    let worker = spawn_worker(&mut world, UnitId(1), Vec2::new(10.5, 10.5));
     let used = seed_used_excluding(&world, &map, worker);
 
     let (dropoff, slot, _) = nearest_reachable_dropoff(&world, &map, worker, &used)
@@ -659,23 +742,23 @@ fn nearest_dropoff_breaks_distance_ties_on_building_id() {
     );
     assert!(
         Footprint::new(GridPos::new(11, 9), 2, 2).is_immediately_adjacent(slot),
-        "assigned slot {slot:?} is on the winning Storehouse perimeter"
+        "assigned slot {slot:?} is on the winning Depot perimeter"
     );
 }
 
 #[test]
-fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
+fn gather_rejects_foreign_and_non_worker_workers_without_touching_them() {
     let mut world = World::new();
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
     world.insert_resource(IdAllocator::new(10, 1, 2));
-    let villager = spawn_villager(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
-    let spearman = spawn_unit(
+    let worker = spawn_worker(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
+    let guard = spawn_unit(
         &mut world,
         UnitId(8),
         TeamId(1),
         Vec2::new(10.5, 8.5),
-        UnitKind::Spearman,
+        UnitKind::Guard,
         6.0,
     );
     let foreign = spawn_unit(
@@ -683,20 +766,20 @@ fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
         UnitId(9),
         TeamId(2),
         Vec2::new(2.5, 2.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     spawn_resource_source(
         &mut world,
         &mut map,
         ResourceId(1),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(12, 12),
         400,
     );
     // Observable state on the rejected workers: "without touching them"
     // means both task and move order must survive the command verbatim.
-    world.entity_mut(spearman).insert((
+    world.entity_mut(guard).insert((
         WorkerTask::Gathering {
             source: ResourceId(1),
         },
@@ -737,21 +820,21 @@ fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
     assert_eq!(
         outcome.rejected_units,
         vec![
-            (UnitId(8), RejectReason::NotVillager),
+            (UnitId(8), RejectReason::NotWorker),
             (UnitId(9), RejectReason::NotOwned),
         ]
     );
     assert_eq!(
-        world.get::<WorkerTask>(spearman),
+        world.get::<WorkerTask>(guard),
         Some(&WorkerTask::Gathering {
             source: ResourceId(1)
         }),
-        "the rejected non-villager keeps its old task"
+        "the rejected non-worker keeps its old task"
     );
     assert_eq!(
-        world.get::<MoveOrder>(spearman).map(|order| order.goal),
+        world.get::<MoveOrder>(guard).map(|order| order.goal),
         Some(GridPos::new(18, 6)),
-        "the rejected non-villager keeps its old move order"
+        "the rejected non-worker keeps its old move order"
     );
     assert_eq!(
         world.get::<WorkerTask>(foreign),
@@ -767,7 +850,7 @@ fn gather_rejects_foreign_and_non_villager_workers_without_touching_them() {
         Some(GridPos::new(3, 3)),
         "the rejected foreign worker keeps its old move order"
     );
-    match world.get::<WorkerTask>(villager).unwrap() {
+    match world.get::<WorkerTask>(worker).unwrap() {
         WorkerTask::ToSource { source, .. } => assert_eq!(*source, ResourceId(1)),
         other => panic!("expected ToSource, got {other:?}"),
     }
@@ -782,7 +865,7 @@ fn gather_rejects_an_unexplored_standalone_source() {
     reveal(&mut world, &map);
     assert!(
         !explored_by(&world, TeamId(1), GridPos::new(45, 16)),
-        "the northern expansion gold starts unexplored"
+        "the northern expansion coal starts unexplored"
     );
 
     let outcome = apply_player_command(
@@ -802,15 +885,15 @@ fn explored_source_stays_gatherable_after_vision_is_lost() {
     let (mut world, mut map) = skirmish_world();
     reveal(&mut world, &map);
 
-    // Scout the northern expansion gold, then return home: the source stays
+    // Scout the northern expansion coal, then return home: the source stays
     // known but falls out of current vision.
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(map.cell_center(GridPos::new(45, 19))));
     refresh_visibility(&mut world, &map);
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(map.cell_center(GridPos::new(20, 19))));
     refresh_visibility(&mut world, &map);
     assert!(explored_by(&world, TeamId(1), GridPos::new(45, 16)));
@@ -828,7 +911,7 @@ fn explored_source_stays_gatherable_after_vision_is_lost() {
     );
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
     assert!(matches!(
-        world.get::<WorkerTask>(villager),
+        world.get::<WorkerTask>(worker),
         Some(WorkerTask::ToSource {
             source: ResourceId(13),
             ..
@@ -842,9 +925,9 @@ fn gather_replaces_an_active_move_order_and_frees_its_goal() {
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
     world.insert_resource(IdAllocator::new(10, 1, 2));
-    let villager = spawn_villager(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
+    let worker = spawn_worker(&mut world, UnitId(1), Vec2::new(8.5, 8.5));
     let old_goal = GridPos::new(18, 6);
-    world.entity_mut(villager).insert(MoveOrder {
+    world.entity_mut(worker).insert(MoveOrder {
         waypoints: vec![map.cell_center(old_goal)],
         next: 0,
         goal: old_goal,
@@ -855,7 +938,7 @@ fn gather_replaces_an_active_move_order_and_frees_its_goal() {
         &mut world,
         &mut map,
         ResourceId(1),
-        ResourceKind::Wood,
+        ResourceKind::Scrap,
         GridPos::new(12, 12),
         400,
     );
@@ -867,7 +950,7 @@ fn gather_replaces_an_active_move_order_and_frees_its_goal() {
     );
 
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
-    match world.get::<WorkerTask>(villager).unwrap() {
+    match world.get::<WorkerTask>(worker).unwrap() {
         WorkerTask::ToSource { source, slot } => {
             assert_eq!(*source, ResourceId(1));
             assert_ne!(
@@ -877,14 +960,14 @@ fn gather_replaces_an_active_move_order_and_frees_its_goal() {
         }
         other => panic!("expected ToSource, got {other:?}"),
     }
-    let order = world.get::<MoveOrder>(villager).expect("fresh order");
+    let order = world.get::<MoveOrder>(worker).expect("fresh order");
     assert_ne!(
         order.goal, old_goal,
         "the gather route replaces, not keeps, the old one"
     );
 
     // The released goal is claimable again by the next move command.
-    let late = spawn_villager(&mut world, UnitId(2), Vec2::new(8.5, 10.5));
+    let late = spawn_worker(&mut world, UnitId(2), Vec2::new(8.5, 10.5));
     let old_goal_center = map.cell_center(old_goal);
     let late_outcome = apply_player_command(
         &mut world,
@@ -909,12 +992,12 @@ fn gather_replaces_an_active_move_order_and_frees_its_goal() {
 fn deposits_bank_into_the_matching_stockpile_arm() {
     let (mut world, mut map) = skirmish_world();
 
-    let villager = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world
-        .entity_mut(villager)
+        .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(20.5, 42.5)));
-    world.entity_mut(villager).insert(Carry::Holding {
-        kind: ResourceKind::Gold,
+    world.entity_mut(worker).insert(Carry::Holding {
+        kind: ResourceKind::Coal,
         amount: NonZeroU32::new(7).unwrap(),
     });
 
@@ -925,22 +1008,22 @@ fn deposits_bank_into_the_matching_stockpile_arm() {
     );
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
 
-    // Deposit order: the carried gold banks on arrival at the town-center
+    // Deposit order: the carried coal banks on arrival at the research-center
     // drop-off, then one food gather cycle banks food. The loop polls
     // movement + economy until both have landed in their stockpile arms.
     for _ in 0..4000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
-        if state.stockpile.gold == 107 && state.stockpile.food == 210 {
+        if state.stockpile.coal == 157 && state.stockpile.food == 210 {
             break;
         }
     }
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
-    assert_eq!(state.stockpile.gold, 107, "carried gold banks in full");
+    assert_eq!(state.stockpile.coal, 157, "carried coal banks in full");
     assert_eq!(state.stockpile.food, 210, "a gather cycle banks ten food");
-    assert_eq!(state.stockpile.wood, 300, "wood stays untouched");
-    assert_eq!(world.get::<Carry>(villager), Some(&Carry::Empty));
+    assert_eq!(state.stockpile.scrap, 300, "scrap stays untouched");
+    assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
 }
 
 #[test]
@@ -949,7 +1032,7 @@ fn deposited_workers_route_back_to_their_finite_source() {
     let mut map = GridMap::new(24, 24);
     test_economy(&mut world);
 
-    // A standalone finite Food source, plus a Town Center drop-off. Finite
+    // A standalone finite Food source, plus a Research Center drop-off. Finite
     // nodes keep no exclusive holder: every worker returning from a deposit
     // routes back to the node while it has remaining yield.
     spawn_resource_source(
@@ -960,12 +1043,12 @@ fn deposited_workers_route_back_to_their_finite_source() {
         GridPos::new(4, 16),
         400,
     );
-    let town_center = world
+    let research_center = world
         .spawn((
             Building {
                 id: BuildingId(2),
                 team: TeamId(1),
-                kind: crate::catalog::BuildingKind::TownCenter,
+                kind: crate::catalog::BuildingKind::ResearchCenter,
                 construction: crate::buildings::ConstructionState {
                     progress_seconds: 0.0,
                     complete: true,
@@ -978,11 +1061,11 @@ fn deposited_workers_route_back_to_their_finite_source() {
         .id();
     world
         .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(2), town_center);
+        .insert(BuildingId(2), research_center);
 
-    // The first worker deposits at the Town Center and routes back to the
+    // The first worker deposits at the Research Center and routes back to the
     // source it was working.
-    let first = spawn_villager(&mut world, UnitId(1), map.cell_center(GridPos::new(6, 17)));
+    let first = spawn_worker(&mut world, UnitId(1), map.cell_center(GridPos::new(6, 17)));
     world.entity_mut(first).insert((
         WorkerTask::ToDropoff {
             source: ResourceId(1),
@@ -1017,7 +1100,7 @@ fn deposited_workers_route_back_to_their_finite_source() {
 
     // A second worker delivering from the same node gets the same
     // return leg — finite sources share, they do not reserve.
-    let second = spawn_villager(&mut world, UnitId(2), map.cell_center(GridPos::new(6, 17)));
+    let second = spawn_worker(&mut world, UnitId(2), map.cell_center(GridPos::new(6, 17)));
     world.entity_mut(second).insert((
         WorkerTask::ToDropoff {
             source: ResourceId(1),
@@ -1121,12 +1204,12 @@ fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
         UnitId(1),
         TeamId(1),
         Vec2::new(4.5, 4.5),
-        UnitKind::Villager,
+        UnitKind::Worker,
         6.0,
     );
     world.entity_mut(worker).insert((
         Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(5).unwrap(),
         },
         GatherProgress(0.5),
@@ -1160,7 +1243,7 @@ fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
     assert_eq!(
         world.get::<Carry>(worker),
         Some(&Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: NonZeroU32::new(5).unwrap(),
         })
     );
@@ -1172,10 +1255,10 @@ fn cancel_unit_activity_drops_combat_orders_and_preserves_carry() {
 #[test]
 fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
     let (mut world, mut map) = skirmish_world();
-    let villager = world
+    let worker = world
         .resource::<UnitIndex>()
         .entity(UnitId(1))
-        .expect("seeded villager");
+        .expect("seeded worker");
 
     let outcome = apply_player_command(
         &mut world,
@@ -1187,7 +1270,7 @@ fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         if matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Gathering { .. })
         ) {
             break;
@@ -1195,36 +1278,36 @@ fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
     }
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::Gathering {
                 source: ResourceId(1)
             })
         ),
-        "premise: the villager reached Gathering"
+        "premise: the worker reached Gathering"
     );
 
     // Teleport it six cells off the source's perimeter.
     let away = map.cell_center(GridPos::new(30, 48));
-    world.entity_mut(villager).insert(SimPosition::new(away));
+    world.entity_mut(worker).insert(SimPosition::new(away));
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
     assert!(
         matches!(
-            world.get::<WorkerTask>(villager),
+            world.get::<WorkerTask>(worker),
             Some(WorkerTask::ToSource {
                 source: ResourceId(1),
                 ..
             })
         ),
         "a non-adjacent gatherer must be walking back, not gathering: {:?}",
-        world.get::<WorkerTask>(villager)
+        world.get::<WorkerTask>(worker)
     );
     assert_eq!(
-        world.get::<Carry>(villager),
+        world.get::<Carry>(worker),
         Some(&Carry::Empty),
         "nothing transfers while away from the source"
     );
     assert!(
-        world.get::<MoveOrder>(villager).is_some(),
+        world.get::<MoveOrder>(worker).is_some(),
         "the walk back installs a real route"
     );
 
@@ -1233,7 +1316,7 @@ fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
         if world
-            .get::<Carry>(villager)
+            .get::<Carry>(worker)
             .map_or(0, |carry| carry.amount_or_zero())
             > 0
         {
@@ -1241,7 +1324,7 @@ fn displaced_gatherer_walks_back_instead_of_gathering_from_afar() {
         }
     }
     assert!(
-        matches!(world.get::<Carry>(villager), Some(Carry::Holding { .. })),
+        matches!(world.get::<Carry>(worker), Some(Carry::Holding { .. })),
         "the gatherer resumes gathering after walking back"
     );
 }
@@ -1297,12 +1380,12 @@ fn hidden_units_do_not_reserve_gather_approach_cells() {
     refresh_visibility(&mut world, &map);
     assert!(!visible_to(&world, TeamId(1), free));
 
-    // A hidden enemy villager parks on the only approach cell.
-    let enemy = spawn_villager(&mut world, UnitId(80), map.cell_center(free));
+    // A hidden enemy worker parks on the only approach cell.
+    let enemy = spawn_worker(&mut world, UnitId(80), map.cell_center(free));
     world.entity_mut(enemy).insert(Unit {
         id: UnitId(80),
         team: TeamId(2),
-        kind: UnitKind::Villager,
+        kind: UnitKind::Worker,
         speed: 6.0,
     });
     refresh_visibility(&mut world, &map);

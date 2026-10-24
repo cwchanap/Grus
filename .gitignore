@@ -7,3 +7,4 @@ godot/bin/*
 .worktrees/
 test_output/
 dist/
+build/

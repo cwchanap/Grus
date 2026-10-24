@@ -19,8 +19,8 @@ use grus_sim::{
 };
 
 const TEAM: TeamId = TeamId(1);
-/// Authored team-1 Town Center and berry bush.
-const TOWN_CENTER: BuildingId = BuildingId(1);
+/// Authored team-1 Research Center and berry bush.
+const RESEARCH_CENTER: BuildingId = BuildingId(1);
 const BERRIES: ResourceId = ResourceId(1);
 /// The placed Barracks takes the first runtime building id after the two TCs.
 const BARRACKS: BuildingId = BuildingId(3);
@@ -37,7 +37,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // Gatherer A parks beside the berries at (22, 42); villager 2 stays home
+    // Gatherer A parks beside the berries at (22, 42); worker 2 stays home
     // as the builder for the authored Barracks slot.
     let gatherer = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world
@@ -45,7 +45,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
         .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
     let builder = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
 
-    // A Town Center rally point on open ground south-east of the footprint:
+    // A Research Center rally point on open ground south-east of the footprint:
     // the spawn must march to it, but only after its completion tick.
     let rally = GridPos::new(20, 58);
 
@@ -54,13 +54,13 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     let queue: RefCell<Vec<PlayerCommand>> = RefCell::new(vec![
         PlayerCommand::SetRally {
             issuer: TEAM,
-            building: TOWN_CENTER,
+            building: RESEARCH_CENTER,
             target: rally,
         },
         PlayerCommand::EnqueueUnit {
             issuer: TEAM,
-            building: TOWN_CENTER,
-            kind: UnitKind::Villager,
+            building: RESEARCH_CENTER,
+            kind: UnitKind::Worker,
         },
     ]);
     let apply_queued_test_commands = |world: &mut World, map: &mut GridMap| {
@@ -70,8 +70,8 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
         }
     };
 
-    // Tick arithmetic (0.3 cells per movement tick at villager speed):
-    // - The Villager job enqueued at tick 1 completes at tick 300 (15s /
+    // Tick arithmetic (0.3 cells per movement tick at worker speed):
+    // - The Worker job enqueued at tick 1 completes at tick 300 (15s /
     //   0.05).
     // - Barracks placed at tick 270: builder walks 6 cells over 24 movement
     //   ticks (271..=294) and arrives at tick 294.
@@ -135,7 +135,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     let spawned = world
         .resource::<UnitIndex>()
         .entity(UnitId(9))
-        .expect("the trained villager spawned in this tick");
+        .expect("the trained worker spawned in this tick");
     let spawn_position = world.get::<SimPosition>(spawned).unwrap().current;
     let spawn_cell = map.world_to_cell(spawn_position);
     assert_eq!(
@@ -175,9 +175,9 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // A second team-1 drop-off beside the Town Center's resource line so the
+    // A second team-1 drop-off beside the Research Center's resource line so the
     // destroyed drop-off's worker has a same-team reroute target. Placed
-    // through the public command path on the authored Storehouse slot and
+    // through the public command path on the authored Depot slot and
     // completed instantly; the first runtime building id after the two Town
     // Centers is 3.
     let placed = apply_player_command(
@@ -186,58 +186,55 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         PlayerCommand::PlaceBuilding {
             issuer: TEAM,
             builder: UnitId(2),
-            kind: BuildingKind::Storehouse,
-            anchor: MapFixture::safe_storehouse_anchor(TEAM),
+            kind: BuildingKind::Depot,
+            anchor: MapFixture::depot_anchor(TEAM),
         },
     );
-    assert_eq!(placed.reject, None, "storehouse placement rejected");
-    let storehouse_id = BuildingId(3);
-    let storehouse = world
-        .resource::<BuildingIndex>()
-        .entity(storehouse_id)
-        .unwrap();
+    assert_eq!(placed.reject, None, "depot placement rejected");
+    let depot_id = BuildingId(3);
+    let depot = world.resource::<BuildingIndex>().entity(depot_id).unwrap();
     world
-        .get_mut::<Building>(storehouse)
+        .get_mut::<Building>(depot)
         .unwrap()
         .construction
         .complete = true;
-    world.entity_mut(storehouse).insert(Dropoff { team: TEAM });
+    world.entity_mut(depot).insert(Dropoff { team: TEAM });
 
-    // Carrying worker parked exactly at its Town Center drop-off slot.
+    // Carrying worker parked exactly at its Research Center drop-off slot.
     let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world.entity_mut(worker).insert((
         SimPosition::new(map.cell_center(GridPos::new(11, 46))),
         Carry::Holding {
-            kind: ResourceKind::Wood,
+            kind: ResourceKind::Scrap,
             amount: std::num::NonZeroU32::new(6).unwrap(),
         },
         GatherProgress::default(),
         WorkerTask::ToDropoff {
             source: ResourceId(1),
-            dropoff: TOWN_CENTER,
+            dropoff: RESEARCH_CENTER,
             slot: GridPos::new(11, 46),
         },
     ));
 
-    // A raider in range of the Town Center with a direct attack order; the
+    // A raider in range of the Research Center with a direct attack order; the
     // killing blow lands in this tick's combat step.
     let raider = spawn_unit(
         &mut world,
         UnitId(100),
         TeamId(2),
         Vec2::new(11.5, 49.5),
-        UnitKind::Spearman,
-        unit_spec(UnitKind::Spearman).speed,
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
     );
     world.entity_mut(raider).insert(CombatOrder::Attack {
-        target: CombatTarget::Building(TOWN_CENTER),
+        target: CombatTarget::Building(RESEARCH_CENTER),
         last_target_cell: None,
     });
-    let town_center = world
+    let research_center = world
         .resource::<BuildingIndex>()
-        .entity(TOWN_CENTER)
+        .entity(RESEARCH_CENTER)
         .unwrap();
-    world.get_mut::<Health>(town_center).unwrap().current = 10;
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
 
     // The canonical order under test: combat -> movement -> economy.
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -247,19 +244,19 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     assert!(
         world
             .resource::<BuildingIndex>()
-            .entity(TOWN_CENTER)
+            .entity(RESEARCH_CENTER)
             .is_none(),
         "combat destroyed the drop-off inside this tick"
     );
     match world.get::<WorkerTask>(worker) {
         Some(WorkerTask::ToDropoff { dropoff, .. }) => assert_eq!(
-            *dropoff, storehouse_id,
+            *dropoff, depot_id,
             "the worker was retasked to the surviving drop-off"
         ),
         other => panic!("expected a rerouted ToDropoff, got {other:?}"),
     }
     assert_eq!(
-        world.resource::<TeamEconomy>().0[&TEAM].stockpile.wood,
+        world.resource::<TeamEconomy>().0[&TEAM].stockpile.scrap,
         300 - 75,
         "the stale deposit at the just-destroyed drop-off must never land"
     );
@@ -282,7 +279,7 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
 
     // Scout the future site, then walk home: the ground stays explored but
     // falls out of current vision.
-    let site = Footprint::new(GridPos::new(30, 46), 2, 2); // Storehouse 2×2
+    let site = Footprint::new(GridPos::new(30, 46), 2, 2); // Depot 2×2
     let builder = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
     world
         .entity_mut(builder)
@@ -306,12 +303,12 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
         PlayerCommand::PlaceBuilding {
             issuer: TEAM,
             builder: UnitId(2),
-            kind: BuildingKind::Storehouse,
+            kind: BuildingKind::Depot,
             anchor: GridPos::new(30, 46),
         },
     );
     assert_eq!(placed.reject, None, "placement on explored ground rejected");
-    let storehouse = world
+    let depot = world
         .resource::<BuildingIndex>()
         .entity(BuildingId(3))
         .unwrap();
@@ -325,7 +322,7 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
 
     // Completion is what flips the site into a reveal origin — driven
     // through the real construction step (teleport the tasked builder onto
-    // its stored slot, then step until the 20 s Storehouse job finishes;
+    // its stored slot, then step until the 20 s Depot job finishes;
     // the bound covers the full build plus float-error slack)
     // instead of poking `construction.complete` by hand.
     let slot = match world.get::<WorkerTask>(builder).unwrap() {
@@ -337,22 +334,13 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
         .insert(SimPosition::new(map.cell_center(slot)));
     for _ in 0..450 {
         step_construction(&mut world, SIM_STEP_SECONDS);
-        if world
-            .get::<Building>(storehouse)
-            .unwrap()
-            .construction
-            .complete
-        {
+        if world.get::<Building>(depot).unwrap().construction.complete {
             break;
         }
     }
     assert!(
-        world
-            .get::<Building>(storehouse)
-            .unwrap()
-            .construction
-            .complete,
-        "the storehouse never completed through the real construction step"
+        world.get::<Building>(depot).unwrap().construction.complete,
+        "the depot never completed through the real construction step"
     );
     refresh_visibility(&mut world, &map);
     assert!(

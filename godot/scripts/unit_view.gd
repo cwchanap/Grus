@@ -4,9 +4,9 @@ extends Node3D
 ## gets a distinct (body scale, marker primitive) pair so units are
 ## readable before final art lands.
 const ROLE_SPECS := {
-	"Villager": {"body_scale": 0.8, "marker": ""},
-	"Spearman": {"body_scale": 1.0, "marker": "spear"},
-	"Archer": {"body_scale": 0.9, "marker": "bow"},
+	"Worker": {"body_scale": 0.8, "marker": ""},
+	"Guard": {"body_scale": 1.0, "marker": "spear"},
+	"Rifleman": {"body_scale": 0.9, "marker": "bow"},
 }
 
 @onready var body: MeshInstance3D = $Body

@@ -8,8 +8,8 @@ func _fail(message: String) -> void:
 	get_tree().quit(1)
 
 ## Normal gameplay must actually carry visibility state: a revision >= 1
-## (initial refresh ran), a 128x96 packed payload, the own Town Center cell
-## Visible and the enemy Town Center cell Unexplored. If the runtime ever
+## (initial refresh ran), a 128x96 packed payload, the own Research Center cell
+## Visible and the enemy Research Center cell Unexplored. If the runtime ever
 ## lost its VisibilityMap, the absent-resource fallback would silently run
 ## full-information — these assertions make that a loud failure.
 func _assert_runtime_visibility(where: String) -> void:
@@ -31,10 +31,10 @@ func _assert_runtime_visibility(where: String) -> void:
 		_fail("%s: visibility snapshot payload is not 128x96: %d" % [where, states.size()])
 		return
 	if states[46 * 128 + 12] != 2:
-		_fail("%s: own Town Center cell (12,46) is not Visible" % where)
+		_fail("%s: own Research Center cell (12,46) is not Visible" % where)
 		return
 	if states[46 * 128 + 112] != 0:
-		_fail("%s: enemy Town Center cell (112,46) is not Unexplored" % where)
+		_fail("%s: enemy Research Center cell (112,46) is not Unexplored" % where)
 		return
 
 func _run() -> void:
@@ -112,8 +112,8 @@ func _run() -> void:
 			_fail("fixture reset lost stable ResourceId %d" % id)
 			return
 	for building in buildings:
-		if str(building.get_meta("building_kind", "")) != "TownCenter":
-			_fail("building view %d is not a Town Center" % int(building.get_meta("building_id", -1)))
+		if str(building.get_meta("building_kind", "")) != "ResearchCenter":
+			_fail("building view %d is not a Research Center" % int(building.get_meta("building_id", -1)))
 			return
 
 	# A normal-skirmish reset returns the session to Start.
@@ -126,12 +126,12 @@ func _run() -> void:
 		return
 
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	if int(economy.get("food", -1)) != 200 or int(economy.get("wood", -1)) != 300 or int(economy.get("gold", -1)) != 100:
-		_fail("Team 1 stockpile after reset is not 200/300/100: %s" % [economy])
+	if int(economy.get("food", -1)) != 200 or int(economy.get("scrap", -1)) != 300 or int(economy.get("coal", -1)) != 150 or int(economy.get("crystals", -1)) != 0:
+		_fail("Team 1 stockpile after reset is not 200/300/150/0: %s" % [economy])
 		return
 	if int(economy.get("population_used", -1)) != 4 or int(economy.get("population_cap", -1)) != 10:
 		_fail("Team 1 population after reset is not 4/10: %s" % [economy])
 		return
 
-	print("GRUS_RESET_SMOKE_OK units=8 buildings=2 resources=18 stockpile=200/300/100 population=4/10 fog=128x96")
+	print("GRUS_RESET_SMOKE_OK units=8 buildings=2 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96")
 	get_tree().quit(0)

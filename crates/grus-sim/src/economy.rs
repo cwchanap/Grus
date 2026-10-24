@@ -9,7 +9,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex, worker_at_slot};
-use crate::catalog::{BASE_GATHER_RATE, CARRY_LIMIT, ResourceKind, UnitKind};
+use crate::catalog::{BASE_GATHER_RATE, CARRY_LIMIT, Cost, ResourceKind, UnitKind};
 use crate::combat::CombatOrder;
 use crate::commands::{
     CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity, release_slot,
@@ -42,8 +42,8 @@ impl Carry {
     }
 }
 
-/// One gatherable node: a standalone 1×1 berry bush, tree, or gold deposit
-/// with a finite remaining amount.
+/// One gatherable node: a standalone 1×1 ration cache, salvage ruin, or
+/// coal seam with a finite remaining amount.
 #[derive(Component, Debug)]
 pub struct ResourceSource {
     pub id: ResourceId,
@@ -131,11 +131,39 @@ pub enum WorkerTask {
     },
 }
 
+/// One team's stock in the four currencies. `crystals` is stockpile surface
+/// only for now: no gatherable source produces it and no catalogue price
+/// charges it yet.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ResourceStockpile {
     pub food: u32,
-    pub wood: u32,
-    pub gold: u32,
+    pub scrap: u32,
+    pub coal: u32,
+    pub crystals: u32,
+}
+
+impl ResourceStockpile {
+    /// Immutable affordability check over all four fields. Used by the
+    /// read-only placement preview; mutates nothing.
+    pub fn can_afford(&self, cost: Cost) -> bool {
+        self.food >= cost.food
+            && self.scrap >= cost.scrap
+            && self.coal >= cost.coal
+            && self.crystals >= cost.crystals
+    }
+    /// Atomic all-or-nothing deduction: compares every field first, then
+    /// deducts all four once. A failure on any currency leaves every field
+    /// unchanged, so a rejected spend can never partially charge.
+    pub fn try_spend(&mut self, cost: Cost) -> bool {
+        if !self.can_afford(cost) {
+            return false;
+        }
+        self.food -= cost.food;
+        self.scrap -= cost.scrap;
+        self.coal -= cost.coal;
+        self.crystals -= cost.crystals;
+        true
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -258,18 +286,18 @@ pub(crate) fn reroute_dropoff_worker(
     }
 }
 
-/// The one idle-villager definition: Villager + `WorkerTask::Idle` + no
+/// The one idle-worker definition: Worker + `WorkerTask::Idle` + no
 /// `MoveOrder`. Lifted from the bridge HUD so the HUD idle count reads the
 /// same truth.
 pub fn is_idle_worker(world: &World, entity: Entity) -> bool {
     world
         .get::<Unit>(entity)
-        .is_some_and(|unit| unit.kind == UnitKind::Villager)
+        .is_some_and(|unit| unit.kind == UnitKind::Worker)
         && world.get::<WorkerTask>(entity) == Some(&WorkerTask::Idle)
         && world.get::<MoveOrder>(entity).is_none()
 }
 
-/// Stable-ID-sorted idle villagers of one team; consumed by the bridge HUD.
+/// Stable-ID-sorted idle workers of one team; consumed by the bridge HUD.
 pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
     let mut ids: Vec<UnitId> = world
         .get_resource::<UnitIndex>()
@@ -288,7 +316,7 @@ pub fn idle_worker_ids(world: &World, team: TeamId) -> Vec<UnitId> {
 }
 
 /// Applies an accepted `Gather`: validates source knowledge, then owned
-/// villagers and shared reservation state; then assigns unique
+/// workers and shared reservation state; then assigns unique
 /// immediate-perimeter slots.
 /// A worker carrying resources routes to a reachable same-team Dropoff
 /// first (depositing) and only then to the requested source, so Carry never
@@ -370,9 +398,9 @@ pub(crate) fn apply_gather(
         };
         if !world
             .get::<Unit>(entity)
-            .is_some_and(|unit| unit.kind == UnitKind::Villager)
+            .is_some_and(|unit| unit.kind == UnitKind::Worker)
         {
-            outcome.rejected_units.push((id, RejectReason::NotVillager));
+            outcome.rejected_units.push((id, RejectReason::NotWorker));
             continue;
         }
         let Some(position) = world.get::<SimPosition>(entity).copied() else {
@@ -818,8 +846,8 @@ fn deposit_carry(world: &mut World, worker: Entity) {
     {
         match kind {
             ResourceKind::Food => state.stockpile.food += amount,
-            ResourceKind::Wood => state.stockpile.wood += amount,
-            ResourceKind::Gold => state.stockpile.gold += amount,
+            ResourceKind::Scrap => state.stockpile.scrap += amount,
+            ResourceKind::Coal => state.stockpile.coal += amount,
         }
     }
     world.entity_mut(worker).insert(Carry::Empty);

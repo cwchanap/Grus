@@ -47,12 +47,12 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     seed_skirmish(&mut world, &mut map, &fixture);
     extend_with_benchmark_workload(&mut world, &mut map);
 
-    // The mixed roster: the four authored villagers plus the workload make
+    // The mixed roster: the four authored workers plus the workload make
     // 20/40/40 per team — 200 units total.
     for team in [TeamId(1), TeamId(2)] {
-        assert_eq!(units_of_kind(&world, team, UnitKind::Villager), 20);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Spearman), 40);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Archer), 40);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Worker), 20);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Guard), 40);
+        assert_eq!(units_of_kind(&world, team, UnitKind::Rifleman), 40);
         assert!(
             world.resource::<TeamEconomy>().0.contains_key(&team),
             "team {team:?} economy present"
@@ -63,23 +63,23 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     // IDs flowed only through the allocator: 8 authored + 192 allocated.
     assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
 
-    // The two starting Town Centers still stand completed, one per team.
-    let town_centers = world
+    // The two starting Research Centers still stand completed, one per team.
+    let research_centers = world
         .resource::<BuildingIndex>()
         .iter()
         .filter(|(_, entity)| {
             world.get::<Building>(**entity).is_some_and(|building| {
-                building.kind == BuildingKind::TownCenter && building.construction.complete
+                building.kind == BuildingKind::ResearchCenter && building.construction.complete
             })
         })
         .count();
-    assert_eq!(town_centers, 2);
+    assert_eq!(research_centers, 2);
 
     // The authored standalone resources are untouched.
     assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
 
     // Every added unit stands in bounds on a walkable (non-authored-blocked)
-    // cell — staging never parks a unit inside terrain, a Town Center or a
+    // cell — staging never parks a unit inside terrain, a Research Center or a
     // resource.
     for (_, entity) in world.resource::<UnitIndex>().iter() {
         let position = world.get::<SimPosition>(*entity).unwrap().current;
@@ -91,7 +91,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     }
 
     // The initial Gather/AttackMove commands were applied through the
-    // ordinary dispatcher and accepted: the first 12 sorted villagers per
+    // ordinary dispatcher and accepted: the first 12 sorted workers per
     // side are tasked two-per-source to the authored safe sources, and both
     // armies hold one AttackMove order toward the shared midfield corridor.
     for team in [TeamId(1), TeamId(2)] {
@@ -110,7 +110,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
         assert_eq!(
             tasked.len(),
             12,
-            "team {team:?}: twelve villagers tasked by the setup gathers"
+            "team {team:?}: twelve workers tasked by the setup gathers"
         );
         let marching = world
             .resource::<UnitIndex>()
@@ -118,7 +118,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
             .filter(|(_, entity)| {
                 world
                     .get::<Unit>(**entity)
-                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Villager)
+                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Worker)
                     && matches!(
                         world.get::<CombatOrder>(**entity),
                         Some(CombatOrder::AttackMove { .. })
@@ -143,8 +143,8 @@ fn authored_anchor_accessors_mirror_between_team_halves() {
     let starts = MapFixture::team_starts();
     let occupied: HashSet<GridPos> = starts
         .iter()
-        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
-        .chain(starts.iter().flat_map(|start| start.villagers))
+        .flat_map(|start| Footprint::new(start.research_center_anchor, 4, 4).cells())
+        .chain(starts.iter().flat_map(|start| start.workers))
         .chain(fixture.resources.iter().map(|spawn| spawn.cell))
         .collect();
 
@@ -156,9 +156,9 @@ fn authored_anchor_accessors_mirror_between_team_halves() {
                 building_spec(BuildingKind::Barracks).width,
             ),
             (
-                "storehouse",
-                MapFixture::safe_storehouse_anchor(team),
-                building_spec(BuildingKind::Storehouse).width,
+                "depot",
+                MapFixture::depot_anchor(team),
+                building_spec(BuildingKind::Depot).width,
             ),
         ] {
             for cell in Footprint::new(anchor, width, width).cells() {
@@ -178,10 +178,10 @@ fn authored_anchor_accessors_mirror_between_team_halves() {
         )
     );
     assert_eq!(
-        MapFixture::safe_storehouse_anchor(TeamId(2)),
+        MapFixture::depot_anchor(TeamId(2)),
         mirror_anchor(
-            MapFixture::safe_storehouse_anchor(TeamId(1)),
-            building_spec(BuildingKind::Storehouse).width
+            MapFixture::depot_anchor(TeamId(1)),
+            building_spec(BuildingKind::Depot).width
         )
     );
 }
@@ -194,14 +194,14 @@ fn authored_team_and_resource_cells_are_in_bounds() {
         .chain(MapFixture::expansion_resources());
 
     for start in MapFixture::team_starts() {
-        for cell in Footprint::new(start.town_center_anchor, 4, 4).cells() {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
             assert!(
                 map.in_bounds(cell),
-                "town center cell {cell:?} out of bounds"
+                "research center cell {cell:?} out of bounds"
             );
         }
-        for cell in start.villagers {
-            assert!(map.in_bounds(cell), "villager cell {cell:?} out of bounds");
+        for cell in start.workers {
+            assert!(map.in_bounds(cell), "worker cell {cell:?} out of bounds");
         }
     }
     for resource in resources {
@@ -214,10 +214,10 @@ fn authored_team_and_resource_cells_are_in_bounds() {
 }
 
 #[test]
-fn resources_never_overlap_town_center_footprints() {
-    let town_center_cells: HashSet<GridPos> = MapFixture::team_starts()
+fn resources_never_overlap_research_center_footprints() {
+    let research_center_cells: HashSet<GridPos> = MapFixture::team_starts()
         .iter()
-        .flat_map(|start| Footprint::new(start.town_center_anchor, 4, 4).cells())
+        .flat_map(|start| Footprint::new(start.research_center_anchor, 4, 4).cells())
         .collect();
     let resources = MapFixture::starting_resources()
         .into_iter()
@@ -225,8 +225,8 @@ fn resources_never_overlap_town_center_footprints() {
 
     for resource in resources {
         assert!(
-            !town_center_cells.contains(&resource.cell),
-            "resource {:?} overlaps a town center",
+            !research_center_cells.contains(&resource.cell),
+            "resource {:?} overlaps a research center",
             resource.cell
         );
     }
@@ -238,7 +238,7 @@ fn safe_source_counts_are_mirrored_between_team_halves() {
     let left = safe.iter().filter(|spawn| spawn.cell.x < 64);
     let right = safe.iter().filter(|spawn| spawn.cell.x >= 64);
 
-    for kind in [ResourceKind::Food, ResourceKind::Wood, ResourceKind::Gold] {
+    for kind in [ResourceKind::Food, ResourceKind::Scrap, ResourceKind::Coal] {
         assert_eq!(
             left.clone().filter(|spawn| spawn.kind == kind).count(),
             right.clone().filter(|spawn| spawn.kind == kind).count(),
@@ -248,27 +248,27 @@ fn safe_source_counts_are_mirrored_between_team_halves() {
 }
 
 #[test]
-fn villager_starts_stay_walkable_after_town_center_blocking() {
+fn worker_starts_stay_walkable_after_research_center_blocking() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map;
     for start in MapFixture::team_starts() {
-        for cell in Footprint::new(start.town_center_anchor, 4, 4).cells() {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
             map.set_blocked(cell, true);
         }
     }
 
     for start in MapFixture::team_starts() {
-        for cell in start.villagers {
+        for cell in start.workers {
             assert!(
                 map.is_walkable(cell),
-                "villager cell {cell:?} blocked by its town center"
+                "worker cell {cell:?} blocked by its research center"
             );
         }
     }
 }
 
 #[test]
-fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
+fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
@@ -282,19 +282,20 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
             state.stockpile,
             ResourceStockpile {
                 food: 200,
-                wood: 300,
-                gold: 100
+                scrap: 300,
+                coal: 150,
+                crystals: 0,
             }
         );
     }
 
-    // Two completed Town Center Buildings, each owning a 4×4 Footprint,
+    // Two completed Research Center Buildings, each owning a 4×4 Footprint,
     // a Dropoff marker, full catalogue Health, and blocked map cells.
-    let mut town_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
-    let town_centers: Vec<_> = town_centers.iter(&world).collect();
-    assert_eq!(town_centers.len(), 2);
-    for (building, footprint, dropoff, health) in &town_centers {
-        assert_eq!(building.kind, BuildingKind::TownCenter);
+    let mut research_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
+    let research_centers: Vec<_> = research_centers.iter(&world).collect();
+    assert_eq!(research_centers.len(), 2);
+    for (building, footprint, dropoff, health) in &research_centers {
+        assert_eq!(building.kind, BuildingKind::ResearchCenter);
         assert!(building.construction.complete);
         assert_eq!(building.construction.active_builder, None);
         assert_eq!((footprint.width, footprint.height), (4, 4));
@@ -312,49 +313,45 @@ fn skirmish_seed_creates_real_town_centers_villagers_and_economy() {
         }
     }
     assert_eq!(
-        town_centers
+        research_centers
             .iter()
             .map(|(b, ..)| b.team)
             .collect::<HashSet<_>>()
             .len(),
         2,
-        "one Town Center per team"
+        "one Research Center per team"
     );
 
     // Every Dropoff lives on a real Building entity — no temporary
-    // Dropoff-only Town Center exists.
+    // Dropoff-only Research Center exists.
     let mut dropoffs = world.query::<(Entity, &Dropoff)>();
     for (entity, _) in dropoffs.iter(&world) {
         assert!(world.get::<Building>(entity).is_some());
     }
 
-    // Four villagers per team with fresh worker components, standing on
+    // Four workers per team with fresh worker components, standing on
     // walkable authored cells.
-    let mut villagers =
-        world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
-    let villagers: Vec<_> = villagers
+    let mut workers = world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
+    let workers: Vec<_> = workers
         .iter(&world)
-        .filter(|(unit, ..)| unit.kind == UnitKind::Villager)
+        .filter(|(unit, ..)| unit.kind == UnitKind::Worker)
         .collect();
-    assert_eq!(villagers.len(), 8);
+    assert_eq!(workers.len(), 8);
     for team in [TeamId(1), TeamId(2)] {
         assert_eq!(
-            villagers
+            workers
                 .iter()
                 .filter(|(unit, ..)| unit.team == team)
                 .count(),
             4
         );
     }
-    assert!(
-        villagers
-            .iter()
-            .all(|(_, position, carry, progress, task)| map
-                .is_walkable(map.world_to_cell(position.current))
-                && **carry == Carry::Empty
-                && progress.0 == 0.0
-                && **task == WorkerTask::Idle)
-    );
+    assert!(workers.iter().all(|(_, position, carry, progress, task)| {
+        map.is_walkable(map.world_to_cell(position.current))
+            && **carry == Carry::Empty
+            && progress.0 == 0.0
+            && **task == WorkerTask::Idle
+    }));
 
     // Eighteen authored finite sources: 1×1 blocked footprints, full
     // authored amounts, registered in the index.

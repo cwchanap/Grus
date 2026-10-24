@@ -16,13 +16,13 @@ use crate::economy::{
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 
-/// Authored starting position of one team: Town Center anchor plus the four
-/// villager spawn cells. All values are cells on the 128×96 battlefield.
+/// Authored starting position of one team: Research Center anchor plus the
+/// four worker spawn cells. All values are cells on the 128×96 battlefield.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TeamStart {
     pub team: TeamId,
-    pub town_center_anchor: GridPos,
-    pub villagers: [GridPos; 4],
+    pub research_center_anchor: GridPos,
+    pub workers: [GridPos; 4],
 }
 
 /// One authored finite resource node with a deterministic `ResourceId`.
@@ -44,14 +44,14 @@ pub struct MapFixture {
 }
 
 impl MapFixture {
-    /// The single authored team-start table. Anchors and villager cells come
-    /// from the HPA-471 design; Town Centers are 4×4 footprints.
+    /// The single authored team-start table. Anchors and worker cells come
+    /// from the HPA-471 design; Research Centers are 4×4 footprints.
     pub fn team_starts() -> [TeamStart; 2] {
         [
             TeamStart {
                 team: TeamId(1),
-                town_center_anchor: GridPos::new(12, 46),
-                villagers: [
+                research_center_anchor: GridPos::new(12, 46),
+                workers: [
                     GridPos::new(11, 45),
                     GridPos::new(11, 50),
                     GridPos::new(16, 45),
@@ -60,8 +60,8 @@ impl MapFixture {
             },
             TeamStart {
                 team: TeamId(2),
-                town_center_anchor: GridPos::new(112, 46),
-                villagers: [
+                research_center_anchor: GridPos::new(112, 46),
+                workers: [
                     GridPos::new(116, 45),
                     GridPos::new(116, 50),
                     GridPos::new(111, 45),
@@ -71,23 +71,23 @@ impl MapFixture {
         ]
     }
 
-    /// Safe resources around each Town Center, mirrored between teams.
+    /// Safe resources around each Research Center, mirrored between teams.
     /// The only resource-position table in the codebase; IDs are
     /// deterministic (team 1 safe, then team 2 safe).
     pub fn starting_resources() -> Vec<ResourceSpawn> {
         vec![
             spawn(ResourceId(1), ResourceKind::Food, 22, 42),
             spawn(ResourceId(2), ResourceKind::Food, 22, 54),
-            spawn(ResourceId(3), ResourceKind::Wood, 20, 45),
-            spawn(ResourceId(4), ResourceKind::Wood, 20, 48),
-            spawn(ResourceId(5), ResourceKind::Wood, 20, 51),
-            spawn(ResourceId(6), ResourceKind::Gold, 25, 48),
+            spawn(ResourceId(3), ResourceKind::Scrap, 20, 45),
+            spawn(ResourceId(4), ResourceKind::Scrap, 20, 48),
+            spawn(ResourceId(5), ResourceKind::Scrap, 20, 51),
+            spawn(ResourceId(6), ResourceKind::Coal, 25, 48),
             spawn(ResourceId(7), ResourceKind::Food, 105, 42),
             spawn(ResourceId(8), ResourceKind::Food, 105, 54),
-            spawn(ResourceId(9), ResourceKind::Wood, 107, 45),
-            spawn(ResourceId(10), ResourceKind::Wood, 107, 48),
-            spawn(ResourceId(11), ResourceKind::Wood, 107, 51),
-            spawn(ResourceId(12), ResourceKind::Gold, 102, 48),
+            spawn(ResourceId(9), ResourceKind::Scrap, 107, 45),
+            spawn(ResourceId(10), ResourceKind::Scrap, 107, 48),
+            spawn(ResourceId(11), ResourceKind::Scrap, 107, 51),
+            spawn(ResourceId(12), ResourceKind::Coal, 102, 48),
         ]
     }
 
@@ -95,12 +95,12 @@ impl MapFixture {
     /// safe sources.
     pub fn expansion_resources() -> Vec<ResourceSpawn> {
         vec![
-            spawn(ResourceId(13), ResourceKind::Gold, 45, 16),
-            spawn(ResourceId(14), ResourceKind::Wood, 43, 18),
-            spawn(ResourceId(15), ResourceKind::Wood, 47, 18),
-            spawn(ResourceId(16), ResourceKind::Gold, 82, 79),
-            spawn(ResourceId(17), ResourceKind::Wood, 84, 77),
-            spawn(ResourceId(18), ResourceKind::Wood, 80, 77),
+            spawn(ResourceId(13), ResourceKind::Coal, 45, 16),
+            spawn(ResourceId(14), ResourceKind::Scrap, 43, 18),
+            spawn(ResourceId(15), ResourceKind::Scrap, 47, 18),
+            spawn(ResourceId(16), ResourceKind::Coal, 82, 79),
+            spawn(ResourceId(17), ResourceKind::Scrap, 84, 77),
+            spawn(ResourceId(18), ResourceKind::Scrap, 80, 77),
         ]
     }
 
@@ -136,14 +136,14 @@ impl MapFixture {
         }
     }
 
-    /// The authored safe Storehouse anchor of one team's base layout (2×2
-    /// footprint), beside the Town Center's resource line. Team 2 mirrors
+    /// The authored safe Depot anchor of one team's base layout (2×2
+    /// footprint), beside the Research Center's resource line. Team 2 mirrors
     /// the team-1 anchor on the vertical center line (footprint-width
     /// aware).
-    pub fn safe_storehouse_anchor(team: TeamId) -> GridPos {
+    pub fn depot_anchor(team: TeamId) -> GridPos {
         let anchor = GridPos::new(21, 46);
         if team == TeamId(2) {
-            mirror_anchor(anchor, building_spec(BuildingKind::Storehouse).width)
+            mirror_anchor(anchor, building_spec(BuildingKind::Depot).width)
         } else {
             anchor
         }
@@ -152,13 +152,13 @@ impl MapFixture {
 
 /// The default skirmish seed: Team 1 at the authored left start, Team 2 at
 /// the authored right start. The pure simulation skirmish seed for one
-/// normal match: real completed Town Center Buildings (4×4 Footprints +
-/// `Dropoff` from birth), four Villagers per team with fresh worker
-/// components, both teams' economies (200 Food / 300 Wood / 100 Gold),
-/// Town Center map occupancy, the authored finite resource sources, and
-/// `UnitIndex`/`BuildingIndex` `IdAllocator` counters above the authored
-/// maxima. Every starting entity flows through the production constructors —
-/// there is no temporary Dropoff-only Town Center.
+/// normal match: real completed Research Center Buildings (4×4 Footprints +
+/// `Dropoff` from birth), four Workers per team with fresh worker
+/// components, both teams' economies (200 Food / 300 Scrap / 150 Coal /
+/// 0 Crystals), Research Center map occupancy, the authored finite resource
+/// sources, and `UnitIndex`/`BuildingIndex` `IdAllocator` counters above the
+/// authored maxima. Every starting entity flows through the production
+/// constructors — there is no temporary Dropoff-only Research Center.
 pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture) {
     let starts = MapFixture::team_starts();
     let mut economy = TeamEconomy::default();
@@ -166,25 +166,27 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
         TeamId(1),
         ResourceStockpile {
             food: 200,
-            wood: 300,
-            gold: 100,
+            scrap: 300,
+            coal: 150,
+            crystals: 0,
         },
     );
     economy.insert_team(
         TeamId(2),
         ResourceStockpile {
             food: 200,
-            wood: 300,
-            gold: 100,
+            scrap: 300,
+            coal: 150,
+            crystals: 0,
         },
     );
     world.insert_resource(economy);
 
     let mut unit_counter: u32 = 0;
-    let town_center_health = building_spec(BuildingKind::TownCenter).max_health;
+    let research_center_health = building_spec(BuildingKind::ResearchCenter).max_health;
     for (index, start) in starts.into_iter().enumerate() {
         let building_id = BuildingId(index as u32 + 1);
-        let footprint = Footprint::new(start.town_center_anchor, 4, 4);
+        let footprint = Footprint::new(start.research_center_anchor, 4, 4);
         for cell in footprint.cells() {
             map.set_blocked(cell, true);
         }
@@ -193,7 +195,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
                 Building {
                     id: building_id,
                     team: start.team,
-                    kind: BuildingKind::TownCenter,
+                    kind: BuildingKind::ResearchCenter,
                     construction: ConstructionState {
                         progress_seconds: 0.0,
                         complete: true,
@@ -203,25 +205,25 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
                 footprint,
                 Dropoff { team: start.team },
                 Health {
-                    current: town_center_health,
-                    max: town_center_health,
+                    current: research_center_health,
+                    max: research_center_health,
                 },
             ))
             .id();
         let mut buildings = world.get_resource_or_insert_with(BuildingIndex::default);
         buildings.insert(building_id, entity);
 
-        for cell in start.villagers {
+        for cell in start.workers {
             unit_counter += 1;
-            let villager = spawn_unit(
+            let worker = spawn_unit(
                 world,
                 UnitId(unit_counter),
                 start.team,
                 map.cell_center(cell),
-                UnitKind::Villager,
-                unit_spec(UnitKind::Villager).speed,
+                UnitKind::Worker,
+                unit_spec(UnitKind::Worker).speed,
             );
-            world.entity_mut(villager).insert((
+            world.entity_mut(worker).insert((
                 Carry::Empty,
                 GatherProgress::default(),
                 WorkerTask::Idle,
@@ -266,17 +268,17 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
     }
 }
 
-/// Per-team workload roster on top of the four authored villagers.
+/// Per-team workload roster on top of the four authored Workers.
 const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
-    (UnitKind::Villager, 16),
-    (UnitKind::Spearman, 40),
-    (UnitKind::Archer, 40),
+    (UnitKind::Worker, 16),
+    (UnitKind::Guard, 40),
+    (UnitKind::Rifleman, 40),
 ];
 
 /// The shared AttackMove target: the authored northern midfield corridor
 /// waypoint (team-1 scout route leg) — walkable, center-map, and never a
-/// Town Center, so the benchmark load fights in the field instead of ending
-/// the match.
+/// Research Center, so the benchmark load fights in the field instead of
+/// ending the match.
 const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 
 /// Extends an already-seeded skirmish with the benchmark workload: 96 more
@@ -284,7 +286,7 @@ const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 /// walkable cells — team 2 point-reflects team 1's cells through the map
 /// center — IDs taken only from the `IdAllocator`, the production worker
 /// bundle on every spawn, then the initial commands applied through the
-/// ordinary dispatcher: the first 12 sorted villagers per side go
+/// ordinary dispatcher: the first 12 sorted workers per side go
 /// two-per-source onto the authored safe sources, and every combatant
 /// AttackMoves to `BENCHMARK_MIDFIELD`. Panics on any rejected setup
 /// command: a benchmark that boots with rejected orders would silently
@@ -316,7 +318,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
     // Membership resolves from the live world, not spawn-order bookkeeping.
     let target = map.cell_center(BENCHMARK_MIDFIELD);
     for team in [TeamId(1), TeamId(2)] {
-        let workers: Vec<UnitId> = team_kind_ids(world, team, UnitKind::Villager)
+        let workers: Vec<UnitId> = team_kind_ids(world, team, UnitKind::Worker)
             .into_iter()
             .take(12)
             .collect();
@@ -331,7 +333,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 },
             );
         }
-        let army: Vec<UnitId> = [UnitKind::Spearman, UnitKind::Archer]
+        let army: Vec<UnitId> = [UnitKind::Guard, UnitKind::Rifleman]
             .into_iter()
             .flat_map(|kind| team_kind_ids(world, team, kind))
             .collect();
@@ -359,7 +361,7 @@ fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
 
 /// The first `BENCHMARK_ROSTER` units per team stage on the first 96
 /// row-major walkable cells of x 26..=53, y 20..=75 — a region holding no
-/// authored blocker, Town Center or source — and team 2 mirrors them by
+/// authored blocker, Research Center or source — and team 2 mirrors them by
 /// point reflection through the map center (the axis the authored map is
 /// symmetric under).
 fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
