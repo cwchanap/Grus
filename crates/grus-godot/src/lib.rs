@@ -11,7 +11,7 @@ use grus_sim::{
     BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
     CombatEventTotal, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
     Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, PlayerCommand,
-    ProductionJob, ProductionKind, ProductionQueue, RallyPoint, RejectReason, ResourceId,
+    ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason, ResourceId,
     ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
     UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
     apply_player_command, explored_by, extend_with_benchmark_workload, idle_worker_ids,
@@ -446,6 +446,25 @@ impl GrusBridgeNode {
             dict
         })
         .unwrap_or_default()
+    }
+
+    /// The authored obstacle rectangles: flat quads
+    /// `[min_x, min_y, max_x, max_y, ...]` of grid cells with INCLUSIVE
+    /// maximum bounds — the same `fixture::RUINS` table the simulation
+    /// blocks through `GridMap::set_blocked_rect`. Static data, so the
+    /// snapshot is safe to read before the first fixed tick; the
+    /// presentation layer derives mesh centers and sizes from this payload
+    /// and never keeps a second coordinate list.
+    #[func]
+    fn obstacle_rects(&self) -> PackedInt32Array {
+        let mut rects = PackedInt32Array::new();
+        for (min, max) in RUINS {
+            rects.push(min.x);
+            rects.push(min.y);
+            rects.push(max.x);
+            rects.push(max.y);
+        }
+        rects
     }
 
     #[func]
@@ -1693,8 +1712,9 @@ mod tests {
             revision >= 1,
             "initial refresh must have bumped the revision"
         );
-        let own_research_center = GridPos::new(12, 46);
-        let enemy_research_center = GridPos::new(112, 46);
+        let [own_start, enemy_start] = MapFixture::team_starts();
+        let own_research_center = own_start.research_center_anchor;
+        let enemy_research_center = enemy_start.research_center_anchor;
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
@@ -1801,11 +1821,15 @@ mod tests {
             "missing attacker is scrubbed"
         );
 
-        // March the enemy unit into Team-1 vision; its id becomes presentable.
+        // March the enemy unit into Team-1 vision — a cell on the immediate
+        // perimeter of the authored central Research Center — and its id
+        // becomes presentable.
+        let seen_cell = Footprint::new(MapFixture::team_starts()[0].research_center_anchor, 4, 4)
+            .perimeter_cells()[0];
         let enemy_entity = world.resource::<UnitIndex>().entity(enemy_at_home).unwrap();
         world
             .entity_mut(enemy_entity)
-            .insert(SimPosition::new(map.cell_center(GridPos::new(22, 46))));
+            .insert(SimPosition::new(map.cell_center(seen_cell)));
         refresh_visibility(&mut world, &map);
         world.insert_resource(CombatEvents(vec![event_from(enemy_at_home)]));
         let drained = take_presentable_events(&mut world);
@@ -2100,7 +2124,7 @@ mod tests {
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
-        let enemy_research_center = GridPos::new(112, 46);
+        let enemy_research_center = MapFixture::team_starts()[1].research_center_anchor;
         assert_eq!(
             states[(enemy_research_center.y * 128 + enemy_research_center.x) as usize],
             0,

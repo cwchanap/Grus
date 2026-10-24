@@ -271,8 +271,8 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
     let (mut world, mut map) = skirmish_world();
 
     let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    // Park the worker away from both the berries and the Research Center so
-    // the deposit leg is a real walk.
+    // Park the worker away from both the ration cache and the Research
+    // Center so the deposit leg is a real walk.
     world
         .entity_mut(worker)
         .insert(SimPosition::new(Vec2::new(20.5, 42.5)));
@@ -327,9 +327,14 @@ fn gather_while_holding_deposits_first_then_gathers_the_requested_source() {
     match world.get::<WorkerTask>(worker).unwrap() {
         WorkerTask::ToSource { source, slot } => {
             assert_eq!(*source, ResourceId(1));
+            let source_cell = MapFixture::starting_resources()
+                .into_iter()
+                .find(|spawn| spawn.id == ResourceId(1))
+                .expect("the authored ration cache")
+                .cell;
             assert!(
-                Footprint::new(GridPos::new(22, 42), 1, 1).is_immediately_adjacent(*slot),
-                "worker routes to the berry slot after depositing"
+                Footprint::new(source_cell, 1, 1).is_immediately_adjacent(*slot),
+                "worker routes to the ration-cache slot after depositing"
             );
         }
         other => panic!("expected ToSource after deposit, got {other:?}"),
@@ -341,10 +346,15 @@ fn ten_gather_ticks_transfer_one_whole_food() {
     let (mut world, mut map) = skirmish_world();
 
     let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    // Park the worker next to the 600-Food berry bush at (22, 42).
-    world
-        .entity_mut(worker)
-        .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
+    // Park the worker next to the authored 600-Food ration cache.
+    let food_cell = MapFixture::starting_resources()
+        .into_iter()
+        .find(|spawn| spawn.id == ResourceId(1))
+        .expect("the authored ration cache")
+        .cell;
+    world.entity_mut(worker).insert(SimPosition::new(
+        map.cell_center(GridPos::new(food_cell.x - 1, food_cell.y)),
+    ));
 
     let outcome = apply_player_command(
         &mut world,
@@ -1132,7 +1142,7 @@ fn vanished_source_idles_empty_workers_and_routes_full_ones_to_the_dropoff() {
     let source_entity = world
         .resource::<ResourceIndex>()
         .entity(ResourceId(1))
-        .expect("the fixture's berry bush");
+        .expect("the fixture's ration cache");
     let empty = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     let full = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
     world

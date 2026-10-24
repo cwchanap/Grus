@@ -2,17 +2,12 @@ extends Node
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
-## Authored fixture geometry for the fog-scouting leg
-## (crates/grus-sim/src/fixture.rs).
-const EXPANSION_TREE_ID := 14
-const TREE_CELL := Vector2i(43, 18)
-const ENEMY_RESEARCH_CENTER_CELL := Vector2i(112, 46)
-
-## March destinations: the expansion tree at (43,18), a vantage inside
-## vision of the enemy start, and open ground back out of vision.
-const TREE_VANTAGE := Vector2(44.5, 19.5)
-const ENEMY_VANTAGE := Vector2(108.5, 44.5)
-const HOME_CELL := Vector2(95.5, 44.5)
+## Stable ids for the fog-scouting leg — positions are read off the live
+## views at run time, never copied from the fixture into GDScript: the
+## expansion salvage ruin (ResourceId 14) and the passive eastern
+## Research Center (BuildingId 2).
+const EXPANSION_SALVAGE_ID := 14
+const ENEMY_RESEARCH_CENTER_ID := 2
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -230,6 +225,52 @@ func _run() -> void:
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
 
+	# Camera framing contract, before any pan/zoom/minimap interaction: the
+	# live Team-1 Research Center view (stable BuildingId 1) must project
+	# into the central half of the viewport. The projection is independent —
+	# nothing copies the authored anchor into GDScript — so a layout or
+	# camera drift fails loudly here.
+	var research_center_view: Node3D = null
+	for _frame in range(60):
+		await get_tree().process_frame
+		research_center_view = _building_view(1)
+		if research_center_view != null:
+			break
+	if research_center_view == null:
+		_fail("Research Center view 1 never initialized for the camera check")
+		return
+	var center_screen := camera.unproject_position(research_center_view.global_position)
+	if center_screen.x < viewport_size.x * 0.25 or center_screen.x > viewport_size.x * 0.75 \
+			or center_screen.y < viewport_size.y * 0.25 or center_screen.y > viewport_size.y * 0.75:
+		_fail("central Research Center projects outside the viewport's central half: %s" % center_screen)
+		return
+
+	# Rendered-ruins contract: the bridge hands over the same inclusive
+	# rectangles the simulation blocks, and the battlefield instantiates
+	# exactly one BoxMesh per rect whose size/center derive from the
+	# payload — never a copied coordinate.
+	var ruin_rects: PackedInt32Array = GrusBridge.obstacle_rects()
+	if ruin_rects.is_empty() or ruin_rects.size() % 4 != 0:
+		_fail("obstacle_rects payload is malformed: %s" % [ruin_rects])
+		return
+	var ruins_root := get_node("Main/Battlefield/Ruins") as Node3D
+	var ruin_count := ruin_rects.size() / 4
+	if ruins_root.get_child_count() != ruin_count:
+		_fail("rendered ruin count %d != bridge payload %d" % [ruins_root.get_child_count(), ruin_count])
+		return
+	for i in ruin_count:
+		var min_cell := Vector2i(ruin_rects[i * 4], ruin_rects[i * 4 + 1])
+		var max_cell := Vector2i(ruin_rects[i * 4 + 2], ruin_rects[i * 4 + 3])
+		var cells := max_cell - min_cell + Vector2i.ONE
+		var ruin := ruins_root.get_node("Ruin%d" % i) as MeshInstance3D
+		var mesh := ruin.mesh as BoxMesh
+		var want_size := Vector3(cells.x, 2.0, cells.y)
+		var want_center := Vector3(min_cell.x + cells.x * 0.5, 1.0, min_cell.y + cells.y * 0.5)
+		if mesh == null or mesh.size != want_size or ruin.position != want_center:
+			_fail("ruin %d rendered %s at %s != bridge-derived %s at %s" % [
+				i, mesh.size if mesh != null else Vector3.ZERO, ruin.position, want_size, want_center])
+			return
+
 	var size_before_zoom := camera.size
 	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
 	await get_tree().process_frame
@@ -329,7 +370,14 @@ func _run() -> void:
 		_fail("HUD click leaked into world controls")
 		return
 
-	var blocked_target := Vector3(64.5, 0.0, 48.5)
+	# A genuinely blocked destination: the center of a bridge-reported ruin
+	# rectangle (quad 4, west of the city) — real impassable terrain, never
+	# the friendly Research Center, and its projection lands on open HUD.
+	var ruin_min := Vector2i(ruin_rects[16], ruin_rects[17])
+	var ruin_max := Vector2i(ruin_rects[18], ruin_rects[19])
+	var ruin_cells := ruin_max - ruin_min + Vector2i.ONE
+	var blocked_target := Vector3(
+		ruin_min.x + ruin_cells.x * 0.5, 0.0, ruin_min.y + ruin_cells.y * 0.5)
 	_mouse_click(camera.unproject_position(blocked_target), MOUSE_BUTTON_RIGHT)
 	for _frame in range(3):
 		await get_tree().physics_frame
@@ -378,8 +426,25 @@ func _run() -> void:
 	var main := get_node("Main") as Node3D
 	var minimap := get_node("Main/HUD/Minimap") as Control
 
+	# Scout targets derive from the live views — the expansion ruin and the
+	# enemy Research Center — so the choreography tracks whatever layout
+	# the fixture authors instead of a copied coordinate list.
+	var salvage_view := _resource_view(EXPANSION_SALVAGE_ID)
+	var enemy_view := _building_view(ENEMY_RESEARCH_CENTER_ID)
+	if salvage_view == null or enemy_view == null:
+		_fail("scout target views are missing (salvage %s, enemy %s)" % [salvage_view, enemy_view])
+		return
+	var salvage_cell := Vector2i(int(salvage_view.global_position.x), int(salvage_view.global_position.z))
+	var enemy_cell := Vector2i(int(enemy_view.global_position.x), int(enemy_view.global_position.z))
+	# March destinations: beside the expansion ruin (its own cell is
+	# blocked), a vantage inside vision of the enemy start, and open ground
+	# far enough east of the base to drop every enemy back out of vision.
+	var salvage_vantage := Vector2(salvage_view.global_position.x + 1.5, salvage_view.global_position.z + 1.5)
+	var enemy_vantage := Vector2(enemy_view.global_position.x - 5.0, enemy_view.global_position.z - 4.5)
+	var home_cell := Vector2(enemy_view.global_position.x - 18.5, enemy_view.global_position.z - 3.5)
+
 	# Pre-scout baseline: the earlier choreography stayed inside own
-	# vision, so the enemy start and the expansion tree are still
+	# vision, so the enemy start and the expansion salvage are still
 	# Unexplored — enemy views hidden (but alive in the view tree), the
 	# fog-gated building snapshot empty, and no enemy minimap markers.
 	var pre_snap: Dictionary = GrusBridge.visibility_snapshot()
@@ -387,8 +452,8 @@ func _run() -> void:
 	if pre_states.size() != 128 * 96:
 		_fail("visibility snapshot payload is not 128x96: %d" % pre_states.size())
 		return
-	if _cell_state(pre_states, TREE_CELL) != 0 \
-			or _cell_state(pre_states, ENEMY_RESEARCH_CENTER_CELL) != 0:
+	if _cell_state(pre_states, salvage_cell) != 0 \
+			or _cell_state(pre_states, enemy_cell) != 0:
 		_fail("scout targets did not stay Unexplored before the leg")
 		return
 	for id in range(5, 9):
@@ -398,8 +463,8 @@ func _run() -> void:
 	if not _hidden(_building_view(2)):
 		_fail("enemy Research Center view was not hidden before the scout leg")
 		return
-	if not _hidden(_resource_view(EXPANSION_TREE_ID)):
-		_fail("expansion tree view was not hidden before the scout leg")
+	if not _hidden(_resource_view(EXPANSION_SALVAGE_ID)):
+		_fail("expansion salvage view was not hidden before the scout leg")
 		return
 	if not GrusBridge.building_snapshot(2).is_empty():
 		_fail("building_snapshot(2) leaked data for a hidden enemy building")
@@ -411,16 +476,16 @@ func _run() -> void:
 		_fail("minimap lost friendly markers")
 		return
 
-	# Scout leg 1: reveal the expansion tree.
-	if not await _move_scout(4, TREE_VANTAGE, "tree scout"):
+	# Scout leg 1: reveal the expansion salvage.
+	if not await _move_scout(4, salvage_vantage, "salvage scout"):
 		return
-	if not await _wait_until(func(): return _shown(_resource_view(EXPANSION_TREE_ID)), 60.0,
-			"scout never revealed the expansion tree"):
+	if not await _wait_until(func(): return _shown(_resource_view(EXPANSION_SALVAGE_ID)), 60.0,
+			"scout never revealed the expansion salvage"):
 		return
 
 	# Scout leg 2: reveal the enemy start — views, the fog-gated building
 	# snapshot, and minimap markers all open together.
-	if not await _move_scout(4, ENEMY_VANTAGE, "enemy scout"):
+	if not await _move_scout(4, enemy_vantage, "enemy scout"):
 		return
 	if not await _wait_until(func(): return _shown(_building_view(2)) and _shown(_unit_view(5)), 60.0,
 			"scout never revealed the enemy Research Center/workers"):
@@ -449,13 +514,13 @@ func _run() -> void:
 	# Scout leg 3: march home — vision shrinks, enemies hide, exploration
 	# persists. With a passive Team 2 nothing can wander back into vision,
 	# so the hidden enemies' marker count must return to exactly zero.
-	if not await _move_scout(4, HOME_CELL, "return march"):
+	if not await _move_scout(4, home_cell, "return march"):
 		return
 	if not await _wait_until(_all_enemies_hidden, 60.0,
 			"the enemy start never fully hid after the scout left"):
 		return
-	if not _shown(_resource_view(EXPANSION_TREE_ID)):
-		_fail("explored expansion tree lost its view after leaving vision")
+	if not _shown(_resource_view(EXPANSION_SALVAGE_ID)):
+		_fail("explored expansion salvage lost its view after leaving vision")
 		return
 	if int(main.get("selected_building_id")) != -1:
 		_fail("stale selected enemy building was never cleared once hidden")
@@ -475,8 +540,8 @@ func _run() -> void:
 	if fog_states.size() != 128 * 96:
 		_fail("visibility snapshot lost its payload")
 		return
-	if _cell_state(fog_states, TREE_CELL) != 1 \
-			or _cell_state(fog_states, ENEMY_RESEARCH_CENTER_CELL) != 1:
+	if _cell_state(fog_states, salvage_cell) != 1 \
+			or _cell_state(fog_states, enemy_cell) != 1:
 		_fail("explored fog did not persist after the scout left")
 		return
 

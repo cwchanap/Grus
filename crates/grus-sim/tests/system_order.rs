@@ -6,7 +6,6 @@
 
 use std::cell::RefCell;
 
-use bevy::math::Vec2;
 use bevy::prelude::World;
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
@@ -19,10 +18,11 @@ use grus_sim::{
 };
 
 const TEAM: TeamId = TeamId(1);
-/// Authored team-1 Research Center and berry bush.
+/// Authored team-1 Research Center and ration cache.
 const RESEARCH_CENTER: BuildingId = BuildingId(1);
-const BERRIES: ResourceId = ResourceId(1);
-/// The placed Barracks takes the first runtime building id after the two TCs.
+const RATIONS: ResourceId = ResourceId(1);
+/// The placed Barracks takes the first runtime building id after the two
+/// seeded Research Centers.
 const BARRACKS: BuildingId = BuildingId(3);
 
 /// Production runs after movement, economy and construction: in the tick a
@@ -37,17 +37,23 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // Gatherer A parks beside the berries at (22, 42); worker 2 stays home
-    // as the builder for the authored Barracks slot.
+    // Gatherer A parks beside the authored safe ration cache; worker 2 stays
+    // home as the builder for the authored Barracks slot.
+    let rations_cell = MapFixture::starting_resources()
+        .into_iter()
+        .find(|spawn| spawn.id == RATIONS)
+        .expect("the authored ration cache")
+        .cell;
     let gatherer = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
-    world
-        .entity_mut(gatherer)
-        .insert(SimPosition::new(map.cell_center(GridPos::new(21, 42))));
+    world.entity_mut(gatherer).insert(SimPosition::new(
+        map.cell_center(GridPos::new(rations_cell.x - 1, rations_cell.y)),
+    ));
     let builder = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
 
-    // A Research Center rally point on open ground south-east of the footprint:
-    // the spawn must march to it, but only after its completion tick.
-    let rally = GridPos::new(20, 58);
+    // A Research Center rally point on open ground south-east of the
+    // footprint: the spawn must march to it, but only after its completion
+    // tick.
+    let rally = GridPos::new(70, 58);
 
     // Commands queued ahead of the chain; the helper drains whatever is
     // queued through the public dispatcher before each tick's systems run.
@@ -83,16 +89,16 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
         kind: BuildingKind::Barracks,
         anchor: MapFixture::barracks_anchor(TEAM),
     };
-    let gather_berries = PlayerCommand::Gather {
+    let gather_rations = PlayerCommand::Gather {
         issuer: TEAM,
         workers: vec![UnitId(1)],
-        source: BERRIES,
+        source: RATIONS,
     };
 
     for tick in 1..=300 {
         match tick {
             270 => queue.borrow_mut().push(place_barracks.clone()),
-            296 => queue.borrow_mut().push(gather_berries.clone()),
+            296 => queue.borrow_mut().push(gather_rations.clone()),
             _ => {}
         }
         apply_queued_test_commands(&mut world, &mut map);
@@ -108,7 +114,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     assert!(
         matches!(
             world.get::<WorkerTask>(gatherer),
-            Some(WorkerTask::Gathering { source }) if *source == BERRIES
+            Some(WorkerTask::Gathering { source }) if *source == RATIONS
         ),
         "the gather arrival must transition inside this tick's economy step"
     );
@@ -178,8 +184,8 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     // A second team-1 drop-off beside the Research Center's resource line so the
     // destroyed drop-off's worker has a same-team reroute target. Placed
     // through the public command path on the authored Depot slot and
-    // completed instantly; the first runtime building id after the two Town
-    // Centers is 3.
+    // completed instantly; the first runtime building id after the two
+    // seeded Research Centers is 3.
     let placed = apply_player_command(
         &mut world,
         &mut map,
@@ -200,10 +206,15 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         .complete = true;
     world.entity_mut(depot).insert(Dropoff { team: TEAM });
 
-    // Carrying worker parked exactly at its Research Center drop-off slot.
+    // Carrying worker parked exactly at its Research Center drop-off slot —
+    // a free cell on the west face of the central city's footprint.
+    let dropoff_slot = GridPos::new(
+        MapFixture::team_starts()[0].research_center_anchor.x - 1,
+        47,
+    );
     let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
     world.entity_mut(worker).insert((
-        SimPosition::new(map.cell_center(GridPos::new(11, 46))),
+        SimPosition::new(map.cell_center(dropoff_slot)),
         Carry::Holding {
             kind: ResourceKind::Scrap,
             amount: std::num::NonZeroU32::new(6).unwrap(),
@@ -212,7 +223,7 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         WorkerTask::ToDropoff {
             source: ResourceId(1),
             dropoff: RESEARCH_CENTER,
-            slot: GridPos::new(11, 46),
+            slot: dropoff_slot,
         },
     ));
 
@@ -222,7 +233,7 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         &mut world,
         UnitId(100),
         TeamId(2),
-        Vec2::new(11.5, 49.5),
+        map.cell_center(GridPos::new(dropoff_slot.x, 49)),
         UnitKind::Guard,
         unit_spec(UnitKind::Guard).speed,
     );

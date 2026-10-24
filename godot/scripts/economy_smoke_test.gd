@@ -15,30 +15,33 @@ const REJECT_OCCUPIED := 10
 const REJECT_INSUFFICIENT := 8
 
 ## Authored fixture source ids (crates/grus-sim/src/fixture.rs).
-const BERRY_ID := 1
-const TREE_ID := 3
+const RATIONS_ID := 1
+const SALVAGE_ID := 3
 const COAL_ID := 6
-## Northeast expansion tree used for the Depot delivery proof.
-const FAR_TREE_ID := 14
+## Northwest expansion salvage used for the Depot delivery proof.
+const FAR_SALVAGE_ID := 14
 
 ## Solvency targets before any spending: deposit-driven, so reaching them
-## proves real gather cycles (starts are 200 Food / 300 Scrap / 100 Coal).
+## proves real gather cycles (starts are 200 Food / 300 Scrap / 150 Coal).
 const TARGET_SCRAP := 400
 const TARGET_FOOD := 320
 const TARGET_COAL := 160
 
-const BUNKHOUSE_ANCHOR := Vector2i(9, 44)
-const DEPOT_ANCHOR := Vector2i(38, 22)
-const BARRACKS_ANCHOR := Vector2i(17, 41)
+## Free anchors: a Bunkhouse slot beside the central city's south-east
+## worker corner, a Depot beside the scouted northwest expansion salvage, and
+## the authored Barracks ring slot west of the Research Center.
+const BUNKHOUSE_ANCHOR := Vector2i(66, 52)
+const DEPOT_ANCHOR := Vector2i(40, 20)
+const BARRACKS_ANCHOR := Vector2i(58, 46)
 
-## Open ground west of the base; workers parked here stay well outside the
+## Open ground west of the city; workers parked here stay well outside the
 ## 20 px unit-priority click radius of every building origin.
 const STAGING_CELL := Vector2i(5, 47)
 ## Research Center rally cell for the rally-point proof.
 const RALLY_CELL := Vector2i(20, 58)
-## A cell inside the seeded Research Center footprint (anchor 12,46 + 4x4): the
-## read-only placement preview must answer Occupied there.
-const OCCUPIED_CELL := Vector2i(13, 47)
+## A cell inside the seeded Research Center footprint (anchor 62,46 + 4x4):
+## the read-only placement preview must answer Occupied there.
+const OCCUPIED_CELL := Vector2i(63, 47)
 
 var _camera: Camera3D
 var _start_ms := 0
@@ -163,8 +166,8 @@ func _building_complete_at(id: int) -> bool:
 	return bool(GrusBridge.building_snapshot(id).get("complete", false))
 
 ## Delivery proof for the Depot: a Scrap stockpile credit that lands while
-## the worker stands near the Depot. Its far-tree gather slots are
-## >= 4 cells from the Depot origin and the Research Center >= 28, so only a
+## the worker stands near the Depot. Its far-tree gather slots sit a few
+## cells from the Depot origin and ~30 from the Research Center, so only a
 ## real Depot deposit can satisfy this within one physics frame of drift.
 func _scrap_deposited_at_depot(worker: Node3D, depot: Vector3, box: Dictionary) -> bool:
 	var scrap := int(GrusBridge.economy_snapshot().get("scrap", -1))
@@ -406,9 +409,9 @@ func _run() -> void:
 		_fail("start_match did not reach Playing")
 		return
 
-	# Step 1: workers onto trees/berries/coal via right-click; stockpiles
+	# Step 1: workers onto salvage/rations/coal via right-click; stockpiles
 	# move only after a deposit, never on the command itself.
-	for job in [[1, TREE_ID], [2, BERRY_ID], [3, COAL_ID]]:
+	for job in [[1, SALVAGE_ID], [2, RATIONS_ID], [3, COAL_ID]]:
 		var worker := _unit_view(job[0])
 		var source := _resource_view(job[1])
 		if worker == null or source == null:
@@ -457,22 +460,22 @@ func _run() -> void:
 		_fail("completed Bunkhouse did not raise the population cap to 20")
 		return
 
-	# Fog retarget (HPA-473): the Depot anchor (38,22) and the northeast
-	# expansion tree (43,18) boot Unexplored — placement validates explored
+	# Fog retarget (HPA-473): the Depot anchor (40,20) and the northwest
+	# expansion salvage boot Unexplored — placement validates explored
 	# footprints and gather requires explored sources, so scout the corridor
-	# first. The expansion tree's view becoming visible is the explored
+	# first. The expansion salvage's view becoming visible is the explored
 	# proof (views are the presentation projection of the sim fog).
 	await _click_view(builder, MOUSE_BUTTON_LEFT)
 	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(
-			func(): return _resource_view(FAR_TREE_ID) != null \
-					and (_resource_view(FAR_TREE_ID) as Node3D).is_visible_in_tree(),
-			60.0, "scout never revealed the far expansion tree"):
+			func(): return _resource_view(FAR_SALVAGE_ID) != null \
+					and (_resource_view(FAR_SALVAGE_ID) as Node3D).is_visible_in_tree(),
+			60.0, "scout never revealed the far expansion salvage"):
 		return
 
-	# Step 5: Depot delivery proof. Retask worker 1 to the northeast
-	# expansion tree (~6 cells from the Depot, ~40 from the Research Center):
-	# every later Scrap deposit must land at the Depot.
+	# Step 5: Depot delivery proof. Retask worker 1 to the northwest
+	# expansion salvage (a few cells from the Depot, ~30 from the Research
+	# Center): every later Scrap deposit must land at the Depot.
 	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/DepotButton") as Button, DEPOT_ANCHOR)
 	var depot := await _wait_building("Depot", 25.0)
 	if depot == null:
@@ -481,18 +484,18 @@ func _run() -> void:
 	if not await _wait_until(_building_complete_at.bind(depot_id), 30.0, "Depot never completed"):
 		return
 	var scrap_worker := _unit_view(1)
-	var far_tree := _resource_view(FAR_TREE_ID)
-	if scrap_worker == null or far_tree == null:
-		_fail("scrap worker or expansion tree view is missing")
+	var far_salvage := _resource_view(FAR_SALVAGE_ID)
+	if scrap_worker == null or far_salvage == null:
+		_fail("scrap worker or expansion salvage view is missing")
 		return
 	await _click_view(scrap_worker, MOUSE_BUTTON_LEFT)
-	# The far tree's view is fog-revealed: it pays the fog settle.
-	await _click_view(far_tree, MOUSE_BUTTON_RIGHT, true)
+	# The far salvage's view is fog-revealed: it pays the fog settle.
+	await _click_view(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
 	if not await _wait_until(_scrap_deposited_at_depot.bind(scrap_worker, depot.global_position, delivery_box), 45.0,
 			"no scrap delivery ever reached the Depot"):
 		return
-	# Retire the scrap gatherer: its northeast corridor stays clear of every
+	# Retire the scrap gatherer: its northwest corridor stays clear of every
 	# later click target, so parking in place is safe.
 	await _stop_unit(scrap_worker)
 

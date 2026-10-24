@@ -290,14 +290,14 @@ fn same_step_dual_research_center_destruction_keeps_the_first_result() {
         phase: MatchPhase::Playing,
     });
 
-    // Ascending UnitId order: the team-2 raider reaches team 1's Research Center
-    // first; team 1's counter-raider stands in range of team 2's Research Center
-    // in the same tick.
+    // Ascending UnitId order: the team-2 raider stands beside team 1's
+    // central Research Center and reaches it first; team 1's counter-raider
+    // stands in range of team 2's Research Center in the same tick.
     let raider_two = spawn_unit(
         &mut world,
         UnitId(10),
         TeamId(2),
-        Vec2::new(11.5, 49.5),
+        Vec2::new(61.5, 49.5),
         UnitKind::Guard,
         unit_spec(UnitKind::Guard).speed,
     );
@@ -505,7 +505,7 @@ fn nearest_source(world: &World, team: TeamId, kind: ResourceKind) -> ResourceId
         .expect("an authored source of the requested kind")
 }
 
-/// The authored mirrored Barracks anchor from the one base-coordinate table
+/// The authored Barracks anchor from the one `TeamStart` table
 /// (`MapFixture::barracks_anchor`): clear of every authored start cell,
 /// resource node, footprint, and gather slot on both starts.
 fn barracks_anchor(team: TeamId) -> GridPos {
