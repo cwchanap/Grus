@@ -24,37 +24,37 @@ func _building_view(id: int) -> Node3D:
 ## (BuildingId 2) Unexplored. If the runtime ever lost its VisibilityMap,
 ## the absent-resource fallback would silently run full-information —
 ## these assertions make that a loud failure.
-func _assert_runtime_visibility(where: String) -> void:
+func _assert_runtime_visibility(where: String) -> bool:
 	if not GrusBridge.has_method("visibility_revision") \
 			or not GrusBridge.has_method("visibility_snapshot"):
 		_fail("%s: visibility bridge methods are missing" % where)
-		return
+		return false
 	var own := _building_view(1)
 	var enemy := _building_view(2)
 	if own == null or enemy == null:
 		_fail("%s: Research Center views missing for the fog cells" % where)
-		return
+		return false
 	var revision := int(GrusBridge.visibility_revision())
 	if revision < 1:
 		_fail("%s: runtime visibility state absent (revision %d) — runtime must not run full-info" % [where, revision])
-		return
+		return false
 	var snap: Dictionary = GrusBridge.visibility_snapshot()
 	if int(snap.get("revision", -1)) != revision \
 			or int(snap.get("width", -1)) != 128 or int(snap.get("height", -1)) != 96:
 		_fail("%s: visibility snapshot metadata mismatch: %s" % [where, snap.keys()])
-		return
+		return false
 	var states: PackedInt32Array = snap.get("states", PackedInt32Array())
 	if states.size() != 128 * 96:
 		_fail("%s: visibility snapshot payload is not 128x96: %d" % [where, states.size()])
-		return
+		return false
 	var own_cell := _cell_of(own)
 	if states[own_cell.y * 128 + own_cell.x] != 2:
 		_fail("%s: own Research Center cell %s is not Visible" % [where, own_cell])
-		return
+		return false
 	var enemy_cell := _cell_of(enemy)
 	if states[enemy_cell.y * 128 + enemy_cell.x] != 0:
 		_fail("%s: enemy Research Center cell %s is not Unexplored" % [where, enemy_cell])
-		return
+		return false
 
 	# The discrete tile overlay must mirror the same states exactly —
 	# compacted row-major instance transforms, visible only while non-empty
@@ -74,20 +74,20 @@ func _assert_runtime_visibility(where: String) -> void:
 		await get_tree().process_frame
 	if not synced:
 		_fail("%s: fog overlay never consumed the bridge visibility revision" % where)
-		return
+		return false
 	states = snap.get("states", PackedInt32Array())
 	var layers: Array = [fog.get("_unexplored"), fog.get("_explored")]
 	if layers[0] == null or layers[1] == null:
 		_fail("%s: fog overlay layers are missing" % where)
-		return
+		return false
 	if not bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)):
 		_fail("%s: project physics interpolation is disabled — the non-interpolated overlay contract needs the global setting" % where)
-		return
+		return false
 	for layer in layers:
 		if layer.physics_interpolation_mode != Node.PHYSICS_INTERPOLATION_MODE_OFF \
 				or layer.is_physics_interpolated_and_enabled():
 			_fail("%s: fog overlay layer is not explicitly non-interpolated (physics_interpolation_mode=%d interpolated=%s)" % [where, layer.physics_interpolation_mode, layer.is_physics_interpolated_and_enabled()])
-			return
+			return false
 	for state in layers.size():
 		var layer := layers[state] as MultiMeshInstance3D
 		var multimesh := layer.multimesh
@@ -97,10 +97,10 @@ func _assert_runtime_visibility(where: String) -> void:
 				expected += 1
 		if multimesh.instance_count != expected:
 			_fail("%s: fog layer %d drew %d tiles; snapshot has %d state-%d cells" % [where, state, multimesh.instance_count, expected, state])
-			return
+			return false
 		if layer.visible != (expected > 0):
 			_fail("%s: fog layer %d visibility is %s; expected %s for %d tiles" % [where, state, layer.visible, expected > 0, expected])
-			return
+			return false
 		if expected == 0:
 			continue
 		# Exact tile buffer: 12 floats per TRANSFORM_3D tile — identity
@@ -109,7 +109,7 @@ func _assert_runtime_visibility(where: String) -> void:
 		var buffer: PackedFloat32Array = multimesh.get_buffer()
 		if buffer.size() != expected * 12:
 			_fail("%s: fog layer %d buffer is %d floats; expected %d for %d tiles" % [where, state, buffer.size(), expected * 12, expected])
-			return
+			return false
 		var index := 0
 		var x := 0
 		var y := 0
@@ -125,12 +125,13 @@ func _assert_runtime_visibility(where: String) -> void:
 						and is_equal_approx(buffer[o + 10], 1.0)
 				if not basis_ok or not got_origin.is_equal_approx(want_origin):
 					_fail("%s: fog layer %d tile %d origin %s != cell (%d, %d) at %s" % [where, state, index, got_origin, x, y, want_origin])
-					return
+					return false
 				index += 1
 			x += 1
 			if x >= 128:
 				x = 0
 				y += 1
+	return true
 
 func _run() -> void:
 	var units: Array[Node] = []
@@ -155,7 +156,8 @@ func _run() -> void:
 	if not GrusBridge.has_method("reset_fixture"):
 		_fail("fixture reset bridge is missing")
 		return
-	await _assert_runtime_visibility("setup")
+	if not await _assert_runtime_visibility("setup"):
+		return
 	if not GrusBridge.reset_fixture():
 		_fail("fixture reset bridge rejected reset")
 		return
@@ -216,7 +218,8 @@ func _run() -> void:
 			return
 	# Post-reset fog rides the settled view tree: the fresh fixture must
 	# boot the same 128x96 visibility payload as the first setup.
-	await _assert_runtime_visibility("restart")
+	if not await _assert_runtime_visibility("restart"):
+		return
 
 	# A normal-skirmish reset returns the session to Start.
 	if not GrusBridge.has_method("session_snapshot"):
