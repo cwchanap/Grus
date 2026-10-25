@@ -19,6 +19,7 @@ The existing project-wide Linear project description still describes the complet
 | Simulation clock/lifecycle | `session.rs::gameplay_active`; extend chained `FixedUpdate` in `crates/grus-godot/src/lib.rs`. No timer in GDScript. |
 | Unit identity/spawn | `ids.rs::IdAllocator`, `commands.rs::spawn_unit`, `UnitIndex`, `SimPosition`, `Health`. No Alien entity hierarchy. |
 | Movement/targeting | Existing `PlayerCommand::Units(AttackMove)`, path/occupancy, `combat.rs::step_combat`, eight-cell acquisition and visibility. |
+| Research Center approach destinations | **EXTEND/REUSE** `commands.rs::approach_slots(map, footprint, used, count)` for immediate-perimeter candidates. Keep route reservations/validation in the existing AttackMove dispatcher; do not add another perimeter scanner. |
 | Crystal currency | `economy.rs::TeamEconomy/ResourceStockpile.crystals`, credit at combat's *actual kill* seam, not animation callbacks. |
 | Balance | Extend `catalog.rs::UnitSpec` / `CombatSpec` and named wave constants. Avoid hard-coded values in `waves.rs` or Godot. |
 | UI / fog | `GrusBridge` read-only snapshots, `battlefield_controller.gd` HUD, `minimap.gd` overlays; keep enemy markers vision-gated. |
@@ -27,7 +28,7 @@ The existing project-wide Linear project description still describes the complet
 
 ## Implementation steps — one PR, reviewable commits
 
-These are **steps/commits within one ticket**, not subtasks requiring separate PRs. Prefer green functional checkpoints; at minimum, do not merge while any cross-layer fixture or enum cutover is incomplete.
+These are **logical implementation phases in one PR**, not separate tickets or PRs. Split the fixture work from wave behavior for review, but a one-base/no-waves intermediate tree removes the passive combat target and cannot satisfy the existing combat/Defeat smoke. Do **not** weaken/skip those smoke gates or retain a fake PvP fixture just to manufacture a green intermediate commit. Stage 2a first, then complete 2b and the associated smoke migration as one integrated **green checkpoint** if necessary; reviewable commits must preserve genuinely meaningful coverage.
 
 ### 1. Typed alien catalogue and deterministic wave planning
 
@@ -37,14 +38,21 @@ These are **steps/commits within one ticket**, not subtasks requiring separate P
 - Add typed wave parameters in `catalog.rs` with the 300/100/30 schedule, 150 cap and formula terms; implement pure budget, unlock/roster and zone-rotation helpers with stable integer rounding, and an ECS `WaveState` resource. All w>=1 schedules are computed from one next-wave index; avoid a generalized queue.
 - Test small and large wave budgets, availability at 1/4/8/10, bosses at 10/20, 9→10 and 19→20 zone changes, deterministic replay, zero/partial budget behavior and one-before/one-after timing boundaries. Protect against overflow and HP-multiplier divide-by-zero.
 
-### 2. Cut over to a one-base fixture and run actual alien orders
+### 2a. Stage the one-base fixture migration
 
-**Files:** `crates/grus-sim/src/fixture.rs` and tests, `waves.rs`, `commands.rs` only if a targeted reusable helper is proven needed, `crates/grus-godot/src/lib.rs`, `crates/grus-sim/tests/system_order.rs`.
+**Files:** `crates/grus-sim/src/fixture.rs` and tests, dependent Rust fixture consumers, `crates/grus-sim/tests/system_order.rs`.
 
-- Remove the authored Team-2 Research Center, four passive Workers and unused Team-2 stockpile; keep a single Team-1 central Research Center and four human Workers. Adapt `TeamStart`/helpers and tests to the one-side seed. Keep the authored finite resources unless a spawn/reachability proof shows an actual conflict; never invent new deposits for Crystals.
-- Insert `WaveState` with a 300-second prep countdown on every normal seed. Drop it during `clear_gameplay_world`. Insert `advance_waves` directly after pending commands, before combat. Its `Time<Fixed>` delta is the only time input, including accelerated smoke. Same-tick spawn reaches combat/movement as normal.
-- On wave launch, choose unique, walkable border cells, create aliens via `IdAllocator + spawn_unit`, assign validated Team-2 AttackMove toward a free perimeter approach to the central Research Center. Fail loudly in tests if any authored zone cannot route. Cap *live* alien count at 150; apply the documented fresh-wave-only overflow HP multiplier, test both reduced-cap and completely full-cap outcomes.
-- Validate that Team 2 remains noncommandable by Team 1, exposed targets still require actual visibility, and Team-2 killing the center reaches the existing Defeat result. Prove pause/start/result prevent advancing wave state or spawning. Prove Restart restores countdown, wave number, spawn IDs and empty crystal stock.
+- Remove the authored Team-2 Research Center, four passive Workers and unused Team-2 stockpile; keep the central Team-1 Research Center and four human Workers. Adapt `TeamStart`/helpers, deterministic stable-ID assumptions and Rust fixture consumers. Keep all eighteen finite resources unless a validated spawn route actually conflicts; never invent Crystal deposits.
+- Audit which existing Godot/CI smokes assume exactly eight Workers, two Research Centers or a passive-opponent Victory path. List their replacement survival assertions for phase 2b. This is an **intermediate edit**, not independently merge-ready without the wave integration; do not delete meaningful combat coverage or add a legacy Team-2 base for the sake of this checkpoint.
+
+### 2b. Wire wave launch, orders and recovery into the existing fixed step
+
+**Files:** `waves.rs`, `crates/grus-godot/src/lib.rs`, `crates/grus-sim/tests/system_order.rs`, and affected end-to-end fixture/smoke consumers.
+
+- Insert `WaveState` with its 300-second prep countdown on every normal seed. Drop it during `clear_gameplay_world`. Add `advance_waves` directly after pending commands and before combat, using the existing `Time<Fixed>` delta (including 20x smokes). Same-tick spawns must reach combat/movement, with visibility updated at the end.
+- On wave launch, select valid unique border cells, create aliens via `IdAllocator + spawn_unit`, and use **existing `approach_slots`** to propose walkable cells outside the Research Center's blocked footprint. Assign normal Team-2 AttackMove via `apply_player_command` so the dispatcher handles reservations, alternate goal rings and actual A* validation. Assert commands succeed or explicitly handle rejects; cap *live* aliens at 150 and test overflow scaling and no-recipient behavior.
+- **Recovery:** on a stable-ID ordered, once-per-*simulated*-second retry (derived from existing `WaveState.elapsed`, no new timer resource), retry Team-2 aliens with neither `MoveOrder` nor `CombatOrder`. Also retarget an **unengaged** AttackMove that finished its route outside acquisition range; an accepted command can reach a fallback ring too far from the Research Center to engage. Leave moving/fighting aliens unchanged, use only the same AttackMove dispatcher, and let genuinely inaccessible routes wait for a later retry. Add a regression that starts with rejected claimed/unreachable goals and demonstrates forward progress after occupancy/path clearance; also assert the retry is throttled rather than doing A* at 20 Hz.
+- Validate Team-2 ownership/fog, the only remaining Research Center's alien-induced Defeat, session Start/Pause/Result freezes, and Restart's fresh timer, unit IDs and empty Crystal stockpile. Adapt the real Godot fixture/combat smoke as part of this green integration checkpoint rather than making the old passive Victory pass by fiat.
 
 ### 3. Crystal rewards and non-cheating combat integration
 
@@ -85,7 +93,7 @@ These are **steps/commits within one ticket**, not subtasks requiring separate P
 - [ ] Format: `cargo fmt --all -- --check`.
 - [ ] Compile and lint: `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings`.
 - [ ] Full Rust workspace tests and **>=90% `grus-sim` line coverage** with the existing cargo-llvm-cov gate; no test-time-only duplicated algorithms.
-- [ ] Rust wave, catalogue, crystal reward, fixture, system-order and session regressions listed in the design.
+- [ ] Rust wave, catalogue, crystal reward, fixture, system-order and session regressions listed in the design; especially retry of uncommanded alien after a rejected route and retargeting accepted AttackMove that stopped out of acquisition range.
 - [ ] Real Godot bridge, fixture-reset, economy, combat-lifecycle **Defeat**, and new wave smokes; initial warning, attack, reward and Restart asserted against authoritative bridge snapshots. All pass within existing/<=90s scene timeouts and clean process exit.
 - [ ] Linux Godot import, smoke export/boot, `bevy-e2e` exported-game test and strict CI build split still pass.
 - [ ] Session-free 200-unit survival benchmark runs the full existing frame-stat/liveness contract at 10s CI; measurements labeled as the **new** workload.
