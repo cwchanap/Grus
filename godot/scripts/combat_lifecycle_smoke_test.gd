@@ -14,9 +14,7 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 ## numeric codes only (last_reject_code) and reports "no rejection" as -1.
 const REJECT_SESSION_LOCKED := 17
 
-## Proven-open Barracks anchor: the authored ring slot west of the central
-## Research Center (crates/grus-sim/src/fixture.rs TeamStart table).
-const BARRACKS_ANCHOR := Vector2i(58, 46)
+const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
 var _main: Node3D
 var _fx: Node3D
@@ -221,8 +219,18 @@ func _run() -> void:
 		_fail("worker role presentation is not the small unmarked body")
 		return
 
-	# Combat journey: produce a combatant, then attack enemy worker 5.
-	if not GrusBridge.place_building(4, "Barracks", BARRACKS_ANCHOR.x, BARRACKS_ANCHOR.y):
+	# Combat journey: produce a combatant, then attack enemy worker 5. The
+	# Barracks ring slot is probed off the live Research Center view —
+	# never a copied fixture coordinate.
+	var research_center := _building_view(1)
+	if research_center == null:
+		_fail("Research Center view 1 is missing")
+		return
+	var barracks_anchor := SmokeHelpers.barracks_anchor(4, research_center)
+	if barracks_anchor.x < 0:
+		_fail("no valid Barracks anchor in the Research Center's west ring")
+		return
+	if not GrusBridge.place_building(4, "Barracks", barracks_anchor.x, barracks_anchor.y):
 		_fail("Barracks placement was rejected")
 		return
 	var barracks_box := {"view": null}

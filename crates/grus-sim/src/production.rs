@@ -1,6 +1,7 @@
 //! FIFO production queues on completed producers, derived population, spawn
-//! clearance, and rally points. Production is the last system in the
-//! canonical fixed-step order.
+//! clearance, and rally points. In the canonical fixed-step order production
+//! runs after construction; visibility refresh and the route-reject drain
+//! close the tick.
 
 use std::collections::{HashSet, VecDeque};
 
@@ -233,7 +234,8 @@ const PROGRESS_EPSILON: f32 = 0.01;
 /// Advances production one fixed tick. Every queue head advances (clamped at
 /// 100%); ready producers then complete in ascending `BuildingId` order,
 /// recomputing population after each successful spawn so same-tick completions
-/// cannot both consume the final slot. Runs LAST in the fixed-step chain.
+/// cannot both consume the final slot. Runs after construction in the
+/// fixed-step chain; visibility refresh and the reject drain follow it.
 pub fn step_production(world: &mut World, map: &mut GridMap, seconds: f32) {
     if !gameplay_active(world) {
         return;

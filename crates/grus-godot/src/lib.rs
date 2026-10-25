@@ -47,9 +47,6 @@ impl Default for CommandFeedback {
 struct ViewMetaInitialized;
 
 #[derive(Component)]
-struct ResourceMetaInitialized;
-
-#[derive(Component)]
 struct GameplayViewRequested;
 
 #[derive(GodotClass)]
@@ -707,8 +704,10 @@ fn cost_dict(cost: grus_sim::catalog::Cost) -> VarDictionary {
     dict
 }
 
-/// Engine-free catalogue snapshot content, extracted so unit tests can
-/// drive it without a live Godot node.
+/// Catalogue payload behind `catalogue_snapshot`, extracted so the bridge
+/// method stays a thin `#[func]` wrapper. It builds Godot dictionaries, so
+/// it can only run with the engine loaded — exercised through the GDScript
+/// smokes, not unit tests.
 fn catalogue_snapshot_dict() -> VarDictionary {
     let mut units = VarDictionary::new();
     for kind in UnitKind::ALL {
@@ -1028,11 +1027,7 @@ fn attach_missing_gameplay_views(
     buildings: Query<(Entity, &Footprint), (With<Building>, Without<GameplayViewRequested>)>,
     standalone_resources: Query<
         (Entity, &Footprint),
-        (
-            With<ResourceSource>,
-            Without<Building>,
-            Without<GameplayViewRequested>,
-        ),
+        (With<ResourceSource>, Without<GameplayViewRequested>),
     >,
     map: Res<GridMap>,
 ) {
@@ -1160,7 +1155,7 @@ fn initialize_view_metadata(world: &mut World) {
         &ResourceSource,
         &Footprint,
         &GodotNodeHandle,
-    ), (Without<Building>, Without<ViewMetaInitialized>)>();
+    ), Without<ViewMetaInitialized>>();
     let resource_batch: Vec<(Entity, ResourceId, ResourceKind, Footprint, GodotNodeHandle)> =
         resources
             .iter(world)
@@ -1203,9 +1198,7 @@ fn initialize_view_metadata(world: &mut World) {
         // Standalone sources appear on first exploration and persist.
         let visible = explored_by(world, TeamId(1), footprint);
         node.set_visible(visible);
-        world
-            .entity_mut(entity)
-            .insert((ViewMetaInitialized, ResourceMetaInitialized));
+        world.entity_mut(entity).insert(ViewMetaInitialized);
     }
 }
 
@@ -1232,10 +1225,8 @@ fn sync_view_visibility(world: &mut World) {
         .iter(world)
         .map(|(building, footprint, handle)| (building.team, *footprint, *handle))
         .collect();
-    let mut resources = world.query_filtered::<
-        (&Footprint, &GodotNodeHandle),
-        (With<ResourceSource>, Without<Building>),
-    >();
+    let mut resources =
+        world.query_filtered::<(&Footprint, &GodotNodeHandle), With<ResourceSource>>();
     let resource_batch: Vec<(Footprint, GodotNodeHandle)> = resources
         .iter(world)
         .map(|(footprint, handle)| (*footprint, *handle))
@@ -1270,9 +1261,6 @@ fn set_view_visible(handle: GodotNodeHandle, visible: bool) {
     }
 }
 
-/// All standalone `ResourceSource` entities are finite nodes spawned at seed
-/// time, so their one-shot view metadata lands in `initialize_view_metadata`
-/// and no late resource stamp is needed.
 /// Health bars ride the existing per-entity Godot node handles: every
 /// `Changed<Health>` tick forwards the ratio to the view script, which owns
 /// the bar's primitive geometry. No per-frame GDScript world polling.

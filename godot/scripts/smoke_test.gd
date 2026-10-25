@@ -9,6 +9,8 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 const EXPANSION_SALVAGE_ID := 14
 const ENEMY_RESEARCH_CENTER_ID := 2
 
+const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -155,82 +157,14 @@ func _settled_fog_snapshot(where: String) -> Dictionary:
 	_fail("%s: visibility snapshot never matched the consumed fog revision" % where)
 	return {}
 
-## Fog overlay contract: the two MultiMesh layers are discrete tiles
-## compacted in row-major order by state — Unexplored (opaque) and
-## Explored (translucent); Visible cells draw no tile. The buffers must
-## equal the snapshot exactly — instance count, packed per-tile transform
-## floats, layer visibility — and under the project's globally enabled
-## physics interpolation each layer must be explicitly non-interpolated:
-## a rebuild reassigns instance indices to different cells rather than
-## moving a mesh, so an interpolated tile is a wrong tile, and buffer
-## writes from _process trip the engine's outside-physics-transform
-## warning.
+## Asserts the fog overlay's packed buffers mirror a settled snapshot
+## exactly. The buffer-layout contract itself lives in
+## SmokeHelpers.fog_overlay_error — shared with reset_test.
 func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
-	var fog := get_node("Main/Battlefield/FogOfWar")
-	var layers: Array[MultiMeshInstance3D] = [fog.get("_unexplored"), fog.get("_explored")]
-	if layers[0] == null or layers[1] == null:
-		_fail("%s: fog overlay layers are missing" % where)
+	var error := SmokeHelpers.fog_overlay_error(where, get_node("Main/Battlefield/FogOfWar"), snap)
+	if not error.is_empty():
+		_fail(error)
 		return false
-	if not bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)):
-		_fail("%s: project physics interpolation is disabled — the non-interpolated overlay contract requires the global setting" % where)
-		return false
-	for layer in layers:
-		if layer.physics_interpolation_mode != Node.PHYSICS_INTERPOLATION_MODE_OFF:
-			_fail("%s: fog overlay layer is not explicitly non-interpolated (physics_interpolation_mode=%d)" % [where, layer.physics_interpolation_mode])
-			return false
-		if layer.is_physics_interpolated_and_enabled():
-			_fail("%s: fog overlay layer is still physics-interpolated — compacted tiles would lerp between unrelated cells" % where)
-			return false
-	var width := int(snap.get("width", 0))
-	var states: PackedInt32Array = snap.get("states", PackedInt32Array())
-	if width <= 0 or states.is_empty() or states.size() % width != 0:
-		_fail("%s: malformed visibility snapshot for the overlay check: %s" % [where, snap.keys()])
-		return false
-	for state in layers.size():
-		var layer := layers[state]
-		var multimesh := layer.multimesh
-		var expected := 0
-		for value in states:
-			if value == state:
-				expected += 1
-		if multimesh.instance_count != expected:
-			_fail("%s: fog layer %d drew %d tiles; snapshot has %d state-%d cells" % [where, state, multimesh.instance_count, expected, state])
-			return false
-		if layer.visible != (expected > 0):
-			_fail("%s: fog layer %d visibility is %s; expected %s for %d tiles" % [where, state, layer.visible, expected > 0, expected])
-			return false
-		if expected == 0:
-			continue
-		# Exact tile buffer: 12 floats per TRANSFORM_3D tile — identity
-		# basis (offsets 0/5/10) and the cell-center origin (offsets
-		# 3/7/11) in the same row-major compaction order _fill writes.
-		# get_buffer round-trips through the stored multimesh data on every
-		# renderer, including the headless dummy driver.
-		var buffer: PackedFloat32Array = multimesh.get_buffer()
-		if buffer.size() != expected * 12:
-			_fail("%s: fog layer %d buffer is %d floats; expected %d for %d tiles" % [where, state, buffer.size(), expected * 12, expected])
-			return false
-		var index := 0
-		var x := 0
-		var y := 0
-		for value in states:
-			if value == state:
-				var o := index * 12
-				var want_origin := Vector3(x + 0.5, float(fog.FOG_Y), y + 0.5)
-				var got_origin := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
-				var basis_ok := is_equal_approx(buffer[o], 1.0) and is_zero_approx(buffer[o + 1]) \
-						and is_zero_approx(buffer[o + 2]) and is_zero_approx(buffer[o + 4]) \
-						and is_equal_approx(buffer[o + 5], 1.0) and is_zero_approx(buffer[o + 6]) \
-						and is_zero_approx(buffer[o + 8]) and is_zero_approx(buffer[o + 9]) \
-						and is_equal_approx(buffer[o + 10], 1.0)
-				if not basis_ok or not got_origin.is_equal_approx(want_origin):
-					_fail("%s: fog layer %d tile %d origin %s != cell (%d, %d) at %s" % [where, state, index, got_origin, x, y, want_origin])
-					return false
-				index += 1
-			x += 1
-			if x >= width:
-				x = 0
-				y += 1
 	return true
 
 func _run() -> void:
@@ -471,6 +405,9 @@ func _run() -> void:
 	# A genuinely blocked destination: the center of a bridge-reported ruin
 	# rectangle (quad 4, west of the city) — real impassable terrain, never
 	# the friendly Research Center, and its projection lands on open HUD.
+	if ruin_count < 5:
+		_fail("obstacle_rects returned %d ruin rect(s); the blocked-destination probe indexes quad 4" % ruin_count)
+		return
 	var ruin_min := Vector2i(ruin_rects[16], ruin_rects[17])
 	var ruin_max := Vector2i(ruin_rects[18], ruin_rects[19])
 	var ruin_cells := ruin_max - ruin_min + Vector2i.ONE

@@ -167,14 +167,14 @@ impl MapFixture {
         }
     }
 
-    /// The `TeamStart` row for a team, falling back to the human team's row
-    /// for ids outside the authored table.
+    /// The `TeamStart` row for a team. Panics for ids outside the authored
+    /// table — an unknown team is a fixture bug, never a silent borrow of
+    /// the human start.
     fn team_start(team: TeamId) -> TeamStart {
-        let starts = Self::team_starts();
-        starts
+        Self::team_starts()
             .into_iter()
             .find(|start| start.team == team)
-            .unwrap_or(starts[0])
+            .unwrap_or_else(|| panic!("no authored TeamStart row for {team:?}"))
     }
 
     /// The authored Barracks anchor of one team's base layout (3×3
@@ -317,8 +317,11 @@ const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
 ];
 
 /// The shared AttackMove target: the authored northern midfield corridor
-/// waypoint — walkable, center-map, and never a Research Center, so the
-/// benchmark load fights in the field instead of ending the match.
+/// waypoint — walkable, center-map, and never a Research Center. With the
+/// city now mid-map, team 2's march from the reflected east staging cells
+/// passes inside the 8-cell acquisition radius of the central base, so the
+/// measured load is a raid on the city rather than a pure field fight —
+/// and numbers recorded before the relocation are not comparable.
 const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 
 /// Extends an already-seeded skirmish with the benchmark workload: 96 more

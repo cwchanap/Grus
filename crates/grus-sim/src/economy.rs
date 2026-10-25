@@ -627,16 +627,16 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
         }
     }
 
-    let mut gatherers: Vec<(Entity, ResourceId, Carry, TeamId)> = Vec::new();
+    let mut gatherers: Vec<(Entity, ResourceId, Carry)> = Vec::new();
     {
-        let mut query = world.query::<(Entity, &WorkerTask, &Carry, &Unit)>();
-        for (entity, task, carry, unit) in query.iter(world) {
+        let mut query = world.query::<(Entity, &WorkerTask, &Carry)>();
+        for (entity, task, carry) in query.iter(world) {
             if let WorkerTask::Gathering { source } = task {
-                gatherers.push((entity, *source, carry.clone(), unit.team));
+                gatherers.push((entity, *source, carry.clone()));
             }
         }
     }
-    for (entity, source, carry, _team) in gatherers {
+    for (entity, source, carry) in gatherers {
         let source_entity = world
             .get_resource::<ResourceIndex>()
             .and_then(|index| index.entity(source));
@@ -764,7 +764,7 @@ fn leave_gathering(
 /// Routes a worker that just deposited back to its requested source, if the
 /// source still exists and a reachable immediate-perimeter slot is free.
 fn route_back_to_source(
-    world: &mut World,
+    world: &World,
     map: &GridMap,
     worker: Entity,
     source: ResourceId,

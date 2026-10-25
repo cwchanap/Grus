@@ -28,20 +28,19 @@ const TARGET_FOOD := 320
 const TARGET_COAL := 160
 
 ## Free anchors: a Bunkhouse slot beside the central city's south-east
-## worker corner, a Depot beside the scouted northwest expansion salvage, and
-## the authored Barracks ring slot west of the Research Center.
+## worker corner and a Depot beside the scouted northwest expansion salvage.
+## The Barracks slot and the Occupied probe cell come from the live Research
+## Center view at run time (SmokeHelpers) — never a copied fixture cell.
 const BUNKHOUSE_ANCHOR := Vector2i(66, 52)
 const DEPOT_ANCHOR := Vector2i(40, 20)
-const BARRACKS_ANCHOR := Vector2i(58, 46)
 
 ## Open ground west of the city; workers parked here stay well outside the
 ## 20 px unit-priority click radius of every building origin.
 const STAGING_CELL := Vector2i(5, 47)
 ## Research Center rally cell for the rally-point proof.
 const RALLY_CELL := Vector2i(20, 58)
-## A cell inside the seeded Research Center footprint (anchor 62,46 + 4x4):
-## the read-only placement preview must answer Occupied there.
-const OCCUPIED_CELL := Vector2i(63, 47)
+
+const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
 var _camera: Camera3D
 var _start_ms := 0
@@ -501,8 +500,10 @@ func _run() -> void:
 
 	# Reject-code pin: the read-only placement preview reports the numeric
 	# Occupied code for a footprint inside the seeded Research Center — the same
-	# RejectReason discriminant the bridge emits on real rejects.
-	var occupied_preview: Dictionary = GrusBridge.placement_preview(4, "Bunkhouse", OCCUPIED_CELL.x, OCCUPIED_CELL.y)
+	# RejectReason discriminant the bridge emits on real rejects. The probe
+	# cell is the live view's center, inside its footprint.
+	var occupied_cell := SmokeHelpers.cell_of(research_center)
+	var occupied_preview: Dictionary = GrusBridge.placement_preview(4, "Bunkhouse", occupied_cell.x, occupied_cell.y)
 	if int(occupied_preview.get("reject_code", -1)) != REJECT_OCCUPIED:
 		_fail("placement preview inside the Research Center did not report Occupied (%d): %s" % [REJECT_OCCUPIED, occupied_preview])
 		return
@@ -520,7 +521,12 @@ func _run() -> void:
 
 	# Step 6: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
-	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/BarracksButton") as Button, BARRACKS_ANCHOR)
+	# The ring slot west of the city is probed off the live RC view.
+	var barracks_anchor := SmokeHelpers.barracks_anchor(4, research_center)
+	if barracks_anchor.x < 0:
+		_fail("no valid Barracks anchor in the Research Center's west ring")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/BarracksButton") as Button, barracks_anchor)
 	var barracks := await _wait_building("Barracks", 25.0)
 	if barracks == null:
 		return
@@ -615,14 +621,17 @@ func _run() -> void:
 
 	# Step 10: the same UI train path that accepted solvent enqueues now
 	# runs the Food stockpile dry. Every gatherer is retired, so each real
-	# GuardButton click charges exactly the 60f catalogue cost until the
+	# GuardButton click charges exactly the catalogue Guard cost until the
 	# stockpile cannot pay; an identical click on the drained-empty queue
 	# must then reject InsufficientResources and leave stockpiles, the
 	# queue and the building census untouched.
 	await _select_building(barracks)
 	var guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
 	var insufficient := false
-	var attempts := 6
+	# The bound comes from live Food: each accepted click charges
+	# guard_food, so food/guard_food + 1 clicks always reach the reject.
+	var guard_food := int(guard_entry.get("food", 60))
+	var attempts := int(GrusBridge.economy_snapshot().get("food", 0)) / guard_food + 1
 	for _attempt in attempts:
 		var revision: int = GrusBridge.command_feedback_revision()
 		var before_click := {
@@ -642,8 +651,8 @@ func _run() -> void:
 		var reject_code := int(after_click.get("last_reject_code", -1))
 		if reject_code == -1:
 			# A solvent click is accepted and charged exactly once.
-			if int(after_click.get("food", -1)) != before_click["food"] - 60:
-				_fail("accepted Guard enqueue did not charge exactly 60 food: %s -> %s" % [before_click, after_click])
+			if int(after_click.get("food", -1)) != before_click["food"] - guard_food:
+				_fail("accepted Guard enqueue did not charge exactly %d food: %s -> %s" % [guard_food, before_click, after_click])
 				return
 			continue
 		if reject_code != REJECT_INSUFFICIENT:
