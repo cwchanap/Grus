@@ -104,17 +104,29 @@ pub(crate) fn resolve_target(
     }
 }
 
-/// The single eligibility seam for every direct attack and attack-move
-/// acquisition: the target exists in its index, has live Health, belongs to
-/// another team, and is currently visible to the attacker's team — through
-/// the one `visible_to` predicate, unconditionally (a unit by its current
-/// cell, a building by its footprint). Without a `VisibilityMap` the
-/// predicate passes everything, so pure-sim tests keep full information.
+/// The one eligibility rule every combat target passes: foreign to the
+/// attacker, live, and currently visible. `target_eligible` applies it to a
+/// stored target resolved through the world; `acquire_target` applies the
+/// same rule to `AcquisitionSnapshot` rows, so a rule change lands on both
+/// consumers at once.
+fn target_passes(attacker_team: TeamId, team: TeamId, alive: bool, visible: bool) -> bool {
+    team != attacker_team && alive && visible
+}
+
+/// The eligibility check for a stored combat target: the target exists in
+/// its index and satisfies `target_passes`, with visibility resolved
+/// through the one `visible_to` predicate, unconditionally (a unit by its
+/// current cell, a building by its footprint). Without a `VisibilityMap`
+/// the predicate passes everything, so pure-sim tests keep full
+/// information.
 pub fn target_eligible(world: &World, attacker_team: TeamId, target: CombatTarget) -> bool {
     resolve_target(world, target).is_some_and(|(entity, team, health)| {
-        team != attacker_team
-            && health.current > 0
-            && target_visible(world, attacker_team, target, entity)
+        target_passes(
+            attacker_team,
+            team,
+            health.current > 0,
+            target_visible(world, attacker_team, target, entity),
+        )
     })
 }
 
@@ -308,11 +320,11 @@ fn refresh_target(
 
 /// Per-tick table of every acquirable target, collected in one pass over
 /// the live indices at step start. `acquire_target` scans this pure data —
-/// eligibility (live, foreign, visible), distance key, and ordering are the
-/// exact `target_eligible`/`min_by` semantics — instead of re-resolving
-/// each candidate through `World` for every scanning attacker. `strike` is
-/// the step's only target-state mutation, so the struck entry alone is
-/// refreshed from live state after each strike.
+/// the shared `target_passes` eligibility rule, distance key, and `min_by`
+/// ordering — instead of re-resolving each candidate through `World` for
+/// every scanning attacker. `strike` is the step's only target-state
+/// mutation, so the struck entry alone is refreshed from live state after
+/// each strike.
 #[derive(Default)]
 struct AcquisitionSnapshot {
     units: Vec<UnitCandidate>,
@@ -422,24 +434,34 @@ fn acquire_target(
     // Radius first: the visibility lookup only runs for the few candidates
     // actually in reach.
     for unit in &acquisition.units {
-        if unit.alive && unit.team != attacker_team {
-            let distance = position.distance(unit.position);
-            if distance <= ATTACK_MOVE_RADIUS && visible(unit.cell.into()) {
-                candidates.push((distance, 0, unit.id.0, CombatTarget::Unit(unit.id)));
-            }
+        let distance = position.distance(unit.position);
+        if distance <= ATTACK_MOVE_RADIUS
+            && target_passes(
+                attacker_team,
+                unit.team,
+                unit.alive,
+                visible(unit.cell.into()),
+            )
+        {
+            candidates.push((distance, 0, unit.id.0, CombatTarget::Unit(unit.id)));
         }
     }
     for building in &acquisition.buildings {
-        if building.alive && building.team != attacker_team {
-            let distance = position.distance(building.footprint.closest_point(position));
-            if distance <= ATTACK_MOVE_RADIUS && visible(building.footprint.into()) {
-                candidates.push((
-                    distance,
-                    1,
-                    building.id.0,
-                    CombatTarget::Building(building.id),
-                ));
-            }
+        let distance = position.distance(building.footprint.closest_point(position));
+        if distance <= ATTACK_MOVE_RADIUS
+            && target_passes(
+                attacker_team,
+                building.team,
+                building.alive,
+                visible(building.footprint.into()),
+            )
+        {
+            candidates.push((
+                distance,
+                1,
+                building.id.0,
+                CombatTarget::Building(building.id),
+            ));
         }
     }
     candidates

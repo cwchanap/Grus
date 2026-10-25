@@ -1,16 +1,13 @@
 extends Node
 
+const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+
 func _ready() -> void:
 	call_deferred("_run")
 
 func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
-
-## The grid cell under a live view — fog cells come from presented views
-## (stable ids), never a copied fixture coordinate.
-func _cell_of(view: Node3D) -> Vector2i:
-	return Vector2i(int(view.global_position.x), int(view.global_position.z))
 
 func _building_view(id: int) -> Node3D:
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -47,11 +44,11 @@ func _assert_runtime_visibility(where: String) -> bool:
 	if states.size() != 128 * 96:
 		_fail("%s: visibility snapshot payload is not 128x96: %d" % [where, states.size()])
 		return false
-	var own_cell := _cell_of(own)
+	var own_cell := SmokeHelpers.cell_of(own)
 	if states[own_cell.y * 128 + own_cell.x] != 2:
 		_fail("%s: own Research Center cell %s is not Visible" % [where, own_cell])
 		return false
-	var enemy_cell := _cell_of(enemy)
+	var enemy_cell := SmokeHelpers.cell_of(enemy)
 	if states[enemy_cell.y * 128 + enemy_cell.x] != 0:
 		_fail("%s: enemy Research Center cell %s is not Unexplored" % [where, enemy_cell])
 		return false
@@ -75,62 +72,12 @@ func _assert_runtime_visibility(where: String) -> bool:
 	if not synced:
 		_fail("%s: fog overlay never consumed the bridge visibility revision" % where)
 		return false
-	states = snap.get("states", PackedInt32Array())
-	var layers: Array = [fog.get("_unexplored"), fog.get("_explored")]
-	if layers[0] == null or layers[1] == null:
-		_fail("%s: fog overlay layers are missing" % where)
+	# The buffer-layout contract lives in SmokeHelpers.fog_overlay_error —
+	# shared with smoke_test's fog legs.
+	var overlay_error := SmokeHelpers.fog_overlay_error(where, fog, snap)
+	if not overlay_error.is_empty():
+		_fail(overlay_error)
 		return false
-	if not bool(ProjectSettings.get_setting("physics/common/physics_interpolation", false)):
-		_fail("%s: project physics interpolation is disabled — the non-interpolated overlay contract needs the global setting" % where)
-		return false
-	for layer in layers:
-		if layer.physics_interpolation_mode != Node.PHYSICS_INTERPOLATION_MODE_OFF \
-				or layer.is_physics_interpolated_and_enabled():
-			_fail("%s: fog overlay layer is not explicitly non-interpolated (physics_interpolation_mode=%d interpolated=%s)" % [where, layer.physics_interpolation_mode, layer.is_physics_interpolated_and_enabled()])
-			return false
-	for state in layers.size():
-		var layer := layers[state] as MultiMeshInstance3D
-		var multimesh := layer.multimesh
-		var expected := 0
-		for value in states:
-			if value == state:
-				expected += 1
-		if multimesh.instance_count != expected:
-			_fail("%s: fog layer %d drew %d tiles; snapshot has %d state-%d cells" % [where, state, multimesh.instance_count, expected, state])
-			return false
-		if layer.visible != (expected > 0):
-			_fail("%s: fog layer %d visibility is %s; expected %s for %d tiles" % [where, state, layer.visible, expected > 0, expected])
-			return false
-		if expected == 0:
-			continue
-		# Exact tile buffer: 12 floats per TRANSFORM_3D tile — identity
-		# basis (offsets 0/5/10) and the cell-center origin (offsets
-		# 3/7/11) in the same row-major compaction order _fill writes.
-		var buffer: PackedFloat32Array = multimesh.get_buffer()
-		if buffer.size() != expected * 12:
-			_fail("%s: fog layer %d buffer is %d floats; expected %d for %d tiles" % [where, state, buffer.size(), expected * 12, expected])
-			return false
-		var index := 0
-		var x := 0
-		var y := 0
-		for value in states:
-			if value == state:
-				var o := index * 12
-				var want_origin := Vector3(x + 0.5, float(fog.FOG_Y), y + 0.5)
-				var got_origin := Vector3(buffer[o + 3], buffer[o + 7], buffer[o + 11])
-				var basis_ok := is_equal_approx(buffer[o], 1.0) and is_zero_approx(buffer[o + 1]) \
-						and is_zero_approx(buffer[o + 2]) and is_zero_approx(buffer[o + 4]) \
-						and is_equal_approx(buffer[o + 5], 1.0) and is_zero_approx(buffer[o + 6]) \
-						and is_zero_approx(buffer[o + 8]) and is_zero_approx(buffer[o + 9]) \
-						and is_equal_approx(buffer[o + 10], 1.0)
-				if not basis_ok or not got_origin.is_equal_approx(want_origin):
-					_fail("%s: fog layer %d tile %d origin %s != cell (%d, %d) at %s" % [where, state, index, got_origin, x, y, want_origin])
-					return false
-				index += 1
-			x += 1
-			if x >= 128:
-				x = 0
-				y += 1
 	return true
 
 func _run() -> void:
