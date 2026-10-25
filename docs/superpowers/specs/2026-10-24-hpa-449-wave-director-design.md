@@ -1,0 +1,71 @@
+# HPA-449 — Endless alien wave director: design decisions
+
+**Linear:** https://linear.app/cwchanap/issue/HPA-449/grus-survival-38-wave-director-endless-alien-waves  
+**Parent contract:** [Winter Survival](2026-10-21-winter-survival-design.md)  
+**Audited base:** `main` at `8b4c70c05458f133d7a541cd656c277d7f4ba02d` (HPA-448 PR #9 merged).  
+**Status:** proposed design, documentation only. This draft PR becomes the **single implementation PR** for HPA-449. No implementation or passing tests are claimed.
+
+## Goal and boundaries
+
+Replace the passive eastern Team-2 Research Center and its four Workers with a deterministic, continuous alien onslaught against the **central Team-1 Research Center**. Deliver prep/countdown, four entry zones, budgeted waves, four alien kinds, capped live aliens with overflow pressure, Crystal rewards, visible wave HUD/minimap telegraphs, an undefended-defeat smoke and a new survival benchmark. The player still builds, gathers, trains and uses the existing Start/Playing/Paused/Result/Restart lifecycle.
+
+This is **not** the walls/towers and walled-in fallback of HPA-450, cold/heat of HPA-181, research/victory of HPA-188, late-game tuning of HPA-289, or the separate model/icon/SFX tasks. All visuals here use existing primitive Godot views. No parallel enemy AI, alternate simulation clock, wave service, special attack engine, second faction model, or independent Godot gameplay state.
+
+## Ground-truth seams (merged main)
+
+- `catalog.rs` currently has exactly `Worker/Guard/Rifleman`; `Cost` and `ResourceStockpile` already contain Crystals, but nothing earns them. `UnitSpec` is the sole owner of unit HP/speed/combat. `CombatSpec` already has `counter_target` and `counter_bonus` (both surviving human bonuses are presently zero).
+- `fixture.rs::seed_skirmish` seeds **two** Research Centers, eight total Workers, eighteen resource sources and two team stockpiles. `MapFixture::team_starts()` holds the Team-2 authored east base; benchmark extends this with 96 more units **per** team and scripted PvP orders. The central Team-1 core is at anchor (62,46) on a 128×96 grid.
+- `commands.rs::spawn_unit` inserts `Unit`, `SimPosition`, `Health`, `AttackCooldown`, and `UnitIndex` under a stable `UnitId`. `PlayerCommand::Units(AttackMove)` already validates reachable, walkable destinations and applies normal navigation/combat state. `step_combat` already handles acquisition, pursuit and destroying either team's units/buildings. `strike` knows the actual killer and target before calling `destroy_unit`; it calls `resolve_result` when a Research Center dies.
+- `grus-godot/src/lib.rs` drives the chained fixed step `commands → combat → movement → economy → construction → production → visibility → feedback`, uses the same `seed_match_world` for startup/restart and the benchmark, and strips transient resources in `clear_gameplay_world`. A normal match has `MatchSession::Start`; the benchmark intentionally has **no** `MatchSession` and therefore remains Playing.
+- `unit_view.gd`, `battlefield_controller.gd`, `minimap.gd`, `combat_lifecycle_smoke_test.gd`, and `benchmark_200.gd` currently assume the two-sided fixture in some of their presentation or test assertions. The benchmark is **not** a permanent old-skirmish compatibility target.
+
+## Simulation model and tick contract
+
+Add a small `waves.rs` simulation feature, exported by `grus-sim/lib.rs`. Use a single `WaveState` ECS resource containing elapsed simulation time, next wave index and currently announced entry zones (no persistent wave entities or new event bus). Public entry point: `step_waves(world: &mut World, map: &mut GridMap, seconds: f32)`, with pure, testable budget/zone/roster helpers. The bridge inserts `advance_waves` **after pending commands and before combat** in the existing fixed-step chain, so spawning is observable to combat/movement on the same tick and remains covered by the existing visibility refresh at the end. Update the system-order test and doc comment to pin this placement.
+
+- `gameplay_active(world)` gates both the timer and spawns. The **300-second** preparation countdown begins only after Start → Playing, stops on Pause/Result and is recreated at Restart. Missing-session worlds (benchmark) use the existing Playing convention. At time 300 launch wave 1; thereafter launch every **100 simulated seconds** regardless of surviving enemies, without resetting the interval on clearance.
+- Accumulate the passed fixed-step simulation delta monotonically; use a boundary-safe comparison and integer wave index to avoid missed/doubled spawns from floating-point stepping. Compute HUD countdown from the same WaveState; Godot never drives timing. The incoming zone announcement becomes available at most **30 simulated seconds** before each next wave and clears/replaces at arrival. Before the first announcement the UI may display the countdown but cannot expose unannounced zones.
+- Four fixed, authored entry directions are **North, East, South, West**. For wave `w` (1-based), start at `(w - 1) % 4` on that cycle; assign 1 zone for waves 1–9, 2 consecutive zones for 10–19 and 3 for 20+. This resolves otherwise ambiguous multi-zone rotation deterministically. Pick spawn cells by deterministic offset search along each border; require in-bounds, unblocked, unique cells and a real path toward a walkable approach cell beside the Team-1 Research Center. Prefer authored border anchors (N 64,0; E 127,48; S 64,95; W 0,48), but do not spawn into obstacles/resources/occupied slots. Alternate spawned aliens across the selected zones. No RNG.
+- Resolve a **walkable** approach destination beside the Research Center footprint; never issue AttackMove to its blocked center cell. Reuse `apply_player_command` with `issuer: TeamId(2)` to assign the existing AttackMove, and assert/handle rejected routes in tests. The existing acquisition finds workers or buildings inside its eight-cell radius as aliens approach. Advanced walled-in fallback remains HPA-450.
+
+## Catalogue and wave spending
+
+Keep **all** tunable values in `catalog.rs`: prep 300s, interval 100s, warning 30s, budget terms 8/4/0.4, zone breakpoints 10/20, live cap 150, the alien catalogue, and the human counter bonuses. The module owns algorithms, not secret balancing constants.
+
+| Alien `UnitKind` | Threat cost | Max HP | Speed | Combat | First appearance | Crystals for Team-1 kill |
+| --- | ---: | ---: | ---: | --- | --- | ---: |
+| Swarmer | 1 | 40 | 8 | melee, 6 damage / 1.0s | 1 | 1 |
+| Spitter | 3 | 70 | 6 | range 6, 8 damage / 1.5s | 4 | 2 |
+| Brute | 6 | 300 | 4 | melee, 30 damage / 2.0s | 8 | 5 |
+| Behemoth | 40 | 2,000 | 3 | melee, 80 damage / 2.0s | 10, 20, 30, ... | 50 |
+
+`budget(w) = 8 + 4w + 0.4w²`; convert once to a deterministic integer threat pool (floor, documented and tested). Add one Behemoth on every tenth wave **before** allocating the rest of its budget. Spend approximately half the remaining threat points on Swarmers, then prefer a deterministic Brute/Spitter mix when unlocked, filling affordable leftovers with Swarmers. Before each unlock, redirect that kind's share into available kinds rather than creating an unavailable enemy. Roster construction and zone distribution must be stable across identical resets; cap math must never overflow the integer budget.
+
+Maintain a **150 live Team-2 alien** limit by counting actual `UnitIndex` liveness, not number ever spawned. Spawn up to the free slots using the ordinary `IdAllocator` and `spawn_unit`, **without** production queues, costs, buildings or human population. Convert the threat points of **planned but cap-suppressed** units into an HP multiplier on the new units of that wave (proposed `1 + overflow_points / spawned_points`, applied to both `Health.current` and `max`, with deterministic rounding and saturation). Do **not** permanently change `UnitSpec`. If all 150 slots are occupied, that wave has no fresh recipients: it advances schedule/countdown without exceeding the cap or buffing existing earlier-wave aliens. Pin this zero-recipient behavior in a regression test. This simple cap rule avoids a queue of deferred waves or retroactive buffs; if balance evidence shows it is too weak, tune in HPA-289 rather than adding infrastructure here.
+
+Set Guard `counter_target = Swarmer` with its intended positive alien-specific bonus and Rifleman `counter_target = Spitter` with its intended positive bonus; choose modest initial values in the typed catalogue and treat them as HPA-289 tuning inputs. Keep all alien counters at zero. **No extra combat-dispatch path.**
+
+Expose `UnitKind::ALL` including aliens for specification/matching and maintain an explicit `HUMAN` subset for training/catalogue UI/parsing. The bridge must **not** show aliens as player-trainable or interpret alien strings as valid `enqueue_unit` requests. Keep `producer_kind_name`, `produces` and placement logic human-only.
+
+## Crystal kill reward and game result
+
+At the existing `combat.rs::strike` kill boundary, while the victim's `Unit` and kind still exist, add `unit_spec(victim.kind).crystal_reward` to **Team-1** `TeamEconomy.stockpile.crystals` only when `attacker.team == TeamId(1)` and the victim is an alien on Team 2. Reuse the same shared stockpile; use checked/saturating credit as needed. This credit occurs **once** before despawn, independent of ephemeral `CombatEvents` (which can be cleared before presentation when sim speed is high). Ordinary dead humans reward nothing; no special Crystal source, worker carry, gather route or dropoff is created.
+
+Deleting the Team-2 Research Center leaves only the Team-1 Research Center. Its destruction by Team-2 aliens uses the existing `resolve_result(world, TeamId(2))`, giving the Defeat overlay. HPA-449 deliberately has **no reachable Victory journey**; research victory returns in HPA-188. Retain Start/Pause/Result command rejection and pause interpolation behavior, and reset `WaveState` together with the rest of the world on both normal and benchmark reseeding.
+
+## Fixture, bridge and Godot presentation
+
+- Migrate `TeamStart` and `seed_skirmish` to the one human starting base (Research Center + four Workers + starting stockpile); remove the passive Team-2 building, workers and stockpile. Keep eighteen authored ration/scrap/coal resource IDs unless one specifically conflicts with a validated spawn route; eastern deposits are now human expansion opportunities, not a fake enemy economy. Update tests that assumed both starting teams and hard-coded enemy stable IDs.
+- Provide one narrow read-only `GrusBridge.wave_snapshot()` from `WaveState`: next/wave number, seconds remaining, announced zone names, and current live aliens; the same fields drive the HUD and minimap. Do not expose enemy locations through this snapshot. An announced **zone** is public telegraph data even when fog hides individual aliens.
+- Add a compact wave/countdown/incoming-zone label to the current HUD and an unobtrusive short-lived border ping in the existing `minimap.gd`, based only on `wave_snapshot`. Fog/visibility still gates actual enemy markers, pickers, detailed building snapshots and combat events. Update the Start overlay's "Skirmish ready" text to survival language.
+- Style all four alien kinds with distinct primitive scales/markers/colors in `unit_view.gd`. Continue reading stable ID, team and kind from bridge metadata. No model generation, shaders, new asset loader or audio work.
+
+## Replace the obsolete benchmark, rather than preserve it
+
+The **same HPA-449 PR** must replace `extend_with_benchmark_workload` and `reset_benchmark_world` two-sided logic. Seed one human base and approximately **50 human defenders total**, and spawn **150 Team-2 aliens** through the same wave spawn/AttackMove seams into a **session-free** benchmark world. If a benchmark-only helper selects a large test wave/roster, it must call shared spawn internals rather than duplicate combat or bypass validation. Guarantee a deterministic initial 200 unique live-unit census with one Research Center and the existing resource set, visible/fog-hidden markers, accepted orders and observable movement/combat during the 10-second window. Adapt `benchmark_200.gd` census/assertions but retain the existing timing, liveness, frame-stat field names and 10s CI / 60s hardware measurement controls. Historic 100-vs-100 results are **not comparable** to this scenario; record a fresh run, not fabricated performance figures.
+
+## Testable contract / non-goals
+
+Rust tests: 300/100/30-second boundaries, paused/Start/Result freeze, Restart, deterministic wave budgets/rounding, zone rotation including wave 9/10/19/20, unlocks, every-tenth Behemoth, valid accessible spawn/approach cells, accepted AttackMove and same-tick order, 150-live cap/overflow/no-recipient case, mixed-team Crystal kill credit exactly once, human counter bonus, Team-2 core absence and alien-induced Defeat. Godot smoke: Start → warning → spawn/attack → kill/Crystal credit → pause/resume → defeat → restart, with headless speedup and exact fog/ping contracts. No fixed AI tick tricks or admin grants in the ordinary player smoke.
+
+Preserve fmt, no-warning Clippy, Rust workspace tests, `grus-sim` 90% coverage, existing bridge/economy/reset and adapted combat smoke, exported smoke, E2E boot and new benchmark. Keep 90s real-time or lower Godot smoke timeouts, and require a clean process exit in CI (not merely a printed success marker). No legacy Team-2 base, research victory substitute, wall/gate fallback, heat, final balancing, art/audio generation, or compatibility aliases in this PR.
