@@ -38,7 +38,7 @@ pub use economy::{
 };
 pub use fixture::{
     ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart,
-    extend_with_benchmark_workload, seed_skirmish,
+    extend_with_benchmark_workload, replay_benchmark_orders, seed_skirmish,
 };
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};

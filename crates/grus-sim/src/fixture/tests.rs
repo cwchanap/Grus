@@ -313,6 +313,168 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
     assert_eq!(world.resource::<WaveState>().next_wave, 101);
 }
 
+#[test]
+fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(crate::visibility::VisibilityMap::default());
+    crate::visibility::refresh_visibility(&mut world, &map);
+    extend_with_benchmark_workload(&mut world, &mut map);
+
+    for second in 1..=60 {
+        if second > 1 && (second - 1) % 5 == 0 {
+            assert!(replay_benchmark_orders(
+                &mut world,
+                &mut map,
+                ((second - 1) / 5) % 2 == 0,
+            ));
+        }
+        let positions: std::collections::HashMap<_, _> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .map(|(id, entity)| (*id, world.get::<SimPosition>(*entity).unwrap().current))
+            .collect();
+        let strikes = world
+            .get_resource::<crate::combat::CombatEventTotal>()
+            .map_or(0, |total| total.0);
+        for _ in 0..20 {
+            step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
+            crate::combat::step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+            crate::movement::step_movement(&mut world, &map, SIM_STEP_SECONDS);
+            crate::economy::step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+            crate::buildings::step_construction(&mut world, SIM_STEP_SECONDS);
+            crate::production::step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+            crate::visibility::refresh_visibility(&mut world, &map);
+        }
+        let moving = world.resource::<UnitIndex>().iter().any(|(id, entity)| {
+            positions.get(id).is_some_and(|before| {
+                before.distance(world.get::<SimPosition>(*entity).unwrap().current) > 0.05
+            })
+        });
+        let new_strikes = world
+            .get_resource::<crate::combat::CombatEventTotal>()
+            .map_or(0, |total| total.0);
+        let humans = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| world.get::<Unit>(**entity).unwrap().team == TeamId(1))
+            .count();
+        assert!(
+            moving || new_strikes > strikes,
+            "benchmark went idle at second {second}: humans={humans}, live={}, buildings={}",
+            world.resource::<UnitIndex>().iter().count(),
+            world.resource::<BuildingIndex>().iter().count(),
+        );
+    }
+}
+
+#[test]
+fn benchmark_order_replay_preserves_survivors_and_rejects_normal_matches() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    extend_with_benchmark_workload(&mut world, &mut map);
+    let entities: Vec<_> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(_, entity)| *entity)
+        .collect();
+    for entity in &entities {
+        world.get_mut::<Health>(*entity).unwrap().current -= 1;
+        world
+            .get_mut::<crate::combat::AttackCooldown>(*entity)
+            .unwrap()
+            .0 = 0.75;
+    }
+    let before: Vec<_> = entities
+        .iter()
+        .map(|entity| {
+            let health = world.get::<Health>(*entity).unwrap();
+            (
+                health.current,
+                health.max,
+                world
+                    .get::<crate::combat::AttackCooldown>(*entity)
+                    .unwrap()
+                    .0,
+            )
+        })
+        .collect();
+    let worker_goals: Vec<_> = entities
+        .iter()
+        .filter(|entity| world.get::<Unit>(**entity).unwrap().kind == UnitKind::Worker)
+        .map(|entity| {
+            (
+                *entity,
+                world
+                    .get::<crate::movement::MoveOrder>(*entity)
+                    .unwrap()
+                    .goal,
+            )
+        })
+        .collect();
+    assert!(replay_benchmark_orders(&mut world, &mut map, false));
+    assert!(replay_benchmark_orders(&mut world, &mut map, true));
+    assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
+    assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
+    for (entity, (current, max, cooldown)) in entities.iter().zip(before) {
+        assert_eq!(world.get::<Health>(*entity).unwrap().current, current);
+        assert_eq!(world.get::<Health>(*entity).unwrap().max, max);
+        assert_eq!(
+            world
+                .get::<crate::combat::AttackCooldown>(*entity)
+                .unwrap()
+                .0,
+            cooldown
+        );
+    }
+    for (entity, goal) in worker_goals {
+        assert_eq!(
+            world
+                .get::<crate::movement::MoveOrder>(entity)
+                .unwrap()
+                .goal,
+            goal
+        );
+        assert!(matches!(
+            world.get::<WorkerTask>(entity),
+            Some(WorkerTask::ToSource { .. })
+        ));
+    }
+    let goals_before: std::collections::HashMap<_, _> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(id, entity)| {
+            (
+                *id,
+                world
+                    .get::<crate::movement::MoveOrder>(*entity)
+                    .map(|order| order.goal),
+            )
+        })
+        .collect();
+    world.insert_resource(crate::session::MatchSession {
+        phase: crate::session::MatchPhase::Playing,
+    });
+    assert!(!replay_benchmark_orders(&mut world, &mut map, false));
+    let goals_after: std::collections::HashMap<_, _> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(id, entity)| {
+            (
+                *id,
+                world
+                    .get::<crate::movement::MoveOrder>(*entity)
+                    .map(|order| order.goal),
+            )
+        })
+        .collect();
+    assert_eq!(goals_before, goals_after);
+}
+
 /// The human reinforcements stage on unique cells clear of authored workers.
 #[test]
 fn benchmark_staging_cells_are_free_unique_and_clear_of_authored_occupancy() {
