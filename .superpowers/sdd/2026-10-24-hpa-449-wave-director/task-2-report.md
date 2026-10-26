@@ -16,3 +16,42 @@
 ## Concerns
 
 No known concerns. Godot and device smokes were not run because this stage changes only the simulation kill boundary and does not add presentation behavior.
+
+## Review round 1: seeded fixture coverage
+
+Added `seeded_skirmish_credits_crystal_reward_to_existing_team_one_stockpile` in `combat/tests.rs`. The regression calls `seed_skirmish`, allocates fresh unit IDs from its `IdAllocator`, spawns a Team 1 Guard and Team 2 Brute through `spawn_unit`, and verifies the existing Team 1 stockpile gains exactly the Brute's catalogued 5 crystals while its other fields stay unchanged. The isolated exact-once, accumulation, and eligibility tests remain.
+
+Command: `rtk proxy cargo test -p grus-sim crystal_reward -- --nocapture`
+
+Output (exit code 0):
+
+```text
+   Compiling grus-sim v0.1.0 (/Users/chanwaichan/orca/workspaces/Grus/hpa-449-draft-endless-alien-wave-director-design-2/crates/grus-sim)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.12s
+     Running unittests src/lib.rs (target/debug/deps/grus_sim-186ffbac82252344)
+
+running 3 tests
+test combat::tests::seeded_skirmish_credits_crystal_reward_to_existing_team_one_stockpile ... ok
+test combat::tests::crystal_rewards_require_a_team_one_killer_and_team_two_alien_victim ... ok
+test combat::tests::team_one_crystal_rewards_arrive_once_on_alien_kills_and_accumulate ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 211 filtered out; finished in 0.01s
+
+     Running tests/economy_flow.rs (target/debug/deps/economy_flow-f691a4b7d1f51784)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/occupancy_replan.rs (target/debug/deps/occupancy_replan-748081ef9654a5a3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 1 filtered out; finished in 0.00s
+
+     Running tests/system_order.rs (target/debug/deps/system_order-b28b681a0807ab1e)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.00s
+```
