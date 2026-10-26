@@ -46,7 +46,7 @@ Godot headless smokes (each is a real end-to-end contract, not a stub):
 
 ```bash
 godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg
-godot --headless --path godot res://scenes/reset_test.tscn           # fixture reset → 8 units / 2 buildings / 18 resources
+godot --headless --path godot res://scenes/reset_test.tscn           # fixture reset → 4 units / 1 building / 18 resources
 godot --headless --path godot res://scenes/economy_smoke_test.tscn   # full HPA-471 economy loop at 20x sim speed
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # HPA-472 combat/session lifecycle at 20x sim speed
 ```
@@ -74,12 +74,12 @@ Modules: `catalog` (the single source of costs, build/train seconds, footprints,
 **`crates/grus-godot`** — the GDExtension. `build_app` (`#[bevy_app]`) registers the godot-bevy plugins, sets `Time::<Fixed>` to `SIM_STEP_SECONDS` (0.05 → 20 Hz), and chains `FixedUpdate` in a fixed order:
 
 ```
-apply_pending_commands → advance_combat → advance_movement → advance_economy → advance_construction → advance_production → advance_visibility → drain_route_reject_feedback
+apply_pending_commands → advance_waves → advance_combat → advance_movement → advance_economy → advance_construction → advance_production → advance_visibility → drain_route_reject_feedback
 ```
 
-Order is a contract, not an accident: arrival is visible to economy/construction in the same tick, and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick; `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
+Order is a contract, not an accident: waves launch after commands and before combat/movement so a new alien can acquire a target in the launch tick; arrival is visible to economy/construction in the same tick, and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick. `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
 
-**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
+**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `placement_preview`, `catalogue_snapshot`, `wave_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
 
 ### Non-obvious invariants
 
@@ -88,7 +88,7 @@ Order is a contract, not an accident: arrival is visible to economy/construction
 - **Coordinates:** sim is a flat 2D plane (`Vec2 { x, y }`); Godot is 3D with sim `y` → world `z`, `y = 0`.
 - **Occupancy** mutates only through `GridMap::set_blocked`. The map revision changes only when walkability actually changes; active `MoveOrder`s replan once on a newer revision rather than pathing every tick, and `last_failed_replan` suppresses re-running A* toward a known-unreachable goal until the map changes again.
 - **Layout coordinates are single-sourced:** `MapFixture::team_starts()` returns the `TeamStart` table (Research Center anchor, 4 worker cells, Barracks/Depot anchors, `safe_sources: [ResourceId; 6]` per team) and `fixture::RUINS` is the only static-blocker table — `battlefield()` applies it through `set_blocked_rect`, `GrusBridge.obstacle_rects()` exposes the same inclusive rectangles, and `ruins.gd` stamps one `BoxMesh` per rect. Never copy ruin or start coordinates into tests, `.tscn`, or GDScript — read the table or the live views. Team 1's start is the central city (RC center = map midpoint); team membership and safe-source ids come from the table, never from an `x < 64` style side test.
-- **Two reset modes, do not mix:** `reset_fixture` reseeds the 8-unit/2-building/18-resource skirmish (runtime + smokes); `reset_benchmark_fixture` reseeds the session-free mixed 100-vs-100 benchmark (normal seed + 96 added units per team with initial gather/attack-move orders under fog of war, **no `MatchSession`** — a missing session reads as Playing) used only by `benchmark_200.tscn`. Both share the single non-mirrored `seed_skirmish` path — the mirrored seed / `GRUS_MIRRORED_START` launch mode was removed in HPA-445.
+- **Two reset modes, do not mix:** `reset_fixture` reseeds the 4-unit/1-building/18-resource survival fixture (runtime + smokes) and resets `WaveState`; `reset_benchmark_fixture` reseeds 50 human defenders plus 150 actual aliens through the shared wave spawn/AttackMove path, keeps one Research Center and inserts **no `MatchSession`** (a missing session reads as Playing), and is used only by `benchmark_200.tscn`. Both share the single human-start `seed_skirmish` path — the mirrored seed / `GRUS_MIRRORED_START` launch mode was removed in HPA-445.
 - **Sim speed** is `Engine.time_scale` (godot-bevy's fixed driver derives its delta from `_physics_process`), not `Time<Virtual>` alone — `set_sim_speed` writes both; the economy smoke runs at 20×.
 - `setup_fixture` is guarded on `UnitIndex` already existing, so a bridge reset before the first fixed tick does not double-seed.
 

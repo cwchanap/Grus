@@ -5,7 +5,7 @@ use super::*;
 use crate::buildings::ConstructionState;
 use crate::catalog::{BuildingKind, unit_spec};
 use crate::commands::spawn_unit;
-use crate::fixture::{MapFixture, ResourceSpawn, seed_skirmish};
+use crate::fixture::{ENTRY_ZONES, MapFixture, ResourceSpawn, seed_skirmish};
 use crate::ids::{ResourceId, UnitId};
 
 /// The authored skirmish seed with no visibility inserted: pure-sim tests run
@@ -37,28 +37,28 @@ fn single_unit_entity(world: &mut World) -> Entity {
 }
 
 #[test]
-fn initial_reveal_marks_own_start_visible_and_enemy_start_unknown() {
+fn initial_reveal_shows_the_human_core_and_hides_entry_zones() {
     let (mut world, map) = seeded();
     world.insert_resource(VisibilityMap::default());
 
     refresh_visibility(&mut world, &map);
 
     let visibility = world.resource::<VisibilityMap>();
-    let [own_start, enemy_start] = MapFixture::team_starts();
+    let own_start = MapFixture::team_starts()[0];
     assert_eq!(
         visibility.cell_state(TeamId(1), own_start.research_center_anchor),
         CellVisibility::Visible,
         "own Research Center footprint is visible after initial reveal"
     );
     assert_eq!(
-        visibility.cell_state(TeamId(1), enemy_start.research_center_anchor),
+        visibility.cell_state(TeamId(1), ENTRY_ZONES[0].1),
         CellVisibility::Unexplored,
-        "the enemy Research Center is unknown to team 1"
+        "alien entry anchors stay unexplored before aliens arrive"
     );
     assert_eq!(
         visibility.cell_state(TeamId(2), own_start.research_center_anchor),
         CellVisibility::Unexplored,
-        "the central human city is unknown to the eastern opponent"
+        "team 2 without live entities sees nothing"
     );
     assert_eq!(visibility.revision, 1, "initial reveal changes state");
 }
@@ -72,8 +72,8 @@ fn authored_start_resources_are_explored_and_expansions_are_not() {
 
     // Safe-source ownership is the authored TeamStart membership — never an
     // x<64 side inference: the central human city's safe ring may straddle
-    // the midline. Each team sees exactly its own six safe sources; the
-    // opponent's ring and every expansion stay Unexplored.
+    // the midline. The human sees its six safe sources; eastern deposits and
+    // every expansion stay Unexplored.
     let resources: std::collections::HashMap<ResourceId, ResourceSpawn> =
         MapFixture::starting_resources()
             .into_iter()

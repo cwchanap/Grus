@@ -1,7 +1,7 @@
 //! E2E-only selector surface.
 //!
 //! Behind the `e2e` feature, attaches stable [`E2eId`] names to the
-//! deterministic authored skirmish entities after `setup_fixture` seeds the
+//! deterministic survival fixture entities after `setup_fixture` seeds the
 //! world, and spawns the `grus.ready` readiness marker. `reset_fixture`
 //! reseeds the same authored entities, so it re-runs the attachment; the
 //! marker survives the clear and is spawned only once. The out-of-process
@@ -18,9 +18,6 @@ use grus_sim::{Building, BuildingKind, TeamId, Unit, UnitKind};
 
 /// The authored fixture's player team.
 const PLAYER_TEAM: TeamId = TeamId(1);
-/// The authored fixture's enemy team.
-const ENEMY_TEAM: TeamId = TeamId(2);
-
 /// In-game wiring for the `e2e` feature: prepares the app for
 /// `BevyE2EPlugin`'s BRP stack and attaches the selector surface. Like
 /// [`bevy_e2e::BevyE2EPlugin`], it registers nothing unless `BEVY_E2E=1`.
@@ -63,18 +60,14 @@ pub fn attach_selectors(world: &mut World) {
         .map(|(entity, building)| (entity, building.team))
         .collect();
     for (entity, team) in research_centers {
-        let selector = if team == PLAYER_TEAM {
-            "player.research-center"
-        } else if team == ENEMY_TEAM {
-            "enemy.research-center"
-        } else {
+        if team != PLAYER_TEAM {
             continue;
-        };
+        }
+        let selector = "player.research-center";
         world.entity_mut(entity).insert(E2eId::new(selector));
     }
 
-    // The fixture authors four equivalent starting workers per team; the
-    // selector names the first-authored one (smallest authored `UnitId`).
+    // The selector names the first-authored human Worker.
     let mut units = world.query::<(Entity, &Unit)>();
     let first_worker = units
         .iter(world)
@@ -176,7 +169,6 @@ mod tests {
         for selector in [
             "grus.ready",
             "player.research-center",
-            "enemy.research-center",
             "player.starting-worker",
         ] {
             assert_eq!(
@@ -187,7 +179,7 @@ mod tests {
         }
         assert_eq!(
             by_id.len(),
-            4,
+            3,
             "no entities may carry selectors beyond the contract"
         );
 
@@ -197,11 +189,6 @@ mod tests {
             .get::<Building>()
             .unwrap();
         assert_eq!(player.team, PLAYER_TEAM);
-        let enemy = world
-            .entity(by_id["enemy.research-center"][0])
-            .get::<Building>()
-            .unwrap();
-        assert_eq!(enemy.team, ENEMY_TEAM);
         let worker = world
             .entity(by_id["player.starting-worker"][0])
             .get::<Unit>()
@@ -238,7 +225,6 @@ mod tests {
         for selector in [
             "grus.ready",
             "player.research-center",
-            "enemy.research-center",
             "player.starting-worker",
         ] {
             assert_eq!(
@@ -249,7 +235,7 @@ mod tests {
         }
         assert_eq!(
             by_id.len(),
-            4,
+            3,
             "reset may neither drop nor duplicate the selector contract"
         );
 
@@ -258,11 +244,6 @@ mod tests {
             .get::<Building>()
             .unwrap();
         assert_eq!(player.team, PLAYER_TEAM);
-        let enemy = world
-            .entity(by_id["enemy.research-center"][0])
-            .get::<Building>()
-            .unwrap();
-        assert_eq!(enemy.team, ENEMY_TEAM);
         let worker = world
             .entity(by_id["player.starting-worker"][0])
             .get::<Unit>()

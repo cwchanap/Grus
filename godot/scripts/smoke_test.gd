@@ -2,12 +2,9 @@ extends Node
 
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
-## Stable ids for the fog-scouting leg — positions are read off the live
-## views at run time, never copied from the fixture into GDScript: the
-## expansion salvage ruin (ResourceId 14) and the passive eastern
-## Research Center (BuildingId 2).
+## Stable id for the fog-scouting leg; positions are read off the live view
+## at run time, never copied from the fixture into GDScript.
 const EXPANSION_SALVAGE_ID := 14
-const ENEMY_RESEARCH_CENTER_ID := 2
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
@@ -113,14 +110,6 @@ func _shown(view: Node3D) -> bool:
 func _hidden(view: Node3D) -> bool:
 	return view != null and not view.is_visible_in_tree()
 
-func _all_enemies_hidden() -> bool:
-	if not _hidden(_building_view(2)):
-		return false
-	for id in range(5, 9):
-		if not _hidden(_unit_view(id)):
-			return false
-	return true
-
 ## A queued move is not acceptance: the sim's own feedback must say so.
 func _accepted_since(revision: int) -> bool:
 	return int(GrusBridge.command_feedback_revision()) > revision \
@@ -182,28 +171,26 @@ func _run() -> void:
 	for _frame in range(160):
 		await get_tree().physics_frame
 		units = get_tree().get_nodes_in_group("unit_views")
-		if units.size() == 8:
+		if units.size() == 4:
 			break
 
-	if units.size() != 8:
-		_fail("expected 8 ECS-backed unit views, found %d" % units.size())
+	if units.size() != 4:
+		_fail("expected 4 ECS-backed unit views, found %d" % units.size())
 		return
 
 	var unit_one: Node3D = null
 	var unit_two: Node3D = null
 	var unit_three: Node3D = null
-	var enemy: Node3D = null
 	for _frame in range(30):
 		await get_tree().process_frame
 		units = get_tree().get_nodes_in_group("unit_views")
 		unit_one = _find_unit(units, 1)
 		unit_two = _find_unit(units, 2)
 		unit_three = _find_unit(units, 3)
-		enemy = _find_unit(units, 5)
-		if unit_one != null and unit_two != null and unit_three != null and enemy != null:
+		if unit_one != null and unit_two != null and unit_three != null:
 			break
 
-	if unit_one == null or unit_two == null or unit_three == null or enemy == null:
+	if unit_one == null or unit_two == null or unit_three == null or _unit_view(4) == null:
 		_fail("stable UnitId metadata did not initialize for skirmish fixture")
 		return
 	for id in range(1, 5):
@@ -211,8 +198,8 @@ func _run() -> void:
 		if member == null or int(member.get_meta("team_id", -1)) != 1:
 			_fail("Team 1 worker %d is missing or has the wrong team metadata" % id)
 			return
-	if int(enemy.get_meta("team_id", -1)) != 2:
-		_fail("Team 2 worker does not start at UnitId 5")
+	if _building_view(2) != null:
+		_fail("one-base fixture unexpectedly contains a second Research Center")
 		return
 
 	# Normal skirmish boots into Start; gameplay opens only via start_match.
@@ -240,8 +227,8 @@ func _run() -> void:
 		if not token in control_words:
 			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
 			return
-	# This scripted choreography runs against a passive Team 2: no opponent
-	# controller exists to lift before gameplay opens.
+	# The Start overlay keeps the first wave timer frozen until the player
+	# starts the one-base survival match.
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
 		return
@@ -451,66 +438,51 @@ func _run() -> void:
 		_fail("20 Hz presentation is not interpolated: max visual step %.3f across %d visual changes" % [max_visual_step, visual_changes])
 		return
 
-	# HPA-445 fog/minimap contract (moved out of the removed scouting-AI
-	# smoke): a human scout — worker 4, untouched by the choreography
-	# above — reveals a hidden resource and the passive enemy start, then
-	# leaves again. Presentation must track sim fog throughout: enemy views
-	# and the HUD data path open only under current vision, explored
-	# resources persist, a stale enemy selection clears itself, and enemy
-	# minimap markers appear/disappear with the presented views. The
-	# minimap click at the end recenters the camera without queuing any
-	# gameplay command.
+	# A human scout — worker 4, untouched by the choreography above — reveals
+	# an expansion resource, then leaves its vision. Fog tiles and explored
+	# resources follow the scout, while no aliens or enemy markers exist
+	# before wave 1. Alien visibility is covered by the dedicated wave smoke.
 	if not GrusBridge.set_sim_speed(20.0):
 		_fail("failed to accelerate the sim for the scouting leg")
 		return
 	var main := get_node("Main") as Node3D
 	var minimap := get_node("Main/HUD/Minimap") as Control
 
-	# Scout targets derive from the live views — the expansion ruin and the
-	# enemy Research Center — so the choreography tracks whatever layout
-	# the fixture authors instead of a copied coordinate list.
+	# The expansion target derives from its live view so the choreography
+	# tracks the authored layout instead of a copied coordinate list.
 	var salvage_view := _resource_view(EXPANSION_SALVAGE_ID)
-	var enemy_view := _building_view(ENEMY_RESEARCH_CENTER_ID)
-	if salvage_view == null or enemy_view == null:
-		_fail("scout target views are missing (salvage %s, enemy %s)" % [salvage_view, enemy_view])
+	if salvage_view == null:
+		_fail("scout target view is missing (salvage %s)" % [salvage_view])
 		return
 	var salvage_cell := Vector2i(int(salvage_view.global_position.x), int(salvage_view.global_position.z))
-	var enemy_cell := Vector2i(int(enemy_view.global_position.x), int(enemy_view.global_position.z))
-	# March destinations: beside the expansion ruin (its own cell is
-	# blocked), a vantage inside vision of the enemy start, and open ground
-	# far enough east of the base to drop every enemy back out of vision.
+	# March beside the expansion ruin (its own cell is blocked), then back
+	# toward the live home base so its explored fog remains out of vision.
 	var salvage_vantage := Vector2(salvage_view.global_position.x + 1.5, salvage_view.global_position.z + 1.5)
-	var enemy_vantage := Vector2(enemy_view.global_position.x - 5.0, enemy_view.global_position.z - 4.5)
-	var home_cell := Vector2(enemy_view.global_position.x - 18.5, enemy_view.global_position.z - 3.5)
+	var home := _building_view(1)
+	if home == null:
+		_fail("home Research Center view is missing before the scout leg")
+		return
+	var home_cell := Vector2(home.global_position.x - 18.5, home.global_position.z - 3.5)
 
-	# Pre-scout baseline: the earlier choreography stayed inside own
-	# vision, so the enemy start and the expansion salvage are still
-	# Unexplored — enemy views hidden (but alive in the view tree), the
-	# fog-gated building snapshot empty, and no enemy minimap markers.
+	# Pre-scout baseline: the expansion salvage remains Unexplored and hidden;
+	# no wave has launched and the fog-gated enemy marker set stays empty.
 	var pre_snap: Dictionary = GrusBridge.visibility_snapshot()
 	var pre_states: PackedInt32Array = pre_snap.get("states", PackedInt32Array())
 	if pre_states.size() != 128 * 96:
 		_fail("visibility snapshot payload is not 128x96: %d" % pre_states.size())
 		return
-	if _cell_state(pre_states, salvage_cell) != 0 \
-			or _cell_state(pre_states, enemy_cell) != 0:
-		_fail("scout targets did not stay Unexplored before the leg")
-		return
-	for id in range(5, 9):
-		if not _hidden(_unit_view(id)):
-			_fail("enemy worker %d was not hidden before the scout leg" % id)
-			return
-	if not _hidden(_building_view(2)):
-		_fail("enemy Research Center view was not hidden before the scout leg")
+	if _cell_state(pre_states, salvage_cell) != 0:
+		_fail("expansion salvage did not stay Unexplored before the leg")
 		return
 	if not _hidden(_resource_view(EXPANSION_SALVAGE_ID)):
 		_fail("expansion salvage view was not hidden before the scout leg")
 		return
-	if not GrusBridge.building_snapshot(2).is_empty():
-		_fail("building_snapshot(2) leaked data for a hidden enemy building")
+	var wave_error := SmokeHelpers.no_launched_wave_error("general smoke before scout")
+	if not wave_error.is_empty():
+		_fail(wave_error)
 		return
 	if int(minimap.enemy_marker_count) != 0:
-		_fail("minimap drew enemy markers while every enemy is hidden")
+		_fail("minimap drew alien markers before wave 1")
 		return
 	if int(minimap.friendly_marker_count) < 4:
 		_fail("minimap lost friendly markers")
@@ -530,62 +502,28 @@ func _run() -> void:
 			"scout never revealed the expansion salvage"):
 		return
 
-	# Scout leg 2: reveal the enemy start — views, the fog-gated building
-	# snapshot, and minimap markers all open together.
-	if not await _move_scout(4, enemy_vantage, "enemy scout"):
-		return
-	if not await _wait_until(func(): return _shown(_building_view(2)) and _shown(_unit_view(5)), 60.0,
-			"scout never revealed the enemy Research Center/workers"):
-		return
-	var enemy_snap: Dictionary = GrusBridge.building_snapshot(2)
-	if enemy_snap.is_empty() or int(enemy_snap.get("team_id", -1)) != 2:
-		_fail("visible enemy Research Center snapshot is missing or wrong: %s" % [enemy_snap])
-		return
-	if int(minimap.enemy_marker_count) < 1:
-		_fail("minimap shows no enemy markers after the reveal")
-		return
-	# A visible enemy building may be selected, and reconcile keeps it.
-	# Deliberate test seam: the selection is poked directly because the
-	# enemy Research Center boots hidden under fog, and the real picking funnel
-	# (battlefield _select_at) rightly skips not-visible-in-tree views —
-	# selecting it through a real click would first require marching the
-	# scout into the enemy start, machinery the fog contract under test
-	# does not need.
-	main.set("selected_building_id", 2)
-	for _frame in 3:
-		await get_tree().process_frame
-	if int(main.get("selected_building_id")) != 2:
-		_fail("reconcile dropped the selection of a visible enemy building")
-		return
-
 	# Reveal transition: the compacted buffers must track the live states
-	# with no lerped tiles — the scout may still be marching, so the check
-	# samples whatever settled revision the overlay actually consumed.
+	# with no lerped tiles; the check samples the overlay's settled revision.
 	var fog_snap_revealed := await _settled_fog_snapshot("revealed")
 	if fog_snap_revealed.is_empty() or not _assert_fog_overlay("revealed", fog_snap_revealed):
 		return
 
-	# Scout leg 3: march home — vision shrinks, enemies hide, exploration
-	# persists. With a passive Team 2 nothing can wander back into vision,
-	# so the hidden enemies' marker count must return to exactly zero.
+	# March home — vision shrinks and exploration persists.
 	if not await _move_scout(4, home_cell, "return march"):
 		return
-	if not await _wait_until(_all_enemies_hidden, 60.0,
-			"the enemy start never fully hid after the scout left"):
+	if not await _wait_until(func():
+			var snap: Dictionary = GrusBridge.visibility_snapshot()
+			var states: PackedInt32Array = snap.get("states", PackedInt32Array())
+			return states.size() == 128 * 96 and _cell_state(states, salvage_cell) == 1,
+			60.0, "the scouted expansion salvage never returned to Explored"):
 		return
 	if not _shown(_resource_view(EXPANSION_SALVAGE_ID)):
-		_fail("explored expansion salvage lost its view after leaving vision")
-		return
-	if int(main.get("selected_building_id")) != -1:
-		_fail("stale selected enemy building was never cleared once hidden")
-		return
-	if not GrusBridge.building_snapshot(2).is_empty():
-		_fail("building_snapshot(2) leaked data after the enemy hid again")
+		_fail("explored expansion salvage lost its persistent view after the scout left")
 		return
 	for _frame in 2:
 		await get_tree().process_frame
 	if int(minimap.enemy_marker_count) != 0:
-		_fail("minimap kept enemy markers after every enemy hid")
+		_fail("minimap drew alien markers before wave 1")
 		return
 	# The fog data agrees: scouted cells keep Explored instead of snapping
 	# back to Unexplored.
@@ -594,9 +532,8 @@ func _run() -> void:
 	if fog_states.size() != 128 * 96:
 		_fail("visibility snapshot lost its payload")
 		return
-	if _cell_state(fog_states, salvage_cell) != 1 \
-			or _cell_state(fog_states, enemy_cell) != 1:
-		_fail("explored fog did not persist after the scout left")
+	if _cell_state(fog_states, salvage_cell) != 1:
+		_fail("explored resource fog did not persist after the scout left")
 		return
 
 	# Hide transition: exploration persists as state 1 tiles — same exact
@@ -639,5 +576,9 @@ func _run() -> void:
 		_fail("failed to restore sim speed")
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=8 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true stale_selection_cleared=true markers=fog_gated recenter=command_free" % max_visual_step)
+	wave_error = SmokeHelpers.no_launched_wave_error("general smoke")
+	if not wave_error.is_empty():
+		_fail(wave_error)
+		return
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true" % max_visual_step)
 	get_tree().quit(0)

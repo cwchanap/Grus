@@ -62,9 +62,8 @@ fn ruins_are_the_only_authored_blocked_cells() {
 }
 
 /// Ruins decorate the outskirts of the central city: they may not sit on
-/// any authored start, worker, resource, or either benchmark staging
-/// region, and the central construction/gather ring around the city stays
-/// clear.
+/// any authored start, worker, resource, or benchmark staging region, and
+/// the central construction/gather ring around the city stays clear.
 #[test]
 fn ruins_avoid_every_authored_occupant_and_staging_region() {
     let fixture = MapFixture::battlefield();
@@ -75,12 +74,10 @@ fn ruins_avoid_every_authored_occupant_and_staging_region() {
         .chain(starts.iter().flat_map(|start| start.workers))
         .chain(fixture.resources.iter().map(|spawn| spawn.cell))
         .collect();
-    // The row-major west staging scan (x 26..=53, y 20..=75) and its local
-    // point reflection used for the east benchmark side.
+    // The row-major west staging scan (x 26..=53, y 20..=75).
     for y in 20..=75 {
         for x in 26..=53 {
             off_limits.insert(GridPos::new(x, y));
-            off_limits.insert(GridPos::new(127 - x, 95 - y));
         }
     }
     // The city's own construction/gather ring: a generous rectangle around
@@ -104,12 +101,10 @@ fn ruins_avoid_every_authored_occupant_and_staging_region() {
     }
 }
 
-/// Reachability proofs for the central-city layout: every map border
-/// reaches the city, the east side (the passive opponent) is reachable for
-/// the Victory journey, and blocking one route cell always leaves an
+/// Every map border reaches the city, and blocking one route cell leaves an
 /// alternate route.
 #[test]
-fn battlefield_connects_every_border_and_the_east_side_to_the_city() {
+fn battlefield_connects_every_entry_lane_to_the_city() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map;
     let starts = MapFixture::team_starts();
@@ -145,34 +140,16 @@ fn battlefield_connects_every_border_and_the_east_side_to_the_city() {
         );
     }
 
-    // The passive eastern base stays reachable: a team-1 worker cell can
-    // path to a free cell adjacent to team 2's Research Center — the
-    // attack-move/Victory journey has a real route.
-    let east = starts
-        .iter()
-        .find(|start| start.team == TeamId(2))
-        .expect("the eastern start");
-    let east_gate = east
-        .workers
-        .iter()
-        .copied()
-        .find(|cell| map.is_walkable(*cell))
-        .expect("a free worker cell beside the enemy Research Center");
-    assert!(
-        map.find_path(city.workers[0], east_gate).is_some(),
-        "the eastern side is unreachable from the central city"
-    );
-
-    // One blocked cell on a main route must leave an alternate route: the
-    // open field offers more than one corridor.
+    // One blocked cell on the east entry route must leave an alternate
+    // route through the open field.
     let route = map
-        .find_path(city.workers[0], east_gate)
-        .expect("the cross-map route exists");
+        .find_path(city.workers[0], GridPos::new(127, 48))
+        .expect("the east entry route exists");
     let interior = route[route.len() / 2];
-    assert!(interior != city.workers[0] && interior != east_gate);
+    assert!(interior != city.workers[0] && interior != GridPos::new(127, 48));
     assert!(map.set_blocked(interior, true));
     let alternate = map
-        .find_path(city.workers[0], east_gate)
+        .find_path(city.workers[0], GridPos::new(127, 48))
         .expect("an alternate route must exist");
     assert!(!alternate.contains(&interior));
 }
@@ -218,11 +195,19 @@ fn authored_alien_entry_zones_reach_the_central_research_center() {
 
 /// Team-kind census over the live `UnitIndex` — counts only.
 fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> usize {
-    team_kind_ids(world, team, kind).len()
+    world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter(|(_, entity)| {
+            world
+                .get::<Unit>(**entity)
+                .is_some_and(|unit| unit.team == team && unit.kind == kind)
+        })
+        .count()
 }
 
 #[test]
-fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
+fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
@@ -230,23 +215,27 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
     seed_skirmish(&mut world, &mut map, &fixture);
     extend_with_benchmark_workload(&mut world, &mut map);
 
-    // The mixed roster: the four authored workers plus the workload make
-    // 20/40/40 per team — 200 units total.
-    for team in [TeamId(1), TeamId(2)] {
-        assert_eq!(units_of_kind(&world, team, UnitKind::Worker), 20);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Guard), 40);
-        assert_eq!(units_of_kind(&world, team, UnitKind::Rifleman), 40);
-        assert!(
-            world.resource::<TeamEconomy>().0.contains_key(&team),
-            "team {team:?} economy present"
-        );
-    }
+    assert_eq!(units_of_kind(&world, TeamId(1), UnitKind::Worker), 4);
+    assert_eq!(units_of_kind(&world, TeamId(1), UnitKind::Guard), 23);
+    assert_eq!(units_of_kind(&world, TeamId(1), UnitKind::Rifleman), 23);
+    let alien_count = [
+        UnitKind::Swarmer,
+        UnitKind::Spitter,
+        UnitKind::Brute,
+        UnitKind::Behemoth,
+    ]
+    .into_iter()
+    .map(|kind| units_of_kind(&world, TeamId(2), kind))
+    .sum::<usize>();
+    assert_eq!(alien_count, 150);
+    assert_eq!(world.resource::<TeamEconomy>().0.len(), 1);
+    assert!(world.resource::<TeamEconomy>().0.contains_key(&TeamId(1)));
     assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
 
-    // IDs flowed only through the allocator: 8 authored + 192 allocated.
+    // IDs flowed only through the allocator: 4 authored + 46 defenders + 150 aliens.
     assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
 
-    // The two starting Research Centers still stand completed, one per team.
+    // Only the human Research Center remains; all 18 sources survive.
     let research_centers = world
         .resource::<BuildingIndex>()
         .iter()
@@ -256,7 +245,7 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
             })
         })
         .count();
-    assert_eq!(research_centers, 2);
+    assert_eq!(research_centers, 1);
 
     // The authored standalone resources are untouched.
     assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
@@ -273,51 +262,36 @@ fn benchmark_workload_extends_the_skirmish_to_mixed_200() {
         );
     }
 
-    // The initial Gather/AttackMove commands were applied through the
-    // ordinary dispatcher and accepted: the first 12 sorted workers per
-    // side are tasked two-per-source to the authored safe sources, and both
-    // armies hold one AttackMove order toward the shared midfield corridor.
-    for team in [TeamId(1), TeamId(2)] {
-        let tasked: HashSet<u32> = world
+    let attack_movers = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter(|(_, entity)| {
+            matches!(
+                world.get::<CombatOrder>(**entity),
+                Some(CombatOrder::AttackMove { .. })
+            )
+        })
+        .count();
+    assert_eq!(
+        attack_movers, 196,
+        "all 46 defenders and 150 aliens have accepted AttackMove orders"
+    );
+    assert_eq!(
+        world
             .resource::<UnitIndex>()
             .iter()
-            .filter_map(|(id, entity)| {
-                let unit = world.get::<Unit>(*entity)?;
-                (unit.team == team).then_some(())?;
-                match world.get::<WorkerTask>(*entity)? {
-                    WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. } => Some(id.0),
-                    _ => None,
-                }
-            })
-            .collect();
-        assert_eq!(
-            tasked.len(),
-            12,
-            "team {team:?}: twelve workers tasked by the setup gathers"
-        );
-        let marching = world
-            .resource::<UnitIndex>()
-            .iter()
-            .filter(|(_, entity)| {
-                world
-                    .get::<Unit>(**entity)
-                    .is_some_and(|unit| unit.team == team && unit.kind != UnitKind::Worker)
-                    && matches!(
-                        world.get::<CombatOrder>(**entity),
-                        Some(CombatOrder::AttackMove { .. })
-                    )
-            })
-            .count();
-        assert_eq!(
-            marching, 80,
-            "team {team:?}: every combatant marches on the midfield corridor"
-        );
-    }
+            .filter(|(_, entity)| matches!(
+                world.get::<WorkerTask>(**entity),
+                Some(WorkerTask::ToSource { .. } | WorkerTask::Gathering { .. })
+            ))
+            .count(),
+        4,
+        "the four human Workers have accepted real Gather orders"
+    );
+    assert_eq!(world.resource::<WaveState>().next_wave, 101);
 }
 
-/// The staging scan must produce 96 unique cells per side that are free on
-/// the fully seeded map — no ruin, Research Center, resource, or authored
-/// worker may sit on a staging cell.
+/// The human reinforcements stage on unique cells clear of authored workers.
 #[test]
 fn benchmark_staging_cells_are_free_unique_and_clear_of_authored_occupancy() {
     let fixture = MapFixture::battlefield();
@@ -330,26 +304,22 @@ fn benchmark_staging_cells_are_free_unique_and_clear_of_authored_occupancy() {
         .flat_map(|start| start.workers)
         .collect();
 
-    for team in [TeamId(1), TeamId(2)] {
-        let cells = benchmark_staging_cells(&map, team);
-        assert_eq!(cells.len(), 96, "team {team:?} staging capacity");
-        let unique: HashSet<GridPos> = cells.iter().copied().collect();
-        assert_eq!(unique.len(), cells.len(), "staging cells must be unique");
-        for cell in &cells {
-            assert!(map.in_bounds(*cell) && map.is_walkable(*cell));
-            assert!(
-                !authored_units.contains(cell),
-                "staging cell {cell:?} coincides with an authored worker"
-            );
-        }
+    let cells = benchmark_staging_cells(&map);
+    assert_eq!(cells.len(), BENCHMARK_REINFORCEMENTS);
+    let unique: HashSet<GridPos> = cells.iter().copied().collect();
+    assert_eq!(unique.len(), cells.len(), "staging cells must be unique");
+    for cell in &cells {
+        assert!(map.in_bounds(*cell) && map.is_walkable(*cell));
+        assert!(
+            !authored_units.contains(cell),
+            "staging cell {cell:?} coincides with an authored worker"
+        );
     }
 }
 
-/// The authored build anchors now live on the `TeamStart` table itself:
-/// each team's Barracks/Depot slots must equal the table fields, sit
-/// in-bounds, walkable and clear of both starts and every resource — and
-/// the eastern team's sites must be real east-side anchors, not horizontal
-/// reflections of the central human city.
+/// The authored human build anchors live on the `TeamStart` table itself:
+/// Barracks/Depot slots equal the table fields and stay clear of authored
+/// occupants and resources.
 #[test]
 fn authored_anchor_accessors_read_the_team_start_table() {
     let fixture = MapFixture::battlefield();
@@ -394,21 +364,6 @@ fn authored_anchor_accessors_read_the_team_start_table() {
             }
         }
     }
-
-    // No accidental reflection: the passive east team's Barracks site must
-    // sit east of the midline, next to its own base — never a mirror of the
-    // central human site into the wrong half.
-    let team_two = starts
-        .iter()
-        .find(|start| start.team == TeamId(2))
-        .expect("the eastern start");
-    assert!(team_two.barracks_anchor.x >= 64);
-    assert!(team_two.depot_anchor.x >= 64);
-    assert_ne!(
-        MapFixture::barracks_anchor(TeamId(2)),
-        MapFixture::barracks_anchor(TeamId(1)),
-        "the two teams must not share one authored build site"
-    );
 }
 
 #[test]
@@ -651,32 +606,30 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
 }
 
 #[test]
-fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
+fn survival_seed_creates_one_real_human_core_four_workers_and_economy() {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
 
     seed_skirmish(&mut world, &mut map, &fixture);
 
-    // Both teams start solvent.
-    for team in [TeamId(1), TeamId(2)] {
-        let state = &world.resource::<TeamEconomy>().0[&team];
-        assert_eq!(
-            state.stockpile,
-            ResourceStockpile {
-                food: 200,
-                scrap: 300,
-                coal: 150,
-                crystals: 0,
-            }
-        );
-    }
+    let economies = &world.resource::<TeamEconomy>().0;
+    assert_eq!(economies.len(), 1, "only the human economy is seeded");
+    assert_eq!(
+        economies[&TeamId(1)].stockpile,
+        ResourceStockpile {
+            food: 200,
+            scrap: 300,
+            coal: 150,
+            crystals: 0,
+        }
+    );
 
-    // Two completed Research Center Buildings, each owning a 4×4 Footprint,
-    // a Dropoff marker, full catalogue Health, and blocked map cells.
+    // One completed human Research Center owns a 4×4 Footprint, Dropoff,
+    // full catalogue Health, and blocked map cells.
     let mut research_centers = world.query::<(&Building, &Footprint, &Dropoff, &Health)>();
     let research_centers: Vec<_> = research_centers.iter(&world).collect();
-    assert_eq!(research_centers.len(), 2);
+    assert_eq!(research_centers.len(), 1);
     for (building, footprint, dropoff, health) in &research_centers {
         assert_eq!(building.kind, BuildingKind::ResearchCenter);
         assert!(building.construction.complete);
@@ -704,8 +657,8 @@ fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
             .map(|(b, ..)| b.team)
             .collect::<HashSet<_>>()
             .len(),
-        2,
-        "one Research Center per team"
+        1,
+        "the survival fixture seeds one human Research Center"
     );
 
     // Every Dropoff lives on a real Building entity — no temporary
@@ -715,23 +668,15 @@ fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
         assert!(world.get::<Building>(entity).is_some());
     }
 
-    // Four workers per team with fresh worker components, standing on
+    // Four human workers with fresh worker components, standing on
     // walkable authored cells.
     let mut workers = world.query::<(&Unit, &SimPosition, &Carry, &GatherProgress, &WorkerTask)>();
     let workers: Vec<_> = workers
         .iter(&world)
         .filter(|(unit, ..)| unit.kind == UnitKind::Worker)
         .collect();
-    assert_eq!(workers.len(), 8);
-    for team in [TeamId(1), TeamId(2)] {
-        assert_eq!(
-            workers
-                .iter()
-                .filter(|(unit, ..)| unit.team == team)
-                .count(),
-            4
-        );
-    }
+    assert_eq!(workers.len(), 4);
+    assert!(workers.iter().all(|(unit, ..)| unit.team == TeamId(1)));
     assert!(workers.iter().all(|(_, position, carry, progress, task)| {
         map.is_walkable(map.world_to_cell(position.current))
             && **carry == Carry::Empty
@@ -756,9 +701,10 @@ fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
     assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
 
     // Indexes and allocator counters sit above the authored maxima
-    // (8 units, 2 buildings, resource IDs 1..=18).
-    assert_eq!(world.resource::<UnitIndex>().iter().count(), 8);
-    assert_eq!(world.resource::<BuildingIndex>().iter().count(), 2);
+    // (4 units, 1 building, resource IDs 1..=18).
+    assert_eq!(world.resource::<UnitIndex>().iter().count(), 4);
+    assert_eq!(world.resource::<BuildingIndex>().iter().count(), 1);
+    assert_eq!(*world.resource::<WaveState>(), WaveState::default());
     let allocator = world.resource::<IdAllocator>();
     assert_eq!(
         (
@@ -766,6 +712,6 @@ fn skirmish_seed_creates_real_research_centers_workers_and_economy() {
             allocator.next_building,
             allocator.next_resource
         ),
-        (9, 3, 19)
+        (5, 2, 19)
     );
 }

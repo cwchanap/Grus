@@ -55,6 +55,28 @@ func _fail(message: String) -> void:
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(1)
 
+func _gather_wait_details(elapsed_seconds: float) -> String:
+	var economy: Dictionary = GrusBridge.economy_snapshot()
+	var session: Dictionary = GrusBridge.session_snapshot()
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	var idle_ids: PackedInt32Array = economy.get("idle_worker_ids", PackedInt32Array())
+	var worker_states := PackedStringArray()
+	for worker_id in [1, 2, 3, 4]:
+		var worker := _unit_view(worker_id)
+		if worker == null:
+			worker_states.append("%d:missing" % worker_id)
+			continue
+		var activity := "idle" if idle_ids.has(worker_id) else "ordered"
+		worker_states.append("%d:%s@(%.1f,%.1f)" % [
+			worker_id, activity, worker.global_position.x, worker.global_position.z])
+	var summary := "elapsed=%.1fs stockpile=%d/%d/%d/%d phase=%s wave=%s countdown=%s workers=[%s] command_revision=%d feedback=%s" % [
+		elapsed_seconds, int(economy.get("food", -1)), int(economy.get("scrap", -1)),
+		int(economy.get("coal", -1)), int(economy.get("crystals", -1)),
+		str(session.get("phase", "unknown")), str(wave.get("wave", "unknown")),
+		str(wave.get("seconds_remaining", "unknown")), ",".join(worker_states),
+		GrusBridge.command_feedback_revision(), GrusBridge.command_feedback()]
+	return summary
+
 func _mouse_click(position: Vector2, button: int) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = button
@@ -87,6 +109,7 @@ func _key_tap(keycode: int) -> void:
 func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
 	_mouse_click(_camera.unproject_position(view.global_position), button)
 	await get_tree().process_frame
+	await get_tree().process_frame
 	# Extra frame only for fog-gated targets whose view was recently
 	# revealed; plain clicks keep the original single-frame settle.
 	if fog_settle:
@@ -95,20 +118,28 @@ func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
 func _click_world(point: Vector2, button: int) -> void:
 	_mouse_click(_camera.unproject_position(Vector3(point.x + 0.25, 0.0, point.y + 0.25)), button)
 	await get_tree().process_frame
+	await get_tree().process_frame
 
 func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
 	await get_tree().process_frame
 
 ## Polls a condition every physics frame until it holds or the frame budget
 ## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	var gather_wait := message.begins_with("gatherers never stockpiled")
+	var gather_started_ms := Time.get_ticks_msec()
 	for _frame in frame_budget:
 		if condition.call():
 			return true
 		await get_tree().physics_frame
-	_fail("%s (waited %.0fs)" % [message, timeout_s])
+	var details := ""
+	if gather_wait:
+		var elapsed := float(Time.get_ticks_msec() - gather_started_ms) / 1000.0
+		details = ": %s" % _gather_wait_details(elapsed)
+	_fail("%s (waited %.0fs)%s" % [message, timeout_s, details])
 	return false
 
 func _find_view(group: String, meta: String, id: int) -> Node3D:
@@ -142,7 +173,7 @@ func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
 	var resources := get_tree().get_nodes_in_group("resource_views")
-	if units.size() != 8 or buildings.size() != 2 or resources.size() != 18:
+	if units.size() != 4 or buildings.size() != 1 or resources.size() != 18:
 		return false
 	for unit in units:
 		if int(unit.get_meta("unit_id", -1)) <= 0:
@@ -198,48 +229,23 @@ func _unit_of_kind_present(kind: String, min_id: int, box: Dictionary) -> bool:
 			return true
 	return false
 
-func _units_near(point: Vector3, radius: float) -> int:
-	var count := 0
-	for node in get_tree().get_nodes_in_group("unit_views"):
-		if int(node.get_meta("team_id", -1)) != 1:
-			continue
-		if (node as Node3D).global_position.distance_to(point) <= radius:
-			count += 1
-	return count
-
-func _area_clear_of_units(point: Vector3, radius: float) -> bool:
-	return _units_near(point, radius) == 0
-
-## Waits until no friendly unit sits inside the unit-priority click radius of
-## a building origin, so the next left-click selects the building.
-func _wait_units_clear(point: Vector3, radius: float, timeout_s: float) -> bool:
+## Waits until the controller's screen-space unit picker cannot intercept a
+## click at the building origin, so the next left-click selects the building.
+func _wait_units_clear(point: Vector3, timeout_s: float) -> bool:
+	var screen_position := _camera.unproject_position(point)
+	var main := get_node("Main") as Node3D
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	for _frame in frame_budget:
-		if _area_clear_of_units(point, radius):
+		if main.call("_nearest_view", "unit_views", screen_position, 1) == null:
 			return true
 		await get_tree().physics_frame
-	for node in get_tree().get_nodes_in_group("unit_views"):
-		print("DEBUG unit %d kind=%s team=%d pos=%s" % [
-			int(node.get_meta("unit_id", -1)), str(node.get_meta("unit_kind", "")),
-			int(node.get_meta("team_id", -1)), (node as Node3D).global_position])
 	_fail("units never cleared the click zone at %s" % point)
 	return false
 
 func _select_building(view: Node3D) -> void:
-	if not await _wait_units_clear(view.global_position, 2.2, 15.0):
+	if not await _wait_units_clear(view.global_position, 15.0):
 		return
 	await _click_view(view, MOUSE_BUTTON_LEFT)
-
-## Selects a unit and sends it to the staging ground, waiting until it left
-## the hazard radius (unit-priority selection would otherwise steal a click
-## on the hazard).
-func _move_unit_away(view: Node3D, hazard: Vector3, min_dist: float) -> void:
-	await _click_view(view, MOUSE_BUTTON_LEFT)
-	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
-	if not await _wait_until(
-			func(): return view.global_position.distance_to(hazard) >= min_dist,
-			15.0, "unit never left the hazard zone"):
-		return
 
 ## Retires a gatherer through the UI (select + Stop). Finite sources deplete
 ## at 20x virtual time, and a depleted source leaves the worker idled at its
@@ -312,7 +318,7 @@ func _run() -> void:
 		return
 
 	if not await _wait_until(_fixture_views_settled, 20.0,
-			"skirmish startup never settled to 8 units / 2 buildings / 18 resources"):
+			"skirmish startup never settled to 4 units / 1 building / 18 resources"):
 		return
 
 	var boot: Dictionary = GrusBridge.economy_snapshot()
@@ -393,7 +399,7 @@ func _run() -> void:
 		_fail("Research Center view 1 is missing")
 		return
 	var research_center_id := int(research_center.get_meta("building_id"))
-	_building_ids = {1: true, 2: true}
+	_building_ids = {1: true}
 	var builder := _unit_view(4)
 	if builder == null:
 		_fail("builder worker 4 is missing")
@@ -519,7 +525,56 @@ func _run() -> void:
 	await _park_at_staging(food_worker)
 	await _park_at_staging(coal_worker)
 
-	# Step 6: the Barracks is the single military producer — it accepts both
+	# Step 6: a Research Center rally point; the next trained unit walks to it.
+	await _select_building(research_center)
+	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
+	if not await _wait_until(_rally_stored.bind(research_center_id), 10.0,
+			"Research Center rally point was never stored"):
+		return
+	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button)
+	var rally_worker_box := {}
+	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
+			"rallied Worker view never appeared"):
+		return
+	var rally_worker: Node3D = rally_worker_box["view"]
+	var rally_target := Vector3(RALLY_CELL.x + 0.5, 0.0, RALLY_CELL.y + 0.5)
+	if not await _wait_until(
+			func(): return rally_worker.global_position.distance_to(rally_target) < 1.5,
+			15.0, "rallied worker never moved toward the rally point"):
+		return
+	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
+			or int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
+		_fail("first economy leg did not finish at population 5 of 20")
+		return
+	# The gather/build/rally leg is complete. Assert the countdown stayed
+	# intact before resetting the fixture, then run military production and
+	# insufficient-resource coverage in a fresh Playing leg so neither smoke
+	# interaction can be masked by an unintended alien wave.
+	var wave_error := SmokeHelpers.no_launched_wave_error("economy smoke before reset")
+	if not wave_error.is_empty():
+		_fail(wave_error)
+		return
+	if not GrusBridge.reset_fixture():
+		_fail("fixture reset between economy smoke legs was rejected")
+		return
+	if not await _wait_until(_fixture_views_settled, 20.0,
+			"economy fixture did not settle after its guarded reset"):
+		return
+	_building_ids = {1: true}
+	research_center = _building_view(1)
+	research_center_id = int(research_center.get_meta("building_id", -1))
+	builder = _unit_view(4)
+	if research_center == null or builder == null:
+		_fail("Research Center or builder worker missing after the guarded reset")
+		return
+	if not GrusBridge.start_match():
+		_fail("start_match rejected the second economy smoke leg")
+		return
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("second economy smoke leg did not reach Playing")
+		return
+
+	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
 	# The ring slot west of the city is probed off the live RC view.
 	var barracks_anchor := SmokeHelpers.barracks_anchor(4, research_center)
@@ -536,7 +591,7 @@ func _run() -> void:
 	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "":
 		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s" % [_blocked_reason(barracks_id), _queue_label(barracks_id)])
 		return
-	await _move_unit_away(builder, barracks.global_position, 2.5)
+	await _park_at_staging(builder)
 	await _select_building(barracks)
 	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
 	var scrap_before := int(GrusBridge.economy_snapshot().get("scrap", -1))
@@ -562,70 +617,62 @@ func _run() -> void:
 			10.0, "Barracks enqueue did not charge Guard+Rifleman exactly once"):
 		return
 	var guard_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Guard", 9, guard_box), 30.0,
+	if not await _wait_until(_unit_of_kind_present.bind("Guard", 5, guard_box), 30.0,
 			"trained Guard view never appeared"):
 		return
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "Rifleman", 15.0,
 			"Rifleman never became the FIFO head after the Guard spawned"):
 		return
 	var rifleman_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 9, rifleman_box), 35.0,
+	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 5, rifleman_box), 35.0,
 			"trained Rifleman view never appeared"):
 		return
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 15.0,
 			"Rifleman job never left the Barracks queue"):
 		return
-	# Park both combatants clear of the Research Center click zone below.
+	# Park both combatants at staging so their live views cannot intercept the
+	# Barracks-origin click below.
 	for unit in [guard_box["view"], rifleman_box["view"]]:
-		await _move_unit_away(unit as Node3D, research_center.global_position, 4.0)
+		await _park_at_staging(unit as Node3D)
 
-	# Step 7: a Research Center rally point; the next trained unit walks to it.
-	await _select_building(research_center)
-	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
-	if not await _wait_until(_rally_stored.bind(research_center_id), 10.0,
-			"Research Center rally point was never stored"):
-		return
-	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button)
-	var rally_worker_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Worker", 9, rally_worker_box), 30.0,
-			"rallied Worker view never appeared"):
-		return
-	var rally_worker: Node3D = rally_worker_box["view"]
-	var rally_target := Vector3(RALLY_CELL.x + 0.5, 0.0, RALLY_CELL.y + 0.5)
-	if not await _wait_until(
-			func(): return rally_worker.global_position.distance_to(rally_target) < 1.5,
-			15.0, "rallied worker never moved toward the rally point"):
-		return
-
-	# Step 8: idle-worker navigation selects a live idle_worker_ids member.
-	if int(GrusBridge.economy_snapshot().get("idle_workers", 0)) < 1:
-		_fail("no idle workers before idle navigation")
-		return
-	await _click_button(get_node("Main/HUD/EconomyPanel/IdleButton") as Button)
-	if not await _wait_until(_single_ringed_idle_worker, 10.0,
-			"idle navigation did not select an idle_worker_ids member"):
-		return
-
-	# Step 9 recap: construction ramp (Bunkhouse), queue ramps (Guard/Rifleman),
+	# Step 8 recap: construction ramp (Bunkhouse), queue ramps (Guard/Rifleman),
 	# the Occupied reject code, and the blocked fields were all asserted at
 	# their stages above; finish with the final economy state and unblocked
 	# producers.
 	var final: Dictionary = GrusBridge.economy_snapshot()
-	if int(final.get("population_cap", -1)) != 20 or int(final.get("population_used", -1)) != 7:
-		_fail("final economy state is not population 7 of 20: %s" % [final])
+	if int(final.get("population_cap", -1)) != 10 or int(final.get("population_used", -1)) != 6:
+		_fail("military production leg did not finish at population 6 of 10: %s" % [final])
 		return
 	for producer_id in [research_center_id, barracks_id]:
 		if _blocked_reason(producer_id) != 0:
 			_fail("producer %d ended with a blocked queue" % producer_id)
 			return
 
-	# Step 10: the same UI train path that accepted solvent enqueues now
+	# Step 9: the same UI train path that accepted solvent enqueues now
 	# runs the Food stockpile dry. Every gatherer is retired, so each real
 	# GuardButton click charges exactly the catalogue Guard cost until the
 	# stockpile cannot pay; an identical click on the drained-empty queue
 	# must then reject InsufficientResources and leave stockpiles, the
 	# queue and the building census untouched.
 	await _select_building(barracks)
+	var main := get_node("Main") as Node3D
+	var selected_after_pick := int(main.get("selected_building_id"))
+	if selected_after_pick != barracks_id:
+		var screen := _camera.unproject_position(barracks.global_position)
+		var unit_pick = main.call("_nearest_view", "unit_views", screen, 1) as Node3D
+		var building_pick = main.call("_nearest_view", "building_views", screen, 1) as Node3D
+		var selected_unit := _unit_view(6)
+		var session_panel := main.get_node("HUD/SessionPanel") as Control
+		_fail("Barracks click did not select its producer: wanted=%d selected=%d unit_pick=%s building_pick=%s screen=%s barracks=%s visible=%s panel=%s phase=%s placement=%s left_pressed=%s last_press=%s selected_units=%s selected_unit_screen=%s" % [
+			barracks_id, selected_after_pick,
+			str(unit_pick.get_meta("unit_id", -1)) if unit_pick != null else "none",
+			str(building_pick.get_meta("building_id", -1)) if building_pick != null else "none",
+			screen, barracks.global_position, barracks.is_visible_in_tree(), session_panel.visible,
+			str(main.get("_session_phase")), str(main.get("_placement_kind")),
+			str(main.get("_left_pressed")), str(main.get("_left_press_position")),
+			str(main.get("selected_ids")),
+			_camera.unproject_position(selected_unit.global_position) if selected_unit != null else "missing"])
+		return
 	var guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
 	var insufficient := false
 	# The bound comes from live Food: each accepted click charges
@@ -652,7 +699,12 @@ func _run() -> void:
 		if reject_code == -1:
 			# A solvent click is accepted and charged exactly once.
 			if int(after_click.get("food", -1)) != before_click["food"] - guard_food:
-				_fail("accepted Guard enqueue did not charge exactly %d food: %s -> %s" % [guard_food, before_click, after_click])
+				var selected_id := int(get_node("Main").get("selected_building_id"))
+				var selected: Dictionary = GrusBridge.building_snapshot(selected_id)
+				_fail("accepted Guard enqueue did not charge exactly %d food: %s -> %s; selected=%d kind=%s status=%s feedback=%s phase=%s wave=%s" % [
+					guard_food, before_click, after_click, selected_id, str(selected.get("kind", "")),
+					str((get_node("Main/HUD/CommandStatus") as Label).text), GrusBridge.command_feedback(),
+					str(GrusBridge.session_snapshot()), GrusBridge.wave_snapshot()])
 				return
 			continue
 		if reject_code != REJECT_INSUFFICIENT:
@@ -717,7 +769,18 @@ func _run() -> void:
 	if get_tree().get_nodes_in_group("building_views").size() != unaffordable_before["buildings"]:
 		_fail("rejected Guard enqueue still changed the building census")
 		return
+	if int(GrusBridge.economy_snapshot().get("idle_workers", 0)) < 1:
+		_fail("no idle workers before idle navigation")
+		return
+	await _click_button(get_node("Main/HUD/EconomyPanel/IdleButton") as Button)
+	if not await _wait_until(_single_ringed_idle_worker, 10.0,
+			"idle navigation did not select an idle_worker_ids member"):
+		return
 
+	wave_error = SmokeHelpers.no_launched_wave_error("economy smoke")
+	if not wave_error.is_empty():
+		_fail(wave_error)
+		return
 	if not GrusBridge.set_sim_speed(1.0):
 		_fail("failed to restore Bevy virtual time")
 		return

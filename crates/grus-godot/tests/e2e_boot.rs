@@ -38,7 +38,6 @@ fn boot_ready_and_fixture_markers() {
     bevy_e2e::run(options, |game| {
         game.wait_for("grus.ready")?;
         game.find("player.research-center")?;
-        game.find("enemy.research-center")?;
         game.find("player.starting-worker")?;
 
         // Cheap reflected-state round-trip: read the marker entity's own

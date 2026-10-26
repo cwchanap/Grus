@@ -1,8 +1,7 @@
-//! Canonical fixed-step order: commands → combat → movement → economy →
-//! construction → production → visibility → route feedback. Movement
-//! arrival is visible to economy/construction in the same fixed tick, and
-//! production runs last, so a unit completing in tick N does not move until
-//! tick N+1 even when its producer owns a rally point.
+//! Canonical fixed-step order: commands → wave director → combat → movement
+//! → economy → construction → production → visibility → route feedback.
+//! Aliens enter combat in their spawn tick, movement arrival is visible to
+//! economy/construction in the same tick, and rallied production moves next.
 
 use std::cell::RefCell;
 
@@ -10,20 +9,20 @@ use bevy::prelude::World;
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
     Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget, Dropoff,
-    Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, MoveOrder, PlayerCommand,
-    ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId,
-    UnitIndex, UnitKind, VisibilityMap, WorkerTask, apply_player_command, explored_by,
-    refresh_visibility, seed_skirmish, spawn_unit, step_combat, step_construction, step_economy,
-    step_movement, step_production, visible_to,
+    Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, MatchPhase, MatchSession,
+    MoveOrder, PlayerCommand, ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy,
+    TeamId, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState, WorkerTask,
+    apply_player_command, explored_by, refresh_visibility, seed_skirmish, spawn_unit, step_combat,
+    step_construction, step_economy, step_movement, step_production, step_waves, visible_to,
 };
 
 const TEAM: TeamId = TeamId(1);
 /// Authored team-1 Research Center and ration cache.
 const RESEARCH_CENTER: BuildingId = BuildingId(1);
 const RATIONS: ResourceId = ResourceId(1);
-/// The placed Barracks takes the first runtime building id after the two
-/// seeded Research Centers.
-const BARRACKS: BuildingId = BuildingId(3);
+/// The placed Barracks takes the first runtime building id after the seeded
+/// human Research Center.
+const BARRACKS: BuildingId = BuildingId(2);
 
 /// Production runs after movement, economy and construction: in the tick a
 /// queued unit completes, a worker's gather arrival transitions to
@@ -108,7 +107,6 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
         step_construction(&mut world, SIM_STEP_SECONDS);
         step_production(&mut world, &mut map, SIM_STEP_SECONDS);
     }
-
     // The completion tick: both arrivals are visible to their consumers in
     // this same tick.
     assert!(
@@ -140,7 +138,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     // this tick, so it cannot have marched.
     let spawned = world
         .resource::<UnitIndex>()
-        .entity(UnitId(9))
+        .entity(UnitId(5))
         .expect("the trained worker spawned in this tick");
     let spawn_position = world.get::<SimPosition>(spawned).unwrap().current;
     let spawn_cell = map.world_to_cell(spawn_position);
@@ -184,8 +182,7 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     // A second team-1 drop-off beside the Research Center's resource line so the
     // destroyed drop-off's worker has a same-team reroute target. Placed
     // through the public command path on the authored Depot slot and
-    // completed instantly; the first runtime building id after the two
-    // seeded Research Centers is 3.
+    // completed instantly; BuildingId 2 follows the single seeded core.
     let placed = apply_player_command(
         &mut world,
         &mut map,
@@ -197,7 +194,7 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
         },
     );
     assert_eq!(placed.reject, None, "depot placement rejected");
-    let depot_id = BuildingId(3);
+    let depot_id = BuildingId(2);
     let depot = world.resource::<BuildingIndex>().entity(depot_id).unwrap();
     world
         .get_mut::<Building>(depot)
@@ -273,6 +270,60 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
     );
 }
 
+#[test]
+fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // Move the core beside the authored north entry so wave 1 is already
+    // inside attack range when it launches. This makes the chain order
+    // observable: combat must run after the director in the spawn tick.
+    let core_entity = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    let old = *world.get::<Footprint>(core_entity).unwrap();
+    for cell in old.cells() {
+        map.set_blocked(cell, false);
+    }
+    let core = Footprint::new(GridPos::new(62, 1), 4, 4);
+    for cell in core.cells() {
+        assert!(map.is_walkable(cell));
+        map.set_blocked(cell, true);
+    }
+    world.entity_mut(core_entity).insert(core);
+    world.get_mut::<Health>(core_entity).unwrap().current = 1;
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+
+    step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(world.resource::<WaveState>().next_wave, 2);
+    assert_eq!(world.resource::<UnitIndex>().iter().count(), 16);
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(grus_sim::MatchResult(TeamId(2)))
+    );
+    assert!(
+        world
+            .resource::<grus_sim::CombatEvents>()
+            .0
+            .iter()
+            .any(|event| {
+                event.target == CombatTarget::Building(RESEARCH_CENTER) && event.killed
+            })
+    );
+}
+
 /// Visibility contract of the construction boundary: a newly placed site
 /// grants no vision of itself while incomplete, and completion turns the
 /// footprint into a reveal origin. With every unit far from the site, the
@@ -321,7 +372,7 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
     assert_eq!(placed.reject, None, "placement on explored ground rejected");
     let depot = world
         .resource::<BuildingIndex>()
-        .entity(BuildingId(3))
+        .entity(BuildingId(2))
         .unwrap();
     // Live-state check: recompute fog so this assert sees the freshly
     // placed site, not the pre-placement map the last refresh produced.

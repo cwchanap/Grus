@@ -6,7 +6,7 @@ use super::*;
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
-use crate::fixture::MapFixture;
+use crate::fixture::{ENTRY_ZONES, MapFixture};
 use crate::map::Footprint;
 
 fn assert_vec2_near(actual: Vec2, expected: Vec2) {
@@ -440,9 +440,9 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
         }
     }
 
-    // The march destination derives from the authored team-2 start — the
-    // first east-side worker cell — instead of a duplicated spawn constant.
-    let east_goal = MapFixture::team_starts()[1].workers[0];
+    // The march destination derives from the authored east alien entry
+    // anchor, not a duplicated coordinate.
+    let east_goal = ENTRY_ZONES[1].1;
     let target = fixture.map.cell_center(east_goal);
     let outcome = apply_player_command(
         &mut world,

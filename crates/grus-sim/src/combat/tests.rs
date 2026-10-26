@@ -17,7 +17,6 @@ use crate::fixture::{MapFixture, seed_skirmish};
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
-use crate::session::tests as journeys;
 use crate::session::{MatchPhase, MatchSession};
 use crate::visibility::{VisibilityMap, refresh_visibility};
 
@@ -2686,31 +2685,6 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
         world.get::<Health>(defender).unwrap().current,
         health_at_range - 8
     );
-}
-
-#[test]
-fn bounded_victory_journey_destroys_the_enemy_research_center_through_real_systems() {
-    let (mut world, mut map) = journeys::live_match();
-
-    journeys::run_army_journey(&mut world, &mut map, TeamId(1));
-
-    // Combat-level journey facts: the winning blow is a recorded combat
-    // event against team 2's authored Research Center, and the passive opponent
-    // never scratched the army.
-    let events = &world.resource::<CombatEvents>().0;
-    assert!(
-        events
-            .iter()
-            .any(|event| event.target == CombatTarget::Building(BuildingId(2)) && event.killed),
-        "the Research Center's killing blow is a recorded combat event"
-    );
-    assert_eq!(
-        journeys::units_of_kind(&world, TeamId(1), UnitKind::Guard).len(),
-        4,
-        "the passive opponent never damages the army"
-    );
-
-    journeys::assert_result_freezes_and_locks(&mut world, &mut map, TeamId(1));
 }
 
 /// The building arm of the fog oracle rule: a live-but-hidden enemy
