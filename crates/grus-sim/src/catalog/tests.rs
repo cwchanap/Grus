@@ -10,6 +10,27 @@ fn workers_are_noncombatants_and_military_units_are_not() {
 }
 
 #[test]
+fn human_roster_is_exactly_the_non_alien_catalogue_subset() {
+    let humans: Vec<_> = UnitKind::ALL
+        .into_iter()
+        .filter(|kind| unit_spec(*kind).alien.is_none())
+        .collect();
+    assert_eq!(UnitKind::HUMAN.as_slice(), humans);
+    assert_eq!(
+        UnitKind::ALL
+            .into_iter()
+            .filter(|kind| unit_spec(*kind).alien.is_some())
+            .collect::<Vec<_>>(),
+        [
+            UnitKind::Swarmer,
+            UnitKind::Spitter,
+            UnitKind::Brute,
+            UnitKind::Behemoth,
+        ]
+    );
+}
+
+#[test]
 fn military_units_carry_initial_combat_tuning() {
     let worker = unit_spec(UnitKind::Worker);
     let guard = unit_spec(UnitKind::Guard);
@@ -34,16 +55,88 @@ fn military_units_carry_initial_combat_tuning() {
 }
 
 #[test]
-fn surviving_units_carry_zero_counter_bonuses() {
-    // The PvP counter cycle was deleted with the obsolete roster: every
-    // surviving spec still names a concrete counter target but applies no
-    // bonus damage.
-    for kind in UnitKind::ALL {
-        let Some(combat) = unit_spec(kind).combat else {
-            continue;
-        };
-        assert_eq!(combat.counter_bonus, 0, "{kind:?} counter bonus");
+fn human_counters_target_their_alien_matchups_and_aliens_have_no_counters() {
+    let guard = unit_spec(UnitKind::Guard).combat.unwrap();
+    assert_eq!(guard.counter_target, UnitKind::Swarmer);
+    assert_eq!(guard.counter_bonus, 5);
+
+    let rifleman = unit_spec(UnitKind::Rifleman).combat.unwrap();
+    assert_eq!(rifleman.counter_target, UnitKind::Spitter);
+    assert_eq!(rifleman.counter_bonus, 4);
+
+    for kind in [
+        UnitKind::Swarmer,
+        UnitKind::Spitter,
+        UnitKind::Brute,
+        UnitKind::Behemoth,
+    ] {
+        assert_eq!(
+            unit_spec(kind).combat.unwrap().counter_bonus,
+            0,
+            "{kind:?} counter bonus"
+        );
     }
+}
+
+#[test]
+fn alien_catalogue_specs_pin_threat_unlock_reward_and_combat() {
+    let expected = [
+        (UnitKind::Swarmer, 1, 1, 1, 40, 8.0, 6, 1.0, 1.5, false),
+        (UnitKind::Spitter, 3, 2, 4, 70, 6.0, 8, 1.5, 6.0, true),
+        (UnitKind::Brute, 6, 5, 8, 300, 4.0, 30, 2.0, 1.5, false),
+        (
+            UnitKind::Behemoth,
+            40,
+            50,
+            10,
+            2_000,
+            3.0,
+            80,
+            2.0,
+            1.5,
+            false,
+        ),
+    ];
+    for (
+        kind,
+        threat,
+        crystal_reward,
+        first_wave,
+        health,
+        speed,
+        damage,
+        cooldown,
+        range,
+        ranged,
+    ) in expected
+    {
+        let spec = unit_spec(kind);
+        let alien = spec.alien.expect("alien specification");
+        let combat = spec.combat.expect("alien combat");
+        assert_eq!(alien.threat, threat);
+        assert_eq!(alien.crystal_reward, crystal_reward);
+        assert_eq!(alien.first_wave, first_wave);
+        assert_eq!(spec.max_health, health);
+        assert_eq!(spec.speed, speed);
+        assert_eq!(combat.damage, damage);
+        assert_eq!(combat.cooldown_seconds, cooldown);
+        assert_eq!(combat.attack_range, range);
+        assert_eq!(combat.ranged, ranged);
+        assert_eq!(combat.counter_bonus, 0);
+    }
+}
+
+#[test]
+fn wave_tuning_is_catalogued_as_integer_values() {
+    assert_eq!(WAVE_PREPARATION_SECONDS, 300);
+    assert_eq!(WAVE_INTERVAL_SECONDS, 100);
+    assert_eq!(WAVE_WARNING_SECONDS, 30);
+    assert_eq!(MAX_LIVE_ALIENS, 150);
+    assert_eq!(WAVE_BUDGET_BASE, 8);
+    assert_eq!(WAVE_BUDGET_PER_WAVE, 4);
+    assert_eq!(WAVE_BUDGET_QUADRATIC_TENTHS, 4);
+    assert_eq!(WAVE_TWO_ZONE_START, 10);
+    assert_eq!(WAVE_THREE_ZONE_START, 20);
 }
 
 #[test]
@@ -65,9 +158,16 @@ fn buildings_carry_catalogue_health() {
 }
 
 #[test]
-fn winter_roster_has_exactly_three_units_and_four_buildings() {
-    let unit_names: Vec<String> = UnitKind::ALL.iter().map(|k| format!("{k:?}")).collect();
-    assert_eq!(unit_names, ["Worker", "Guard", "Rifleman"]);
+fn winter_human_roster_stays_separate_from_the_full_catalogue() {
+    let human_names: Vec<String> = UnitKind::HUMAN.iter().map(|k| format!("{k:?}")).collect();
+    assert_eq!(human_names, ["Worker", "Guard", "Rifleman"]);
+    let all_names: Vec<String> = UnitKind::ALL.iter().map(|k| format!("{k:?}")).collect();
+    assert_eq!(
+        all_names,
+        [
+            "Worker", "Guard", "Rifleman", "Swarmer", "Spitter", "Brute", "Behemoth"
+        ]
+    );
     let building_names: Vec<String> = BuildingKind::ALL.iter().map(|k| format!("{k:?}")).collect();
     assert_eq!(
         building_names,
@@ -136,7 +236,7 @@ fn winter_costs_and_producers_are_pinned() {
 
     // Producer compatibility: ResearchCenter -> Worker; Barracks -> Guard,
     // Rifleman. Nothing else produces, and the Bunkhouse/Depot produce nothing.
-    for kind in UnitKind::ALL {
+    for kind in UnitKind::HUMAN {
         let producers: Vec<BuildingKind> = BuildingKind::ALL
             .into_iter()
             .filter(|building| produces(*building, ProductionKind::Unit(kind)))
@@ -144,11 +244,25 @@ fn winter_costs_and_producers_are_pinned() {
         let expected = match kind {
             UnitKind::Worker => vec![BuildingKind::ResearchCenter],
             UnitKind::Guard | UnitKind::Rifleman => vec![BuildingKind::Barracks],
+            UnitKind::Swarmer | UnitKind::Spitter | UnitKind::Brute | UnitKind::Behemoth => {
+                panic!("alien kind {kind:?} entered the human roster")
+            }
         };
         assert_eq!(producers, expected, "{kind:?} producer");
     }
+    for kind in UnitKind::ALL
+        .into_iter()
+        .filter(|kind| !UnitKind::HUMAN.contains(kind))
+    {
+        for building in BuildingKind::ALL {
+            assert!(
+                !produces(building, ProductionKind::Unit(kind)),
+                "aliens cannot be produced by {building:?}"
+            );
+        }
+    }
     for building in [BuildingKind::Bunkhouse, BuildingKind::Depot] {
-        for kind in UnitKind::ALL {
+        for kind in UnitKind::HUMAN {
             assert!(
                 !produces(building, ProductionKind::Unit(kind)),
                 "{building:?} must not produce {kind:?}"
