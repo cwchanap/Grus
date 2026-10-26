@@ -87,15 +87,17 @@ These are **reviewable stages inside this single PR**, not additional tickets/PR
 - [x] Full Rust workspace tests and **>=90% `grus-sim` line coverage** with the existing cargo-llvm-cov gate; no test-time-only duplicated algorithms.
 - [x] Rust wave, exact roster/order (1/4/8/10), `HUMAN`/alien catalogue partition, fixture zone reachability, Crystal reward, system-order and session regressions listed in the design; one retry predicate for rejection/arrival/lost leg, with `path_call_count` proving only **director** throttling.
 - [x] Real Godot bridge, fixture-reset, economy, adapted scouting/fog smoke, combat-lifecycle **Defeat**, and new wave smokes. Every other pre-existing Playing smoke asserts via shared helpers that **no wave launched before completion** (including before resets); wave/Defeat scenarios are explicitly exempt. All pass within existing/<=90s scene timeouts and clean process exit.
-- [ ] Linux Godot import, smoke export/boot, `bevy-e2e` exported-game test and strict CI build split still pass.
-- [ ] Session-free 200-unit survival benchmark runs the full existing frame-stat/liveness contract at 10s CI; measurements labeled as the **new** workload.
+- [x] Linux Godot import, smoke export/boot, `bevy-e2e` exported-game test and strict CI build split still pass.
+- [x] Session-free 200-unit survival benchmark runs the full existing frame-stat/liveness contract at 10s CI; measurements labeled as the **new** workload.
 - [x] README/spec synchronized; PR remains **Draft** while documentation-only and is not merged before the implementation and gates are complete.
 
 Local acceptance on 2026-10-26: 241 workspace tests, 18 serialized e2e-feature
 library tests, 96.11% simulation line coverage, five real exit-0 Godot smokes,
 and fresh 10-second headless / 60-second rendered M1 Pro benchmark samples.
-The two Linux/hosted checkboxes above remain pending their actual CI run;
-local macOS checks do not substitute for them. The benchmark's one-off orders
+[Hosted CI run 40366902630](https://github.com/cwchanap/Grus/actions/runs/40366902630)
+passed all three jobs on reviewed implementation commit `4b81cde`, including
+Linux import/export, packaged smoke, exported-game E2E and the software-GL
+benchmark. Local macOS checks were not substituted for those gates. The benchmark's one-off orders
 settled at 28 seconds, so its existing runner now replays ordinary survivor
 AttackMove inputs every five measured seconds through a session-free-only
 fixture/bridge seam, retaining all liveness checks and real deaths. See the

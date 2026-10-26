@@ -28,8 +28,8 @@ cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore
 cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 ```
 
-The actual exported-game E2E test remains a separate Linux CI gate. A
-workspace test run without `GRUS_E2E_BINARY` does not establish that result.
+The actual exported-game E2E test is a separate Linux CI gate, recorded below.
+A workspace test run without `GRUS_E2E_BINARY` does not establish that result.
 
 ## Real Godot journeys
 
@@ -115,8 +115,8 @@ comparable to this workload.
 ## Platform and shutdown limits
 
 - Local Linux export/boot and exported-game E2E were not run: Docker's
-  daemon was unavailable. The existing strict Linux CI build split, export,
-  E2E and 10-second software-GL benchmark gates remain required on the PR.
+  daemon was unavailable. Hosted CI subsequently passed those real gates,
+  as recorded below; local macOS results were not substituted for them.
 - Restricted macOS invocations produced a CA-certificate lookup error or
   could not initialize the app/default user-log path. Final runtime checks
   used the required sandbox escalation and writable log paths; no host
@@ -131,3 +131,35 @@ Full local command output, smoke-result JSON, native metadata JSON and the
 labeled visual preview are retained under `/private/tmp/hpa449-task6/` in
 the implementation workspace's host environment. Hosted checks are tracked
 through the same [implementation PR](https://github.com/cwchanap/Grus/pull/10).
+
+## Hosted Linux acceptance
+
+[CI run 40366902630](https://github.com/cwchanap/Grus/actions/runs/40366902630)
+(run 211) completed successfully on reviewed implementation commit `4b81cde`.
+All three jobs passed: `rust-build-lint`, `unit-tests` and `e2e`. This final
+documentation update records that result without changing implementation.
+
+The unit job ran 219 simulation unit tests plus the economy/occupancy/system-
+order integration tests under the coverage gate, 15 bridge library tests and
+18 serialized e2e-feature tests. The runtime job passed import, all five real
+Godot smokes, strict plain/e2e dependency split, Linux smoke export and its
+full packaged smoke contract. The real-main exported-game E2E test ran with
+`GRUS_E2E_BINARY` and passed 1 test in 16.62 seconds.
+
+The fresh Linux software-GL benchmark exited 0 with its complete marker.
+The runner reported x86_64 / AMD EPYC 7763, Mesa 25.2.8, llvmpipe
+(LLVM 20.1.2, 256 bits), X11, 1920×1080:
+
+| Field | Hosted Linux software GL |
+| --- | ---: |
+| Requested / measured duration | 10 / 10.16 s |
+| Frames / mean FPS | 22 / 2.2 |
+| Mean / p50 frame time | 461.838 / 459.175 ms |
+| p95 / p99 / maximum | 527.300 / 672.910 / 672.910 ms |
+| Live start / min / mean / end | 200 / 168 / 170.7 / 168 |
+| Visible-in-tree min / mean / end | 71 / 74.6 / 110 |
+| Visibility revision | 222 |
+
+These software-renderer results establish the CI timing/liveness contract;
+they are not hardware performance acceptance. The reference Linux release-
+host measurement remains unmeasured.
