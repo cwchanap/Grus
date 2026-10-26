@@ -7,7 +7,7 @@ use crate::buildings::Building;
 use crate::catalog::resource_amount;
 use crate::combat::CombatOrder;
 use crate::commands::{UnitIndex, approach_slots};
-use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
+use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask};
 use crate::ids::IdAllocator;
 use crate::map::Footprint;
 use crate::movement::{SimPosition, Unit};
@@ -234,6 +234,28 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
 
     // IDs flowed only through the allocator: 4 authored + 46 defenders + 150 aliens.
     assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
+
+    let mut worker_sources: Vec<(UnitId, ResourceId)> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(id, entity)| match world.get::<WorkerTask>(*entity)? {
+            WorkerTask::ToSource { source, .. } | WorkerTask::Gathering { source } => {
+                Some((*id, *source))
+            }
+            _ => None,
+        })
+        .collect();
+    worker_sources.sort_unstable_by_key(|(id, _)| *id);
+    assert_eq!(
+        worker_sources,
+        vec![
+            (UnitId(1), ResourceId(1)),
+            (UnitId(2), ResourceId(2)),
+            (UnitId(3), ResourceId(3)),
+            (UnitId(4), ResourceId(4)),
+        ],
+        "benchmark workers must receive safe sources in stable unit-ID order"
+    );
 
     // Only the human Research Center remains; all 18 sources survive.
     let research_centers = world

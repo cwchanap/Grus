@@ -88,6 +88,77 @@ func _visible_alien(box: Dictionary) -> bool:
 			return true
 	return false
 
+func _mouse_click(position: Vector2, button: int) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = button
+	press.position = position
+	press.pressed = true
+	Input.parse_input_event(press)
+
+	var release := InputEventMouseButton.new()
+	release.button_index = button
+	release.position = position
+	release.pressed = false
+	Input.parse_input_event(release)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+func _mouse_drag(start: Vector2, finish: Vector2) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.position = start
+	press.pressed = true
+	Input.parse_input_event(press)
+
+	var motion := InputEventMouseMotion.new()
+	motion.position = finish
+	motion.relative = finish - start
+	motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+	Input.parse_input_event(motion)
+
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.position = finish
+	release.pressed = false
+	Input.parse_input_event(release)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+func _key_tap(keycode: int) -> void:
+	var press := InputEventKey.new()
+	press.keycode = keycode
+	press.pressed = true
+	Input.parse_input_event(press)
+
+	var release := InputEventKey.new()
+	release.keycode = keycode
+	release.pressed = false
+	Input.parse_input_event(release)
+	await get_tree().process_frame
+	await get_tree().process_frame
+
+func _select_guards(guards: Array[Node3D], guard_ids: PackedInt32Array) -> bool:
+	var top_left := Vector2(INF, INF)
+	var bottom_right := Vector2(-INF, -INF)
+	for guard in guards:
+		var screen_position: Vector2 = _main.camera.unproject_position(guard.global_position)
+		top_left.x = minf(top_left.x, screen_position.x)
+		top_left.y = minf(top_left.y, screen_position.y)
+		bottom_right.x = maxf(bottom_right.x, screen_position.x)
+		bottom_right.y = maxf(bottom_right.y, screen_position.y)
+	await _mouse_drag(top_left - Vector2(4.0, 4.0), bottom_right + Vector2(4.0, 4.0))
+	var selected := {}
+	for id in _main.selected_ids:
+		selected[int(id)] = true
+	if selected.size() != guard_ids.size():
+		_fail("controller drag selected %d units, expected the three trained Guards: %s" % [selected.size(), _main.selected_ids])
+		return false
+	for id in guard_ids:
+		if not selected.has(int(id)):
+			_fail("controller drag omitted trained Guard %d: %s" % [id, _main.selected_ids])
+			return false
+	return true
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -287,8 +358,16 @@ func _run() -> void:
 		return
 	var defender_target := Vector2(anchor.x, anchor.y + 22.0)
 	var defenders_revision := int(GrusBridge.command_feedback_revision())
-	if not GrusBridge.attack_move_units(guard_ids, defender_target):
-		_fail("Guard attack-move toward the announced entry was not queued")
+	if not await _select_guards(guards, guard_ids):
+		return
+	await _key_tap(KEY_A)
+	if not bool(_main._attack_move_armed):
+		_fail("controller A-key did not arm Guard attack-move")
+		return
+	var defender_screen: Vector2 = _main.camera.unproject_position(Vector3(defender_target.x, 0.0, defender_target.y))
+	await _mouse_click(defender_screen, MOUSE_BUTTON_RIGHT)
+	if str(_main.command_status.text) != "Attack-move queued":
+		_fail("controller ground right-click did not queue the announced-entry attack-move: %s" % [_main.command_status.text])
 		return
 	if not await _wait_until(
 			func(): return int(GrusBridge.command_feedback_revision()) > defenders_revision \
@@ -333,8 +412,9 @@ func _run() -> void:
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var attack_revision := int(GrusBridge.command_feedback_revision())
-	if not GrusBridge.attack_units(guard_ids, "unit", target_id):
-		_fail("Guard direct attack on the visible alien was not queued")
+	await _mouse_click(_main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
+	if str(_main.command_status.text) != "Attack command queued":
+		_fail("controller right-click did not queue a direct attack on the visible alien: %s" % [_main.command_status.text])
 		return
 	if not await _wait_until(
 			func(): return int(GrusBridge.command_feedback_revision()) > attack_revision \
@@ -453,6 +533,6 @@ func _run() -> void:
 		_fail("restart left transient combat effects on stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated attack=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true")
+	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true")
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
