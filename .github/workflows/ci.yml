@@ -183,6 +183,18 @@ jobs:
             echo "::error::combat smoke contract held but godot exited $rc"
             exit 1
           fi
+      - name: Run HPA-449 wave presentation and lifecycle smoke
+        # Reuses the real wave lifecycle with a 20x simulation clock; this
+        # separate gate also pins the HUD, minimap telegraph, and alien roles.
+        run: |
+          set -o pipefail
+          timeout 90s godot --headless --path godot res://scenes/wave_smoke_test.tscn 2>&1 | tee wave-smoke.log || rc=$?
+          rc=${rc:-0}
+          grep -q "GRUS_WAVE_SMOKE_OK" wave-smoke.log || exit 1
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::wave smoke contract held but godot exited $rc"
+            exit 1
+          fi
       - name: Test packaging stale-archive guard
         # Pure-bash contract test: stubs cargo/godot in a scratch repo and
         # asserts a failed package run never leaves a stale release archive.
@@ -298,7 +310,7 @@ jobs:
         run: |
           command -v gdb || { sudo apt-get update -qq && sudo apt-get install -y gdb; }
           cp target/libgrus_godot_noe2e.so godot/bin/libgrus_godot.so
-          for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test; do
+          for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test wave_smoke_test; do
             echo "=== gdb run: $scene" | tee -a gdb-teardown.log
             timeout -k 10s 150s gdb -batch -ex run -ex 'thread apply all bt' --args godot --headless --path godot "res://scenes/$scene.tscn" 2>&1 | tee -a gdb-teardown.log || true
           done

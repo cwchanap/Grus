@@ -54,6 +54,15 @@ offset_right = 600.0
 offset_bottom = 76.0
 text = "ECS bridge initializing…"
 
+[node name="WaveLabel" type="Label" parent="HUD"]
+offset_left = 18.0
+offset_top = 78.0
+offset_right = 850.0
+offset_bottom = 102.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "Prep   Next wave 1 in 5:00   Aliens 0"
+
 [node name="InputShield" type="Control" parent="HUD"]
 layout_mode = 3
 offset_left = 8.0
@@ -181,7 +190,7 @@ offset_top = 8.0
 offset_right = 392.0
 offset_bottom = 56.0
 theme_override_font_sizes/font_size = 20
-text = "Skirmish ready"
+text = "Survive the alien waves"
 
 [node name="StartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0

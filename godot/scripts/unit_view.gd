@@ -7,6 +7,10 @@ const ROLE_SPECS := {
 	"Worker": {"body_scale": 0.8, "marker": ""},
 	"Guard": {"body_scale": 1.0, "marker": "spear"},
 	"Rifleman": {"body_scale": 0.9, "marker": "bow"},
+	"Swarmer": {"body_scale": 0.62, "marker": "spines"},
+	"Spitter": {"body_scale": 0.84, "marker": "sac"},
+	"Brute": {"body_scale": 1.3, "marker": "shoulders"},
+	"Behemoth": {"body_scale": 1.8, "marker": "crest"},
 }
 
 @onready var body: MeshInstance3D = $Body
@@ -73,17 +77,36 @@ func _apply_role(kind: String) -> void:
 			_add_marker(_make_box_mesh(Vector3(0.08, 1.6, 0.08)))
 		"bow":
 			_add_marker(_make_box_mesh(Vector3(0.55, 0.55, 0.08)))
+		"spines":
+			for offset in [-0.22, 0.0, 0.22]:
+				var spike := CylinderMesh.new()
+				spike.top_radius = 0.0
+				spike.bottom_radius = 0.12
+				spike.height = 0.48
+				_add_marker(spike, Vector3(offset, body_scale + 0.08, 0.0))
+		"sac":
+			var sac := SphereMesh.new()
+			sac.radius = 0.24
+			sac.height = 0.48
+			_add_marker(sac, Vector3(0.18, body_scale * 0.8, 0.0))
+		"shoulders":
+			_add_marker(_make_box_mesh(Vector3(1.1, 0.32, 0.78)), Vector3(0.0, body_scale * 0.7, 0.0))
+		"crest":
+			var crest := CapsuleMesh.new()
+			crest.radius = 0.34
+			crest.height = 0.95
+			_add_marker(crest, Vector3(0.0, body_scale + 0.18, 0.0))
 
 func _make_box_mesh(size: Vector3) -> BoxMesh:
 	var mesh := BoxMesh.new()
 	mesh.size = size
 	return mesh
 
-func _add_marker(mesh: Mesh) -> void:
+func _add_marker(mesh: Mesh, local_position := Vector3(0.0, 0.8, 0.0)) -> void:
 	var view := MeshInstance3D.new()
 	view.name = "MarkerMesh"
 	view.mesh = mesh
-	view.position.y = 0.8
+	view.position = local_position
 	var material := StandardMaterial3D.new()
 	material.albedo_color = Color(0.25, 0.22, 0.2, 1.0)
 	view.material_override = material

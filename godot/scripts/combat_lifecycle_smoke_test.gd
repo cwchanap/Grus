@@ -221,6 +221,9 @@ func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
 			return false
 	return true
 
+func _success_marker() -> String:
+	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true"
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -445,13 +448,16 @@ func _run() -> void:
 					and _session_label().text == "Paused",
 			5.0, "Paused overlay is not showing Resume with Pause/Quit hidden"):
 		return
+	var wave_before_pause: Dictionary = GrusBridge.wave_snapshot()
 	var health_before_pause := float(_building_view(1).call("health_ratio"))
 	var events_before_pause := int(GrusBridge.combat_event_total())
 	for _frame in 12:
 		await get_tree().physics_frame
+	var wave_during_pause: Dictionary = GrusBridge.wave_snapshot()
 	if float(_building_view(1).call("health_ratio")) != health_before_pause \
+			or not is_equal_approx(float(wave_during_pause.get("seconds_remaining", -1.0)), float(wave_before_pause.get("seconds_remaining", -2.0))) \
 			or int(GrusBridge.combat_event_total()) != events_before_pause:
-		_fail("paused session continued combat or damaged the Research Center")
+		_fail("paused session advanced its wave clock, combat events, or Research Center health")
 		return
 	if not _assert_input_gated("Paused"):
 		return
@@ -533,6 +539,11 @@ func _run() -> void:
 		_fail("restart left transient combat effects on stage")
 		return
 
-	print("GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true")
+	var marker := _success_marker()
+	if marker.is_empty():
+		GrusBridge.set_sim_speed(1.0)
+		get_tree().quit(1)
+		return
+	print(marker)
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(0)
