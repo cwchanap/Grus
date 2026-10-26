@@ -8,6 +8,7 @@ const ZOOM_STEP := 6.0
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
+@onready var wave_label: Label = $HUD/WaveLabel
 @onready var economy_label: Label = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
@@ -92,7 +93,7 @@ func _refresh_session_overlay(snap: Dictionary) -> void:
 	# Restart/Quit belong to Result only.
 	match _session_phase:
 		"Start":
-			session_label.text = "Skirmish ready"
+			session_label.text = "Survive the alien waves"
 			start_button.visible = true
 			resume_button.visible = false
 			restart_button.visible = false
@@ -170,6 +171,22 @@ func _refresh_hud() -> void:
 		int(economy.get("population_cap", 0)),
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	var remaining := maxi(ceili(float(wave.get("seconds_remaining", 0.0))), 0)
+	var incoming_names := PackedStringArray()
+	for zone in wave.get("incoming_zones", []):
+		incoming_names.append(str(zone.get("name", "")))
+	var wave_number := int(wave.get("wave", 0))
+	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
+	wave_label.text = "%s   Next wave %d in %d:%02d   Aliens %d" % [
+		current_label,
+		int(wave.get("next_wave", 1)),
+		int(remaining / 60),
+		remaining % 60,
+		int(wave.get("live_aliens", 0)),
+	]
+	if not incoming_names.is_empty():
+		wave_label.text += "   Incoming: " + ", ".join(incoming_names)
 	var building: Dictionary = {}
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)

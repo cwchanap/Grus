@@ -18,11 +18,13 @@ const FRIENDLY_COLOR := Color(0.3, 0.6, 1.0)
 const ENEMY_COLOR := Color(1.0, 0.35, 0.3)
 const RESOURCE_COLOR := Color(0.95, 0.8, 0.3)
 const CAMERA_COLOR := Color(1, 1, 1, 0.85)
+const WAVE_PING_COLOR := Color(1.0, 0.82, 0.32, 0.9)
 
 ## Live marker counts for smoke/telemetry reads.
 var friendly_marker_count := 0
 var enemy_marker_count := 0
 var resource_marker_count := 0
+var incoming_ping_points := PackedVector2Array()
 
 var _revision := -1
 var _image: Image
@@ -78,6 +80,15 @@ func _refresh_markers() -> void:
 	_friendly_points.clear()
 	_enemy_points.clear()
 	_resource_points.clear()
+	incoming_ping_points.clear()
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	# The snapshot owns the timer too: show only the first six simulated
+	# seconds of the warning, then leave the longer-lived HUD text in place.
+	if float(wave.get("seconds_remaining", 0.0)) >= 24.0:
+		for zone in wave.get("incoming_zones", []):
+			incoming_ping_points.append(Vector2(
+				float(zone.get("anchor_x", -1)),
+				float(zone.get("anchor_y", -1))))
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		_add_marker(node)
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -116,6 +127,9 @@ func _draw() -> void:
 		draw_circle(point, 2.0, ENEMY_COLOR)
 	for point in _friendly_points:
 		draw_circle(point, 2.0, FRIENDLY_COLOR)
+	for point in incoming_ping_points:
+		draw_circle(point, 1.6, WAVE_PING_COLOR)
+		draw_arc(point, 5.0, 0.0, TAU, 20, WAVE_PING_COLOR, 1.0)
 	var corners := _camera_ground_corners()
 	if corners.size() == 4:
 		draw_polyline(corners + PackedVector2Array([corners[0]]), CAMERA_COLOR, 1.0)
