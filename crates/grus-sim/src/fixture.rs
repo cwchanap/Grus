@@ -308,7 +308,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         }
     }
 
-    let units = world
+    let mut units = world
         .resource::<UnitIndex>()
         .iter()
         .filter_map(|(id, entity)| {
@@ -318,6 +318,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 .map(|unit| (*id, unit.kind))
         })
         .collect::<Vec<_>>();
+    units.sort_unstable_by_key(|(id, _)| *id);
     let workers: Vec<UnitId> = units
         .iter()
         .filter_map(|(id, kind)| (*kind == UnitKind::Worker).then_some(*id))
