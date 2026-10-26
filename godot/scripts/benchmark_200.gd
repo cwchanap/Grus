@@ -7,10 +7,13 @@ extends Node
 ## real-time duration. A liveness checkpoint between fixed frame intervals fails a
 ## sample that shows neither unit movement nor combat activity. Real combat
 ## deaths are expected: units are never respawned and health is never reset.
+## Every five measured seconds, surviving combatants receive ordinary
+## AttackMove inputs toward alternating fixture-authored North/South goals.
 
 const BENCHMARK_SIZE := Vector2i(1920, 1080)
 const DEFAULT_SAMPLE_SECONDS := 10.0
 const WARMUP_SECONDS := 2.0
+const ORDER_REPLAY_SECONDS := 5.0
 const VIEW_WAIT_FRAMES := 180
 const VISIBILITY_WAIT_FRAMES := 600
 const MOVEMENT_CHECK_INTERVAL := 20
@@ -151,6 +154,9 @@ func _run() -> void:
 	if not GrusBridge.has_method("combat_event_total"):
 		_fail("benchmark combat-activity counter is missing")
 		return
+	if not GrusBridge.has_method("replay_benchmark_orders"):
+		_fail("benchmark order replay bridge is missing")
+		return
 	if not GrusBridge.reset_benchmark_fixture():
 		_fail("benchmark reset bridge rejected the benchmark fixture")
 		return
@@ -248,6 +254,8 @@ func _run() -> void:
 	_last_sample_ticks = start_ticks
 	var deadline := start_ticks + int(roundf(sample_seconds * 1_000_000.0))
 	var previous_ticks := start_ticks
+	var next_orders := start_ticks + int(ORDER_REPLAY_SECONDS * 1_000_000.0)
+	var southbound := false
 	var frame := 0
 	while true:
 		await get_tree().process_frame
@@ -255,6 +263,12 @@ func _run() -> void:
 		samples.append(float(now - previous_ticks) / 1000.0)
 		previous_ticks = now
 		frame += 1
+		if now >= next_orders and now < deadline:
+			if not GrusBridge.replay_benchmark_orders(southbound):
+				_fail("benchmark scripted AttackMove orders were rejected")
+				return
+			southbound = not southbound
+			next_orders += int(ORDER_REPLAY_SECONDS * 1_000_000.0)
 		if frame % MOVEMENT_CHECK_INTERVAL == 0:
 			older_checkpoint_positions = checkpoint_positions.duplicate()
 			if not _liveness_checkpoint(checkpoint_positions, frame, now):

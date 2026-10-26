@@ -4,7 +4,7 @@
 **Scoped spec:** [HPA-449 design](../specs/2026-10-24-hpa-449-wave-director-design.md)  
 **Parent spec:** [Winter Survival](../specs/2026-10-21-winter-survival-design.md)  
 **Verified base:** `main` `8b4c70c05458f133d7a541cd656c277d7f4ba02d`, includes merged HPA-448 PR #9.  
-**Status:** documentation-only planning baseline; implementation and tests **not performed**. The **same draft PR/branch** is the implementation vehicle; never open a follow-up implementation PR for this ticket.
+**Status:** implementation completed on the existing PR branch, with local acceptance recorded in [verification evidence](../../hpa-449-wave-director-evidence.md). Hosted Linux/export/E2E results are tracked separately through this same PR. Never open a follow-up implementation PR for this ticket or merge before its remaining gates pass.
 
 ## Selection and dependencies
 
@@ -82,14 +82,24 @@ These are **reviewable stages inside this single PR**, not additional tickets/PR
 
 ## Acceptance / final gates
 
-- [ ] Format: `cargo fmt --all -- --check`.
-- [ ] Compile and lint: `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings`.
-- [ ] Full Rust workspace tests and **>=90% `grus-sim` line coverage** with the existing cargo-llvm-cov gate; no test-time-only duplicated algorithms.
-- [ ] Rust wave, exact roster/order (1/4/8/10), `HUMAN`/alien catalogue partition, fixture zone reachability, Crystal reward, system-order and session regressions listed in the design; one retry predicate for rejection/arrival/lost leg, with `path_call_count` proving only **director** throttling.
-- [ ] Real Godot bridge, fixture-reset, economy, adapted scouting/fog smoke, combat-lifecycle **Defeat**, and new wave smokes. Every other pre-existing Playing smoke asserts via shared helpers that **no wave launched before completion** (including before resets); wave/Defeat scenarios are explicitly exempt. All pass within existing/<=90s scene timeouts and clean process exit.
+- [x] Format: `cargo fmt --all -- --check`.
+- [x] Compile and lint: `cargo clippy --workspace --all-targets -- -D warnings`; `cargo clippy -p grus-godot --all-targets --features e2e -- -D warnings`.
+- [x] Full Rust workspace tests and **>=90% `grus-sim` line coverage** with the existing cargo-llvm-cov gate; no test-time-only duplicated algorithms.
+- [x] Rust wave, exact roster/order (1/4/8/10), `HUMAN`/alien catalogue partition, fixture zone reachability, Crystal reward, system-order and session regressions listed in the design; one retry predicate for rejection/arrival/lost leg, with `path_call_count` proving only **director** throttling.
+- [x] Real Godot bridge, fixture-reset, economy, adapted scouting/fog smoke, combat-lifecycle **Defeat**, and new wave smokes. Every other pre-existing Playing smoke asserts via shared helpers that **no wave launched before completion** (including before resets); wave/Defeat scenarios are explicitly exempt. All pass within existing/<=90s scene timeouts and clean process exit.
 - [ ] Linux Godot import, smoke export/boot, `bevy-e2e` exported-game test and strict CI build split still pass.
 - [ ] Session-free 200-unit survival benchmark runs the full existing frame-stat/liveness contract at 10s CI; measurements labeled as the **new** workload.
-- [ ] README/spec synchronized; PR remains **Draft** while documentation-only and is not merged before the implementation and gates are complete.
+- [x] README/spec synchronized; PR remains **Draft** while documentation-only and is not merged before the implementation and gates are complete.
+
+Local acceptance on 2026-10-26: 241 workspace tests, 18 serialized e2e-feature
+library tests, 96.11% simulation line coverage, five real exit-0 Godot smokes,
+and fresh 10-second headless / 60-second rendered M1 Pro benchmark samples.
+The two Linux/hosted checkboxes above remain pending their actual CI run;
+local macOS checks do not substitute for them. The benchmark's one-off orders
+settled at 28 seconds, so its existing runner now replays ordinary survivor
+AttackMove inputs every five measured seconds through a session-free-only
+fixture/bridge seam, retaining all liveness checks and real deaths. See the
+linked evidence for the red regression, preserved stats and measurement limits.
 
 ## Deliberate exclusions and choices for review
 

@@ -361,6 +361,58 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
     step_waves(world, map, SIM_STEP_SECONDS);
 }
 
+/// Replays benchmark inputs through the ordinary command dispatcher. No
+/// survivors are replaced, healed or given different combat statistics.
+pub fn replay_benchmark_orders(world: &mut World, map: &mut GridMap, southbound: bool) -> bool {
+    if world.contains_resource::<crate::session::MatchSession>()
+        || !world.contains_resource::<UnitIndex>()
+    {
+        return false;
+    }
+    let goals = if southbound {
+        [(TeamId(1), EntryZone::South), (TeamId(2), EntryZone::North)]
+    } else {
+        [(TeamId(1), EntryZone::North), (TeamId(2), EntryZone::South)]
+    };
+    let mut issued = false;
+    for (team, zone) in goals {
+        let mut units: Vec<_> = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter_map(|(id, entity)| {
+                world.get::<Unit>(*entity).and_then(|unit| {
+                    (unit.team == team && unit.kind != UnitKind::Worker).then_some(*id)
+                })
+            })
+            .collect();
+        units.sort_unstable();
+        if units.is_empty() {
+            continue;
+        }
+        let anchor = ENTRY_ZONES
+            .iter()
+            .find(|(entry, _)| *entry == zone)
+            .unwrap()
+            .1;
+        let result = apply_player_command(
+            world,
+            map,
+            PlayerCommand::Units(UnitCommand {
+                issuer: team,
+                units,
+                kind: UnitCommandKind::AttackMove {
+                    target: map.cell_center(anchor),
+                },
+            }),
+        );
+        if result.reject.is_some() || !result.rejected_units.is_empty() {
+            return false;
+        }
+        issued = true;
+    }
+    issued
+}
+
 /// Applies one deterministic setup command and panics unless it was fully
 /// accepted (no top-level reject, no rejected units).
 fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {

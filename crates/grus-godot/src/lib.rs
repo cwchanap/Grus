@@ -15,9 +15,10 @@ use grus_sim::{
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
     active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
-    idle_worker_ids, population_cap, population_used, produces, refresh_visibility, seed_skirmish,
-    set_paused, start_match, step_combat, step_construction, step_economy, step_movement,
-    step_production, step_waves, validate_placement, visible_to,
+    idle_worker_ids, population_cap, population_used, produces, refresh_visibility,
+    replay_benchmark_orders, seed_skirmish, set_paused, start_match, step_combat,
+    step_construction, step_economy, step_movement, step_production, step_waves,
+    validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -323,6 +324,25 @@ impl GrusBridgeNode {
         // reset — drop it so the next fetch rebuilds from the reseeded map.
         self.visibility_cache = None;
         true
+    }
+
+    /// Scripted benchmark input only; normal match sessions reject this seam.
+    #[func]
+    fn replay_benchmark_orders(&self, southbound: bool) -> bool {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return false;
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return false;
+        };
+        let world = app.world_mut();
+        if !world.contains_resource::<GridMap>() {
+            return false;
+        }
+        world.resource_scope(|world, mut map: Mut<GridMap>| {
+            replay_benchmark_orders(world, &mut map, southbound)
+        })
     }
 
     /// Sim-speed multiplier for headless gate runs. Scales Godot's
