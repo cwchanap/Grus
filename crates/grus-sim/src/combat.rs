@@ -10,7 +10,7 @@ use bevy::prelude::{Component, Entity, Resource, World};
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, unit_spec};
 use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
-use crate::economy::{WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
+use crate::economy::{TeamEconomy, WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -735,7 +735,20 @@ fn strike(
     }
     if killed {
         match target {
-            CombatTarget::Unit(_) => destroy_unit(world, target_entity),
+            CombatTarget::Unit(_) => {
+                if unit.team == TeamId(1)
+                    && let Some(reward) = world
+                        .get::<Unit>(target_entity)
+                        .filter(|victim| victim.team == TeamId(2))
+                        .and_then(|victim| unit_spec(victim.kind).alien)
+                        .map(|alien| alien.crystal_reward)
+                    && let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
+                    && let Some(team) = economy.0.get_mut(&TeamId(1))
+                {
+                    team.stockpile.crystals = team.stockpile.crystals.saturating_add(reward);
+                }
+                destroy_unit(world, target_entity);
+            }
             CombatTarget::Building(_) => {
                 // Result resolves immediately on Research Center destruction.
                 let research_center = world

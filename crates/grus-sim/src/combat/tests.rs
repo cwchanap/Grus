@@ -54,6 +54,24 @@ fn attack_move_command(issuer: TeamId, units: &[UnitId], target: Vec2) -> Player
     })
 }
 
+fn set_team_one_crystals(world: &mut World, crystals: u32) {
+    let mut economy = TeamEconomy::default();
+    economy.insert_team(
+        TeamId(1),
+        ResourceStockpile {
+            crystals,
+            ..ResourceStockpile::default()
+        },
+    );
+    world.insert_resource(economy);
+}
+
+fn team_one_crystals(world: &World) -> u32 {
+    world.resource::<TeamEconomy>().0[&TeamId(1)]
+        .stockpile
+        .crystals
+}
+
 fn spawn_building(
     world: &mut World,
     map: &mut GridMap,
@@ -268,8 +286,7 @@ fn rifleman_strikes_at_ranged_range_without_moving() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Counter bonuses were deleted with the PvP roster: every kind takes the
-    // attacker's base damage.
+    // Rifleman base 8; Guard is not its counter target.
     assert_eq!(world.get::<Health>(defender).unwrap().current, 92);
     assert!(world.get::<MoveOrder>(attacker).is_none());
     let recorded = events(&world);
@@ -279,7 +296,7 @@ fn rifleman_strikes_at_ranged_range_without_moving() {
 }
 
 #[test]
-fn strikes_deal_only_base_damage_to_every_kind() {
+fn strikes_skip_counter_bonus_for_nonmatching_kinds() {
     let mut world = World::new();
     let mut map = open_map();
     spawn_combatant(
@@ -304,9 +321,190 @@ fn strikes_deal_only_base_damage_to_every_kind() {
     );
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // Guard base 10; no counter bonus survives the PvP-roster deletion.
+    // Guard base 10; Rifleman is not its counter target.
     assert_eq!(world.get::<Health>(rifleman).unwrap().current, 60);
     assert_eq!(events(&world)[0].damage, 10);
+}
+
+#[test]
+fn team_one_crystal_rewards_arrive_once_on_alien_kills_and_accumulate() {
+    let mut world = World::new();
+    let mut map = open_map();
+    set_team_one_crystals(&mut world, 7);
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    let swarmer = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Swarmer,
+    );
+    world.get_mut::<Health>(swarmer).unwrap().current = 20;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(world.get::<Health>(swarmer).unwrap().current, 5);
+    assert!(!events(&world)[0].killed);
+    assert_eq!(team_one_crystals(&world), 7, "living aliens do not pay out");
+
+    for _ in 0..25 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world.resource::<UnitIndex>().entity(UnitId(2)).is_none() {
+            break;
+        }
+    }
+    assert!(
+        world.resource::<UnitIndex>().entity(UnitId(2)).is_none(),
+        "the follow-up strike kills the swarmer"
+    );
+    assert!(events(&world)[0].killed);
+    assert_eq!(team_one_crystals(&world), 8);
+
+    // The next combat tick clears the presentation buffer without reversing
+    // the kill-boundary stockpile credit.
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(events(&world).is_empty());
+    assert_eq!(team_one_crystals(&world), 8);
+
+    let rifleman = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        Vec2::new(5.5, 8.5),
+        UnitKind::Rifleman,
+    );
+    let spitter = spawn_combatant(
+        &mut world,
+        UnitId(4),
+        TeamId(2),
+        Vec2::new(6.5, 8.5),
+        UnitKind::Spitter,
+    );
+    world.get_mut::<Health>(spitter).unwrap().current = 12;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(3)], CombatTarget::Unit(UnitId(4))),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<Health>(spitter).is_none());
+    assert!(events(&world)[0].killed);
+    assert_eq!(team_one_crystals(&world), 10, "alien rewards accumulate");
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(team_one_crystals(&world), 10, "one kill pays once");
+    assert!(world.get::<Unit>(rifleman).is_some());
+}
+
+#[test]
+fn crystal_rewards_require_a_team_one_killer_and_team_two_alien_victim() {
+    let mut world = World::new();
+    let mut map = open_map();
+    set_team_one_crystals(&mut world, 11);
+    spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    let worker = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Worker,
+    );
+    world.get_mut::<Health>(worker).unwrap().current = 10;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<Unit>(worker).is_none());
+    assert_eq!(team_one_crystals(&world), 11, "human kills pay nothing");
+
+    let mut world = World::new();
+    let mut map = open_map();
+    set_team_one_crystals(&mut world, 11);
+    let guard = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(1),
+        Vec2::new(5.5, 5.5),
+        UnitKind::Guard,
+    );
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(6.5, 5.5),
+        UnitKind::Swarmer,
+    );
+    world.get_mut::<Health>(guard).unwrap().current = 6;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(2), &[UnitId(2)], CombatTarget::Unit(UnitId(1))),
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<Unit>(guard).is_none());
+    assert_eq!(
+        team_one_crystals(&world),
+        11,
+        "alien attacks do not pay Team 1"
+    );
+}
+
+#[test]
+fn human_counter_damage_only_applies_to_catalogued_alien_matchups() {
+    for (attacker_kind, target_kind, expected_damage) in [
+        (UnitKind::Guard, UnitKind::Swarmer, 15),
+        (UnitKind::Guard, UnitKind::Spitter, 10),
+        (UnitKind::Rifleman, UnitKind::Spitter, 12),
+        (UnitKind::Rifleman, UnitKind::Swarmer, 8),
+    ] {
+        let mut world = World::new();
+        let mut map = open_map();
+        spawn_combatant(
+            &mut world,
+            UnitId(1),
+            TeamId(1),
+            Vec2::new(5.5, 5.5),
+            attacker_kind,
+        );
+        let target = spawn_combatant(
+            &mut world,
+            UnitId(2),
+            TeamId(2),
+            Vec2::new(6.5, 5.5),
+            target_kind,
+        );
+        let health_before = world.get::<Health>(target).unwrap().current;
+        issue(
+            &mut world,
+            &mut map,
+            attack_command(TeamId(1), &[UnitId(1)], CombatTarget::Unit(UnitId(2))),
+        );
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(events(&world)[0].damage, expected_damage);
+        assert_eq!(
+            world.get::<Health>(target).unwrap().current,
+            health_before - expected_damage
+        );
+    }
 }
 
 #[test]
@@ -2418,7 +2616,7 @@ fn ranged_pursuit_drops_the_leg_and_stops_closing_at_range() {
     );
 
     // Holding position: no closing into melee, and the next shot still
-    // lands once the cooldown elapses (8 base; no counter bonus survives).
+    // lands once the cooldown elapses (8 base; Guard is not the counter target).
     let mut rearmed = false;
     for _ in 0..30 {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
