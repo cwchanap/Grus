@@ -1,0 +1,258 @@
+use bevy::math::Vec2;
+use bevy::prelude::World;
+
+use super::*;
+use crate::catalog::{MAX_LIVE_ALIENS, unit_spec};
+use crate::combat::{CombatOrder, CombatTarget, Health};
+use crate::commands::UnitIndex;
+use crate::fixture::{MapFixture, seed_skirmish};
+use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
+use crate::map::{GridMap, GridPos};
+use crate::movement::{MoveOrder, SimPosition, Unit};
+
+fn seeded_world() -> (World, GridMap) {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    (world, map)
+}
+
+fn alien_ids(world: &World, team: TeamId) -> Vec<UnitId> {
+    let mut ids: Vec<_> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            let unit = world.get::<Unit>(*entity)?;
+            (unit.team == team && unit_spec(unit.kind).alien.is_some()).then_some(*id)
+        })
+        .collect();
+    ids.sort_unstable();
+    ids
+}
+
+fn unit_cells(world: &World, map: &GridMap) -> std::collections::HashSet<GridPos> {
+    world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(_, entity)| {
+            world
+                .get::<SimPosition>(*entity)
+                .map(|position| map.world_to_cell(position.current))
+        })
+        .collect()
+}
+
+fn add_team_two_aliens(world: &mut World, map: &GridMap, count: usize) -> Vec<UnitId> {
+    let mut occupied = unit_cells(world, map);
+    let mut spawned = Vec::with_capacity(count);
+    for y in 0..map.height() {
+        for x in 0..map.width() {
+            let cell = GridPos::new(x, y);
+            if !map.is_walkable(cell) || !occupied.insert(cell) {
+                continue;
+            }
+            let id = world.resource_mut::<IdAllocator>().allocate_unit();
+            let entity = crate::commands::spawn_unit(
+                world,
+                id,
+                TeamId(2),
+                map.cell_center(cell),
+                UnitKind::Swarmer,
+                unit_spec(UnitKind::Swarmer).speed,
+            );
+            world.entity_mut(entity).insert(CombatOrder::Attack {
+                target: CombatTarget::Building(BuildingId(1)),
+                last_target_cell: None,
+            });
+            spawned.push(id);
+            if spawned.len() == count {
+                return spawned;
+            }
+        }
+    }
+    panic!("fixture has enough walkable cells for the live-alien cap test");
+}
+
+#[test]
+fn seeded_wave_spawns_distinct_aliens_and_dispatches_attack_moves_in_the_launch_tick() {
+    let (mut world, mut map) = seeded_world();
+    let occupied_before = unit_cells(&world, &map);
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+
+    step_waves(&mut world, &mut map, 0.05);
+
+    let ids = alien_ids(&world, TeamId(2));
+    assert_eq!(world.resource::<WaveState>().next_wave, 2);
+    assert_eq!(ids.len(), 12);
+    let mut spawned_cells = std::collections::HashSet::new();
+    for id in ids {
+        let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+        let cell = map.world_to_cell(world.get::<SimPosition>(entity).unwrap().current);
+        assert!(!occupied_before.contains(&cell));
+        assert!(
+            spawned_cells.insert(cell),
+            "wave spawn cells must be unique"
+        );
+        assert!(matches!(
+            world.get::<CombatOrder>(entity),
+            Some(CombatOrder::AttackMove { target: None, .. })
+        ));
+        assert!(world.get::<MoveOrder>(entity).is_some());
+    }
+}
+
+#[test]
+fn rejected_wave_routes_retry_once_per_second_after_the_path_opens() {
+    let (mut world, mut map) = seeded_world();
+    for x in 0..map.width() {
+        map.set_blocked(GridPos::new(x, 40), true);
+    }
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+
+    step_waves(&mut world, &mut map, 0.05);
+    let ids = alien_ids(&world, TeamId(2));
+    assert_eq!(ids.len(), 12);
+    assert!(ids.iter().all(|id| {
+        let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+        world.get::<CombatOrder>(entity).is_none() && world.get::<MoveOrder>(entity).is_none()
+    }));
+    let rejected_route_calls = map.path_call_count();
+    assert!(rejected_route_calls > 0);
+
+    for x in 0..map.width() {
+        map.set_blocked(GridPos::new(x, 40), false);
+    }
+    for _ in 0..19 {
+        step_waves(&mut world, &mut map, 0.05);
+    }
+    assert_eq!(map.path_call_count(), rejected_route_calls);
+    assert!(ids.iter().all(|id| {
+        let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+        world.get::<MoveOrder>(entity).is_none()
+    }));
+
+    step_waves(&mut world, &mut map, 0.05);
+    assert!(map.path_call_count() > rejected_route_calls);
+    let failed: Vec<_> = ids
+        .iter()
+        .filter(|id| {
+            let entity = world.resource::<UnitIndex>().entity(**id).unwrap();
+            world.get::<MoveOrder>(entity).is_none()
+        })
+        .collect();
+    assert!(failed.is_empty(), "recovery rejected for {failed:?}");
+}
+
+#[test]
+fn stranded_and_lost_attack_moves_recover_without_resetting_moving_or_engaged_aliens() {
+    let (mut world, mut map) = seeded_world();
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+    step_waves(&mut world, &mut map, 0.05);
+    let ids = alien_ids(&world, TeamId(2));
+
+    let stranded = world.resource::<UnitIndex>().entity(ids[0]).unwrap();
+    world.entity_mut(stranded).remove::<MoveOrder>();
+    world.get_mut::<SimPosition>(stranded).unwrap().current = Vec2::new(20.5, 20.5);
+
+    let lost_route = world.resource::<UnitIndex>().entity(ids[1]).unwrap();
+    world.entity_mut(lost_route).remove::<MoveOrder>();
+    world.entity_mut(lost_route).remove::<CombatOrder>();
+    world.get_mut::<SimPosition>(lost_route).unwrap().current = Vec2::new(22.5, 20.5);
+
+    let moving = world.resource::<UnitIndex>().entity(ids[2]).unwrap();
+    world.get_mut::<SimPosition>(moving).unwrap().current = Vec2::new(24.5, 20.5);
+
+    let engaged = world.resource::<UnitIndex>().entity(ids[3]).unwrap();
+    world.entity_mut(engaged).remove::<MoveOrder>();
+    world.entity_mut(engaged).insert(CombatOrder::AttackMove {
+        destination: GridPos::new(20, 20),
+        target: Some(CombatTarget::Building(BuildingId(1))),
+        last_target_cell: None,
+    });
+    world.get_mut::<SimPosition>(engaged).unwrap().current = Vec2::new(26.5, 20.5);
+
+    let in_range = world.resource::<UnitIndex>().entity(ids[4]).unwrap();
+    world.entity_mut(in_range).remove::<MoveOrder>();
+    world.entity_mut(in_range).insert(CombatOrder::AttackMove {
+        destination: GridPos::new(20, 20),
+        target: None,
+        last_target_cell: None,
+    });
+    world.get_mut::<SimPosition>(in_range).unwrap().current = Vec2::new(54.5, 48.5);
+
+    world.insert_resource(WaveState {
+        elapsed: 300.95,
+        next_wave: 2,
+    });
+    step_waves(&mut world, &mut map, 0.05);
+
+    assert!(world.get::<MoveOrder>(stranded).is_some());
+    assert!(world.get::<MoveOrder>(lost_route).is_some());
+    assert!(world.get::<MoveOrder>(moving).is_some());
+    assert!(world.get::<MoveOrder>(engaged).is_none());
+    assert!(world.get::<MoveOrder>(in_range).is_none());
+}
+
+#[test]
+fn live_cap_overflow_buffs_only_fresh_wave_units_and_full_cap_launches_nothing() {
+    let (mut world, mut map) = seeded_world();
+    let existing = add_team_two_aliens(&mut world, &map, MAX_LIVE_ALIENS as usize - 1);
+    let prior_health = world
+        .get::<Health>(world.resource::<UnitIndex>().entity(existing[0]).unwrap())
+        .copied()
+        .unwrap();
+    world.insert_resource(WaveState {
+        elapsed: 1200.0,
+        next_wave: 10,
+    });
+
+    step_waves(&mut world, &mut map, 0.05);
+
+    let ids = alien_ids(&world, TeamId(2));
+    assert_eq!(ids.len(), MAX_LIVE_ALIENS as usize);
+    let fresh_id = *ids.last().unwrap();
+    assert!(!existing.contains(&fresh_id));
+    let fresh = world.resource::<UnitIndex>().entity(fresh_id).unwrap();
+    assert_eq!(world.get::<Unit>(fresh).unwrap().kind, UnitKind::Behemoth);
+    assert_eq!(world.get::<Health>(fresh).unwrap().max, 4400);
+    assert_eq!(world.get::<Health>(fresh).unwrap().current, 4400);
+    assert_eq!(
+        world.get::<Health>(world.resource::<UnitIndex>().entity(existing[0]).unwrap()),
+        Some(&prior_health)
+    );
+
+    let (mut full_world, mut full_map) = seeded_world();
+    let full = add_team_two_aliens(&mut full_world, &full_map, MAX_LIVE_ALIENS as usize);
+    let next_unit = full_world.resource::<IdAllocator>().next_unit;
+    let full_prior_health = full_world
+        .get::<Health>(full_world.resource::<UnitIndex>().entity(full[0]).unwrap())
+        .copied()
+        .unwrap();
+    full_world.insert_resource(WaveState {
+        elapsed: 1200.0,
+        next_wave: 10,
+    });
+
+    step_waves(&mut full_world, &mut full_map, 0.05);
+
+    assert_eq!(
+        alien_ids(&full_world, TeamId(2)).len(),
+        MAX_LIVE_ALIENS as usize
+    );
+    assert_eq!(full_world.resource::<IdAllocator>().next_unit, next_unit);
+    assert_eq!(full_world.resource::<WaveState>().next_wave, 11);
+    assert_eq!(
+        full_world.get::<Health>(full_world.resource::<UnitIndex>().entity(full[0]).unwrap()),
+        Some(&full_prior_health)
+    );
+}

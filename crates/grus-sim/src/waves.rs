@@ -1,13 +1,24 @@
+use std::collections::HashSet;
 use std::ops::Range;
 
 use bevy::prelude::{Resource, World};
 
+use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{
-    MAX_LIVE_ALIENS, UnitKind, WAVE_BUDGET_BASE, WAVE_BUDGET_PER_WAVE,
-    WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS,
-    WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS, unit_spec,
+    ATTACK_MOVE_RADIUS, BuildingKind, MAX_LIVE_ALIENS, UnitKind, WAVE_BUDGET_BASE,
+    WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
+    WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
+    unit_spec,
+};
+use crate::combat::{CombatOrder, Health};
+use crate::commands::{
+    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, approach_slots,
+    destination_slots, spawn_unit,
 };
 use crate::fixture::{ENTRY_ZONES, EntryZone};
+use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
+use crate::map::{Footprint, GridMap, GridPos};
+use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
 
 const TIMER_BOUNDARY_EPSILON_SECONDS: f64 = 0.0001;
@@ -197,6 +208,239 @@ fn wave_deadline(wave: u64) -> f64 {
     f64::from(WAVE_PREPARATION_SECONDS)
         + wave.saturating_sub(1) as f64 * f64::from(WAVE_INTERVAL_SECONDS)
 }
+
+/// Advances the pure-simulation wave clock, launches each newly due wave,
+/// and retries stranded aliens at most once per elapsed simulation second.
+pub fn step_waves(world: &mut World, map: &mut GridMap, seconds: f32) {
+    let previous = world
+        .get_resource::<WaveState>()
+        .copied()
+        .unwrap_or_default();
+    let mut state = previous;
+    let due_waves = state.advance(world, seconds);
+    let retry_due = state.elapsed.floor() > previous.elapsed.floor();
+    world.insert_resource(state);
+
+    if retry_due {
+        retry_stranded_aliens(world, map);
+    }
+    for wave in due_waves {
+        launch_wave(world, map, wave);
+    }
+}
+
+fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
+    let roster = plan_roster(wave);
+    let planned = roster.ordered_prefix(MAX_LIVE_ALIENS as usize);
+    let live = live_alien_count(world, TeamId(2));
+    let room = (MAX_LIVE_ALIENS as usize).saturating_sub(live);
+    let spawn_order: Vec<UnitKind> = planned.into_iter().take(room).collect();
+    if spawn_order.is_empty() {
+        return;
+    }
+
+    let prefix_threat = spawn_order.iter().fold(0_u64, |total, kind| {
+        total.saturating_add(u64::from(unit_spec(*kind).alien.unwrap().threat))
+    });
+    let overflow_threat = roster.total_threat().saturating_sub(prefix_threat);
+    let zones = zones_for(wave);
+    let mut occupied = live_unit_cells(world, map);
+    let mut spawned = Vec::with_capacity(spawn_order.len());
+
+    for (index, kind) in spawn_order.iter().copied().enumerate() {
+        let zone_index = index % zones.len();
+        let zone = zones[zone_index];
+        let Some(anchor) = ENTRY_ZONES
+            .iter()
+            .find_map(|(candidate, anchor)| (*candidate == zone).then_some(*anchor))
+        else {
+            continue;
+        };
+        let remaining_in_zone = 1 + (spawn_order.len() - index - 1) / zones.len();
+        let Some(cell) = destination_slots(map, anchor, remaining_in_zone, &occupied)
+            .into_iter()
+            .find(|candidate| map.is_walkable(*candidate) && !occupied.contains(candidate))
+        else {
+            break;
+        };
+        occupied.insert(cell);
+
+        let Some(id) = world
+            .get_resource_mut::<IdAllocator>()
+            .map(|mut allocator| allocator.allocate_unit())
+        else {
+            break;
+        };
+        let spec = unit_spec(kind);
+        let entity = spawn_unit(
+            world,
+            id,
+            TeamId(2),
+            map.cell_center(cell),
+            kind,
+            spec.speed,
+        );
+        spawned.push(id);
+        if overflow_threat > 0 {
+            let max_health = scaled_health(spec.max_health, overflow_threat, prefix_threat);
+            world.entity_mut(entity).insert(Health {
+                current: max_health,
+                max: max_health,
+            });
+        }
+    }
+
+    let targets = research_center_approach_slots(world, map);
+    if targets.is_empty() {
+        return;
+    }
+    for (index, id) in spawned.into_iter().enumerate() {
+        dispatch_attack_move(world, map, id, targets[index % targets.len()]);
+    }
+}
+
+fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
+    let Some((_, footprint)) = team_one_research_center(world) else {
+        return;
+    };
+    let targets = research_center_approach_slots(world, map);
+    if targets.is_empty() {
+        return;
+    }
+
+    let mut ids: Vec<UnitId> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    let unit = world.get::<Unit>(*entity)?;
+                    (unit.team == TeamId(2) && unit_spec(unit.kind).alien.is_some()).then_some(*id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+
+    let mut target_index = 0;
+    for id in ids {
+        let Some(entity) = world
+            .get_resource::<UnitIndex>()
+            .and_then(|index| index.entity(id))
+        else {
+            continue;
+        };
+        if world.get::<MoveOrder>(entity).is_some()
+            || matches!(
+                world.get::<CombatOrder>(entity),
+                Some(CombatOrder::Attack { .. })
+                    | Some(CombatOrder::AttackMove {
+                        target: Some(_),
+                        ..
+                    })
+            )
+        {
+            continue;
+        }
+        let Some(position) = world.get::<SimPosition>(entity) else {
+            continue;
+        };
+        if position
+            .current
+            .distance(footprint.closest_point(position.current))
+            <= ATTACK_MOVE_RADIUS
+        {
+            continue;
+        }
+
+        dispatch_attack_move(world, map, id, targets[target_index % targets.len()]);
+        target_index += 1;
+    }
+}
+
+fn research_center_approach_slots(world: &World, map: &GridMap) -> Vec<GridPos> {
+    let Some((_, footprint)) = team_one_research_center(world) else {
+        return Vec::new();
+    };
+    let used = HashSet::new();
+    approach_slots(map, footprint, &used, footprint.perimeter_cells().len())
+}
+
+fn team_one_research_center(world: &World) -> Option<(BuildingId, Footprint)> {
+    let mut centers: Vec<_> = world
+        .get_resource::<BuildingIndex>()?
+        .iter()
+        .filter_map(|(id, entity)| {
+            let building = world.get::<Building>(*entity)?;
+            if building.team == TeamId(1) && building.kind == BuildingKind::ResearchCenter {
+                world
+                    .get::<Footprint>(*entity)
+                    .copied()
+                    .map(|footprint| (*id, footprint))
+            } else {
+                None
+            }
+        })
+        .collect();
+    centers.sort_unstable_by_key(|(id, _)| *id);
+    centers.into_iter().next()
+}
+
+fn dispatch_attack_move(world: &mut World, map: &mut GridMap, id: UnitId, target: GridPos) {
+    let target = map.cell_center(target);
+    apply_player_command(
+        world,
+        map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(2),
+            units: vec![id],
+            kind: UnitCommandKind::AttackMove { target },
+        }),
+    );
+}
+
+fn live_alien_count(world: &World, team: TeamId) -> usize {
+    world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter(|(_, entity)| {
+                    world.get::<Unit>(**entity).is_some_and(|unit| {
+                        unit.team == team && unit_spec(unit.kind).alien.is_some()
+                    })
+                })
+                .count()
+        })
+        .unwrap_or_default()
+}
+
+fn live_unit_cells(world: &World, map: &GridMap) -> HashSet<GridPos> {
+    world
+        .get_resource::<UnitIndex>()
+        .into_iter()
+        .flat_map(|index| index.iter())
+        .filter_map(|(_, entity)| {
+            world
+                .get::<SimPosition>(*entity)
+                .map(|position| map.world_to_cell(position.current))
+        })
+        .collect()
+}
+
+fn scaled_health(base: u32, overflow: u64, spawned: u64) -> u32 {
+    if overflow == 0 || spawned == 0 {
+        return base;
+    }
+    let total_points = u128::from(spawned) + u128::from(overflow);
+    let denominator = u128::from(spawned);
+    let scaled = (u128::from(base) * total_points + denominator / 2) / denominator;
+    u32::try_from(scaled).unwrap_or(u32::MAX)
+}
+
+#[cfg(test)]
+#[path = "waves/tests.rs"]
+mod runtime_tests;
 
 #[cfg(test)]
 mod tests {
