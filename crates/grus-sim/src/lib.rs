@@ -54,4 +54,4 @@ pub use session::{
 pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
-pub use waves::{WaveRoster, WaveState, plan_roster, wave_budget, zones_for};
+pub use waves::{WaveRoster, WaveState, plan_roster, step_waves, wave_budget, zones_for};

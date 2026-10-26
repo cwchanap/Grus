@@ -661,7 +661,7 @@ fn slot_taken(used: &HashMap<GridPos, usize>, cell: &GridPos) -> bool {
     used.contains_key(cell)
 }
 
-fn destination_slots(
+pub(crate) fn destination_slots(
     map: &GridMap,
     target: GridPos,
     unit_count: usize,
