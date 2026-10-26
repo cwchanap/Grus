@@ -13,7 +13,8 @@ use crate::commands::{
 use crate::economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceStockpile, TeamEconomy, WorkerTask,
 };
-use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
+use crate::fixture::{MapFixture, seed_skirmish};
+use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
 use crate::session::tests as journeys;
@@ -404,6 +405,54 @@ fn team_one_crystal_rewards_arrive_once_on_alien_kills_and_accumulate() {
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(team_one_crystals(&world), 10, "one kill pays once");
     assert!(world.get::<Unit>(rifleman).is_some());
+}
+
+#[test]
+fn seeded_skirmish_credits_crystal_reward_to_existing_team_one_stockpile() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+
+    let stockpile_before = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    let (attacker_id, alien_id) = {
+        let mut ids = world.resource_mut::<IdAllocator>();
+        (ids.allocate_unit(), ids.allocate_unit())
+    };
+    let attacker = spawn_unit(
+        &mut world,
+        attacker_id,
+        TeamId(1),
+        map.cell_center(GridPos::new(2, 2)),
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
+    );
+    let alien = spawn_unit(
+        &mut world,
+        alien_id,
+        TeamId(2),
+        map.cell_center(GridPos::new(3, 2)),
+        UnitKind::Brute,
+        unit_spec(UnitKind::Brute).speed,
+    );
+    world.get_mut::<Health>(alien).unwrap().current = 1;
+    issue(
+        &mut world,
+        &mut map,
+        attack_command(TeamId(1), &[attacker_id], CombatTarget::Unit(alien_id)),
+    );
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert!(world.get::<Unit>(alien).is_none());
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        ResourceStockpile {
+            crystals: stockpile_before.crystals + 5,
+            ..stockpile_before
+        }
+    );
+    assert!(world.get::<Unit>(attacker).is_some());
 }
 
 #[test]
