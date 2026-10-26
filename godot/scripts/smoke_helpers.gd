@@ -15,6 +15,20 @@ static func footprint_anchor(view: Node3D) -> Vector2i:
 		int(view.global_position.x - view.scale.x * 0.5),
 		int(view.global_position.z - view.scale.z * 0.5))
 
+## Pre-wave Playing smokes must finish before the first 300 simulated-second
+## preparation countdown expires. A launched wave means the fixture choreo-
+## graphy ran long enough for alien combat to intrude, which is a smoke
+## contract failure even if the scripted interaction otherwise passed.
+static func no_launched_wave_error(where: String) -> String:
+	if not GrusBridge.has_method("wave_snapshot"):
+		return "%s: wave_snapshot bridge method is missing" % where
+	var snapshot: Dictionary = GrusBridge.wave_snapshot()
+	if snapshot.is_empty() or not snapshot.has("wave"):
+		return "%s: wave_snapshot is missing the launched wave number" % where
+	if int(snapshot.get("wave", 0)) >= 1:
+		return "smoke overran wave prep"
+	return ""
+
 ## A valid Barracks anchor in the ring slot just west of the Research
 ## Center, probed through the read-only placement preview starting from the
 ## live view's footprint — never a copied fixture coordinate. Returns

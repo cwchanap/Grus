@@ -9,15 +9,15 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
     BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
-    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, Footprint, GridMap, GridPos,
-    Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession, PlayerCommand,
-    ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason, ResourceId,
-    ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, active_phase,
-    apply_player_command, explored_by, extend_with_benchmark_workload, idle_worker_ids,
-    population_cap, population_used, produces, refresh_visibility, seed_skirmish, set_paused,
-    start_match, step_combat, step_construction, step_economy, step_movement, step_production,
-    validate_placement, visible_to,
+    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, ENTRY_ZONES, EntryZone, Footprint,
+    GridMap, GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
+    active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
+    idle_worker_ids, population_cap, population_used, produces, refresh_visibility, seed_skirmish,
+    set_paused, start_match, step_combat, step_construction, step_economy, step_movement,
+    step_production, step_waves, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -259,6 +259,14 @@ impl GrusBridgeNode {
             dict
         })
         .unwrap_or_default()
+    }
+
+    /// Read-only wave state for smoke assertions and the HUD/minimap. Zone
+    /// names and fixture anchors are present only during the 30-second
+    /// warning; individual alien positions remain behind normal fog views.
+    #[func]
+    fn wave_snapshot(&self) -> VarDictionary {
+        with_app(|app| wave_snapshot_dict(app.world())).unwrap_or_default()
     }
 
     /// Explicit Start -> Playing. Gameplay commands and the fixed steps stay
@@ -757,6 +765,7 @@ fn build_app(app: &mut App) {
             FixedUpdate,
             (
                 apply_pending_commands,
+                advance_waves,
                 advance_combat,
                 advance_movement,
                 advance_economy,
@@ -1340,6 +1349,7 @@ fn clear_gameplay_world(world: &mut World) {
     // Start.
     world.remove_resource::<CombatEvents>();
     world.remove_resource::<CombatEventTotal>();
+    world.remove_resource::<WaveState>();
     world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
@@ -1449,11 +1459,71 @@ fn format_command_result(result: &CommandResult) -> String {
 // ponytail: each advance_* system takes one coarse Time<Fixed>::delta() per
 // tick (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy
 // inside the tick if a high-speed scenario ever shows tunneling or overshoot.
+fn advance_waves(world: &mut World) {
+    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
+    world.resource_scope(|world, mut map: Mut<GridMap>| {
+        step_waves(world, &mut map, seconds);
+    });
+}
+
 fn advance_combat(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
         step_combat(world, &mut map, seconds);
     });
+}
+
+fn wave_snapshot_dict(world: &World) -> VarDictionary {
+    let state = world
+        .get_resource::<WaveState>()
+        .copied()
+        .unwrap_or_default();
+    let incoming_zones: Array<VarDictionary> = state
+        .incoming_zones()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|zone| {
+            let anchor = ENTRY_ZONES
+                .iter()
+                .find_map(|(candidate, anchor)| (*candidate == zone).then_some(*anchor))?;
+            Some(wave_zone_dict(zone, anchor))
+        })
+        .collect();
+    let live_aliens = world
+        .get_resource::<UnitIndex>()
+        .into_iter()
+        .flat_map(|index| index.iter())
+        .filter(|(_, entity)| {
+            world
+                .get::<Unit>(**entity)
+                .is_some_and(|unit| unit.team == TeamId(2) && unit_spec(unit.kind).alien.is_some())
+        })
+        .count();
+
+    let mut dict = VarDictionary::new();
+    dict.set(
+        "wave",
+        i64::try_from(state.next_wave.saturating_sub(1)).unwrap_or(i64::MAX),
+    );
+    dict.set(
+        "next_wave",
+        i64::try_from(state.next_wave).unwrap_or(i64::MAX),
+    );
+    dict.set("seconds_remaining", state.remaining_seconds());
+    dict.set("incoming_zones", &incoming_zones);
+    dict.set(
+        "live_aliens",
+        i64::try_from(live_aliens).unwrap_or(i64::MAX),
+    );
+    dict
+}
+
+fn wave_zone_dict(zone: EntryZone, anchor: GridPos) -> VarDictionary {
+    let mut dict = VarDictionary::new();
+    dict.set("name", &kind_name(zone));
+    dict.set("anchor_x", i64::from(anchor.x));
+    dict.set("anchor_y", i64::from(anchor.y));
+    dict
 }
 
 fn advance_movement(world: &mut World) {
@@ -1706,9 +1776,9 @@ mod tests {
             revision >= 1,
             "initial refresh must have bumped the revision"
         );
-        let [own_start, enemy_start] = MapFixture::team_starts();
+        let own_start = MapFixture::team_starts()[0];
         let own_research_center = own_start.research_center_anchor;
-        let enemy_research_center = enemy_start.research_center_anchor;
+        let entry_anchor = ENTRY_ZONES[0].1;
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
@@ -1717,9 +1787,9 @@ mod tests {
             2
         );
         assert_eq!(
-            states[(enemy_research_center.y * 128 + enemy_research_center.x) as usize],
+            states[(entry_anchor.y * 128 + entry_anchor.x) as usize],
             0,
-            "the enemy start must boot Unexplored — runtime is not full-info"
+            "alien entry anchors must boot Unexplored — runtime is not full-info"
         );
 
         // A normal restart re-inserts a fresh fogged map.
@@ -1737,23 +1807,21 @@ mod tests {
         );
     }
 
-    /// Runtime boot seeds the authored layout through the one ordinary
-    /// start path: Team 1 on the authored left start, Team 2 on the right.
+    /// Runtime boot seeds the one authored human core and no passive enemy
+    /// base.
     #[test]
-    fn setup_fixture_seeds_the_authored_team_starts() {
+    fn setup_fixture_seeds_only_the_authored_human_start() {
         let mut world = World::new();
         setup_fixture(&mut world);
-        let [left, right] = MapFixture::team_starts();
+        let start = MapFixture::team_starts()[0];
         assert_eq!(
             research_center_anchor(&world, TeamId(1)),
-            left.research_center_anchor,
-            "boot: Team 1 seeds on the authored left start"
+            start.research_center_anchor,
+            "boot seeds the authored human core"
         );
-        assert_eq!(
-            research_center_anchor(&world, TeamId(2)),
-            right.research_center_anchor,
-            "boot: Team 2 seeds on the authored right start"
-        );
+        assert_eq!(world.resource::<BuildingIndex>().iter().count(), 1);
+        assert!(world.resource::<TeamEconomy>().0.contains_key(&TeamId(1)));
+        assert!(!world.resource::<TeamEconomy>().0.contains_key(&TeamId(2)));
     }
 
     fn research_center_anchor(world: &World, team: TeamId) -> GridPos {
@@ -1795,6 +1863,14 @@ mod tests {
             killed: false,
         };
         let enemy_at_home = UnitId(5);
+        spawn_unit(
+            &mut world,
+            enemy_at_home,
+            TeamId(2),
+            map.cell_center(ENTRY_ZONES[1].1),
+            UnitKind::Swarmer,
+            unit_spec(UnitKind::Swarmer).speed,
+        );
         let missing = UnitId(999);
         world.insert_resource(CombatEvents(vec![
             event_from(UnitId(1)),
@@ -1834,7 +1910,7 @@ mod tests {
     }
 
     #[test]
-    fn enemy_buildings_are_fog_hidden_and_friendly_ones_are_not() {
+    fn live_aliens_use_fog_and_the_seed_has_no_enemy_building() {
         let fixture = MapFixture::battlefield();
         let mut map = fixture.map.clone();
         let mut world = World::new();
@@ -1846,23 +1922,29 @@ mod tests {
             .resource::<BuildingIndex>()
             .entity(BuildingId(1))
             .unwrap();
-        let enemy = world
-            .resource::<BuildingIndex>()
-            .entity(BuildingId(2))
-            .unwrap();
         assert!(!building_hidden_from_local_player(&world, own));
-        assert!(
-            building_hidden_from_local_player(&world, enemy),
-            "the far enemy Research Center starts hidden"
-        );
+        assert_eq!(world.resource::<BuildingIndex>().iter().count(), 1);
 
-        // A team-1 scout beside the enemy footprint clears it for presentation.
+        // A live alien at the east entry is fog-hidden until a scout reaches it.
+        let alien_cell = ENTRY_ZONES[1].1;
+        let alien = spawn_unit(
+            &mut world,
+            UnitId(5),
+            TeamId(2),
+            map.cell_center(alien_cell),
+            UnitKind::Swarmer,
+            unit_spec(UnitKind::Swarmer).speed,
+        );
+        assert!(!visible_to(&world, TeamId(1), alien_cell));
+
+        // A team-1 scout beside the alien clears its cell for presentation.
         let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
         world
             .entity_mut(scout)
-            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
+            .insert(SimPosition::new(map.cell_center(alien_cell)));
         refresh_visibility(&mut world, &map);
-        assert!(!building_hidden_from_local_player(&world, enemy));
+        assert!(visible_to(&world, TeamId(1), alien_cell));
+        assert!(world.get::<Unit>(alien).is_some());
     }
 
     #[test]
@@ -1983,7 +2065,7 @@ mod tests {
         );
     }
 
-    /// The full initial-skirmish contract after setup/reset: seeded ids,
+    /// The full survival-fixture contract after setup/reset: seeded ids,
     /// indexes, stockpiles, a Start session, and no combat transients.
     fn assert_fixture_restored(world: &World) {
         let mut unit_ids: Vec<u32> = world
@@ -1992,7 +2074,7 @@ mod tests {
             .map(|(id, _)| id.0)
             .collect();
         unit_ids.sort_unstable();
-        assert_eq!(unit_ids, (1..=8).collect::<Vec<u32>>());
+        assert_eq!(unit_ids, (1..=4).collect::<Vec<u32>>());
 
         let mut building_ids: Vec<u32> = world
             .resource::<BuildingIndex>()
@@ -2000,21 +2082,21 @@ mod tests {
             .map(|(id, _)| id.0)
             .collect();
         building_ids.sort_unstable();
-        assert_eq!(building_ids, vec![1, 2]);
+        assert_eq!(building_ids, vec![1]);
 
         assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
-        for team in [TeamId(1), TeamId(2)] {
-            let stockpile = &world.resource::<TeamEconomy>().0[&team].stockpile;
-            assert_eq!(
-                (
-                    stockpile.food,
-                    stockpile.scrap,
-                    stockpile.coal,
-                    stockpile.crystals
-                ),
-                (200, 300, 150, 0)
-            );
-        }
+        assert_eq!(world.resource::<TeamEconomy>().0.len(), 1);
+        let stockpile = &world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+        assert_eq!(
+            (
+                stockpile.food,
+                stockpile.scrap,
+                stockpile.coal,
+                stockpile.crystals
+            ),
+            (200, 300, 150, 0)
+        );
+        assert_eq!(*world.resource::<WaveState>(), WaveState::default());
         assert!(matches!(
             world.resource::<MatchSession>().phase,
             MatchPhase::Start
@@ -2083,27 +2165,24 @@ mod tests {
                 },
             }));
 
-        // Use the fog: a scout beside the enemy start explores its Town
-        // Center footprint.
+        // Use the fog: a scout reveals a live alien at an authored entry.
         let fixture = MapFixture::battlefield();
         let map = fixture.map;
+        let alien_cell = ENTRY_ZONES[1].1;
+        spawn_unit(
+            &mut world,
+            UnitId(5),
+            TeamId(2),
+            map.cell_center(alien_cell),
+            UnitKind::Swarmer,
+            unit_spec(UnitKind::Swarmer).speed,
+        );
         let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
         world
             .entity_mut(scout)
-            .insert(SimPosition::new(map.cell_center(GridPos::new(108, 44))));
-        let enemy_research_center_entity = world
-            .resource::<BuildingIndex>()
-            .entity(BuildingId(2))
-            .unwrap();
-        let enemy_research_center_footprint = *world
-            .get::<Footprint>(enemy_research_center_entity)
-            .unwrap();
+            .insert(SimPosition::new(map.cell_center(alien_cell)));
         refresh_visibility(&mut world, &map);
-        assert!(explored_by(
-            &world,
-            TeamId(1),
-            enemy_research_center_footprint
-        ));
+        assert!(explored_by(&world, TeamId(1), alien_cell));
 
         reset_fixture_world(&mut world);
 
@@ -2118,20 +2197,20 @@ mod tests {
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
-        let enemy_research_center = MapFixture::team_starts()[1].research_center_anchor;
+        let alien_entry = ENTRY_ZONES[1].1;
         assert_eq!(
-            states[(enemy_research_center.y * 128 + enemy_research_center.x) as usize],
+            states[(alien_entry.y * 128 + alien_entry.x) as usize],
             0,
-            "restart must return the used fog to boot Unexplored"
+            "restart must return used fog to the entry's boot Unexplored state"
         );
     }
 
-    /// The benchmark contract: the shared normal seed (fogged authored
-    /// skirmish) extended with the pure mixed workload, and no
+    /// The benchmark contract: the shared normal seed (fogged human core)
+    /// extended with the director workload, and no
     /// `MatchSession` — the missing session reads as Playing forever, so a
     /// settled stale session cannot leak in and the load can never freeze.
     #[test]
-    fn benchmark_reset_is_session_free_mixed_workload() {
+    fn benchmark_reset_is_session_free_survival_workload() {
         let mut world = World::new();
         // A stale normal-skirmish session must not leak into the benchmark:
         // reset removes it, and the missing session reads as Playing.
@@ -2146,7 +2225,8 @@ mod tests {
             "the missing session reads as Playing"
         );
 
-        // The mixed 100-vs-100 roster: 20/40/40 per team.
+        // The one-base survival roster: four workers, 46 defenders, and
+        // 150 actual aliens.
         let count = |team: TeamId, kind: UnitKind| {
             world
                 .resource::<UnitIndex>()
@@ -2158,15 +2238,24 @@ mod tests {
                 })
                 .count()
         };
-        for team in [TeamId(1), TeamId(2)] {
-            assert_eq!(count(team, UnitKind::Worker), 20);
-            assert_eq!(count(team, UnitKind::Guard), 40);
-            assert_eq!(count(team, UnitKind::Rifleman), 40);
-        }
+        assert_eq!(count(TeamId(1), UnitKind::Worker), 4);
+        assert_eq!(count(TeamId(1), UnitKind::Guard), 23);
+        assert_eq!(count(TeamId(1), UnitKind::Rifleman), 23);
+        let aliens = [
+            UnitKind::Swarmer,
+            UnitKind::Spitter,
+            UnitKind::Brute,
+            UnitKind::Behemoth,
+        ]
+        .into_iter()
+        .map(|kind| count(TeamId(2), kind))
+        .sum::<usize>();
+        assert_eq!(aliens, 150);
         assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
+        assert_eq!(world.resource::<WaveState>().next_wave, 101);
 
-        // The two starting Research Centers and all 18 authored sources survive
-        // from the shared skirmish seed.
+        // One Research Center and all 18 authored sources survive from the
+        // shared seed.
         let research_centers = world
             .resource::<BuildingIndex>()
             .iter()
@@ -2176,7 +2265,7 @@ mod tests {
                 })
             })
             .count();
-        assert_eq!(research_centers, 2);
+        assert_eq!(research_centers, 1);
         assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
     }
 

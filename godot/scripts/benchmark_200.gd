@@ -156,29 +156,43 @@ func _run() -> void:
 		return
 	_progress("benchmark_reset")
 
-	# Start shape: exactly 200 unique unit views; exactly the authored 2
-	# buildings; at least the authored 18 resource sources. The workload
+	# Start shape: exactly 50 human defenders plus 150 real Team-2 aliens
+	# (200 unique unit views); exactly the one authored Research Center and
+	# at least the authored 18 resource sources. The workload
 	# itself was already accepted during the benchmark reset — there is no
 	# separate start call.
 	var units: Array[Node] = []
 	var unique_ids: Dictionary = {}
+	var team_counts := {1: 0, 2: 0}
 	for _frame in range(VIEW_WAIT_FRAMES):
 		await get_tree().physics_frame
 		units = get_tree().get_nodes_in_group("unit_views")
 		unique_ids.clear()
+		team_counts[1] = 0
+		team_counts[2] = 0
 		for unit in units:
 			var id := int(unit.get_meta("unit_id", -1))
 			if id > 0:
 				unique_ids[id] = true
+			var team := int(unit.get_meta("team_id", -1))
+			if team_counts.has(team):
+				team_counts[team] += 1
 		if units.size() == 200 and unique_ids.size() == 200 \
-				and get_tree().get_nodes_in_group("building_views").size() == 2 \
+				and team_counts[1] == 50 and team_counts[2] == 150 \
+				and get_tree().get_nodes_in_group("building_views").size() == 1 \
 				and get_tree().get_nodes_in_group("resource_views").size() >= 18:
 			break
 	if units.size() != 200 or unique_ids.size() != 200:
 		_fail("expected 200 unique unit views, found %d nodes / %d ids" % [units.size(), unique_ids.size()])
 		return
-	if get_tree().get_nodes_in_group("building_views").size() != 2:
-		_fail("benchmark fixture must show exactly 2 building views, found %d" % get_tree().get_nodes_in_group("building_views").size())
+	if team_counts[1] != 50 or team_counts[2] != 150:
+		_fail("benchmark fixture must show 50 human defenders and 150 actual aliens, found %s" % [team_counts])
+		return
+	var buildings := get_tree().get_nodes_in_group("building_views")
+	if buildings.size() != 1 or int(buildings[0].get_meta("building_id", -1)) != 1 \
+			or int(buildings[0].get_meta("team_id", -1)) != 1 \
+			or str(buildings[0].get_meta("building_kind", "")) != "ResearchCenter":
+		_fail("benchmark fixture must show the single human Research Center, found %d building views" % buildings.size())
 		return
 	if get_tree().get_nodes_in_group("resource_views").size() < 18:
 		_fail("benchmark fixture must show at least 18 resource views, found %d" % get_tree().get_nodes_in_group("resource_views").size())
@@ -287,7 +301,7 @@ func _run() -> void:
 	var adapter := RenderingServer.get_video_adapter_name()
 	var vendor := RenderingServer.get_video_adapter_vendor()
 
-	print("GRUS_BENCHMARK_200 start_units=200 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_in_tree_units=%d mean_visible_in_tree_units=%.1f end_visible_in_tree_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
+	print("GRUS_BENCHMARK_200 start_units=200 human_units=50 alien_units=150 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_in_tree_units=%d mean_visible_in_tree_units=%.1f end_visible_in_tree_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
 		min_live_units,
 		mean_live_units,
 		_live_unit_count(),

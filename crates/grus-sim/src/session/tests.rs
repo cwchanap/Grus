@@ -5,18 +5,19 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, step_construction};
-use crate::catalog::{BuildingKind, CARRY_LIMIT, ResourceKind, UnitKind, building_spec, unit_spec};
+use crate::catalog::{BuildingKind, UnitKind, unit_spec};
 use crate::combat::{AttackCooldown, CombatOrder, CombatTarget, Health, step_combat};
 use crate::commands::{
     PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
     spawn_unit,
 };
-use crate::economy::{ResourceSource, ResourceStockpile, TeamEconomy, WorkerTask, step_economy};
+use crate::economy::{ResourceStockpile, TeamEconomy, WorkerTask, step_economy};
 use crate::fixture::{MapFixture, seed_skirmish};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
-use crate::map::{Footprint, GridMap, GridPos};
-use crate::movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};
+use crate::map::{GridMap, GridPos};
+use crate::movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::{ProductionJob, ProductionKind, ProductionQueue, step_production};
+use crate::waves::{WaveState, step_waves};
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -284,16 +285,13 @@ fn frozen_fixed_steps_perform_no_gameplay_mutation() {
 }
 
 #[test]
-fn same_step_dual_research_center_destruction_keeps_the_first_result() {
+fn same_step_core_destruction_keeps_the_first_result_and_stops_later_combat() {
     let (mut world, mut map) = battlefield();
     world.insert_resource(MatchSession {
         phase: MatchPhase::Playing,
     });
 
-    // Ascending UnitId order: the team-2 raider stands beside team 1's
-    // central Research Center and reaches it first; team 1's counter-raider
-    // stands in range of team 2's Research Center in the same tick.
-    let raider_two = spawn_unit(
+    let raider = spawn_unit(
         &mut world,
         UnitId(10),
         TeamId(2),
@@ -301,58 +299,55 @@ fn same_step_dual_research_center_destruction_keeps_the_first_result() {
         UnitKind::Guard,
         unit_spec(UnitKind::Guard).speed,
     );
-    world.entity_mut(raider_two).insert(CombatOrder::Attack {
+    world.entity_mut(raider).insert(CombatOrder::Attack {
         target: CombatTarget::Building(BuildingId(1)),
         last_target_cell: None,
     });
-    let raider_one = spawn_unit(
+    let later_attacker = spawn_unit(
         &mut world,
         UnitId(20),
         TeamId(1),
-        Vec2::new(111.5, 49.5),
+        Vec2::new(30.5, 30.5),
         UnitKind::Guard,
         unit_spec(UnitKind::Guard).speed,
     );
-    world.entity_mut(raider_one).insert(CombatOrder::Attack {
-        target: CombatTarget::Building(BuildingId(2)),
-        last_target_cell: None,
-    });
-
-    let research_center_one = world
+    world
+        .entity_mut(later_attacker)
+        .insert(CombatOrder::Attack {
+            target: CombatTarget::Unit(UnitId(30)),
+            last_target_cell: None,
+        });
+    let later_target = spawn_unit(
+        &mut world,
+        UnitId(30),
+        TeamId(2),
+        Vec2::new(30.5, 30.5),
+        UnitKind::Swarmer,
+        unit_spec(UnitKind::Swarmer).speed,
+    );
+    let core = world
         .resource::<BuildingIndex>()
         .entity(BuildingId(1))
         .unwrap();
-    let research_center_two = world
-        .resource::<BuildingIndex>()
-        .entity(BuildingId(2))
-        .unwrap();
-    world
-        .get_mut::<Health>(research_center_one)
-        .unwrap()
-        .current = 1;
-    world
-        .get_mut::<Health>(research_center_two)
-        .unwrap()
-        .current = 1;
+    world.get_mut::<Health>(core).unwrap().current = 1;
+    world.get_mut::<Health>(later_target).unwrap().current = 1;
 
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
-    // First destruction settles the result; the later same-step attacker
-    // never strikes, so the second Research Center survives untouched.
     assert_eq!(
         active_phase(&world),
         MatchPhase::Result(MatchResult(TeamId(2)))
     );
     assert_eq!(
-        world.get::<Health>(research_center_two).unwrap().current,
+        world.get::<Health>(later_target).unwrap().current,
         1,
         "the later same-step attacker must not act after Result"
     );
     let events = world.resource::<crate::combat::CombatEvents>();
     assert_eq!(events.0.len(), 1);
     assert!(events.0[0].killed);
+    assert_eq!(events.0[0].target, CombatTarget::Building(BuildingId(1)));
 
-    // Belt and braces: resolve_result itself never overwrites a settled result.
     resolve_result(&mut world, TeamId(1));
     assert_eq!(
         active_phase(&world),
@@ -361,26 +356,36 @@ fn same_step_dual_research_center_destruction_keeps_the_first_result() {
 }
 
 #[test]
-fn bounded_defeat_journey_team_two_destroys_team_one_through_the_same_systems() {
-    let (mut world, mut map) = live_match();
+fn bounded_wave_journey_destroys_the_only_core_and_freezes_the_session() {
+    let (mut world, mut map) = battlefield();
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    world.get_resource_mut::<WaveState>().unwrap().elapsed = 299.95;
+    run_until_result(&mut world, &mut map, "the alien wave");
 
-    run_army_journey(&mut world, &mut map, TeamId(2));
     assert_eq!(
         active_phase(&world),
         MatchPhase::Result(MatchResult(TeamId(2))),
-        "team 2's identical journey reads as team 1's defeat"
+        "Team-2 aliens defeat the human by destroying the only core"
     );
-
-    assert_result_freezes_and_locks(&mut world, &mut map, TeamId(2));
+    assert_eq!(
+        world.resource::<BuildingIndex>().iter().count(),
+        0,
+        "the only Research Center was destroyed"
+    );
+    assert!(world.resource::<WaveState>().next_wave >= 2);
+    assert!(
+        world
+            .resource::<crate::combat::CombatEvents>()
+            .0
+            .iter()
+            .any(|event| { event.target == CombatTarget::Building(BuildingId(1)) && event.killed })
+    );
+    assert_result_freezes_and_locks(&mut world, &mut map, TeamId(1));
 }
 
-// ---- Bounded passive-opponent journeys -------------------------------------
-//
-// Shared with combat/tests.rs: the victory journey lives next to combat, the
-// defeat journey next to the session lifecycle. Both drive the normal
-// authored skirmish through real commands and the real fixed steps — no
-// runtime AI, game mode, or debug-grant API — and every wait is a bounded
-// event loop that asserts outcomes, never exact tick numbers.
+// ---- Bounded wave journey --------------------------------------------------
 
 /// Tick budget for every bounded journey loop. A correct journey settles in
 /// a few thousand ticks; only a broken system runs out.
@@ -389,20 +394,10 @@ const JOURNEY_BUDGET: u32 = 6_000;
 /// Full match ticks inspected after Result to prove the freeze holds.
 const FREEZE_TICKS: u32 = 40;
 
-/// The authored skirmish under a real session: Start -> start_match().
-pub(crate) fn live_match() -> (World, GridMap) {
-    let (mut world, map) = battlefield();
-    world.insert_resource(MatchSession {
-        phase: MatchPhase::Start,
-    });
-    start_match(&mut world);
-    assert_eq!(active_phase(&world), MatchPhase::Playing);
-    (world, map)
-}
-
-/// One canonical fixed-step match tick in the production order: combat,
-/// movement, economy, construction, production.
+/// One canonical fixed-step match tick in the production order: waves,
+/// combat, movement, economy, construction, production.
 fn step_match(world: &mut World, map: &mut GridMap) {
+    step_waves(world, map, SIM_STEP_SECONDS);
     step_combat(world, map, SIM_STEP_SECONDS);
     step_movement(world, map, SIM_STEP_SECONDS);
     step_economy(world, map, SIM_STEP_SECONDS);
@@ -428,271 +423,10 @@ fn run_until_result(world: &mut World, map: &mut GridMap, what: &str) -> u32 {
     resolved_at.unwrap_or_else(|| panic!("{what} did not resolve inside {JOURNEY_BUDGET} ticks"))
 }
 
-/// Bounded event loop for a mid-journey outcome condition.
-fn run_until(world: &mut World, map: &mut GridMap, what: &str, condition: impl Fn(&World) -> bool) {
-    for _ in 0..JOURNEY_BUDGET {
-        if condition(world) {
-            return;
-        }
-        step_match(world, map);
-    }
-    panic!("{what} did not happen inside {JOURNEY_BUDGET} ticks");
-}
-
-fn other_team(team: TeamId) -> TeamId {
-    if team == TeamId(1) {
-        TeamId(2)
-    } else {
-        TeamId(1)
-    }
-}
-
-fn research_center_of(world: &World, team: TeamId) -> BuildingId {
-    world
-        .resource::<BuildingIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            world
-                .get::<Building>(*entity)
-                .is_some_and(|building| {
-                    building.team == team && building.kind == BuildingKind::ResearchCenter
-                })
-                .then_some(*id)
-        })
-        .min()
-        .unwrap_or_else(|| panic!("team {team:?} has no Research Center"))
-}
-
-pub(crate) fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> Vec<UnitId> {
-    let mut ids: Vec<UnitId> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            world
-                .get::<Unit>(*entity)
-                .is_some_and(|unit| unit.team == team && unit.kind == kind)
-                .then_some(*id)
-        })
-        .collect();
-    ids.sort_unstable();
-    ids
-}
-
-fn workers_of(world: &World, team: TeamId) -> Vec<UnitId> {
-    units_of_kind(world, team, UnitKind::Worker)
-}
-
-/// Authored source of `kind` nearest the team's Research Center.
-fn nearest_source(world: &World, team: TeamId, kind: ResourceKind) -> ResourceId {
-    let research_center_entity = world
-        .resource::<BuildingIndex>()
-        .entity(research_center_of(world, team))
-        .expect("indexed Research Center");
-    let home = world
-        .get::<Footprint>(research_center_entity)
-        .expect("Research Center footprint")
-        .center();
-    world
-        .resource::<crate::economy::ResourceIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            let source = world.get::<ResourceSource>(*entity)?;
-            let footprint = world.get::<Footprint>(*entity)?;
-            (source.kind == kind).then_some((footprint.center().distance_squared(home), *id))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)))
-        .map(|(_, id)| id)
-        .expect("an authored source of the requested kind")
-}
-
-/// The authored Barracks anchor from the one `TeamStart` table
-/// (`MapFixture::barracks_anchor`): clear of every authored start cell,
-/// resource node, footprint, and gather slot on both starts.
-fn barracks_anchor(team: TeamId) -> GridPos {
-    MapFixture::barracks_anchor(team)
-}
-
-fn barracks_of(world: &World, team: TeamId) -> BuildingId {
-    world
-        .resource::<BuildingIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            world
-                .get::<Building>(*entity)
-                .is_some_and(|building| {
-                    building.team == team && building.kind == BuildingKind::Barracks
-                })
-                .then_some(*id)
-        })
-        .min()
-        .expect("a placed Barracks")
-}
-
-fn barracks_complete(world: &World, id: BuildingId) -> bool {
-    world
-        .resource::<BuildingIndex>()
-        .entity(id)
-        .and_then(|entity| world.get::<Building>(entity))
-        .is_some_and(|building| building.construction.complete)
-}
-
-/// The full passive-opponent journey for `attacker`: a real gather wave feeds
-/// real production; the trained army marches through the combat step and
-/// destroys the enemy Research Center, settling the Result. The opponent is
-/// passive — nobody drives its units; there is no AI.
-pub(crate) fn run_army_journey(world: &mut World, map: &mut GridMap, attacker: TeamId) {
-    let defender = other_team(attacker);
-    let workers = workers_of(world, attacker);
-    assert_eq!(workers.len(), 4, "authored worker complement");
-
-    // Economy: every worker gathers Food until real deposits have grown
-    // the stockpile by one full carry wave.
-    let food_before = world.resource::<TeamEconomy>().0[&attacker].stockpile.food;
-    let food = nearest_source(world, attacker, ResourceKind::Food);
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::Gather {
-            issuer: attacker,
-            workers: workers.clone(),
-            source: food,
-        },
-    );
-    assert_eq!(outcome.reject, None, "gather accepted");
-    assert_eq!(outcome.accepted_units, workers);
-    run_until(world, map, "the gather wave", |world| {
-        world.resource::<TeamEconomy>().0[&attacker].stockpile.food
-            >= food_before + CARRY_LIMIT * workers.len() as u32
-    });
-
-    // Production: the authored starting scrap stockpile pays for a Barracks;
-    // one worker builds it while the rest keep gathering.
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::PlaceBuilding {
-            issuer: attacker,
-            builder: workers[0],
-            kind: BuildingKind::Barracks,
-            anchor: barracks_anchor(attacker),
-        },
-    );
-    assert_eq!(outcome.reject, None, "Barracks placement accepted");
-    let barracks = barracks_of(world, attacker);
-    assert_eq!(
-        world.resource::<TeamEconomy>().0[&attacker].stockpile.scrap,
-        300 - building_spec(BuildingKind::Barracks).cost.scrap,
-        "placement charges the real catalogue cost once"
-    );
-    run_until(world, map, "the Barracks construction", |world| {
-        barracks_complete(world, barracks)
-    });
-
-    // Production: four Guards through the real FIFO queue.
-    for _ in 0..4 {
-        let outcome = apply_player_command(
-            world,
-            map,
-            PlayerCommand::EnqueueUnit {
-                issuer: attacker,
-                building: barracks,
-                kind: UnitKind::Guard,
-            },
-        );
-        assert_eq!(outcome.reject, None, "Guard enqueue accepted");
-    }
-    run_until(world, map, "the Guard training", |world| {
-        units_of_kind(world, attacker, UnitKind::Guard).len() == 4
-    });
-
-    // The freed workers switch roles — three to Coal, the builder back
-    // to Food — so the march phase runs a live economy into the Result
-    // freeze snapshot.
-    let coal = nearest_source(world, attacker, ResourceKind::Coal);
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::Gather {
-            issuer: attacker,
-            workers: workers[1..].to_vec(),
-            source: coal,
-        },
-    );
-    assert_eq!(outcome.reject, None, "coal retask accepted");
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::Gather {
-            issuer: attacker,
-            workers: vec![workers[0]],
-            source: food,
-        },
-    );
-    assert_eq!(outcome.reject, None, "food retask accepted");
-
-    // March + attack: the army attacks the enemy Research Center through the
-    // combat step's pursuit and strikes; its destruction settles the Result.
-    let enemy_research_center = research_center_of(world, defender);
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::Attack {
-            issuer: attacker,
-            units: units_of_kind(world, attacker, UnitKind::Guard),
-            target: CombatTarget::Building(enemy_research_center),
-        },
-    );
-    assert_eq!(outcome.accepted_units.len(), 4, "the whole army attacks");
-
-    // The last production leg — a Research Center Worker queued once the
-    // enemy Research Center is nearly dead, so the job is genuinely still in
-    // flight when the Result lands and the freeze comparison has real
-    // queue state to hold still. Four Guards strike 40 damage per
-    // cooldown round: queued at <=120 hit points, only a few seconds of
-    // the 15-second train can elapse before the Result.
-    let enemy_tc_entity = world
-        .resource::<BuildingIndex>()
-        .entity(enemy_research_center)
-        .expect("enemy Research Center entity");
-    run_until(
-        world,
-        map,
-        "the enemy Research Center's last stretch",
-        |world| {
-            world
-                .get::<Health>(enemy_tc_entity)
-                .is_some_and(|health| health.current <= 120)
-        },
-    );
-    let outcome = apply_player_command(
-        world,
-        map,
-        PlayerCommand::EnqueueUnit {
-            issuer: attacker,
-            building: research_center_of(world, attacker),
-            kind: UnitKind::Worker,
-        },
-    );
-    assert_eq!(outcome.reject, None, "late Worker enqueue accepted");
-
-    run_until_result(world, map, "the journey");
-    assert_eq!(
-        active_phase(world),
-        MatchPhase::Result(MatchResult(attacker)),
-        "the enemy Research Center destruction wins the match"
-    );
-    assert!(
-        world
-            .resource::<BuildingIndex>()
-            .entity(enemy_research_center)
-            .is_none(),
-        "the enemy Research Center is destroyed atomically"
-    );
-}
-
 /// Everything the Result freeze contract names, captured for equality.
 #[derive(Debug, PartialEq)]
 struct FreezeSnapshot {
+    wave: WaveState,
     economies: Vec<(u8, ResourceStockpile)>,
     positions: Vec<(UnitId, Vec2, Vec2)>,
     cooldowns: Vec<(UnitId, f32)>,
@@ -760,6 +494,7 @@ impl FreezeSnapshot {
         production.sort_by_key(|entry| entry.0);
 
         Self {
+            wave: *world.resource::<WaveState>(),
             economies,
             positions,
             cooldowns,
@@ -780,15 +515,11 @@ pub(crate) fn assert_result_freezes_and_locks(
 ) {
     let frozen = FreezeSnapshot::of(world);
 
-    // Premise: the journey must arrive at Result with a genuinely pending
-    // production job, or the production arm of the freeze comparison is
-    // vacuous — a queue that already drained has nothing to hold still.
+    // The surviving live wave and its elapsed clock make the freeze proof
+    // non-vacuous; destroying the sole core also removes its production queue.
     assert!(
-        frozen
-            .production
-            .iter()
-            .any(|(_, jobs, progress, _)| *jobs > 0 || *progress > 0.0),
-        "no production job still pending at Result: the freeze proof is vacuous"
+        frozen.wave.elapsed >= 300.0 && !frozen.positions.is_empty(),
+        "the wave clock or surviving units are absent at Result"
     );
 
     for _ in 0..FREEZE_TICKS {
@@ -802,9 +533,9 @@ pub(crate) fn assert_result_freezes_and_locks(
 
     // Every command kind hits the same session gate: rejected wholesale,
     // no per-unit outcomes, no mutation.
-    let worker = *workers_of(world, issuer).first().expect("workers survive");
-    let research_center = research_center_of(world, issuer);
-    let source = nearest_source(world, issuer, ResourceKind::Food);
+    let worker = UnitId(1);
+    let research_center = BuildingId(1);
+    let source = ResourceId(1);
     let commands: [(&str, PlayerCommand); 5] = [
         (
             "move",
@@ -836,7 +567,7 @@ pub(crate) fn assert_result_freezes_and_locks(
             "attack",
             PlayerCommand::Attack {
                 issuer,
-                units: units_of_kind(world, issuer, UnitKind::Guard),
+                units: vec![worker],
                 target: CombatTarget::Building(research_center),
             },
         ),
@@ -846,7 +577,7 @@ pub(crate) fn assert_result_freezes_and_locks(
                 issuer,
                 builder: worker,
                 kind: BuildingKind::Barracks,
-                anchor: barracks_anchor(issuer),
+                anchor: MapFixture::barracks_anchor(issuer),
             },
         ),
     ];

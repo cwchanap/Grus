@@ -15,6 +15,11 @@ func _ready() -> void:
 	_sound.volume_db = -14.0
 	add_child(_sound)
 
+func _exit_tree() -> void:
+	if _sound != null:
+		_sound.stop()
+		_sound.stream = null
+
 ## Plays at most one cue per drain batch, throttled so a fast tick burst
 ## stays a cue instead of a machine gun.
 func play_hit_cue() -> void:

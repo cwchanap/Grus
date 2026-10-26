@@ -101,7 +101,7 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         },
     );
     assert_eq!(outcome.reject, None, "depot placement rejected");
-    let depot = BuildingId(3);
+    let depot = BuildingId(2);
     let depot_entity = world.resource::<BuildingIndex>().entity(depot).unwrap();
     drive(&mut world, &mut map, 4000, |world| {
         world

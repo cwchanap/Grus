@@ -17,8 +17,8 @@ func _building_view(id: int) -> Node3D:
 
 ## Normal gameplay must actually carry visibility state: a revision >= 1
 ## (initial refresh ran), a 128x96 packed payload, the own Research Center
-## cell (stable BuildingId 1) Visible and the enemy Research Center cell
-## (BuildingId 2) Unexplored. If the runtime ever lost its VisibilityMap,
+## cell (stable BuildingId 1) Visible and the north alien entry cell
+## Unexplored. If the runtime ever lost its VisibilityMap,
 ## the absent-resource fallback would silently run full-information —
 ## these assertions make that a loud failure.
 func _assert_runtime_visibility(where: String) -> bool:
@@ -27,9 +27,9 @@ func _assert_runtime_visibility(where: String) -> bool:
 		_fail("%s: visibility bridge methods are missing" % where)
 		return false
 	var own := _building_view(1)
-	var enemy := _building_view(2)
-	if own == null or enemy == null:
-		_fail("%s: Research Center views missing for the fog cells" % where)
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	if own == null or wave.is_empty() or not wave.has("incoming_zones"):
+		_fail("%s: Research Center or wave snapshot missing for the fog cells" % where)
 		return false
 	var revision := int(GrusBridge.visibility_revision())
 	if revision < 1:
@@ -48,9 +48,13 @@ func _assert_runtime_visibility(where: String) -> bool:
 	if states[own_cell.y * 128 + own_cell.x] != 2:
 		_fail("%s: own Research Center cell %s is not Visible" % [where, own_cell])
 		return false
-	var enemy_cell := SmokeHelpers.cell_of(enemy)
-	if states[enemy_cell.y * 128 + enemy_cell.x] != 0:
-		_fail("%s: enemy Research Center cell %s is not Unexplored" % [where, enemy_cell])
+	# Before the warning window, zone anchors must not leak through the wave
+	# snapshot; sim tests pin the authored anchors' walkability/reachability.
+	if not wave.get("incoming_zones", []).is_empty():
+		_fail("%s: wave snapshot exposed zones before the warning" % where)
+		return false
+	if int(wave.get("wave", -1)) != 0 or int(wave.get("live_aliens", -1)) != 0:
+		_fail("%s: fresh setup is not pre-wave: %s" % [where, wave])
 		return false
 
 	# The discrete tile overlay must mirror the same states exactly —
@@ -93,17 +97,21 @@ func _run() -> void:
 		# Group membership lands at instantiation; the `building_id` meta is
 		# stamped one bridge Update later — wait for the actual views the
 		# fog assertions below look up, not just the count.
-		if units.size() == 8 and buildings.size() == 2 and resources.size() == 18 \
-				and _building_view(1) != null and _building_view(2) != null:
+		if units.size() == 4 and buildings.size() == 1 and resources.size() == 18 \
+				and _building_view(1) != null:
 			break
 
-	if units.size() != 8 or buildings.size() != 2 or resources.size() != 18:
-		_fail("skirmish startup expected 8 units, 2 buildings, 18 resources; found %d/%d/%d" % [units.size(), buildings.size(), resources.size()])
+	if units.size() != 4 or buildings.size() != 1 or resources.size() != 18:
+		_fail("skirmish startup expected 4 units, 1 building, 18 resources; found %d/%d/%d" % [units.size(), buildings.size(), resources.size()])
 		return
 	if not GrusBridge.has_method("reset_fixture"):
 		_fail("fixture reset bridge is missing")
 		return
 	if not await _assert_runtime_visibility("setup"):
+		return
+	var wave_error := SmokeHelpers.no_launched_wave_error("reset smoke before reset")
+	if not wave_error.is_empty():
+		_fail(wave_error)
 		return
 	if not GrusBridge.reset_fixture():
 		_fail("fixture reset bridge rejected reset")
@@ -133,28 +141,27 @@ func _run() -> void:
 			var id := int(resource.get_meta("resource_id", -1))
 			if id > 0:
 				resource_ids[id] = true
-		if units.size() == 8 and unique_ids.size() == 8 \
-				and buildings.size() == 2 and building_ids.size() == 2 \
+		if units.size() == 4 and unique_ids.size() == 4 \
+				and buildings.size() == 1 and building_ids.size() == 1 \
 				and resources.size() == 18 and resource_ids.size() == 18:
 			break
 
-	if units.size() != 8 or unique_ids.size() != 8:
+	if units.size() != 4 or unique_ids.size() != 4:
 		_fail("fixture reset left duplicate/stale unit views: nodes=%d unique_ids=%d" % [units.size(), unique_ids.size()])
 		return
-	if buildings.size() != 2 or building_ids.size() != 2:
-		_fail("fixture reset expected 2 unique building views: nodes=%d unique_ids=%d" % [buildings.size(), building_ids.size()])
+	if buildings.size() != 1 or building_ids.size() != 1:
+		_fail("fixture reset expected 1 unique building view: nodes=%d unique_ids=%d" % [buildings.size(), building_ids.size()])
 		return
 	if resources.size() != 18 or resource_ids.size() != 18:
 		_fail("fixture reset expected 18 unique resource views: nodes=%d unique_ids=%d" % [resources.size(), resource_ids.size()])
 		return
-	for id in range(1, 9):
+	for id in range(1, 5):
 		if not unique_ids.has(id):
 			_fail("fixture reset lost stable UnitId %d" % id)
 			return
-	for id in range(1, 3):
-		if not building_ids.has(id):
-			_fail("fixture reset lost stable BuildingId %d" % id)
-			return
+	if not building_ids.has(1):
+		_fail("fixture reset lost stable BuildingId 1")
+		return
 	for id in range(1, 19):
 		if not resource_ids.has(id):
 			_fail("fixture reset lost stable ResourceId %d" % id)
@@ -184,6 +191,10 @@ func _run() -> void:
 	if int(economy.get("population_used", -1)) != 4 or int(economy.get("population_cap", -1)) != 10:
 		_fail("Team 1 population after reset is not 4/10: %s" % [economy])
 		return
+	wave_error = SmokeHelpers.no_launched_wave_error("reset smoke")
+	if not wave_error.is_empty():
+		_fail(wave_error)
+		return
 
-	print("GRUS_RESET_SMOKE_OK units=8 buildings=2 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96")
+	print("GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true")
 	get_tree().quit(0)

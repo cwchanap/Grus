@@ -6,7 +6,7 @@ use crate::catalog::{
 };
 use crate::combat::Health;
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit, team_kind_ids,
+    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, spawn_unit,
 };
 use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
@@ -14,11 +14,11 @@ use crate::economy::{
 };
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
+use crate::movement::{SIM_STEP_SECONDS, Unit};
+use crate::waves::{WaveState, step_waves};
 
-/// Authored starting layout of one team: Research Center anchor, the four
-/// worker spawn cells, the team's authored Barracks/Depot build anchors,
-/// and the six safe starting resource ids. All values are cells on the
-/// 128×96 battlefield; every per-team coordinate lives on this one table.
+/// Authored human starting layout: Research Center anchor, four worker
+/// spawn cells, Barracks/Depot build anchors, and six safe resource ids.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TeamStart {
     pub team: TeamId,
@@ -52,9 +52,7 @@ pub enum EntryZone {
 /// `GridMap::set_blocked_rect`, and the Godot bridge hands the same
 /// rectangles to the presentation layer: nothing may copy the coordinates.
 /// Every rect stays clear of the central construction/gather ring, the
-/// N/E/S/W access lanes, both bases' authored occupants, and the two
-/// benchmark staging regions (x 26..=53 y 20..=75 and its point
-/// reflection) — the fixture tests prove each of those invariants.
+/// N/E/S/W access lanes, authored occupants, and benchmark staging region.
 pub const RUINS: &[(GridPos, GridPos)] = &[
     (GridPos::new(48, 12), GridPos::new(51, 14)),
     (GridPos::new(64, 24), GridPos::new(66, 26)),
@@ -81,61 +79,36 @@ pub struct MapFixture {
 }
 
 impl MapFixture {
-    /// The single authored team-start table. Team 1's Research Center
-    /// anchors the central city: the (62,46) 4×4 footprint centers exactly
-    /// on the map midpoint (64,48), its four workers occupy the free
-    /// diagonal-corner cells, and its Barracks/Depot build anchors hug the
-    /// safe ring. Team 2 keeps the passive eastern base; every per-team
-    /// coordinate lives here — nothing mirrors the human site.
-    pub fn team_starts() -> [TeamStart; 2] {
-        [
-            TeamStart {
-                team: TeamId(1),
-                research_center_anchor: GridPos::new(62, 46),
-                workers: [
-                    GridPos::new(61, 45),
-                    GridPos::new(61, 50),
-                    GridPos::new(66, 45),
-                    GridPos::new(66, 50),
-                ],
-                barracks_anchor: GridPos::new(58, 46),
-                depot_anchor: GridPos::new(63, 51),
-                safe_sources: [
-                    ResourceId(1),
-                    ResourceId(2),
-                    ResourceId(3),
-                    ResourceId(4),
-                    ResourceId(5),
-                    ResourceId(6),
-                ],
-            },
-            TeamStart {
-                team: TeamId(2),
-                research_center_anchor: GridPos::new(112, 46),
-                workers: [
-                    GridPos::new(116, 45),
-                    GridPos::new(116, 50),
-                    GridPos::new(111, 45),
-                    GridPos::new(111, 50),
-                ],
-                barracks_anchor: GridPos::new(108, 51),
-                depot_anchor: GridPos::new(117, 51),
-                safe_sources: [
-                    ResourceId(7),
-                    ResourceId(8),
-                    ResourceId(9),
-                    ResourceId(10),
-                    ResourceId(11),
-                    ResourceId(12),
-                ],
-            },
-        ]
+    /// The single authored human start anchors the central city: its
+    /// (62,46) 4×4 footprint centers on the map midpoint, its four workers
+    /// occupy free diagonal-corner cells, and its Barracks/Depot anchors
+    /// hug the safe ring. Aliens enter through `ENTRY_ZONES` instead.
+    pub fn team_starts() -> [TeamStart; 1] {
+        [TeamStart {
+            team: TeamId(1),
+            research_center_anchor: GridPos::new(62, 46),
+            workers: [
+                GridPos::new(61, 45),
+                GridPos::new(61, 50),
+                GridPos::new(66, 45),
+                GridPos::new(66, 50),
+            ],
+            barracks_anchor: GridPos::new(58, 46),
+            depot_anchor: GridPos::new(63, 51),
+            safe_sources: [
+                ResourceId(1),
+                ResourceId(2),
+                ResourceId(3),
+                ResourceId(4),
+                ResourceId(5),
+                ResourceId(6),
+            ],
+        }]
     }
 
-    /// The safe sources ringing each Research Center — ration caches,
-    /// salvage ruins, and a coal seam within each base's vision. The only
-    /// resource-position table in the codebase; IDs are deterministic
-    /// (team 1 safe 1-6 near the central city, then team 2 safe 7-12 east).
+    /// The six safe sources ringing the human Research Center, followed by
+    /// six eastern expansion deposits. The only resource-position table in
+    /// the codebase; ids remain deterministic from 1 through 18.
     pub fn starting_resources() -> Vec<ResourceSpawn> {
         vec![
             spawn(ResourceId(1), ResourceKind::Food, 58, 42),
@@ -212,15 +185,12 @@ impl MapFixture {
     }
 }
 
-/// The default skirmish seed: Team 1 at the authored central start, Team 2
-/// at the authored eastern start. The pure simulation skirmish seed for one
-/// normal match: real completed Research Center Buildings (4×4 Footprints +
-/// `Dropoff` from birth), four Workers per team with fresh worker
-/// components, both teams' economies (200 Food / 300 Scrap / 150 Coal /
-/// 0 Crystals), Research Center map occupancy, the authored finite resource
-/// sources, and `UnitIndex`/`BuildingIndex` `IdAllocator` counters above the
-/// authored maxima. Every starting entity flows through the production
-/// constructors — there is no temporary Dropoff-only Research Center.
+/// The pure simulation survival seed: one completed human Research Center
+/// (4×4 Footprint + `Dropoff` from birth), four Workers with fresh worker
+/// components, one starting stockpile (200 Food / 300 Scrap / 150 Coal /
+/// 0 Crystals), the wave clock, authored finite resource sources, and
+/// `UnitIndex`/`BuildingIndex` `IdAllocator` counters above authored ids.
+/// Every starting entity flows through the production constructors.
 pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture) {
     let starts = MapFixture::team_starts();
     let mut economy = TeamEconomy::default();
@@ -233,16 +203,8 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
             crystals: 0,
         },
     );
-    economy.insert_team(
-        TeamId(2),
-        ResourceStockpile {
-            food: 200,
-            scrap: 300,
-            coal: 150,
-            crystals: 0,
-        },
-    );
     world.insert_resource(economy);
+    world.insert_resource(WaveState::default());
 
     let mut unit_counter: u32 = 0;
     let research_center_health = building_spec(BuildingKind::ResearchCenter).max_health;
@@ -306,14 +268,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
         );
     }
 
-    world.insert_resource(IdAllocator::new(unit_counter + 1, 3, 19));
-}
-
-/// Point reflection through the map center — used only to stage the east
-/// benchmark army's cells from the west scan (local staging reflection,
-/// not a map-symmetry contract).
-fn point_reflect(cell: GridPos) -> GridPos {
-    GridPos::new(127 - cell.x, 95 - cell.y)
+    world.insert_resource(IdAllocator::new(unit_counter + 1, 2, 19));
 }
 
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
@@ -325,87 +280,84 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
     }
 }
 
-/// Per-team workload roster on top of the four authored Workers.
-const BENCHMARK_ROSTER: [(UnitKind, usize); 3] = [
-    (UnitKind::Worker, 16),
-    (UnitKind::Guard, 40),
-    (UnitKind::Rifleman, 40),
-];
+const BENCHMARK_REINFORCEMENTS: usize = 46;
+const BENCHMARK_WAVE: u64 = 100;
 
-/// The shared AttackMove target: the authored northern midfield corridor
-/// waypoint — walkable, center-map, and never a Research Center. With the
-/// city now mid-map, team 2's march from the reflected east staging cells
-/// passes inside the 8-cell acquisition radius of the central base, so the
-/// measured load is a raid on the city rather than a pure field fight —
-/// and numbers recorded before the relocation are not comparable.
+/// Human defenders march toward the northern approach while the shared wave
+/// director sends aliens toward the central Research Center.
 const BENCHMARK_MIDFIELD: GridPos = GridPos::new(64, 12);
 
-/// Extends an already-seeded skirmish with the benchmark workload: 96 more
-/// units per team (the roster above) staged on deterministic walkable cells —
-/// team 2 point-reflects team 1's scanned cells through the map center
-/// after checking every reflected cell stays walkable — IDs taken only
-/// from the `IdAllocator`, the production worker bundle on every spawn,
-/// then the initial commands applied through the ordinary dispatcher: the
-/// first 12 sorted workers per side go two-per-source onto that team's
-/// authored `safe_sources`, and every combatant AttackMoves to
-/// `BENCHMARK_MIDFIELD`. Panics on any rejected setup command: a benchmark
-/// that boots with rejected orders would silently measure an idle crowd.
+/// Extends the seeded survival fixture to 50 human defenders and 150 live
+/// aliens. Human reinforcements use the shared unit constructor and ordinary
+/// AttackMove dispatcher; aliens come from `step_waves` itself. The benchmark
+/// remains session-free, as the absent MatchSession means Playing.
 pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
-    for team in [TeamId(1), TeamId(2)] {
-        let mut cells = benchmark_staging_cells(map, team).into_iter();
-        for (kind, count) in BENCHMARK_ROSTER {
-            for _ in 0..count {
-                let cell = cells.next().expect("staging capacity");
-                let unit_id = world.resource_mut::<IdAllocator>().allocate_unit();
-                let spawned = spawn_unit(
-                    world,
-                    unit_id,
-                    team,
-                    map.cell_center(cell),
-                    kind,
-                    unit_spec(kind).speed,
-                );
-                world.entity_mut(spawned).insert((
-                    Carry::Empty,
-                    GatherProgress::default(),
-                    WorkerTask::Idle,
-                ));
-            }
+    let mut cells = benchmark_staging_cells(map).into_iter();
+    for kind in [UnitKind::Guard, UnitKind::Rifleman] {
+        for _ in 0..BENCHMARK_REINFORCEMENTS / 2 {
+            let cell = cells.next().expect("benchmark staging capacity");
+            let unit_id = world.resource_mut::<IdAllocator>().allocate_unit();
+            spawn_unit(
+                world,
+                unit_id,
+                TeamId(1),
+                map.cell_center(cell),
+                kind,
+                unit_spec(kind).speed,
+            );
         }
     }
 
-    // Membership resolves from the live world, not spawn-order bookkeeping.
-    let target = map.cell_center(BENCHMARK_MIDFIELD);
-    for team in [TeamId(1), TeamId(2)] {
-        let workers: Vec<UnitId> = team_kind_ids(world, team, UnitKind::Worker)
-            .into_iter()
-            .take(12)
-            .collect();
-        for (pair, source) in workers.chunks(2).zip(MapFixture::safe_source_ids(team)) {
-            accept(
-                world,
-                map,
-                PlayerCommand::Gather {
-                    issuer: team,
-                    workers: pair.to_vec(),
-                    source,
-                },
-            );
-        }
-        let army: Vec<UnitId> = [UnitKind::Guard, UnitKind::Rifleman]
-            .into_iter()
-            .flat_map(|kind| team_kind_ids(world, team, kind))
-            .collect();
+    let units = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter_map(|(id, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .filter(|unit| unit.team == TeamId(1))
+                .map(|unit| (*id, unit.kind))
+        })
+        .collect::<Vec<_>>();
+    let workers: Vec<UnitId> = units
+        .iter()
+        .filter_map(|(id, kind)| (*kind == UnitKind::Worker).then_some(*id))
+        .collect();
+    for (worker, source) in workers
+        .into_iter()
+        .zip(MapFixture::safe_source_ids(TeamId(1)))
+    {
         accept(
             world,
             map,
-            PlayerCommand::Units(UnitCommand {
-                issuer: team,
-                units: army,
-                kind: UnitCommandKind::AttackMove { target },
-            }),
+            PlayerCommand::Gather {
+                issuer: TeamId(1),
+                workers: vec![worker],
+                source,
+            },
         );
     }
+    let defenders: Vec<UnitId> = units
+        .into_iter()
+        .filter_map(|(id, kind)| (kind != UnitKind::Worker).then_some(id))
+        .collect();
+    accept(
+        world,
+        map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(1),
+            units: defenders,
+            kind: UnitCommandKind::AttackMove {
+                target: map.cell_center(BENCHMARK_MIDFIELD),
+            },
+        }),
+    );
+
+    world.insert_resource(WaveState {
+        elapsed: f64::from(crate::catalog::WAVE_PREPARATION_SECONDS)
+            + (BENCHMARK_WAVE - 1) as f64 * f64::from(crate::catalog::WAVE_INTERVAL_SECONDS),
+        next_wave: BENCHMARK_WAVE,
+    });
+    step_waves(world, map, SIM_STEP_SECONDS);
 }
 
 /// Applies one deterministic setup command and panics unless it was fully
@@ -418,34 +370,16 @@ fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
     );
 }
 
-/// The first `BENCHMARK_ROSTER` units per team stage on the first 96
-/// row-major walkable cells of x 26..=53, y 20..=75 — a region holding no
-/// authored blocker, Research Center or source — and team 2's cells are
-/// the local point reflection of the west scan through the map center,
-/// re-checked against the live map so a fixture retune fails loudly here
-/// instead of spawning team 2 into terrain.
-fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
-    if team == TeamId(2) {
-        let cells: Vec<GridPos> = benchmark_staging_cells(map, TeamId(1))
-            .into_iter()
-            .map(point_reflect)
-            .collect();
-        // The reflected cells are only staging candidates: check them
-        // against the live map instead of assuming any symmetry.
-        assert!(
-            cells.iter().all(|cell| map.is_walkable(*cell)),
-            "team-2 staging reflected a walkable team-1 cell onto blocked ground"
-        );
-        return cells;
-    }
-    let capacity: usize = BENCHMARK_ROSTER.iter().map(|(_, count)| count).sum();
-    let mut cells = Vec::with_capacity(capacity);
+/// Reinforcements stage on deterministic row-major cells in the existing
+/// open western field, clear of the human start and authored deposits.
+fn benchmark_staging_cells(map: &GridMap) -> Vec<GridPos> {
+    let mut cells = Vec::with_capacity(BENCHMARK_REINFORCEMENTS);
     'scan: for y in 20..=75 {
         for x in 26..=53 {
             let cell = GridPos::new(x, y);
             if map.is_walkable(cell) {
                 cells.push(cell);
-                if cells.len() == capacity {
+                if cells.len() == BENCHMARK_REINFORCEMENTS {
                     break 'scan;
                 }
             }
@@ -453,7 +387,7 @@ fn benchmark_staging_cells(map: &GridMap, team: TeamId) -> Vec<GridPos> {
     }
     assert_eq!(
         cells.len(),
-        capacity,
+        BENCHMARK_REINFORCEMENTS,
         "the staging region lost walkable cells"
     );
     cells
