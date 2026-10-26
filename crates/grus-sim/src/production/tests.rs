@@ -1136,3 +1136,36 @@ fn building_commands_on_a_hidden_enemy_building_answer_building_missing() {
     let visible = enqueue(&mut world, &mut map, BuildingId(150), UnitKind::Guard);
     assert_eq!(visible.reject, Some(RejectReason::NotOwned));
 }
+
+#[test]
+fn aliens_are_rejected_by_normal_enqueue_commands_without_spending() {
+    let (mut world, mut map) = open_world();
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(100),
+        BuildingKind::Barracks,
+        GridPos::new(20, 20),
+        TEAM,
+    );
+    let initial = stockpile(&world, TEAM);
+
+    for kind in [
+        UnitKind::Swarmer,
+        UnitKind::Spitter,
+        UnitKind::Brute,
+        UnitKind::Behemoth,
+    ] {
+        assert_eq!(
+            enqueue(&mut world, &mut map, BuildingId(100), kind).reject,
+            Some(RejectReason::WrongProducer),
+            "normal enqueue accepted {kind:?}"
+        );
+    }
+    assert_eq!(stockpile(&world, TEAM), initial);
+    let barracks = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(100))
+        .expect("the completed Barracks");
+    assert!(world.get::<ProductionQueue>(barracks).is_none());
+}

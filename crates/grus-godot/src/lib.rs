@@ -710,7 +710,7 @@ fn cost_dict(cost: grus_sim::catalog::Cost) -> VarDictionary {
 /// smokes, not unit tests.
 fn catalogue_snapshot_dict() -> VarDictionary {
     let mut units = VarDictionary::new();
-    for kind in UnitKind::ALL {
+    for kind in UnitKind::HUMAN {
         let spec = unit_spec(kind);
         let mut entry = cost_dict(spec.cost);
         entry.set("seconds", i64::from(spec.train_seconds));
@@ -792,7 +792,7 @@ fn parse_unit_kind(name: &GString) -> Option<UnitKind> {
 /// spellings come from the same `kind_name_str` the outbound serializers
 /// use, so the wire name can never drift between directions.
 fn parse_unit_kind_str(name: &str) -> Option<UnitKind> {
-    UnitKind::ALL
+    UnitKind::HUMAN
         .into_iter()
         .find(|kind| kind_name_str(kind) == name)
 }
@@ -1559,17 +1559,23 @@ mod tests {
 
     use super::*;
 
-    /// Parsers walk the authoritative `UnitKind::ALL`/`BuildingKind::ALL`
-    /// tables, so every catalogue name round-trips and every retired name
-    /// rejects. No hardcoded alias surface: the expected name is the shared
-    /// `kind_name_str` the outbound serializers emit, so these tests prove
-    /// the inbound parsers accept exactly what the bridge sends out. The
-    /// tests run engine-free through the `&str` cores.
+    /// Enqueue parsing accepts only human trainable units; aliens remain in
+    /// the full catalogue for simulation and presentation. Building parsing
+    /// still walks the complete building table. The tests run engine-free.
     #[test]
-    fn unit_kind_parser_accepts_exactly_the_catalogue_names() {
-        for kind in UnitKind::ALL {
+    fn unit_kind_parser_accepts_only_the_human_catalogue_names() {
+        for kind in UnitKind::HUMAN {
             let name = kind_name_str(kind);
             assert_eq!(parse_unit_kind_str(&name), Some(kind), "{name} must parse");
+        }
+        for kind in [
+            UnitKind::Swarmer,
+            UnitKind::Spitter,
+            UnitKind::Brute,
+            UnitKind::Behemoth,
+        ] {
+            let name = kind_name_str(kind);
+            assert_eq!(parse_unit_kind_str(&name), None, "{name} must not enqueue");
         }
         for retired in [
             "Villager", "Spearman", "Archer", "Cavalry", "worker", "Worker ", "", "Cactus",

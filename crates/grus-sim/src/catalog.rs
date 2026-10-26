@@ -1,5 +1,5 @@
 //! Typed gameplay catalogue: the only source of costs, times, footprints,
-//! population values, movement speeds, and the gathering rate.
+//! population values, movement speeds, wave tuning, and the gathering rate.
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ResourceKind {
@@ -13,10 +13,25 @@ pub enum UnitKind {
     Worker,
     Guard,
     Rifleman,
+    Swarmer,
+    Spitter,
+    Brute,
+    Behemoth,
 }
 
 impl UnitKind {
-    pub const ALL: [UnitKind; 3] = [UnitKind::Worker, UnitKind::Guard, UnitKind::Rifleman];
+    /// Every human and alien unit kind, including kinds that cannot be trained.
+    pub const ALL: [UnitKind; 7] = [
+        UnitKind::Worker,
+        UnitKind::Guard,
+        UnitKind::Rifleman,
+        UnitKind::Swarmer,
+        UnitKind::Spitter,
+        UnitKind::Brute,
+        UnitKind::Behemoth,
+    ];
+    /// Human kinds accepted by normal production and the player catalogue.
+    pub const HUMAN: [UnitKind; 3] = [UnitKind::Worker, UnitKind::Guard, UnitKind::Rifleman];
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -55,11 +70,19 @@ pub struct UnitSpec {
     pub max_health: u32,
     /// `None` for noncombatants (Worker).
     pub combat: Option<CombatSpec>,
+    /// Present only on the four alien kinds; normal production stays human-only.
+    pub alien: Option<AlienSpec>,
 }
 
-/// Combat tuning of one military unit. The counter bonus applies only to
-/// `counter_target`; every other kind takes base damage. The deletion of the
-/// PvP roster left no counter relationships: every surviving bonus is zero.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AlienSpec {
+    pub threat: u32,
+    pub crystal_reward: u32,
+    pub first_wave: u64,
+}
+
+/// Combat tuning of one unit. The counter bonus applies only to
+/// `counter_target`; every other kind takes base damage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CombatSpec {
     pub damage: u32,
@@ -85,6 +108,15 @@ pub struct BuildingSpec {
 pub const CARRY_LIMIT: u32 = 10;
 pub const BASE_GATHER_RATE: f32 = 2.0;
 pub const MAX_POPULATION: u32 = 100;
+pub const WAVE_PREPARATION_SECONDS: u32 = 300;
+pub const WAVE_INTERVAL_SECONDS: u32 = 100;
+pub const WAVE_WARNING_SECONDS: u32 = 30;
+pub const MAX_LIVE_ALIENS: u32 = 150;
+pub const WAVE_BUDGET_BASE: u64 = 8;
+pub const WAVE_BUDGET_PER_WAVE: u64 = 4;
+pub const WAVE_BUDGET_QUADRATIC_TENTHS: u64 = 4;
+pub const WAVE_TWO_ZONE_START: u64 = 10;
+pub const WAVE_THREE_ZONE_START: u64 = 20;
 /// Attack-move target-acquisition radius in world units (cells).
 pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
 /// Initial per-unit vision radius in cells; a reveal covers every cell with
@@ -103,6 +135,7 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
             speed: 6.0,
             max_health: 50,
             combat: None,
+            alien: None,
         },
         UnitKind::Guard => UnitSpec {
             cost: Cost {
@@ -116,10 +149,11 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
                 damage: 10,
                 attack_range: 1.5,
                 cooldown_seconds: 1.0,
-                counter_target: UnitKind::Rifleman,
-                counter_bonus: 0,
+                counter_target: UnitKind::Swarmer,
+                counter_bonus: 5,
                 ranged: false,
             }),
+            alien: None,
         },
         UnitKind::Rifleman => UnitSpec {
             cost: Cost {
@@ -135,9 +169,86 @@ pub fn unit_spec(kind: UnitKind) -> UnitSpec {
                 damage: 8,
                 attack_range: 6.0,
                 cooldown_seconds: 1.25,
-                counter_target: UnitKind::Guard,
+                counter_target: UnitKind::Spitter,
+                counter_bonus: 4,
+                ranged: true,
+            }),
+            alien: None,
+        },
+        UnitKind::Swarmer => UnitSpec {
+            cost: Cost::default(),
+            train_seconds: 0,
+            speed: 8.0,
+            max_health: 40,
+            combat: Some(CombatSpec {
+                damage: 6,
+                attack_range: 1.5,
+                cooldown_seconds: 1.0,
+                counter_target: UnitKind::Worker,
+                counter_bonus: 0,
+                ranged: false,
+            }),
+            alien: Some(AlienSpec {
+                threat: 1,
+                crystal_reward: 1,
+                first_wave: 1,
+            }),
+        },
+        UnitKind::Spitter => UnitSpec {
+            cost: Cost::default(),
+            train_seconds: 0,
+            speed: 6.0,
+            max_health: 70,
+            combat: Some(CombatSpec {
+                damage: 8,
+                attack_range: 6.0,
+                cooldown_seconds: 1.5,
+                counter_target: UnitKind::Worker,
                 counter_bonus: 0,
                 ranged: true,
+            }),
+            alien: Some(AlienSpec {
+                threat: 3,
+                crystal_reward: 2,
+                first_wave: 4,
+            }),
+        },
+        UnitKind::Brute => UnitSpec {
+            cost: Cost::default(),
+            train_seconds: 0,
+            speed: 4.0,
+            max_health: 300,
+            combat: Some(CombatSpec {
+                damage: 30,
+                attack_range: 1.5,
+                cooldown_seconds: 2.0,
+                counter_target: UnitKind::Worker,
+                counter_bonus: 0,
+                ranged: false,
+            }),
+            alien: Some(AlienSpec {
+                threat: 6,
+                crystal_reward: 5,
+                first_wave: 8,
+            }),
+        },
+        UnitKind::Behemoth => UnitSpec {
+            cost: Cost::default(),
+            train_seconds: 0,
+            speed: 3.0,
+            max_health: 2_000,
+            combat: Some(CombatSpec {
+                damage: 80,
+                attack_range: 1.5,
+                cooldown_seconds: 2.0,
+                counter_target: UnitKind::Worker,
+                counter_bonus: 0,
+                ranged: false,
+            }),
+            alien: Some(AlienSpec {
+                threat: 40,
+                crystal_reward: 50,
+                first_wave: 10,
             }),
         },
     }

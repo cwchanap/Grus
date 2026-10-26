@@ -10,14 +10,18 @@ pub mod movement;
 pub mod production;
 pub mod session;
 pub mod visibility;
+pub mod waves;
 
 pub use buildings::{
     Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
     validate_placement,
 };
 pub use catalog::{
-    ATTACK_MOVE_RADIUS, BASE_GATHER_RATE, BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec,
-    Cost, MAX_POPULATION, ResourceKind, UnitKind, UnitSpec, resource_amount,
+    ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE, BuildingKind, BuildingSpec, CARRY_LIMIT,
+    CombatSpec, Cost, MAX_LIVE_ALIENS, MAX_POPULATION, ResourceKind, UnitKind, UnitSpec,
+    WAVE_BUDGET_BASE, WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
+    WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
+    resource_amount,
 };
 pub use combat::{
     AttackCooldown, CombatEvent, CombatEventTotal, CombatEvents, CombatOrder, CombatTarget, Health,
@@ -33,7 +37,8 @@ pub use economy::{
     step_economy,
 };
 pub use fixture::{
-    MapFixture, RUINS, ResourceSpawn, TeamStart, extend_with_benchmark_workload, seed_skirmish,
+    ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart,
+    extend_with_benchmark_workload, seed_skirmish,
 };
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
@@ -49,3 +54,4 @@ pub use session::{
 pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
+pub use waves::{WaveRoster, WaveState, plan_roster, wave_budget, zones_for};

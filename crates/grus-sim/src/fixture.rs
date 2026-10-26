@@ -38,6 +38,14 @@ pub struct ResourceSpawn {
     pub amount: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EntryZone {
+    North,
+    East,
+    South,
+    West,
+}
+
 /// The single authored blocker table for the battlefield — sparse ruins
 /// around the central city, each pair a rectangle's minimum and INCLUSIVE
 /// maximum cell. `MapFixture::battlefield` loops exactly this data through
@@ -55,6 +63,14 @@ pub const RUINS: &[(GridPos, GridPos)] = &[
     (GridPos::new(56, 30), GridPos::new(58, 33)),
     (GridPos::new(34, 82), GridPos::new(37, 85)),
     (GridPos::new(84, 80), GridPos::new(88, 83)),
+];
+
+/// Authored alien entry anchors in the same order used for zone rotation.
+pub const ENTRY_ZONES: [(EntryZone, GridPos); 4] = [
+    (EntryZone::North, GridPos::new(64, 0)),
+    (EntryZone::East, GridPos::new(127, 48)),
+    (EntryZone::South, GridPos::new(64, 95)),
+    (EntryZone::West, GridPos::new(0, 48)),
 ];
 
 #[derive(Clone, Debug)]

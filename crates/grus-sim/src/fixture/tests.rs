@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use crate::buildings::Building;
 use crate::catalog::resource_amount;
 use crate::combat::CombatOrder;
-use crate::commands::UnitIndex;
+use crate::commands::{UnitIndex, approach_slots};
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy};
 use crate::ids::IdAllocator;
 use crate::map::Footprint;
@@ -175,6 +175,45 @@ fn battlefield_connects_every_border_and_the_east_side_to_the_city() {
         .find_path(city.workers[0], east_gate)
         .expect("an alternate route must exist");
     assert!(!alternate.contains(&interior));
+}
+
+#[test]
+fn authored_alien_entry_zones_reach_the_central_research_center() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map;
+    for start in MapFixture::team_starts() {
+        for cell in Footprint::new(start.research_center_anchor, 4, 4).cells() {
+            map.set_blocked(cell, true);
+        }
+    }
+    for resource in &fixture.resources {
+        map.set_blocked(resource.cell, true);
+    }
+
+    let core = MapFixture::team_starts()
+        .into_iter()
+        .find(|start| start.team == TeamId(1))
+        .expect("the central team-1 start");
+    let core_slots = approach_slots(
+        &map,
+        Footprint::new(core.research_center_anchor, 4, 4),
+        &HashSet::new(),
+        usize::MAX,
+    );
+    assert!(!core_slots.is_empty(), "the core has no walkable perimeter");
+
+    for (zone, anchor) in ENTRY_ZONES {
+        assert!(
+            map.is_walkable(anchor),
+            "{zone:?} anchor {anchor:?} is blocked"
+        );
+        assert!(
+            core_slots
+                .iter()
+                .any(|slot| map.find_path(anchor, *slot).is_some()),
+            "{zone:?} anchor {anchor:?} cannot reach the core perimeter"
+        );
+    }
 }
 
 /// Team-kind census over the live `UnitIndex` — counts only.
