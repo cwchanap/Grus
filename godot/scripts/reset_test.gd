@@ -17,10 +17,13 @@ func _building_view(id: int) -> Node3D:
 
 ## Normal gameplay must actually carry visibility state: a revision >= 1
 ## (initial refresh ran), a 128x96 packed payload, the own Research Center
-## cell (stable BuildingId 1) Visible and the north alien entry cell
-## Unexplored. If the runtime ever lost its VisibilityMap,
-## the absent-resource fallback would silently run full-information —
-## these assertions make that a loud failure.
+## cell (stable BuildingId 1) Visible and the far bulk of the map still
+## Unexplored — the remote-cell probe the removed enemy-base check gave.
+## Authored entry anchors stay pinned in the sim's visibility tests;
+## fixture coordinates are never re-typed into test scripts. If the
+## runtime ever lost its VisibilityMap, the absent-resource fallback
+## would silently run full-information — these assertions make that a
+## loud failure.
 func _assert_runtime_visibility(where: String) -> bool:
 	if not GrusBridge.has_method("visibility_revision") \
 			or not GrusBridge.has_method("visibility_snapshot"):
@@ -47,6 +50,17 @@ func _assert_runtime_visibility(where: String) -> bool:
 	var own_cell := SmokeHelpers.cell_of(own)
 	if states[own_cell.y * 128 + own_cell.x] != 2:
 		_fail("%s: own Research Center cell %s is not Visible" % [where, own_cell])
+		return false
+	# The radius-10 reveal covers only the human core, so nearly all of the
+	# map must still be Unexplored — an all-Visible full-info payload cannot
+	# pass. This is the remote-cell fog probe that does not need a fixture
+	# coordinate re-typed into GDScript.
+	var unexplored := 0
+	for value in states:
+		if value == 0:
+			unexplored += 1
+	if unexplored * 5 < states.size() * 4:
+		_fail("%s: only %d of %d cells are Unexplored — fog is not hiding remote cells" % [where, unexplored, states.size()])
 		return false
 	# Before the warning window, zone anchors must not leak through the wave
 	# snapshot; sim tests pin the authored anchors' walkability/reachability.
