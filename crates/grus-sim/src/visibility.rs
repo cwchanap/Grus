@@ -144,6 +144,32 @@ pub fn explored_by(world: &World, team: TeamId, subject: impl Into<VisibilitySub
     }
 }
 
+/// Grants `team` immediate vision around `origins` without recomputing the
+/// map: unions one reveal circle into the team's current `visible` and
+/// `explored` sets and bumps `revision` on change. The wave director calls
+/// this for freshly spawned aliens — the end-of-tick refresh is the first
+/// refresh that would otherwise observe the new origins, and same-tick
+/// combat acquisition must not wait a tick to see them. No-op without a
+/// `VisibilityMap`; the next `refresh_visibility` recomputes every team
+/// from live origins anyway.
+pub(crate) fn reveal_for_team(world: &mut World, map: &GridMap, team: TeamId, origins: &[GridPos]) {
+    if origins.is_empty() {
+        return;
+    }
+    let Some(mut visibility) = world.get_resource_mut::<VisibilityMap>() else {
+        return;
+    };
+    let revealed = reveal_circle(map, origins);
+    let vision = visibility.teams.entry(team).or_default();
+    let visible_len = vision.visible.len();
+    let explored_len = vision.explored.len();
+    vision.visible.extend(revealed.iter().copied());
+    vision.explored.extend(revealed);
+    if vision.visible.len() != visible_len || vision.explored.len() != explored_len {
+        visibility.revision = visibility.revision.wrapping_add(1);
+    }
+}
+
 /// Whether a unit of `unit_team` standing on `cell` counts as occupancy to
 /// `issuer`: units the issuer owns always do; any other unit only while
 /// that cell is currently visible. The one rule behind every

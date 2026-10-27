@@ -6,20 +6,21 @@ use bevy::prelude::{Resource, World};
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{
     ATTACK_MOVE_RADIUS, BuildingKind, MAX_LIVE_ALIENS, UnitKind, WAVE_BUDGET_BASE,
-    WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
-    WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
-    unit_spec,
+    WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_CATCH_UP_LIMIT, WAVE_INTERVAL_SECONDS,
+    WAVE_PREPARATION_SECONDS, WAVE_SWARMER_RESERVE_DIVISOR, WAVE_THREE_ZONE_START,
+    WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS, unit_spec,
 };
 use crate::combat::{CombatOrder, Health};
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, approach_slots,
-    destination_slots, spawn_unit,
+    destination_slots, sorted_unit_ids, spawn_unit,
 };
 use crate::fixture::{ENTRY_ZONES, EntryZone};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
-use crate::movement::{MoveOrder, SimPosition, Unit};
+use crate::movement::{MoveOrder, SimPosition};
 use crate::session::gameplay_active;
+use crate::visibility::reveal_for_team;
 
 const TIMER_BOUNDARY_EPSILON_SECONDS: f64 = 0.0001;
 
@@ -100,14 +101,13 @@ pub fn plan_roster(wave: u64) -> WaveRoster {
     let mut remaining = wave_budget(wave);
     let mut roster = WaveRoster::default();
 
-    if wave.is_multiple_of(10) {
+    let behemoth = unit_spec(UnitKind::Behemoth).alien.unwrap();
+    if wave.is_multiple_of(behemoth.first_wave) {
         roster.behemoths = 1;
-        remaining = remaining.saturating_sub(u64::from(
-            unit_spec(UnitKind::Behemoth).alien.unwrap().threat,
-        ));
+        remaining = remaining.saturating_sub(u64::from(behemoth.threat));
     }
 
-    let reserved_swarmers = remaining / 2;
+    let reserved_swarmers = remaining / WAVE_SWARMER_RESERVE_DIVISOR;
     let mut premium_budget = remaining - reserved_swarmers;
     let brute = unit_spec(UnitKind::Brute).alien.unwrap();
     let spitter = unit_spec(UnitKind::Spitter).alien.unwrap();
@@ -184,10 +184,15 @@ impl WaveState {
         if gameplay_active(world) && seconds.is_finite() && seconds > 0.0 {
             self.elapsed += f64::from(seconds);
             while self.next_wave < u64::MAX
+                && self.next_wave - first < WAVE_CATCH_UP_LIMIT
                 && self.elapsed + TIMER_BOUNDARY_EPSILON_SECONDS >= wave_deadline(self.next_wave)
             {
                 self.next_wave += 1;
             }
+            // A pathological delta cannot owe unbounded catch-up: clamp the
+            // clock to the first unlaunched deadline so the skipped indices
+            // are absorbed instead of draining at the limit forever.
+            self.elapsed = self.elapsed.min(wave_deadline(self.next_wave));
         }
         first..self.next_wave
     }
@@ -204,7 +209,7 @@ impl WaveState {
     }
 }
 
-fn wave_deadline(wave: u64) -> f64 {
+pub(crate) fn wave_deadline(wave: u64) -> f64 {
     f64::from(WAVE_PREPARATION_SECONDS)
         + wave.saturating_sub(1) as f64 * f64::from(WAVE_INTERVAL_SECONDS)
 }
@@ -232,7 +237,7 @@ pub fn step_waves(world: &mut World, map: &mut GridMap, seconds: f32) {
 fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
     let roster = plan_roster(wave);
     let planned = roster.ordered_prefix(MAX_LIVE_ALIENS as usize);
-    let live = live_alien_count(world, TeamId(2));
+    let live = live_alien_ids(world, TeamId(2)).len();
     let room = (MAX_LIVE_ALIENS as usize).saturating_sub(live);
     let spawn_order: Vec<UnitKind> = planned.into_iter().take(room).collect();
     if spawn_order.is_empty() {
@@ -246,20 +251,13 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
     let zones = zones_for(wave);
     let mut occupied = live_unit_cells(world, map);
     let mut spawned = Vec::with_capacity(spawn_order.len());
+    let mut spawn_cells = Vec::with_capacity(spawn_order.len());
 
     for (index, kind) in spawn_order.iter().copied().enumerate() {
-        let zone_index = index % zones.len();
-        let zone = zones[zone_index];
-        let Some(anchor) = ENTRY_ZONES
-            .iter()
-            .find_map(|(candidate, anchor)| (*candidate == zone).then_some(*anchor))
-        else {
-            continue;
-        };
-        let remaining_in_zone = 1 + (spawn_order.len() - index - 1) / zones.len();
-        let Some(cell) = destination_slots(map, anchor, remaining_in_zone, &occupied)
+        let zone = zones[index % zones.len()];
+        let Some(cell) = destination_slots(map, zone.anchor(), 1, &occupied)
             .into_iter()
-            .find(|candidate| map.is_walkable(*candidate) && !occupied.contains(candidate))
+            .next()
         else {
             break;
         };
@@ -281,6 +279,7 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
             spec.speed,
         );
         spawned.push(id);
+        spawn_cells.push(cell);
         if overflow_threat > 0 {
             let max_health = scaled_health(spec.max_health, overflow_threat, prefix_threat);
             world.entity_mut(entity).insert(Health {
@@ -290,40 +289,26 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
         }
     }
 
-    let targets = research_center_approach_slots(world, map);
-    if targets.is_empty() {
+    // New aliens see their surroundings immediately: the end-of-tick
+    // refresh is the first refresh that would otherwise observe these
+    // origins, and same-tick combat acquisition must not wait on it.
+    reveal_for_team(world, map, TeamId(2), &spawn_cells);
+
+    let Some((_, targets)) = alien_objective(world, map) else {
         return;
-    }
+    };
     for (index, id) in spawned.into_iter().enumerate() {
         dispatch_attack_move(world, map, id, targets[index % targets.len()]);
     }
 }
 
 fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
-    let Some((_, footprint)) = team_one_research_center(world) else {
+    let Some((standoff, targets)) = alien_objective(world, map) else {
         return;
     };
-    let targets = research_center_approach_slots(world, map);
-    if targets.is_empty() {
-        return;
-    }
-
-    let mut ids: Vec<UnitId> = world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter_map(|(id, entity)| {
-                    let unit = world.get::<Unit>(*entity)?;
-                    (unit.team == TeamId(2) && unit_spec(unit.kind).alien.is_some()).then_some(*id)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    ids.sort_unstable();
 
     let mut target_index = 0;
-    for id in ids {
+    for id in live_alien_ids(world, TeamId(2)) {
         let Some(entity) = world
             .get_resource::<UnitIndex>()
             .and_then(|index| index.entity(id))
@@ -347,7 +332,7 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         };
         if position
             .current
-            .distance(footprint.closest_point(position.current))
+            .distance(standoff.closest_point(position.current))
             <= ATTACK_MOVE_RADIUS
         {
             continue;
@@ -358,32 +343,61 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
     }
 }
 
-fn research_center_approach_slots(world: &World, map: &GridMap) -> Vec<GridPos> {
-    let Some((_, footprint)) = team_one_research_center(world) else {
-        return Vec::new();
-    };
-    let used = HashSet::new();
-    approach_slots(map, footprint, &used, footprint.perimeter_cells().len())
+/// The director's live objective: the standoff footprint stranded aliens
+/// measure "already engaged" against, plus the approach slots new orders
+/// target. The lowest-id team-1 Research Center leads while it stands;
+/// without it the lowest-id team-1 building — then the lowest-id live
+/// team-1 unit's cell — keeps the horde tasked, so a session-free world
+/// (the benchmark) retains alien intent after the core dies.
+fn alien_objective(world: &World, map: &GridMap) -> Option<(Footprint, Vec<GridPos>)> {
+    let mut buildings: Vec<(bool, BuildingId, Footprint)> = world
+        .get_resource::<BuildingIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    let building = world.get::<Building>(*entity)?;
+                    let footprint = world.get::<Footprint>(*entity)?;
+                    (building.team == TeamId(1)).then_some((
+                        building.kind != BuildingKind::ResearchCenter,
+                        *id,
+                        *footprint,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    buildings.sort_unstable_by_key(|(is_other, id, _)| (*is_other, *id));
+    for (_, _, footprint) in buildings {
+        let slots = objective_slots(map, footprint);
+        if !slots.is_empty() {
+            return Some((footprint, slots));
+        }
+    }
+    for id in sorted_unit_ids(world, TeamId(1), |_| true) {
+        let Some(position) = world
+            .get_resource::<UnitIndex>()
+            .and_then(|index| index.entity(id))
+            .and_then(|entity| world.get::<SimPosition>(entity))
+        else {
+            continue;
+        };
+        let footprint = Footprint::new(map.world_to_cell(position.current), 1, 1);
+        let slots = objective_slots(map, footprint);
+        if !slots.is_empty() {
+            return Some((footprint, slots));
+        }
+    }
+    None
 }
 
-fn team_one_research_center(world: &World) -> Option<(BuildingId, Footprint)> {
-    let mut centers: Vec<_> = world
-        .get_resource::<BuildingIndex>()?
-        .iter()
-        .filter_map(|(id, entity)| {
-            let building = world.get::<Building>(*entity)?;
-            if building.team == TeamId(1) && building.kind == BuildingKind::ResearchCenter {
-                world
-                    .get::<Footprint>(*entity)
-                    .copied()
-                    .map(|footprint| (*id, footprint))
-            } else {
-                None
-            }
-        })
-        .collect();
-    centers.sort_unstable_by_key(|(id, _)| *id);
-    centers.into_iter().next()
+fn objective_slots(map: &GridMap, footprint: Footprint) -> Vec<GridPos> {
+    approach_slots(
+        map,
+        footprint,
+        &HashSet::new(),
+        footprint.perimeter_cells().len(),
+    )
 }
 
 fn dispatch_attack_move(world: &mut World, map: &mut GridMap, id: UnitId, target: GridPos) {
@@ -399,20 +413,10 @@ fn dispatch_attack_move(world: &mut World, map: &mut GridMap, id: UnitId, target
     );
 }
 
-fn live_alien_count(world: &World, team: TeamId) -> usize {
-    world
-        .get_resource::<UnitIndex>()
-        .map(|index| {
-            index
-                .iter()
-                .filter(|(_, entity)| {
-                    world.get::<Unit>(**entity).is_some_and(|unit| {
-                        unit.team == team && unit_spec(unit.kind).alien.is_some()
-                    })
-                })
-                .count()
-        })
-        .unwrap_or_default()
+/// Live alien ids for `team` in stable-id order — the one census shared by
+/// the launch cap, the stranded retry, bridge snapshots, and tests.
+pub fn live_alien_ids(world: &World, team: TeamId) -> Vec<UnitId> {
+    sorted_unit_ids(world, team, |unit| unit_spec(unit.kind).alien.is_some())
 }
 
 fn live_unit_cells(world: &World, map: &GridMap) -> HashSet<GridPos> {

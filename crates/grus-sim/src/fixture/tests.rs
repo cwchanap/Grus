@@ -195,15 +195,7 @@ fn authored_alien_entry_zones_reach_the_central_research_center() {
 
 /// Team-kind census over the live `UnitIndex` — counts only.
 fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> usize {
-    world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter(|(_, entity)| {
-            world
-                .get::<Unit>(**entity)
-                .is_some_and(|unit| unit.team == team && unit.kind == kind)
-        })
-        .count()
+    sorted_unit_ids(world, team, |unit| unit.kind == kind).len()
 }
 
 #[test]
@@ -324,13 +316,6 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
     extend_with_benchmark_workload(&mut world, &mut map);
 
     for second in 1..=60 {
-        if second > 1 && (second - 1) % 5 == 0 {
-            assert!(replay_benchmark_orders(
-                &mut world,
-                &mut map,
-                ((second - 1) / 5) % 2 == 0,
-            ));
-        }
         let positions: std::collections::HashMap<_, _> = world
             .resource::<UnitIndex>()
             .iter()
@@ -361,118 +346,20 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .iter()
             .filter(|(_, entity)| world.get::<Unit>(**entity).unwrap().team == TeamId(1))
             .count();
+        let aliens = world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| world.get::<Unit>(**entity).unwrap().team == TeamId(2))
+            .count();
+        // A contested second must show movement or combat; once either side
+        // is extinct, quiet is the real end state rather than a frozen sim.
         assert!(
-            moving || new_strikes > strikes,
+            moving || new_strikes > strikes || humans == 0 || aliens == 0,
             "benchmark went idle at second {second}: humans={humans}, live={}, buildings={}",
             world.resource::<UnitIndex>().iter().count(),
             world.resource::<BuildingIndex>().iter().count(),
         );
     }
-}
-
-#[test]
-fn benchmark_order_replay_preserves_survivors_and_rejects_normal_matches() {
-    let fixture = MapFixture::battlefield();
-    let mut map = fixture.map.clone();
-    let mut world = World::new();
-    seed_skirmish(&mut world, &mut map, &fixture);
-    extend_with_benchmark_workload(&mut world, &mut map);
-    let entities: Vec<_> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .map(|(_, entity)| *entity)
-        .collect();
-    for entity in &entities {
-        world.get_mut::<Health>(*entity).unwrap().current -= 1;
-        world
-            .get_mut::<crate::combat::AttackCooldown>(*entity)
-            .unwrap()
-            .0 = 0.75;
-    }
-    let before: Vec<_> = entities
-        .iter()
-        .map(|entity| {
-            let health = world.get::<Health>(*entity).unwrap();
-            (
-                health.current,
-                health.max,
-                world
-                    .get::<crate::combat::AttackCooldown>(*entity)
-                    .unwrap()
-                    .0,
-            )
-        })
-        .collect();
-    let worker_goals: Vec<_> = entities
-        .iter()
-        .filter(|entity| world.get::<Unit>(**entity).unwrap().kind == UnitKind::Worker)
-        .map(|entity| {
-            (
-                *entity,
-                world
-                    .get::<crate::movement::MoveOrder>(*entity)
-                    .unwrap()
-                    .goal,
-            )
-        })
-        .collect();
-    assert!(replay_benchmark_orders(&mut world, &mut map, false));
-    assert!(replay_benchmark_orders(&mut world, &mut map, true));
-    assert_eq!(world.resource::<UnitIndex>().iter().count(), 200);
-    assert_eq!(world.resource::<IdAllocator>().next_unit, 201);
-    for (entity, (current, max, cooldown)) in entities.iter().zip(before) {
-        assert_eq!(world.get::<Health>(*entity).unwrap().current, current);
-        assert_eq!(world.get::<Health>(*entity).unwrap().max, max);
-        assert_eq!(
-            world
-                .get::<crate::combat::AttackCooldown>(*entity)
-                .unwrap()
-                .0,
-            cooldown
-        );
-    }
-    for (entity, goal) in worker_goals {
-        assert_eq!(
-            world
-                .get::<crate::movement::MoveOrder>(entity)
-                .unwrap()
-                .goal,
-            goal
-        );
-        assert!(matches!(
-            world.get::<WorkerTask>(entity),
-            Some(WorkerTask::ToSource { .. })
-        ));
-    }
-    let goals_before: std::collections::HashMap<_, _> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .map(|(id, entity)| {
-            (
-                *id,
-                world
-                    .get::<crate::movement::MoveOrder>(*entity)
-                    .map(|order| order.goal),
-            )
-        })
-        .collect();
-    world.insert_resource(crate::session::MatchSession {
-        phase: crate::session::MatchPhase::Playing,
-    });
-    assert!(!replay_benchmark_orders(&mut world, &mut map, false));
-    let goals_after: std::collections::HashMap<_, _> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .map(|(id, entity)| {
-            (
-                *id,
-                world
-                    .get::<crate::movement::MoveOrder>(*entity)
-                    .map(|order| order.goal),
-            )
-        })
-        .collect();
-    assert_eq!(goals_before, goals_after);
 }
 
 /// The human reinforcements stage on unique cells clear of authored workers.

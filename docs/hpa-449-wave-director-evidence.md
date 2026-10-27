@@ -71,16 +71,31 @@ attempt exited 1 after 28.32 wall seconds. A pure simulation regression
 reproduced inactivity at simulated second 28 with 0 humans, 149 live aliens
 and 0 buildings. That failure was retained, not counted as a measurement.
 
-The existing benchmark runner now replays ordinary AttackMove inputs every
-five measured seconds for surviving combatants toward opposing, alternating
-North/South fixture anchors. The helper rejects normal match sessions.
-Workers retain their gather tasks; IDs, real deaths, health, cooldowns and
-every existing liveness verdict remain unchanged. A regression verifies
-activity through 60 simulated seconds and separately checks preservation
-and normal-session rejection. This script adds real command/pathfinding
-work; the following results supersede the one-off-order measurements.
+Review follow-up: the scripted `replay_benchmark_orders` seam was removed —
+its ~196 route plans landed inside one measured frame every 5 s and skewed
+max/p99, and it papered over the real issue that the director dropped
+alien intent once the Research Center died. The director now falls back
+(lowest-id team-1 building, then lowest-id live team-1 unit) so the
+session-free workload keeps aliens tasked through the ordinary seams.
+The 60-second liveness regression runs without any replay and permits
+quiet windows only after one side is extinct; the .gd runner applies the
+same contested-battle gate. The scripted-order numbers below are retained
+as history.
 
-## Fresh measurements
+## Replay-free measurement
+
+One fresh local headless run on the replay-free tree (1920×1080-equivalent
+headless `gl_compatibility`, Godot 4.7.1, macOS 26.6.2 arm64, debug
+non-e2e GDExtension, `GRUS_BENCHMARK_SECONDS=10`): measured 10.01 s /
+771 frames, mean 12.980 ms, p50 6.888, p95 38.281, p99 48.150,
+**max 84.717 ms** (77.0 fps); live units start 200 / min 163 / mean 184.1 /
+end 163; visible-in-tree min 72 / mean 96.3 / end 162; visibility revision
+240; exit 0 with the complete marker. The replay-era max/p99 spikes
+(253–289 ms from the ~196-route bursts) are gone — the workload self-
+sustains through the director's fallback objective. Native-rendered and
+hosted Linux runs on this tree remain unmeasured.
+
+## Fresh measurements (scripted-replay era, superseded)
 
 Both runs used 1920×1080, Godot 4.7.1 and the debug library identified above.
 No builds or test matrix ran concurrently with either sample. This was a

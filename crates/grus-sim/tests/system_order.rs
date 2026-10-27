@@ -9,11 +9,12 @@ use bevy::prelude::World;
 use grus_sim::catalog::unit_spec;
 use grus_sim::{
     Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder, CombatTarget, Dropoff,
-    Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, MatchPhase, MatchSession,
-    MoveOrder, PlayerCommand, ResourceId, ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy,
-    TeamId, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState, WorkerTask,
-    apply_player_command, explored_by, refresh_visibility, seed_skirmish, spawn_unit, step_combat,
-    step_construction, step_economy, step_movement, step_production, step_waves, visible_to,
+    EntryZone, Footprint, GatherProgress, GridMap, GridPos, Health, MapFixture, MatchPhase,
+    MatchSession, MoveOrder, PlayerCommand, ResourceId, ResourceKind, SIM_STEP_SECONDS,
+    SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
+    WorkerTask, apply_player_command, explored_by, refresh_visibility, seed_skirmish, spawn_unit,
+    step_combat, step_construction, step_economy, step_movement, step_production, step_waves,
+    visible_to,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -272,6 +273,19 @@ fn combat_destroys_the_dropoff_before_economy_deposits_at_it() {
 
 #[test]
 fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick() {
+    wave_spawn_hits_core_in_launch_tick(false);
+}
+
+/// The same ordering guarantee on the shipped fog-enabled path: the
+/// director's spawn-time vision grant must put the core inside team-2
+/// sight before `step_combat` runs, otherwise `acquire_target` rejects
+/// every candidate until the end-of-tick visibility refresh.
+#[test]
+fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick_under_fog() {
+    wave_spawn_hits_core_in_launch_tick(true);
+}
+
+fn wave_spawn_hits_core_in_launch_tick(fog: bool) {
     let fixture = MapFixture::battlefield();
     let mut map = fixture.map.clone();
     let mut world = World::new();
@@ -279,6 +293,9 @@ fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick() {
     world.insert_resource(MatchSession {
         phase: MatchPhase::Playing,
     });
+    if fog {
+        world.insert_resource(VisibilityMap::default());
+    }
 
     // Move the core beside the authored north entry so wave 1 is already
     // inside attack range when it launches. This makes the chain order
@@ -291,7 +308,8 @@ fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick() {
     for cell in old.cells() {
         map.set_blocked(cell, false);
     }
-    let core = Footprint::new(GridPos::new(62, 1), 4, 4);
+    let north = EntryZone::North.anchor();
+    let core = Footprint::new(GridPos::new(north.x - 2, north.y + 1), 4, 4);
     for cell in core.cells() {
         assert!(map.is_walkable(cell));
         map.set_blocked(cell, true);
@@ -302,6 +320,9 @@ fn wave_spawn_is_acquired_and_hits_the_core_in_the_same_tick() {
         elapsed: 299.95,
         next_wave: 1,
     });
+    if fog {
+        refresh_visibility(&mut world, &map);
+    }
 
     step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(world.resource::<WaveState>().next_wave, 2);

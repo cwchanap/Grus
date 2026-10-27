@@ -118,6 +118,28 @@ impl UnitIndex {
     }
 }
 
+/// Live unit ids of `team` matching `pred`, in stable-id order — the
+/// single census ordering shared by the wave director, fixtures, bridge
+/// snapshots, and tests.
+pub fn sorted_unit_ids(world: &World, team: TeamId, pred: impl Fn(&Unit) -> bool) -> Vec<UnitId> {
+    let mut ids: Vec<UnitId> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(id, entity)| {
+                    world
+                        .get::<Unit>(*entity)
+                        .filter(|unit| unit.team == team && pred(unit))
+                        .map(|_| *id)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    ids.sort_unstable();
+    ids
+}
+
 /// Spawns one unit registered in `UnitIndex`, carrying its catalogue
 /// `Health` at full value and a ready `AttackCooldown`.
 pub fn spawn_unit(

@@ -29,7 +29,7 @@ pub use combat::{
 };
 pub use commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
-    apply_player_command, spawn_unit,
+    apply_player_command, sorted_unit_ids, spawn_unit,
 };
 pub use economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceIndex, ResourceSource,
@@ -38,7 +38,7 @@ pub use economy::{
 };
 pub use fixture::{
     ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart,
-    extend_with_benchmark_workload, replay_benchmark_orders, seed_skirmish,
+    extend_with_benchmark_workload, seed_skirmish,
 };
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
@@ -54,4 +54,6 @@ pub use session::{
 pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
-pub use waves::{WaveRoster, WaveState, plan_roster, step_waves, wave_budget, zones_for};
+pub use waves::{
+    WaveRoster, WaveState, live_alien_ids, plan_roster, step_waves, wave_budget, zones_for,
+};

@@ -19,8 +19,24 @@ func _run() -> void:
 		_stage5_fail("Start overlay does not describe survival: %s" % [start_label.text if start_label != null else "missing"])
 		return
 	var wave_label := main.get_node_or_null("HUD/WaveLabel") as Label
-	if wave_label == null or not wave_label.text.contains("Next wave 1") or not wave_label.text.contains("5:00"):
-		_stage5_fail("wave HUD does not show the authoritative initial countdown: %s" % [wave_label.text if wave_label != null else "missing"])
+	if wave_label == null:
+		_stage5_fail("wave HUD label is missing")
+		return
+	# The countdown must be rendered from a live bridge read, not the
+	# scene's placeholder text: poll until the label shows the snapshot's
+	# next_wave, then require the snapshot's own remaining time on screen.
+	var live_wave: Dictionary = {}
+	for _frame in 8:
+		live_wave = GrusBridge.wave_snapshot()
+		if wave_label.text.contains("Next wave %d" % int(live_wave.get("next_wave", -1))):
+			break
+		await get_tree().process_frame
+	var next_wave := int(live_wave.get("next_wave", -1))
+	var remaining := maxi(ceili(float(live_wave.get("seconds_remaining", 0.0))), 0)
+	var expected_time := "%d:%02d" % [int(remaining / 60), remaining % 60]
+	if not wave_label.text.contains("Next wave %d" % next_wave) \
+			or not wave_label.text.contains(expected_time):
+		_stage5_fail("wave HUD does not render the live snapshot countdown (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, wave_label.text])
 		return
 	if not await _probe_alien_roles():
 		return

@@ -32,12 +32,19 @@ var _texture: ImageTexture
 var _friendly_points := PackedVector2Array()
 var _enemy_points := PackedVector2Array()
 var _resource_points := PackedVector2Array()
+var _wave_snapshot: Dictionary = {}
 
 @onready var _camera: Camera3D = get_node("../../Camera3D")
 
 func _ready() -> void:
 	_image = Image.create(MAP_WIDTH, MAP_HEIGHT, false, Image.FORMAT_RGB8)
 	_texture = ImageTexture.create_from_image(_image)
+
+## The battlefield controller pushes the same wave_snapshot it renders on
+## the HUD each frame, so the minimap never calls the bridge itself and the
+## pings and HUD text share one read — they can never disagree.
+func set_wave_snapshot(wave: Dictionary) -> void:
+	_wave_snapshot = wave
 
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.visibility_revision())
@@ -81,11 +88,11 @@ func _refresh_markers() -> void:
 	_enemy_points.clear()
 	_resource_points.clear()
 	incoming_ping_points.clear()
-	var wave: Dictionary = GrusBridge.wave_snapshot()
-	# The snapshot owns the timer too: show only the first six simulated
-	# seconds of the warning, then leave the longer-lived HUD text in place.
-	if float(wave.get("seconds_remaining", 0.0)) >= 24.0:
-		for zone in wave.get("incoming_zones", []):
+	# The controller pushes the same snapshot it renders on the HUD — one
+	# bridge read per frame, and the timer owns the gate: show only the
+	# first six simulated seconds of the warning.
+	if float(_wave_snapshot.get("seconds_remaining", 0.0)) >= 24.0:
+		for zone in _wave_snapshot.get("incoming_zones", []):
 			incoming_ping_points.append(Vector2(
 				float(zone.get("anchor_x", -1)),
 				float(zone.get("anchor_y", -1))))

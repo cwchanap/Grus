@@ -18,6 +18,7 @@ const ZOOM_STEP := 6.0
 @onready var _fx: Node3D = $CombatFx
 @onready var session_panel: Panel = $HUD/SessionPanel
 @onready var session_label: Label = $HUD/SessionPanel/SessionLabel
+@onready var _minimap: Control = $HUD/Minimap
 @onready var start_button: Button = $HUD/SessionPanel/StartButton
 @onready var resume_button: Button = $HUD/SessionPanel/ResumeButton
 @onready var restart_button: Button = $HUD/SessionPanel/RestartButton
@@ -187,6 +188,10 @@ func _refresh_hud() -> void:
 	]
 	if not incoming_names.is_empty():
 		wave_label.text += "   Incoming: " + ", ".join(incoming_names)
+	# One bridge read per frame: hand the same snapshot to the minimap so
+	# HUD text and incoming pings can never disagree.
+	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
+		_minimap.set_wave_snapshot(wave)
 	var building: Dictionary = {}
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)

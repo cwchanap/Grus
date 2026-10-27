@@ -13,6 +13,11 @@ const ROLE_SPECS := {
 	"Behemoth": {"body_scale": 1.8, "marker": "crest"},
 }
 
+## Class-level shared marker resources: 150+ alien views must not each own
+## unique meshes/materials — every instance pulls from these caches.
+static var _shared_meshes: Dictionary = {}
+static var _shared_marker_material: StandardMaterial3D = null
+
 @onready var body: MeshInstance3D = $Body
 @onready var selection_ring: MeshInstance3D = $SelectionRing
 @onready var role_marker: Node3D = $RoleMarker
@@ -74,28 +79,52 @@ func _apply_role(kind: String) -> void:
 		old.queue_free()
 	match str(spec.get("marker", "")):
 		"spear":
-			_add_marker(_make_box_mesh(Vector3(0.08, 1.6, 0.08)))
+			_add_marker(_shared_mesh("spear"))
 		"bow":
-			_add_marker(_make_box_mesh(Vector3(0.55, 0.55, 0.08)))
+			_add_marker(_shared_mesh("bow"))
 		"spines":
 			for offset in [-0.22, 0.0, 0.22]:
-				var spike := CylinderMesh.new()
-				spike.top_radius = 0.0
-				spike.bottom_radius = 0.12
-				spike.height = 0.48
-				_add_marker(spike, Vector3(offset, body_scale + 0.08, 0.0))
+				_add_marker(_shared_mesh("spine"), Vector3(offset, body_scale + 0.08, 0.0))
 		"sac":
-			var sac := SphereMesh.new()
-			sac.radius = 0.24
-			sac.height = 0.48
-			_add_marker(sac, Vector3(0.18, body_scale * 0.8, 0.0))
+			_add_marker(_shared_mesh("sac"), Vector3(0.18, body_scale * 0.8, 0.0))
 		"shoulders":
-			_add_marker(_make_box_mesh(Vector3(1.1, 0.32, 0.78)), Vector3(0.0, body_scale * 0.7, 0.0))
+			_add_marker(_shared_mesh("shoulders"), Vector3(0.0, body_scale * 0.7, 0.0))
 		"crest":
-			var crest := CapsuleMesh.new()
-			crest.radius = 0.34
-			crest.height = 0.95
-			_add_marker(crest, Vector3(0.0, body_scale + 0.18, 0.0))
+			_add_marker(_shared_mesh("crest"), Vector3(0.0, body_scale + 0.18, 0.0))
+
+## Builds each marker primitive exactly once and hands every unit view the
+## same instance — kind silhouettes stay distinct via the shared mesh class.
+func _shared_mesh(key: String) -> Mesh:
+	var mesh: Mesh = _shared_meshes.get(key)
+	if mesh != null:
+		return mesh
+	match key:
+		"spear":
+			mesh = _make_box_mesh(Vector3(0.08, 1.6, 0.08))
+		"bow":
+			mesh = _make_box_mesh(Vector3(0.55, 0.55, 0.08))
+		"spine":
+			var spike := CylinderMesh.new()
+			spike.top_radius = 0.0
+			spike.bottom_radius = 0.12
+			spike.height = 0.48
+			mesh = spike
+		"sac":
+			var sphere := SphereMesh.new()
+			sphere.radius = 0.24
+			sphere.height = 0.48
+			mesh = sphere
+		"shoulders":
+			mesh = _make_box_mesh(Vector3(1.1, 0.32, 0.78))
+		"crest":
+			var capsule := CapsuleMesh.new()
+			capsule.radius = 0.34
+			capsule.height = 0.95
+			mesh = capsule
+		_:
+			return null
+	_shared_meshes[key] = mesh
+	return mesh
 
 func _make_box_mesh(size: Vector3) -> BoxMesh:
 	var mesh := BoxMesh.new()
@@ -103,11 +132,14 @@ func _make_box_mesh(size: Vector3) -> BoxMesh:
 	return mesh
 
 func _add_marker(mesh: Mesh, local_position := Vector3(0.0, 0.8, 0.0)) -> void:
+	if mesh == null:
+		return
 	var view := MeshInstance3D.new()
 	view.name = "MarkerMesh"
 	view.mesh = mesh
 	view.position = local_position
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.25, 0.22, 0.2, 1.0)
-	view.material_override = material
+	if _shared_marker_material == null:
+		_shared_marker_material = StandardMaterial3D.new()
+		_shared_marker_material.albedo_color = Color(0.25, 0.22, 0.2, 1.0)
+	view.material_override = _shared_marker_material
 	role_marker.add_child(view)
