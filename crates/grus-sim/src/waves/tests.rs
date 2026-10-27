@@ -94,6 +94,36 @@ fn seeded_wave_spawns_distinct_aliens_and_dispatches_attack_moves_in_the_launch_
 }
 
 #[test]
+fn wave_spawn_slides_off_a_blocked_entry_anchor_to_the_nearest_free_cell() {
+    let (mut world, mut map) = seeded_world();
+    // A building placed over the North anchor — wave 1's only zone — must
+    // not swallow the spawn: the anchor is offered first by
+    // destination_slots, so a walkability gap there would drop the alien
+    // inside the footprint where no route can ever start.
+    map.set_blocked_rect(GridPos::new(63, 0), GridPos::new(65, 2));
+    assert!(!map.is_walkable(EntryZone::North.anchor()));
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+
+    step_waves(&mut world, &mut map, 0.05);
+
+    let ids = live_alien_ids(&world, TeamId(2));
+    assert_eq!(ids.len(), 12);
+    for id in ids {
+        let entity = world.resource::<UnitIndex>().entity(id).unwrap();
+        let cell = map.world_to_cell(world.get::<SimPosition>(entity).unwrap().current);
+        assert!(map.is_walkable(cell), "alien spawned on blocked {cell:?}");
+        assert!(world.get::<MoveOrder>(entity).is_some());
+        assert!(matches!(
+            world.get::<CombatOrder>(entity),
+            Some(CombatOrder::AttackMove { target: None, .. })
+        ));
+    }
+}
+
+#[test]
 fn rejected_wave_routes_retry_once_per_second_after_the_path_opens() {
     let (mut world, mut map) = seeded_world();
     for x in 0..map.width() {

@@ -672,7 +672,7 @@ pub(crate) fn destination_slots(
 ) -> Vec<GridPos> {
     let desired = unit_count.max(1).saturating_mul(4);
     let mut slots = Vec::with_capacity(desired);
-    if !used_slots.contains(&target) {
+    if map.is_walkable(target) && !used_slots.contains(&target) {
         slots.push(target);
     }
 
