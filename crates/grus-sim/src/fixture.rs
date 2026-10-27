@@ -6,7 +6,7 @@ use crate::catalog::{
 };
 use crate::combat::Health;
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, spawn_unit,
+    PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, sorted_unit_ids, spawn_unit,
 };
 use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
@@ -14,8 +14,8 @@ use crate::economy::{
 };
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
-use crate::movement::{SIM_STEP_SECONDS, Unit};
-use crate::waves::{WaveState, step_waves};
+use crate::movement::SIM_STEP_SECONDS;
+use crate::waves::{WaveState, step_waves, wave_deadline};
 
 /// Authored human starting layout: Research Center anchor, four worker
 /// spawn cells, Barracks/Depot build anchors, and six safe resource ids.
@@ -44,6 +44,19 @@ pub enum EntryZone {
     East,
     South,
     West,
+}
+
+impl EntryZone {
+    /// The authored map-edge anchor this zone spawns from — single-sourced
+    /// in `ENTRY_ZONES`, so the director, bridge snapshot, and fixtures all
+    /// share the one lookup.
+    pub fn anchor(self) -> GridPos {
+        ENTRY_ZONES
+            .iter()
+            .find(|(zone, _)| *zone == self)
+            .map(|(_, anchor)| *anchor)
+            .expect("every EntryZone has an authored anchor")
+    }
 }
 
 /// The single authored blocker table for the battlefield — sparse ruins
@@ -297,7 +310,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         for _ in 0..BENCHMARK_REINFORCEMENTS / 2 {
             let cell = cells.next().expect("benchmark staging capacity");
             let unit_id = world.resource_mut::<IdAllocator>().allocate_unit();
-            spawn_unit(
+            let unit = spawn_unit(
                 world,
                 unit_id,
                 TeamId(1),
@@ -305,24 +318,17 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
                 kind,
                 unit_spec(kind).speed,
             );
+            // Same post-spawn bundle production gives every trained unit,
+            // so the benchmark measures the real archetype layout.
+            world.entity_mut(unit).insert((
+                Carry::Empty,
+                GatherProgress::default(),
+                WorkerTask::Idle,
+            ));
         }
     }
 
-    let mut units = world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            world
-                .get::<Unit>(*entity)
-                .filter(|unit| unit.team == TeamId(1))
-                .map(|unit| (*id, unit.kind))
-        })
-        .collect::<Vec<_>>();
-    units.sort_unstable_by_key(|(id, _)| *id);
-    let workers: Vec<UnitId> = units
-        .iter()
-        .filter_map(|(id, kind)| (*kind == UnitKind::Worker).then_some(*id))
-        .collect();
+    let workers = sorted_unit_ids(world, TeamId(1), |unit| unit.kind == UnitKind::Worker);
     for (worker, source) in workers
         .into_iter()
         .zip(MapFixture::safe_source_ids(TeamId(1)))
@@ -337,10 +343,7 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
             },
         );
     }
-    let defenders: Vec<UnitId> = units
-        .into_iter()
-        .filter_map(|(id, kind)| (kind != UnitKind::Worker).then_some(id))
-        .collect();
+    let defenders = sorted_unit_ids(world, TeamId(1), |unit| unit.kind != UnitKind::Worker);
     accept(
         world,
         map,
@@ -354,63 +357,10 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
     );
 
     world.insert_resource(WaveState {
-        elapsed: f64::from(crate::catalog::WAVE_PREPARATION_SECONDS)
-            + (BENCHMARK_WAVE - 1) as f64 * f64::from(crate::catalog::WAVE_INTERVAL_SECONDS),
+        elapsed: wave_deadline(BENCHMARK_WAVE),
         next_wave: BENCHMARK_WAVE,
     });
     step_waves(world, map, SIM_STEP_SECONDS);
-}
-
-/// Replays benchmark inputs through the ordinary command dispatcher. No
-/// survivors are replaced, healed or given different combat statistics.
-pub fn replay_benchmark_orders(world: &mut World, map: &mut GridMap, southbound: bool) -> bool {
-    if world.contains_resource::<crate::session::MatchSession>()
-        || !world.contains_resource::<UnitIndex>()
-    {
-        return false;
-    }
-    let goals = if southbound {
-        [(TeamId(1), EntryZone::South), (TeamId(2), EntryZone::North)]
-    } else {
-        [(TeamId(1), EntryZone::North), (TeamId(2), EntryZone::South)]
-    };
-    let mut issued = false;
-    for (team, zone) in goals {
-        let mut units: Vec<_> = world
-            .resource::<UnitIndex>()
-            .iter()
-            .filter_map(|(id, entity)| {
-                world.get::<Unit>(*entity).and_then(|unit| {
-                    (unit.team == team && unit.kind != UnitKind::Worker).then_some(*id)
-                })
-            })
-            .collect();
-        units.sort_unstable();
-        if units.is_empty() {
-            continue;
-        }
-        let anchor = ENTRY_ZONES
-            .iter()
-            .find(|(entry, _)| *entry == zone)
-            .unwrap()
-            .1;
-        let result = apply_player_command(
-            world,
-            map,
-            PlayerCommand::Units(UnitCommand {
-                issuer: team,
-                units,
-                kind: UnitCommandKind::AttackMove {
-                    target: map.cell_center(anchor),
-                },
-            }),
-        );
-        if result.reject.is_some() || !result.rejected_units.is_empty() {
-            return false;
-        }
-        issued = true;
-    }
-    issued
 }
 
 /// Applies one deterministic setup command and panics unless it was fully

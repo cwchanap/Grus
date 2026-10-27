@@ -9,16 +9,15 @@ use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
     BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
-    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, ENTRY_ZONES, EntryZone, Footprint,
-    GridMap, GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, EntryZone, Footprint, GridMap,
+    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
     PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
     active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
-    idle_worker_ids, population_cap, population_used, produces, refresh_visibility,
-    replay_benchmark_orders, seed_skirmish, set_paused, start_match, step_combat,
-    step_construction, step_economy, step_movement, step_production, step_waves,
-    validate_placement, visible_to,
+    idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
+    seed_skirmish, set_paused, start_match, step_combat, step_construction, step_economy,
+    step_movement, step_production, step_waves, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -324,25 +323,6 @@ impl GrusBridgeNode {
         // reset — drop it so the next fetch rebuilds from the reseeded map.
         self.visibility_cache = None;
         true
-    }
-
-    /// Scripted benchmark input only; normal match sessions reject this seam.
-    #[func]
-    fn replay_benchmark_orders(&self, southbound: bool) -> bool {
-        let Some(mut app_node) = bevy_app_singleton() else {
-            return false;
-        };
-        let mut app_node = app_node.bind_mut();
-        let Some(app) = app_node.get_app_mut() else {
-            return false;
-        };
-        let world = app.world_mut();
-        if !world.contains_resource::<GridMap>() {
-            return false;
-        }
-        world.resource_scope(|world, mut map: Mut<GridMap>| {
-            replay_benchmark_orders(world, &mut map, southbound)
-        })
     }
 
     /// Sim-speed multiplier for headless gate runs. Scales Godot's
@@ -1502,23 +1482,9 @@ fn wave_snapshot_dict(world: &World) -> VarDictionary {
         .incoming_zones()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|zone| {
-            let anchor = ENTRY_ZONES
-                .iter()
-                .find_map(|(candidate, anchor)| (*candidate == zone).then_some(*anchor))?;
-            Some(wave_zone_dict(zone, anchor))
-        })
+        .map(|zone| wave_zone_dict(zone, zone.anchor()))
         .collect();
-    let live_aliens = world
-        .get_resource::<UnitIndex>()
-        .into_iter()
-        .flat_map(|index| index.iter())
-        .filter(|(_, entity)| {
-            world
-                .get::<Unit>(**entity)
-                .is_some_and(|unit| unit.team == TeamId(2) && unit_spec(unit.kind).alien.is_some())
-        })
-        .count();
+    let live_aliens = live_alien_ids(world, TeamId(2)).len();
 
     let mut dict = VarDictionary::new();
     dict.set(
@@ -1645,7 +1611,10 @@ mod tests {
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
     use grus_sim::seed_skirmish;
-    use grus_sim::{CombatEvent, CombatTarget, MatchResult, MoveOrder, WorkerTask, spawn_unit};
+    use grus_sim::{
+        CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder, WorkerTask,
+        sorted_unit_ids, spawn_unit,
+    };
 
     use super::*;
 
@@ -1798,7 +1767,7 @@ mod tests {
         );
         let own_start = MapFixture::team_starts()[0];
         let own_research_center = own_start.research_center_anchor;
-        let entry_anchor = ENTRY_ZONES[0].1;
+        let entry_anchor = EntryZone::North.anchor();
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
@@ -1887,7 +1856,7 @@ mod tests {
             &mut world,
             enemy_at_home,
             TeamId(2),
-            map.cell_center(ENTRY_ZONES[1].1),
+            map.cell_center(EntryZone::East.anchor()),
             UnitKind::Swarmer,
             unit_spec(UnitKind::Swarmer).speed,
         );
@@ -1946,7 +1915,7 @@ mod tests {
         assert_eq!(world.resource::<BuildingIndex>().iter().count(), 1);
 
         // A live alien at the east entry is fog-hidden until a scout reaches it.
-        let alien_cell = ENTRY_ZONES[1].1;
+        let alien_cell = EntryZone::East.anchor();
         let alien = spawn_unit(
             &mut world,
             UnitId(5),
@@ -1965,6 +1934,53 @@ mod tests {
         refresh_visibility(&mut world, &map);
         assert!(visible_to(&world, TeamId(1), alien_cell));
         assert!(world.get::<Unit>(alien).is_some());
+    }
+
+    /// The enemy branch of the building fog gate: with the Team-2 base gone,
+    /// only this test keeps a hostile building exercising
+    /// `building_hidden_from_local_player` — hidden under fog, revealed when
+    /// a team-1 scout reaches its footprint.
+    #[test]
+    fn enemy_building_is_fog_gated_until_scouted() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        world.insert_resource(VisibilityMap::default());
+        refresh_visibility(&mut world, &map);
+
+        // A completed enemy Depot at the east entry — far outside team-1
+        // vision. It needs no BuildingIndex entry: the gate reads only the
+        // entity's components.
+        let spec = building_spec(BuildingKind::Depot);
+        let enemy = world
+            .spawn((
+                Building {
+                    id: BuildingId(50),
+                    team: TeamId(2),
+                    kind: BuildingKind::Depot,
+                    construction: ConstructionState {
+                        progress_seconds: 0.0,
+                        complete: true,
+                        active_builder: None,
+                    },
+                },
+                Footprint::new(EntryZone::East.anchor(), spec.width, spec.height),
+                Health {
+                    current: spec.max_health,
+                    max: spec.max_health,
+                },
+            ))
+            .id();
+        assert!(building_hidden_from_local_player(&world, enemy));
+
+        // A team-1 scout beside it reveals the footprint: the gate opens.
+        let scout = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+        world
+            .entity_mut(scout)
+            .insert(SimPosition::new(map.cell_center(EntryZone::East.anchor())));
+        refresh_visibility(&mut world, &map);
+        assert!(!building_hidden_from_local_player(&world, enemy));
     }
 
     #[test]
@@ -2188,7 +2204,7 @@ mod tests {
         // Use the fog: a scout reveals a live alien at an authored entry.
         let fixture = MapFixture::battlefield();
         let map = fixture.map;
-        let alien_cell = ENTRY_ZONES[1].1;
+        let alien_cell = EntryZone::East.anchor();
         spawn_unit(
             &mut world,
             UnitId(5),
@@ -2217,7 +2233,7 @@ mod tests {
         let states = world
             .resource::<VisibilityMap>()
             .packed_cell_states(TeamId(1), 128, 96);
-        let alien_entry = ENTRY_ZONES[1].1;
+        let alien_entry = EntryZone::East.anchor();
         assert_eq!(
             states[(alien_entry.y * 128 + alien_entry.x) as usize],
             0,
@@ -2247,17 +2263,8 @@ mod tests {
 
         // The one-base survival roster: four workers, 46 defenders, and
         // 150 actual aliens.
-        let count = |team: TeamId, kind: UnitKind| {
-            world
-                .resource::<UnitIndex>()
-                .iter()
-                .filter(|(_, entity)| {
-                    world
-                        .get::<Unit>(**entity)
-                        .is_some_and(|unit| unit.team == team && unit.kind == kind)
-                })
-                .count()
-        };
+        let count =
+            |team: TeamId, kind: UnitKind| sorted_unit_ids(&world, team, |u| u.kind == kind).len();
         assert_eq!(count(TeamId(1), UnitKind::Worker), 4);
         assert_eq!(count(TeamId(1), UnitKind::Guard), 23);
         assert_eq!(count(TeamId(1), UnitKind::Rifleman), 23);

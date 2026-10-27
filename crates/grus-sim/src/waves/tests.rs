@@ -19,19 +19,6 @@ fn seeded_world() -> (World, GridMap) {
     (world, map)
 }
 
-fn alien_ids(world: &World, team: TeamId) -> Vec<UnitId> {
-    let mut ids: Vec<_> = world
-        .resource::<UnitIndex>()
-        .iter()
-        .filter_map(|(id, entity)| {
-            let unit = world.get::<Unit>(*entity)?;
-            (unit.team == team && unit_spec(unit.kind).alien.is_some()).then_some(*id)
-        })
-        .collect();
-    ids.sort_unstable();
-    ids
-}
-
 fn unit_cells(world: &World, map: &GridMap) -> std::collections::HashSet<GridPos> {
     world
         .resource::<UnitIndex>()
@@ -86,7 +73,7 @@ fn seeded_wave_spawns_distinct_aliens_and_dispatches_attack_moves_in_the_launch_
 
     step_waves(&mut world, &mut map, 0.05);
 
-    let ids = alien_ids(&world, TeamId(2));
+    let ids = live_alien_ids(&world, TeamId(2));
     assert_eq!(world.resource::<WaveState>().next_wave, 2);
     assert_eq!(ids.len(), 12);
     let mut spawned_cells = std::collections::HashSet::new();
@@ -118,7 +105,7 @@ fn rejected_wave_routes_retry_once_per_second_after_the_path_opens() {
     });
 
     step_waves(&mut world, &mut map, 0.05);
-    let ids = alien_ids(&world, TeamId(2));
+    let ids = live_alien_ids(&world, TeamId(2));
     assert_eq!(ids.len(), 12);
     assert!(ids.iter().all(|id| {
         let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
@@ -159,7 +146,7 @@ fn stranded_and_lost_attack_moves_recover_without_resetting_moving_or_engaged_al
         next_wave: 1,
     });
     step_waves(&mut world, &mut map, 0.05);
-    let ids = alien_ids(&world, TeamId(2));
+    let ids = live_alien_ids(&world, TeamId(2));
 
     let stranded = world.resource::<UnitIndex>().entity(ids[0]).unwrap();
     world.entity_mut(stranded).remove::<MoveOrder>();
@@ -189,7 +176,11 @@ fn stranded_and_lost_attack_moves_recover_without_resetting_moving_or_engaged_al
         target: None,
         last_target_cell: None,
     });
-    world.get_mut::<SimPosition>(in_range).unwrap().current = Vec2::new(54.5, 48.5);
+    // In attack-move range of the authored Research Center standoff:
+    // the RC anchors at (62,46), so cell (54,48) sits on its approach ring.
+    let rc_anchor = MapFixture::team_starts()[0].research_center_anchor;
+    world.get_mut::<SimPosition>(in_range).unwrap().current =
+        map.cell_center(GridPos::new(rc_anchor.x - 8, rc_anchor.y + 2));
 
     world.insert_resource(WaveState {
         elapsed: 300.95,
@@ -219,7 +210,7 @@ fn live_cap_overflow_buffs_only_fresh_wave_units_and_full_cap_launches_nothing()
 
     step_waves(&mut world, &mut map, 0.05);
 
-    let ids = alien_ids(&world, TeamId(2));
+    let ids = live_alien_ids(&world, TeamId(2));
     assert_eq!(ids.len(), MAX_LIVE_ALIENS as usize);
     let fresh_id = *ids.last().unwrap();
     assert!(!existing.contains(&fresh_id));
@@ -247,7 +238,7 @@ fn live_cap_overflow_buffs_only_fresh_wave_units_and_full_cap_launches_nothing()
     step_waves(&mut full_world, &mut full_map, 0.05);
 
     assert_eq!(
-        alien_ids(&full_world, TeamId(2)).len(),
+        live_alien_ids(&full_world, TeamId(2)).len(),
         MAX_LIVE_ALIENS as usize
     );
     assert_eq!(full_world.resource::<IdAllocator>().next_unit, next_unit);
@@ -415,4 +406,33 @@ fn timer_rejects_non_finite_or_negative_deltas_without_rewinding() {
     assert_eq!(state.advance(&world, -5.0), 1..1);
     assert_eq!(state.advance(&world, f32::NAN), 1..1);
     assert_eq!(state.elapsed, 12.0);
+}
+
+#[test]
+fn a_pathological_delta_launches_at_most_the_catch_up_limit() {
+    let world = World::new();
+    let mut state = WaveState::default();
+
+    // A set_sim_speed-scale spike owes ~5e8 waves; the per-tick limit bounds
+    // the work and the clock clamp absorbs the skipped backlog.
+    let due = state.advance(&world, 1.0e12);
+    assert_eq!(due, 1..(WAVE_CATCH_UP_LIMIT + 1));
+    assert_eq!(state.next_wave, WAVE_CATCH_UP_LIMIT + 1);
+    assert_eq!(state.remaining_seconds(), 0.0);
+
+    // Cadence resumes immediately and one-at-a-time from the first
+    // unlaunched deadline — no perpetual maximum-rate spew.
+    assert_eq!(
+        state.advance(&world, 0.05),
+        (WAVE_CATCH_UP_LIMIT + 1)..(WAVE_CATCH_UP_LIMIT + 2)
+    );
+    assert_eq!(
+        state.advance(&world, 0.05),
+        (WAVE_CATCH_UP_LIMIT + 2)..(WAVE_CATCH_UP_LIMIT + 2)
+    );
+    let nearly_interval = f64::from(WAVE_INTERVAL_SECONDS) - 0.1;
+    assert_eq!(
+        state.advance(&world, nearly_interval as f32),
+        (WAVE_CATCH_UP_LIMIT + 2)..(WAVE_CATCH_UP_LIMIT + 3)
+    );
 }

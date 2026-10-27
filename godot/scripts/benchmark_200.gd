@@ -5,15 +5,15 @@ extends Node
 ## ticking, then records one frame-time sample per rendered frame plus
 ## live and visible-in-tree unit counts sampled once per liveness window for a
 ## real-time duration. A liveness checkpoint between fixed frame intervals fails a
-## sample that shows neither unit movement nor combat activity. Real combat
+## sample that shows neither unit movement nor combat activity while the
+## battle is still contested (both sides have live units). Real combat
 ## deaths are expected: units are never respawned and health is never reset.
-## Every five measured seconds, surviving combatants receive ordinary
-## AttackMove inputs toward alternating fixture-authored North/South goals.
+## The workload self-sustains: the wave director retargets aliens onto the
+## remaining team-1 buildings and units until one side is extinct.
 
 const BENCHMARK_SIZE := Vector2i(1920, 1080)
 const DEFAULT_SAMPLE_SECONDS := 10.0
 const WARMUP_SECONDS := 2.0
-const ORDER_REPLAY_SECONDS := 5.0
 const VIEW_WAIT_FRAMES := 180
 const VISIBILITY_WAIT_FRAMES := 600
 const MOVEMENT_CHECK_INTERVAL := 20
@@ -111,11 +111,25 @@ func _visible_in_tree_count() -> int:
 func _liveness_verdict(moved: int, window_end_frame: int) -> bool:
 	var events := int(GrusBridge.combat_event_total())
 	if moved == 0 and events <= _last_combat_event_total:
-		_fail("benchmark liveness window ending at frame %d showed neither unit movement nor combat activity" % window_end_frame)
-		return false
+		var counts := _team_live_counts()
+		if int(counts.get(1, 0)) > 0 and int(counts.get(2, 0)) > 0:
+			_fail("benchmark liveness window ending at frame %d showed neither unit movement nor combat activity" % window_end_frame)
+			return false
+		# One side is extinct: silence is the real end state, not a frozen
+		# sim — the window passes without an activity requirement.
 	_last_combat_event_total = events
 	_progress("active", moved)
 	return true
+
+## Live-unit census per team read off the unit_views group metadata —
+## cheap, no bridge call, and the same source the rest of the gate uses.
+func _team_live_counts() -> Dictionary:
+	var counts := {1: 0, 2: 0}
+	for unit in get_tree().get_nodes_in_group("unit_views"):
+		var team := int(unit.get_meta("team_id", -1))
+		if counts.has(team):
+			counts[team] += 1
+	return counts
 
 ## Appends one live and one visible-in-tree sample for the liveness window
 ## ending at `now_ticks`, storing the measured window duration alongside so
@@ -153,9 +167,6 @@ func _run() -> void:
 		return
 	if not GrusBridge.has_method("combat_event_total"):
 		_fail("benchmark combat-activity counter is missing")
-		return
-	if not GrusBridge.has_method("replay_benchmark_orders"):
-		_fail("benchmark order replay bridge is missing")
 		return
 	if not GrusBridge.reset_benchmark_fixture():
 		_fail("benchmark reset bridge rejected the benchmark fixture")
@@ -254,8 +265,6 @@ func _run() -> void:
 	_last_sample_ticks = start_ticks
 	var deadline := start_ticks + int(roundf(sample_seconds * 1_000_000.0))
 	var previous_ticks := start_ticks
-	var next_orders := start_ticks + int(ORDER_REPLAY_SECONDS * 1_000_000.0)
-	var southbound := false
 	var frame := 0
 	while true:
 		await get_tree().process_frame
@@ -263,12 +272,6 @@ func _run() -> void:
 		samples.append(float(now - previous_ticks) / 1000.0)
 		previous_ticks = now
 		frame += 1
-		if now >= next_orders and now < deadline:
-			if not GrusBridge.replay_benchmark_orders(southbound):
-				_fail("benchmark scripted AttackMove orders were rejected")
-				return
-			southbound = not southbound
-			next_orders += int(ORDER_REPLAY_SECONDS * 1_000_000.0)
 		if frame % MOVEMENT_CHECK_INTERVAL == 0:
 			older_checkpoint_positions = checkpoint_positions.duplicate()
 			if not _liveness_checkpoint(checkpoint_positions, frame, now):

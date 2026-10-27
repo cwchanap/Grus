@@ -78,6 +78,8 @@ pub struct UnitSpec {
 pub struct AlienSpec {
     pub threat: u32,
     pub crystal_reward: u32,
+    /// First wave the kind may appear; for Behemoth it doubles as the
+    /// every-Nth-wave cadence (10 → waves 10, 20, 30, ...).
     pub first_wave: u64,
 }
 
@@ -117,6 +119,14 @@ pub const WAVE_BUDGET_PER_WAVE: u64 = 4;
 pub const WAVE_BUDGET_QUADRATIC_TENTHS: u64 = 4;
 pub const WAVE_TWO_ZONE_START: u64 = 10;
 pub const WAVE_THREE_ZONE_START: u64 = 20;
+/// Fraction of the post-Behemoth wave pool reserved for Swarmers before
+/// premium purchases (`remaining / WAVE_SWARMER_RESERVE_DIVISOR`).
+pub const WAVE_SWARMER_RESERVE_DIVISOR: u64 = 2;
+/// Most waves one fixed step may launch, bounding catch-up work after a
+/// huge time-scale delta. The clock clamps to the first unlaunched
+/// deadline, so skipped wave indices are absorbed rather than owed
+/// forever.
+pub const WAVE_CATCH_UP_LIMIT: u64 = 8;
 /// Attack-move target-acquisition radius in world units (cells).
 pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
 /// Initial per-unit vision radius in cells; a reveal covers every cell with

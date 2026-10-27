@@ -61,7 +61,7 @@ offset_right = 850.0
 offset_bottom = 102.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 14
-text = "Prep   Next wave 1 in 5:00   Aliens 0"
+text = "Wave"
 
 [node name="InputShield" type="Control" parent="HUD"]
 layout_mode = 3
