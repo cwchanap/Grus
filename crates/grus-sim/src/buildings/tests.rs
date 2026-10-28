@@ -1,6 +1,6 @@
 use super::*;
 use crate::catalog::unit_spec;
-use crate::combat::step_combat;
+use crate::combat::{destroy_building, step_combat};
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
@@ -70,6 +70,193 @@ fn placement_validation_never_spends() {
     }
     let after = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
     assert_eq!(before, after, "read-only validation moved the stockpile");
+}
+
+#[test]
+fn gate_placement_routes_humans_and_replans_aliens_until_destruction() {
+    let (mut world, _initial_map, builder) = setup_build_test();
+    let mut map = GridMap::new(12, 8);
+    let gate = GridPos::new(6, 3);
+    for y in 0..map.height() {
+        if y != gate.y {
+            map.set_blocked(GridPos::new(gate.x, y), true);
+        }
+    }
+    let revision_before_gate = map.revision();
+    world
+        .entity_mut(builder)
+        .insert(SimPosition::new(Vec2::new(8.5, 3.5)));
+
+    let alien = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(1.5, 3.5),
+        UnitKind::Swarmer,
+        6.0,
+    );
+    let move_alien = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Units(UnitCommand {
+            issuer: TeamId(2),
+            units: vec![UnitId(2)],
+            kind: UnitCommandKind::Move {
+                target: Vec2::new(10.5, 3.5),
+            },
+        }),
+    );
+    assert_eq!(move_alien.accepted_units, vec![UnitId(2)]);
+    assert!(
+        world
+            .get::<MoveOrder>(alien)
+            .unwrap()
+            .waypoints
+            .contains(&map.cell_center(gate)),
+        "the pre-placement alien route crossed the future Gate cell"
+    );
+
+    // Reserve every free approach slot on the east side without putting
+    // bodies in the builder's route. Validation must use the Gate flag in
+    // its post-placement clone to find a reachable west-side builder slot.
+    let reserved_slots = [GridPos::new(7, 2), GridPos::new(7, 3), GridPos::new(7, 4)];
+    let reservations = reserved_slots
+        .into_iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            let id = UnitId(3 + i as u32);
+            let entity = spawn_unit(
+                &mut world,
+                id,
+                TeamId(1),
+                Vec2::new(9.5 + i as f32, 1.5),
+                UnitKind::Worker,
+                6.0,
+            );
+            world.entity_mut(entity).insert(MoveOrder {
+                waypoints: Vec::new(),
+                next: 0,
+                goal: slot,
+                map_revision: map.revision(),
+                last_failed_replan: None,
+            });
+            entity
+        })
+        .collect::<Vec<_>>();
+
+    let placed = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Gate,
+            anchor: gate,
+        },
+    );
+    assert_eq!(placed.reject, None, "Gate placement rejected: {placed:?}");
+    assert_eq!(map.revision(), revision_before_gate + 1);
+    assert!(!map.is_walkable(gate), "a Gate still reserves free ground");
+    assert!(map.is_traversable_for(TeamId(1), gate));
+    assert!(!map.is_traversable_for(TeamId(2), gate));
+    let stockpile_after_gate = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+
+    let building = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(10))
+        .expect("Gate registered");
+    let WorkerTask::ToConstruction { slot, .. } = world.get::<WorkerTask>(builder).unwrap() else {
+        panic!("builder was not assigned to the Gate site");
+    };
+    assert_eq!(slot.x, 5, "the east-side slots were all reserved");
+    let builder_order = world.get::<MoveOrder>(builder).expect("builder route");
+    assert!(
+        builder_order.waypoints.contains(&map.cell_center(gate)),
+        "the builder's post-placement route must cross the new Gate"
+    );
+
+    // A placement that overlaps the Gate rejects without spending, changing
+    // its route or bumping occupancy a second time.
+    let task_before_reject = world.get::<WorkerTask>(builder).unwrap().clone();
+    let overlapping = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Wall,
+            anchor: gate,
+        },
+    );
+    assert_eq!(overlapping.reject, Some(RejectReason::Occupied));
+    assert_eq!(world.get::<WorkerTask>(builder), Some(&task_before_reject));
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        stockpile_after_gate
+    );
+    assert_eq!(map.revision(), revision_before_gate + 1);
+    for entity in reservations {
+        world.entity_mut(entity).remove::<MoveOrder>();
+    }
+
+    let failed_revision = map.revision();
+    for _ in 0..200 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_construction(&mut world, SIM_STEP_SECONDS);
+        if world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .complete
+        {
+            break;
+        }
+    }
+    assert!(
+        world
+            .get::<Building>(building)
+            .unwrap()
+            .construction
+            .complete,
+        "Gate builder did not finish"
+    );
+    let builder_position = world.get::<SimPosition>(builder).unwrap().current;
+    assert!(
+        map.world_to_cell(builder_position).x < gate.x,
+        "the Worker did not walk through the newly placed Gate: {builder_position:?}"
+    );
+    let alien_position = world.get::<SimPosition>(alien).unwrap().current;
+    assert_ne!(
+        map.world_to_cell(alien_position),
+        gate,
+        "the alien followed its pre-placement route through the Gate"
+    );
+    assert_eq!(
+        map.revision(),
+        failed_revision,
+        "Gate completion must not mutate occupancy a second time"
+    );
+    assert_eq!(
+        world.get::<MoveOrder>(alien).unwrap().last_failed_replan,
+        Some(failed_revision),
+        "the alien's prior order remains pending at the sealed revision"
+    );
+
+    destroy_building(&mut world, &mut map, building);
+    assert_eq!(map.revision(), failed_revision + 1);
+    assert!(map.is_walkable(gate));
+    assert!(map.is_traversable_for(TeamId(2), gate));
+    let position_before_reopen = world.get::<SimPosition>(alien).unwrap().current;
+    step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<SimPosition>(alien).unwrap().current.x > position_before_reopen.x,
+        "the alien did not recover its order after Gate destruction"
+    );
+    let recovered = world
+        .get::<MoveOrder>(alien)
+        .expect("alien order recovered");
+    assert_eq!(recovered.map_revision, map.revision());
+    assert_eq!(recovered.last_failed_replan, None);
 }
 
 /// An insufficient-resources placement rejects before ANY effect: no

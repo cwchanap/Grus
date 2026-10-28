@@ -76,6 +76,45 @@ fn route_finishes_and_removes_move_order() {
 }
 
 #[test]
+fn human_replans_and_moves_from_inside_a_gate() {
+    let mut world = World::new();
+    let mut map = GridMap::new(8, 3);
+    let gate = GridPos::new(3, 1);
+    map.set_gate(gate);
+    let entity = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        map.cell_center(gate),
+        UnitKind::Worker,
+        4.0,
+    );
+    let goal = GridPos::new(6, 1);
+    world.entity_mut(entity).insert(MoveOrder {
+        waypoints: vec![map.cell_center(goal)],
+        next: 0,
+        goal,
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    map.set_blocked(GridPos::new(0, 0), true);
+
+    step_movement(&mut world, &map, SIM_STEP_SECONDS);
+
+    let order = world.get::<MoveOrder>(entity).expect("replanned order");
+    assert_eq!(order.map_revision, map.revision());
+    assert_eq!(order.last_failed_replan, None);
+    for _ in 0..10 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    }
+    let position = world.get::<SimPosition>(entity).unwrap().current;
+    assert!(
+        map.world_to_cell(position).x > gate.x,
+        "unit did not leave Gate"
+    );
+}
+
+#[test]
 fn units_do_not_enter_static_blocked_cells() {
     let mut world = World::new();
     let mut map = GridMap::new(16, 16);
