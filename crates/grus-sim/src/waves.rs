@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use bevy::prelude::{Resource, World};
+use bevy::prelude::{Component, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{
@@ -12,8 +12,8 @@ use crate::catalog::{
 };
 use crate::combat::{CombatOrder, Health};
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, approach_slots,
-    destination_slots, sorted_unit_ids, spawn_unit,
+    CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
+    apply_player_command, approach_slots, destination_slots, sorted_unit_ids, spawn_unit,
 };
 use crate::fixture::{ENTRY_ZONES, EntryZone};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
@@ -168,6 +168,9 @@ pub struct WaveState {
     pub next_wave: u64,
 }
 
+#[derive(Component)]
+struct FailedFallbackRevision(u64);
+
 impl Default for WaveState {
     fn default() -> Self {
         Self {
@@ -294,19 +297,30 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
     // origins, and same-tick combat acquisition must not wait on it.
     reveal_for_team(world, map, TeamId(2), &spawn_cells);
 
-    let Some((_, targets)) = alien_objective(world, map) else {
-        return;
-    };
+    let objective = alien_objective(world, map);
     for (index, id) in spawned.into_iter().enumerate() {
-        dispatch_attack_move(world, map, id, targets[index % targets.len()]);
+        let target = objective
+            .as_ref()
+            .and_then(|(_, targets)| targets.get(index % targets.len()))
+            .copied();
+        match target {
+            Some(target) => {
+                let result = dispatch_attack_move(world, map, id, target);
+                if command_accepted(&result, id) {
+                    clear_failed_fallback_revision(world, id);
+                } else if command_rejected_unreachable(&result, id) {
+                    // The objective dispatch and its rejection are one transaction;
+                    // preserve the failed MoveOrder until a fallback is accepted.
+                    try_reachable_structure_fallback(world, map, id);
+                }
+            }
+            None => try_reachable_structure_fallback(world, map, id),
+        }
     }
 }
 
 fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
-    let Some((standoff, targets)) = alien_objective(world, map) else {
-        return;
-    };
-
+    let objective = alien_objective(world, map);
     let mut target_index = 0;
     for id in live_alien_ids(world, TeamId(2)) {
         let Some(entity) = world
@@ -315,7 +329,16 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         else {
             continue;
         };
-        if world.get::<MoveOrder>(entity).is_some()
+        if let Some(failed) = world.get::<FailedFallbackRevision>(entity) {
+            if failed.0 == map.revision() {
+                continue;
+            }
+            world.entity_mut(entity).remove::<FailedFallbackRevision>();
+        }
+        let failed_route = world
+            .get::<MoveOrder>(entity)
+            .is_some_and(|order| order.last_failed_replan == Some(map.revision()));
+        if (world.get::<MoveOrder>(entity).is_some() && !failed_route)
             || matches!(
                 world.get::<CombatOrder>(entity),
                 Some(CombatOrder::Attack { .. })
@@ -330,16 +353,119 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         let Some(position) = world.get::<SimPosition>(entity) else {
             continue;
         };
-        if position
-            .current
-            .distance(standoff.closest_point(position.current))
-            <= ATTACK_MOVE_RADIUS
-        {
+        let in_core_range = objective.as_ref().is_some_and(|(standoff, _)| {
+            position
+                .current
+                .distance(standoff.closest_point(position.current))
+                <= ATTACK_MOVE_RADIUS
+        });
+        if !failed_route && in_core_range {
             continue;
         }
 
-        dispatch_attack_move(world, map, id, targets[target_index % targets.len()]);
-        target_index += 1;
+        let target = objective
+            .as_ref()
+            .and_then(|(_, targets)| targets.get(target_index % targets.len()))
+            .copied();
+        if let Some(target) = target {
+            let result = dispatch_attack_move(world, map, id, target);
+            target_index += 1;
+            if command_accepted(&result, id) {
+                clear_failed_fallback_revision(world, id);
+            } else if command_rejected_unreachable(&result, id) {
+                try_reachable_structure_fallback(world, map, id);
+            }
+        } else {
+            try_reachable_structure_fallback(world, map, id);
+        }
+    }
+}
+
+fn try_reachable_structure_fallback(world: &mut World, map: &mut GridMap, id: UnitId) {
+    let Some(entity) = world
+        .get_resource::<UnitIndex>()
+        .and_then(|index| index.entity(id))
+    else {
+        return;
+    };
+    let Some(position) = world.get::<SimPosition>(entity).copied() else {
+        return;
+    };
+    if world
+        .get::<FailedFallbackRevision>(entity)
+        .is_some_and(|failed| failed.0 == map.revision())
+    {
+        return;
+    }
+
+    let mut buildings: Vec<(f32, BuildingId, Footprint)> = world
+        .get_resource::<BuildingIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(building_id, building_entity)| {
+                    let building = world.get::<Building>(*building_entity)?;
+                    let footprint = world.get::<Footprint>(*building_entity)?;
+                    (building.team == TeamId(1)).then_some((
+                        footprint
+                            .closest_point(position.current)
+                            .distance_squared(position.current),
+                        *building_id,
+                        *footprint,
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    buildings.sort_unstable_by(|left, right| {
+        left.0
+            .total_cmp(&right.0)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    let start = map.world_to_cell(position.current);
+    for (_, _, footprint) in buildings {
+        let slots = approach_slots(
+            map,
+            footprint,
+            &HashSet::new(),
+            footprint.perimeter_cells().len(),
+        );
+        let reachable_slot = slots
+            .into_iter()
+            .find(|slot| map.find_path(TeamId(2), start, *slot).is_some());
+        if let Some(slot) = reachable_slot {
+            if command_accepted(&dispatch_attack_move(world, map, id, slot), id) {
+                clear_failed_fallback_revision(world, id);
+            }
+            // The nearest statically reachable structure is selected. A
+            // command rejection here is transient crowding, so leave the
+            // alien eligible for the next scheduled retry.
+            return;
+        }
+    }
+
+    world
+        .entity_mut(entity)
+        .insert(FailedFallbackRevision(map.revision()));
+}
+
+fn command_accepted(result: &CommandResult, id: UnitId) -> bool {
+    result.accepted_units.contains(&id)
+}
+
+fn command_rejected_unreachable(result: &CommandResult, id: UnitId) -> bool {
+    result
+        .rejected_units
+        .contains(&(id, RejectReason::Unreachable))
+}
+
+fn clear_failed_fallback_revision(world: &mut World, id: UnitId) {
+    if let Some(entity) = world
+        .get_resource::<UnitIndex>()
+        .and_then(|index| index.entity(id))
+    {
+        world.entity_mut(entity).remove::<FailedFallbackRevision>();
     }
 }
 
@@ -400,7 +526,12 @@ fn objective_slots(map: &GridMap, footprint: Footprint) -> Vec<GridPos> {
     )
 }
 
-fn dispatch_attack_move(world: &mut World, map: &mut GridMap, id: UnitId, target: GridPos) {
+fn dispatch_attack_move(
+    world: &mut World,
+    map: &mut GridMap,
+    id: UnitId,
+    target: GridPos,
+) -> CommandResult {
     let target = map.cell_center(target);
     apply_player_command(
         world,
@@ -410,7 +541,7 @@ fn dispatch_attack_move(world: &mut World, map: &mut GridMap, id: UnitId, target
             units: vec![id],
             kind: UnitCommandKind::AttackMove { target },
         }),
-    );
+    )
 }
 
 /// Live alien ids for `team` in stable-id order — the one census shared by
