@@ -1636,7 +1636,9 @@ fn advance_economy(world: &mut World) {
 
 fn advance_construction(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    step_construction(world, seconds);
+    world.resource_scope(|world, map: Mut<GridMap>| {
+        step_construction(world, &map, seconds);
+    });
 }
 
 fn advance_production(world: &mut World) {

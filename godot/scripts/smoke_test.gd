@@ -36,6 +36,18 @@ func _mouse_click(position: Vector2, button: int, shift_pressed := false) -> voi
 	release.shift_pressed = shift_pressed
 	Input.parse_input_event(release)
 
+func _push_mouse_click(position: Vector2, button: int) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = button
+	press.position = position
+	press.pressed = true
+	get_tree().root.push_input(press)
+	var release := InputEventMouseButton.new()
+	release.button_index = button
+	release.position = position
+	release.pressed = false
+	get_tree().root.push_input(release)
+
 func _mouse_drag(start: Vector2, finish: Vector2, button: int) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = button
@@ -136,6 +148,51 @@ func _hidden(view: Node3D) -> bool:
 func _accepted_since(revision: int) -> bool:
 	return int(GrusBridge.command_feedback_revision()) > revision \
 		and str(GrusBridge.command_feedback()).begins_with("Command accepted")
+
+func _defense_placement_anchor(builder_id: int, kind: String) -> Vector2i:
+	var worker := _unit_view(builder_id)
+	if worker == null:
+		return Vector2i(-1, -1)
+	var origin := Vector2i(floori(worker.global_position.x), floori(worker.global_position.z))
+	for radius in range(1, 17):
+		for y in range(-radius, radius + 1):
+			for x in range(-radius, radius + 1):
+				if maxi(absi(x), absi(y)) != radius:
+					continue
+				var candidate := origin + Vector2i(x, y)
+				var preview: Dictionary = GrusBridge.placement_preview(builder_id, kind, candidate.x, candidate.y)
+				if bool(preview.get("valid", false)):
+					return candidate
+	return Vector2i(-1, -1)
+
+func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
+	var revision := int(GrusBridge.command_feedback_revision())
+	_push_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if int(GrusBridge.command_feedback_revision()) != revision \
+			or str(main.get("_placement_kind")) != kind:
+		_fail("%s build button leaked a command or did not arm placement" % kind)
+		return false
+	return true
+
+func _place_defense_at(main: Node3D, camera: Camera3D, kind: String, anchor: Vector2i) -> bool:
+	if str(main.get("_placement_kind")) != kind:
+		_fail("%s button did not arm placement" % kind)
+		return false
+	var revision := int(GrusBridge.command_feedback_revision())
+	var building_count := get_tree().get_nodes_in_group("building_views").size()
+	var screen := camera.unproject_position(Vector3(anchor.x + 0.25, 0.0, anchor.y + 0.25))
+	_push_mouse_click(screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(
+			func(): return _accepted_since(revision) \
+				and get_tree().get_nodes_in_group("building_views").size() == building_count + 1,
+			10.0, "%s placement was not accepted and rendered at %s" % [kind, anchor]):
+		return false
+	if str(main.get("_placement_kind")) != kind:
+		_fail("successful %s placement did not leave placement armed" % kind)
+		return false
+	return true
 
 func _move_scout(unit_id: int, target: Vector2, what: String) -> bool:
 	var revision_before := int(GrusBridge.command_feedback_revision())
@@ -729,6 +786,80 @@ func _run() -> void:
 
 	if not GrusBridge.set_sim_speed(1.0):
 		_fail("failed to restore sim speed")
+		return
+
+	# Defense placement runs through the visible build buttons and real world
+	# input. Each successful Wall/Gate click stays armed for the next site.
+	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not _ring(unit_one).visible:
+		_fail("defense placement smoke could not select Worker 1")
+		return
+	var building_catalogue: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {})
+	for listed_kind in ["Wall", "Gate", "GunTurret"]:
+		var entry: Dictionary = building_catalogue.get(listed_kind, {})
+		var catalogue_button := get_node("Main/HUD/CommandPanel/BuildGrid/%sButton" % listed_kind) as Button
+		if entry.is_empty() or catalogue_button == null:
+			_fail("%s build button/catalogue entry is missing" % listed_kind)
+			return
+		if not catalogue_button.tooltip_text.contains("Build:") \
+				or not catalogue_button.tooltip_text.contains(str(int(entry.get("scrap", 0)))):
+			_fail("%s build button does not display its catalogue cost/time: %s" % [listed_kind, catalogue_button.tooltip_text])
+			return
+
+	for defense_kind in ["Wall", "Gate"]:
+		var build_button := get_node("Main/HUD/CommandPanel/BuildGrid/%sButton" % defense_kind) as Button
+		if not await _arm_defense(main, build_button, defense_kind):
+			return
+		for _placement in range(2):
+			var anchor := _defense_placement_anchor(1, defense_kind)
+			if anchor.x < 0:
+				_fail("could not find a valid %s anchor near the live Worker view" % defense_kind)
+				return
+			if not await _place_defense_at(main, camera, defense_kind, anchor):
+				return
+		if defense_kind == "Wall":
+			var cancel_anchor := _defense_placement_anchor(1, defense_kind)
+			if cancel_anchor.x < 0:
+				_fail("could not find open ground for the right-click cancellation probe")
+				return
+			var status_before_right_click := command_status.text
+			var revision_before_right_click := int(GrusBridge.command_feedback_revision())
+			_push_mouse_click(
+				camera.unproject_position(Vector3(cancel_anchor.x + 0.25, 0.0, cancel_anchor.y + 0.25)),
+				MOUSE_BUTTON_RIGHT)
+			for _frame in range(5):
+				await get_tree().physics_frame
+			if str(main.get("_placement_kind")) != "" \
+					or int(GrusBridge.command_feedback_revision()) != revision_before_right_click \
+					or command_status.text != status_before_right_click:
+				_fail("right-click while placing did not cancel without a contextual command")
+				return
+
+	var phase_before_escape := str(GrusBridge.session_snapshot().get("phase", ""))
+	var status_before_escape := command_status.text
+	var revision_before_escape := int(GrusBridge.command_feedback_revision())
+	_key_tap(KEY_ESCAPE)
+	for _frame in range(3):
+		await get_tree().physics_frame
+	if str(main.get("_placement_kind")) != "" \
+			or phase_before_escape != "Playing" \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing" \
+			or not (get_node("Main/HUD/PauseButton") as Button).visible \
+			or (get_node("Main/HUD/SessionPanel") as Control).visible \
+			or int(GrusBridge.command_feedback_revision()) != revision_before_escape \
+			or command_status.text != status_before_escape:
+		_fail("Esc did not cancel Gate placement before pausing or dispatching a command")
+		return
+	if not GrusBridge.reset_fixture():
+		_fail("restart after defense placement was rejected")
+		return
+	if not await _wait_until(
+			func(): return get_tree().get_nodes_in_group("unit_views").size() == 4 \
+				and get_tree().get_nodes_in_group("building_views").size() == 1 \
+				and get_tree().get_nodes_in_group("resource_views").size() == 18 \
+				and str(GrusBridge.session_snapshot().get("phase", "")) == "Start",
+			10.0, "restart did not restore the one-building fixture after defense placement"):
 		return
 
 	wave_error = SmokeHelpers.no_launched_wave_error("general smoke")

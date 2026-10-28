@@ -329,7 +329,7 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             crate::combat::step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
             crate::movement::step_movement(&mut world, &map, SIM_STEP_SECONDS);
             crate::economy::step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-            crate::buildings::step_construction(&mut world, SIM_STEP_SECONDS);
+            crate::buildings::step_construction(&mut world, &map, SIM_STEP_SECONDS);
             crate::production::step_production(&mut world, &mut map, SIM_STEP_SECONDS);
             crate::visibility::refresh_visibility(&mut world, &map);
         }

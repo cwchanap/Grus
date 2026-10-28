@@ -243,7 +243,7 @@ fn frozen_fixed_steps_perform_no_gameplay_mutation() {
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         step_production(&mut world, &mut map, SIM_STEP_SECONDS);
 
         assert_eq!(
@@ -401,7 +401,7 @@ fn step_match(world: &mut World, map: &mut GridMap) {
     step_combat(world, map, SIM_STEP_SECONDS);
     step_movement(world, map, SIM_STEP_SECONDS);
     step_economy(world, map, SIM_STEP_SECONDS);
-    step_construction(world, SIM_STEP_SECONDS);
+    step_construction(world, map, SIM_STEP_SECONDS);
     step_production(world, map, SIM_STEP_SECONDS);
 }
 

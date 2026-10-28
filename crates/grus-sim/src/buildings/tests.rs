@@ -202,7 +202,7 @@ fn gate_placement_routes_humans_and_replans_aliens_until_destruction() {
     let failed_revision = map.revision();
     for _ in 0..200 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if world
             .get::<Building>(building)
             .unwrap()
@@ -325,7 +325,7 @@ fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
 
     for _ in 0..300 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if matches!(
             world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing { .. })
@@ -345,11 +345,220 @@ fn setup_active_builder() -> (World, GridMap, Entity, Entity) {
     (world, map, worker, building)
 }
 
+fn place_test_wall(world: &mut World, map: &mut GridMap, anchor: GridPos) -> BuildingId {
+    let result = apply_player_command(
+        world,
+        map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Wall,
+            anchor,
+        },
+    );
+    assert_eq!(result.reject, None, "Wall placement rejected: {result:?}");
+    *world
+        .resource::<BuildingIndex>()
+        .iter()
+        .map(|(id, _)| id)
+        .max()
+        .expect("placed Wall is indexed")
+}
+
+fn make_active_site_complete_next_tick(
+    world: &mut World,
+    map: &GridMap,
+    builder: Entity,
+    building: BuildingId,
+) {
+    let slot = match world.get::<WorkerTask>(builder).expect("builder task") {
+        WorkerTask::ToConstruction {
+            building: assigned,
+            slot,
+        } if *assigned == building => *slot,
+        task => panic!("builder is not assigned to {building:?}: {task:?}"),
+    };
+    world.entity_mut(builder).remove::<MoveOrder>();
+    world.entity_mut(builder).insert((
+        SimPosition::new(map.cell_center(slot)),
+        WorkerTask::Constructing { building },
+    ));
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(building)
+        .expect("active site is indexed");
+    world
+        .get_mut::<Building>(entity)
+        .unwrap()
+        .construction
+        .progress_seconds =
+        building_spec(BuildingKind::Wall).build_seconds as f32 - SIM_STEP_SECONDS;
+}
+
+#[test]
+fn completed_wall_resumes_the_nearest_reachable_old_site_after_a_freeze() {
+    let (mut world, mut map, builder) = setup_build_test();
+    let far = place_test_wall(&mut world, &mut map, GridPos::new(22, 10));
+    let near = place_test_wall(&mut world, &mut map, GridPos::new(17, 10));
+    let active = place_test_wall(&mut world, &mut map, GridPos::new(12, 10));
+    assert_eq!(
+        world
+            .get::<WorkerTask>(builder)
+            .and_then(|task| match task {
+                WorkerTask::ToConstruction { building, .. } => Some(*building),
+                _ => None,
+            }),
+        Some(active),
+        "the last-placed site keeps the builder"
+    );
+    make_active_site_complete_next_tick(&mut world, &map, builder, active);
+
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Paused,
+    });
+    let active_entity = world.resource::<BuildingIndex>().entity(active).unwrap();
+    step_construction(&mut world, &map, SIM_STEP_SECONDS);
+    assert!(
+        !world
+            .get::<Building>(active_entity)
+            .unwrap()
+            .construction
+            .complete
+    );
+    assert_eq!(
+        world.get::<WorkerTask>(builder),
+        Some(&WorkerTask::Constructing { building: active })
+    );
+    assert_eq!(
+        world
+            .get::<Building>(world.resource::<BuildingIndex>().entity(near).unwrap())
+            .unwrap()
+            .construction
+            .active_builder,
+        None,
+        "a frozen tick must not hand off the builder"
+    );
+
+    world.resource_mut::<MatchSession>().phase = MatchPhase::Playing;
+    step_construction(&mut world, &map, SIM_STEP_SECONDS);
+    assert!(
+        world
+            .get::<Building>(active_entity)
+            .unwrap()
+            .construction
+            .complete
+    );
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(builder),
+            Some(WorkerTask::ToConstruction { building, .. }) if *building == near
+        ),
+        "handoff chooses the closest reachable unfinished site"
+    );
+    assert_eq!(
+        world
+            .get::<Building>(world.resource::<BuildingIndex>().entity(near).unwrap())
+            .unwrap()
+            .construction
+            .active_builder,
+        Some(UnitId(1))
+    );
+    assert_eq!(
+        world
+            .get::<Building>(world.resource::<BuildingIndex>().entity(far).unwrap())
+            .unwrap()
+            .construction
+            .active_builder,
+        None,
+        "the farther old site remains unassigned"
+    );
+}
+
+#[test]
+fn completed_wall_skips_busy_and_unreachable_sites_during_handoff() {
+    let (mut world, mut map, builder) = setup_build_test();
+    let busy = place_test_wall(&mut world, &mut map, GridPos::new(14, 10));
+    let blocked = place_test_wall(&mut world, &mut map, GridPos::new(16, 10));
+    let reachable = place_test_wall(&mut world, &mut map, GridPos::new(22, 10));
+    let active = place_test_wall(&mut world, &mut map, GridPos::new(12, 10));
+
+    let second_builder = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(14.5, 13.5),
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
+    );
+    world.entity_mut(second_builder).insert((
+        Carry::Empty,
+        GatherProgress::default(),
+        WorkerTask::Idle,
+    ));
+    let assignment = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::ResumeConstruction {
+            issuer: TeamId(1),
+            builder: UnitId(2),
+            building: busy,
+        },
+    );
+    assert_eq!(assignment.reject, None, "busy site assignment rejected");
+
+    let blocked_entity = world.resource::<BuildingIndex>().entity(blocked).unwrap();
+    let blocked_footprint = *world.get::<Footprint>(blocked_entity).unwrap();
+    for cell in blocked_footprint.perimeter_cells() {
+        map.set_blocked(cell, true);
+    }
+    make_active_site_complete_next_tick(&mut world, &map, builder, active);
+    step_construction(&mut world, &map, SIM_STEP_SECONDS);
+
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(builder),
+            Some(WorkerTask::ToConstruction { building, .. }) if *building == reachable
+        ),
+        "handoff skips the blocked nearer site and tries the farther site"
+    );
+    assert!(
+        matches!(
+            world.get::<WorkerTask>(second_builder),
+            Some(WorkerTask::ToConstruction { building, .. }) if *building == busy
+        ),
+        "handoff leaves an already assigned site and builder alone"
+    );
+    assert_eq!(
+        world
+            .get::<Building>(world.resource::<BuildingIndex>().entity(reachable).unwrap())
+            .unwrap()
+            .construction
+            .active_builder,
+        Some(UnitId(1))
+    );
+    assert_eq!(
+        world
+            .get::<Building>(world.resource::<BuildingIndex>().entity(busy).unwrap())
+            .unwrap()
+            .construction
+            .active_builder,
+        Some(UnitId(2))
+    );
+    assert_eq!(
+        world
+            .get::<Building>(blocked_entity)
+            .unwrap()
+            .construction
+            .active_builder,
+        None
+    );
+}
+
 /// Drives movement + construction until the given worker is Constructing.
 fn run_until_constructing(world: &mut World, map: &GridMap, worker: Entity) {
     for _ in 0..300 {
         step_movement(world, map, SIM_STEP_SECONDS);
-        step_construction(world, SIM_STEP_SECONDS);
+        step_construction(world, map, SIM_STEP_SECONDS);
         if matches!(
             world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing { .. })
@@ -596,7 +805,7 @@ fn gun_turret_gets_attack_cooldown_only_when_construction_completes() {
     world.entity_mut(worker).insert(WorkerTask::Constructing {
         building: BuildingId(10),
     });
-    step_construction(&mut world, 25.0);
+    step_construction(&mut world, &map, 25.0);
 
     assert!(world.get::<Building>(entity).unwrap().construction.complete);
     assert_eq!(
@@ -651,7 +860,7 @@ fn two_builders_never_double_speed() {
         .construction
         .progress_seconds;
     for _ in 0..40 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
     let end = world
         .get::<Building>(building)
@@ -754,7 +963,7 @@ fn resume_keeps_accumulated_progress() {
         .progress_seconds;
 
     for _ in 0..60 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
     let accumulated = world
         .get::<Building>(building)
@@ -806,7 +1015,7 @@ fn resume_keeps_accumulated_progress() {
     // The arrival tick already advanced one step; 59 more completes the
     // same 60-tick batch as before the pause.
     for _ in 0..59 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
 
     let resumed = world
@@ -855,7 +1064,7 @@ fn completed_depot_gains_dropoff_exactly_once() {
         .expect("building registered");
     for _ in 0..1000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if world
             .get::<Building>(building_entity)
             .unwrap()
@@ -876,7 +1085,7 @@ fn completed_depot_gains_dropoff_exactly_once() {
 
     // Further ticks never grant a second marker or restart work.
     for _ in 0..10 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
     assert_eq!(
         world.get::<Dropoff>(building_entity),
@@ -908,7 +1117,7 @@ fn completed_barracks_gains_an_empty_production_queue() {
 
     for _ in 0..1000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if world
             .get::<Building>(building_entity)
             .unwrap()
@@ -958,7 +1167,7 @@ fn completed_building_never_gains_a_resource_source() {
         .expect("barracks registered");
     for _ in 0..2000 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if world
             .get::<Building>(barracks)
             .unwrap()
@@ -1990,7 +2199,7 @@ fn abandoned_site_never_progresses_without_a_builder() {
         .progress_seconds;
 
     for _ in 0..400 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
 
     let state = &world.get::<Building>(building).unwrap().construction;
@@ -2119,7 +2328,7 @@ fn resume_construction_reject_codes_are_deterministic() {
 
     // Once the site completes, resuming it is locked.
     for _ in 0..400 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
     }
     assert!(
         world
@@ -2304,7 +2513,7 @@ fn placement_retargets_a_hidden_workers_task_slot_off_the_footprint() {
     // match worker or stalled site.
     for _ in 0..600 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if matches!(
             world.get::<WorkerTask>(worker),
             Some(WorkerTask::Constructing { .. })
@@ -2397,7 +2606,7 @@ fn displacement_reroutes_a_constructing_worker_to_an_adjacent_slot() {
         .unwrap()
         .construction
         .progress_seconds;
-    step_construction(&mut world, SIM_STEP_SECONDS);
+    step_construction(&mut world, &map, SIM_STEP_SECONDS);
     let after = world
         .get::<Building>(site_entity)
         .unwrap()
