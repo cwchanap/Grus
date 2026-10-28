@@ -524,7 +524,7 @@ fn reachable_builder_slot(
         }
     }
     for slot in approach_slots(map, footprint, &used, footprint.perimeter_cells().len()) {
-        if let Some(path) = map.find_path(start, slot) {
+        if let Some(path) = map.find_path(issuer, start, slot) {
             let route = path
                 .into_iter()
                 .skip(1)

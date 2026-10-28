@@ -135,7 +135,7 @@ fn battlefield_connects_every_entry_lane_to_the_city() {
     ] {
         assert!(map.is_walkable(border), "{name} border probe is blocked");
         assert!(
-            map.find_path(border, city_gate).is_some(),
+            map.find_path(TeamId(2), border, city_gate).is_some(),
             "no path from the {name} border to the central city"
         );
     }
@@ -143,13 +143,13 @@ fn battlefield_connects_every_entry_lane_to_the_city() {
     // One blocked cell on the east entry route must leave an alternate
     // route through the open field.
     let route = map
-        .find_path(city.workers[0], GridPos::new(127, 48))
+        .find_path(city.team, city.workers[0], GridPos::new(127, 48))
         .expect("the east entry route exists");
     let interior = route[route.len() / 2];
     assert!(interior != city.workers[0] && interior != GridPos::new(127, 48));
     assert!(map.set_blocked(interior, true));
     let alternate = map
-        .find_path(city.workers[0], GridPos::new(127, 48))
+        .find_path(city.team, city.workers[0], GridPos::new(127, 48))
         .expect("an alternate route must exist");
     assert!(!alternate.contains(&interior));
 }
@@ -187,7 +187,7 @@ fn authored_alien_entry_zones_reach_the_central_research_center() {
         assert!(
             core_slots
                 .iter()
-                .any(|slot| map.find_path(anchor, *slot).is_some()),
+                .any(|slot| map.find_path(TeamId(2), anchor, *slot).is_some()),
             "{zone:?} anchor {anchor:?} cannot reach the core perimeter"
         );
     }
@@ -604,12 +604,12 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
     seed_skirmish(&mut world, &mut map, &fixture);
 
     let starts = MapFixture::team_starts();
-    let reachable_slots = |from: GridPos, footprint: Footprint| {
+    let reachable_slots = |team: TeamId, from: GridPos, footprint: Footprint| {
         footprint
             .perimeter_cells()
             .into_iter()
             .filter(|cell| map.is_walkable(*cell))
-            .filter(|cell| map.find_path(from, *cell).is_some())
+            .filter(|cell| map.find_path(team, from, *cell).is_some())
             .count()
     };
 
@@ -622,7 +622,7 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
                 .find(|spawn| spawn.id == id)
                 .expect("safe membership resolves");
             let footprint = Footprint::new(spawn.cell, 1, 1);
-            let slots = reachable_slots(start.workers[0], footprint);
+            let slots = reachable_slots(start.team, start.workers[0], footprint);
             assert!(
                 slots >= 3,
                 "safe source {:?} keeps only {slots} reachable approach cells",
@@ -635,7 +635,7 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
     let city_worker = starts[0].workers[0];
     for spawn in MapFixture::expansion_resources() {
         let footprint = Footprint::new(spawn.cell, 1, 1);
-        let slots = reachable_slots(city_worker, footprint);
+        let slots = reachable_slots(TeamId(1), city_worker, footprint);
         assert!(
             slots >= 3,
             "expansion {:?} keeps only {slots} reachable approach cells",
@@ -647,7 +647,7 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
     // a healthy ring of reachable slots.
     for start in &starts {
         let core = Footprint::new(start.research_center_anchor, 4, 4);
-        let slots = reachable_slots(start.workers[0], core);
+        let slots = reachable_slots(start.team, start.workers[0], core);
         assert!(
             slots >= 6,
             "team {:?} Research Center keeps only {slots} reachable drop-off slots",
@@ -666,7 +666,7 @@ fn every_authored_source_and_build_site_keeps_reachable_approaches() {
             ),
         ] {
             let footprint = Footprint::new(anchor, spec.width, spec.height);
-            let slots = reachable_slots(start.workers[0], footprint);
+            let slots = reachable_slots(start.team, start.workers[0], footprint);
             assert!(
                 slots >= 4,
                 "team {:?} {name} site keeps only {slots} reachable approach cells",

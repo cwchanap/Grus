@@ -40,14 +40,20 @@ pub enum BuildingKind {
     Bunkhouse,
     Depot,
     Barracks,
+    Wall,
+    Gate,
+    GunTurret,
 }
 
 impl BuildingKind {
-    pub const ALL: [BuildingKind; 4] = [
+    pub const ALL: [BuildingKind; 7] = [
         BuildingKind::ResearchCenter,
         BuildingKind::Bunkhouse,
         BuildingKind::Depot,
         BuildingKind::Barracks,
+        BuildingKind::Wall,
+        BuildingKind::Gate,
+        BuildingKind::GunTurret,
     ];
 }
 
@@ -83,7 +89,7 @@ pub struct AlienSpec {
     pub first_wave: u64,
 }
 
-/// Combat tuning of one unit. The counter bonus applies only to
+/// Combat tuning for one attacker. The counter bonus applies only to
 /// `counter_target`; every other kind takes base damage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CombatSpec {
@@ -105,6 +111,8 @@ pub struct BuildingSpec {
     /// Construction sites use this full health from placement; progress
     /// never scales it.
     pub max_health: u32,
+    /// Present on buildings that attack without unit orders.
+    pub combat: Option<CombatSpec>,
 }
 
 pub const CARRY_LIMIT: u32 = 10;
@@ -273,6 +281,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 4,
             population_capacity: 10,
             max_health: 800,
+            combat: None,
         },
         BuildingKind::Bunkhouse => BuildingSpec {
             cost: Cost {
@@ -284,6 +293,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 2,
             population_capacity: 10,
             max_health: 250,
+            combat: None,
         },
         BuildingKind::Depot => BuildingSpec {
             cost: Cost {
@@ -295,6 +305,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 2,
             population_capacity: 0,
             max_health: 300,
+            combat: None,
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
@@ -306,6 +317,51 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             height: 3,
             population_capacity: 0,
             max_health: 400,
+            combat: None,
+        },
+        BuildingKind::Wall => BuildingSpec {
+            cost: Cost {
+                scrap: 10,
+                ..Cost::default()
+            },
+            build_seconds: 5,
+            width: 1,
+            height: 1,
+            population_capacity: 0,
+            max_health: 400,
+            combat: None,
+        },
+        BuildingKind::Gate => BuildingSpec {
+            cost: Cost {
+                scrap: 30,
+                ..Cost::default()
+            },
+            build_seconds: 8,
+            width: 1,
+            height: 1,
+            population_capacity: 0,
+            max_health: 600,
+            combat: None,
+        },
+        BuildingKind::GunTurret => BuildingSpec {
+            cost: Cost {
+                scrap: 100,
+                coal: 20,
+                ..Cost::default()
+            },
+            build_seconds: 25,
+            width: 2,
+            height: 2,
+            population_capacity: 0,
+            max_health: 350,
+            combat: Some(CombatSpec {
+                damage: 10,
+                attack_range: 8.0,
+                cooldown_seconds: 1.0,
+                counter_target: UnitKind::Spitter,
+                counter_bonus: 5,
+                ranged: true,
+            }),
         },
     }
 }

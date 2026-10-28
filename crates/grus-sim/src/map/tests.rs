@@ -33,6 +33,52 @@ fn occupancy_revision_changes_only_when_walkability_changes() {
 }
 
 #[test]
+fn gate_occupancy_is_atomic_team_aware_and_cleared_by_unblocking() {
+    let mut map = GridMap::new(8, 8);
+    let gate = GridPos::new(3, 4);
+    let human = TeamId(1);
+    let alien = TeamId(2);
+
+    assert_eq!(map.revision(), 0);
+    assert!(map.set_gate(gate));
+    assert_eq!(map.revision(), 1, "gate placement is one occupancy change");
+    assert!(!map.is_walkable(gate), "gates reserve free ground");
+    assert!(map.is_traversable_for(human, gate));
+    assert!(!map.is_traversable_for(alien, gate));
+
+    assert!(!map.set_gate(gate), "a gate cannot be claimed twice");
+    assert!(
+        !map.set_gate(GridPos::new(8, 4)),
+        "out-of-bounds gates fail"
+    );
+    assert_eq!(map.revision(), 1);
+
+    let wall = GridPos::new(5, 5);
+    assert!(map.set_blocked(wall, true));
+    assert!(
+        !map.set_gate(wall),
+        "a Wall cannot be converted into a Gate"
+    );
+    assert!(!map.is_traversable_for(human, wall));
+    assert_eq!(map.revision(), 2);
+
+    let cloned = map.clone();
+    assert!(cloned.is_traversable_for(human, gate));
+    assert!(!cloned.is_traversable_for(alien, gate));
+
+    assert!(map.set_blocked(gate, false));
+    assert_eq!(map.revision(), 3, "gate removal is one occupancy change");
+    assert!(map.is_walkable(gate));
+    assert!(
+        map.is_traversable_for(alien, gate),
+        "removal clears gate access"
+    );
+    assert!(map.is_traversable_for(human, gate));
+    assert!(!map.set_blocked(gate, false));
+    assert_eq!(map.revision(), 3);
+}
+
+#[test]
 fn world_cell_round_trip_uses_cell_centers() {
     let map = GridMap::new(8, 8);
     for cell in [GridPos::new(0, 0), GridPos::new(3, 5), GridPos::new(7, 7)] {
@@ -122,20 +168,76 @@ fn closest_point_gives_research_center_melee_range() {
 #[test]
 fn find_path_rejects_unwalkable_endpoints() {
     let mut map = GridMap::new(8, 8);
+    let team = TeamId(1);
     map.set_blocked(GridPos::new(2, 2), true);
 
     assert_eq!(
-        map.find_path(GridPos::new(2, 2), GridPos::new(6, 6)),
+        map.find_path(team, GridPos::new(2, 2), GridPos::new(6, 6)),
         None,
         "a blocked start cell has no path"
     );
     assert_eq!(
-        map.find_path(GridPos::new(0, 0), GridPos::new(2, 2)),
+        map.find_path(team, GridPos::new(0, 0), GridPos::new(2, 2)),
         None,
         "a blocked goal cell has no path"
     );
     assert!(
-        map.find_path(GridPos::new(0, 0), GridPos::new(6, 6))
+        map.find_path(team, GridPos::new(0, 0), GridPos::new(6, 6))
             .is_some()
     );
+}
+
+#[test]
+fn only_humans_can_start_on_or_cross_a_gate_and_no_team_can_target_it() {
+    let mut map = GridMap::new(5, 3);
+    let gate = GridPos::new(2, 1);
+    let start = GridPos::new(2, 0);
+    let goal = GridPos::new(2, 2);
+    let human = TeamId(1);
+    let alien = TeamId(2);
+    map.set_gate(gate);
+
+    assert!(
+        map.find_path(human, gate, goal).is_some(),
+        "human gate start"
+    );
+    assert_eq!(map.find_path(alien, gate, goal), None, "alien gate start");
+    assert_eq!(map.find_path(human, start, gate), None, "human gate goal");
+    assert_eq!(map.find_path(alien, start, gate), None, "alien gate goal");
+}
+
+#[test]
+fn humans_cross_gate_intermediate_cells_but_both_teams_stop_at_walls() {
+    let mut map = GridMap::new(5, 3);
+    let gate = GridPos::new(2, 1);
+    let start = GridPos::new(2, 0);
+    let goal = GridPos::new(2, 2);
+    for x in 0..5 {
+        if x != gate.x {
+            map.set_blocked(GridPos::new(x, 1), true);
+        }
+    }
+    map.set_gate(gate);
+
+    let human_path = map
+        .find_path(TeamId(1), start, goal)
+        .expect("the human route crosses the gate");
+    assert!(human_path.contains(&gate));
+    assert_eq!(
+        map.find_path(TeamId(2), start, goal),
+        None,
+        "aliens cannot cross the gate"
+    );
+
+    let mut wall_map = GridMap::new(5, 3);
+    for x in 0..5 {
+        wall_map.set_blocked(GridPos::new(x, 1), true);
+    }
+    for team in [TeamId(1), TeamId(2)] {
+        assert_eq!(
+            wall_map.find_path(team, start, goal),
+            None,
+            "walls block {team:?}"
+        );
+    }
 }

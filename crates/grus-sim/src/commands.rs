@@ -478,7 +478,7 @@ fn apply_unit_command(world: &mut World, map: &mut GridMap, command: UnitCommand
                     if slot_taken(&used_slots, &slot) {
                         return None;
                     }
-                    map.find_path(start, slot).map(|path| (slot, path))
+                    map.find_path(issuer, start, slot).map(|path| (slot, path))
                 });
 
                 let Some((slot, path)) = route else {
@@ -613,7 +613,7 @@ fn plan_move_route(
             if used_slots.contains_key(&slot) {
                 return None;
             }
-            map.find_path(start, slot).map(|path| {
+            map.find_path(issuer, start, slot).map(|path| {
                 let waypoints: Vec<Vec2> = path
                     .into_iter()
                     .skip(1)
