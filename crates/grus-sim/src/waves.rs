@@ -338,15 +338,17 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         let failed_route = world
             .get::<MoveOrder>(entity)
             .is_some_and(|order| order.last_failed_replan == Some(map.revision()));
-        if (world.get::<MoveOrder>(entity).is_some() && !failed_route)
-            || matches!(
-                world.get::<CombatOrder>(entity),
-                Some(CombatOrder::Attack { .. })
-                    | Some(CombatOrder::AttackMove {
-                        target: Some(_),
-                        ..
-                    })
-            )
+        let combat_order = world.get::<CombatOrder>(entity);
+        if matches!(combat_order, Some(CombatOrder::Attack { .. }))
+            || (!failed_route
+                && (world.get::<MoveOrder>(entity).is_some()
+                    || matches!(
+                        combat_order,
+                        Some(CombatOrder::AttackMove {
+                            target: Some(_),
+                            ..
+                        })
+                    )))
         {
             continue;
         }
@@ -494,8 +496,15 @@ fn alien_objective(world: &World, map: &GridMap) -> Option<(Footprint, Vec<GridP
         })
         .unwrap_or_default();
     buildings.sort_unstable_by_key(|(is_other, id, _)| (*is_other, *id));
-    for (_, _, footprint) in buildings {
+    for (is_other, _, footprint) in buildings {
         let slots = objective_slots(map, footprint);
+        if !is_other {
+            // A standing core with no usable perimeter slot is fallback-
+            // eligible. Returning `None` sends launch and retry through the
+            // distance-ranked structure probe instead of selecting the
+            // lowest-ID non-core building as a substitute core objective.
+            return (!slots.is_empty()).then_some((footprint, slots));
+        }
         if !slots.is_empty() {
             return Some((footprint, slots));
         }

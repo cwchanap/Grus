@@ -55,6 +55,24 @@ fn add_team_one_building(
     entity
 }
 
+fn add_gate_wall_ring(
+    world: &mut World,
+    map: &mut GridMap,
+    footprint: Footprint,
+    next_id: &mut u32,
+) {
+    let gate_cell = footprint.perimeter_cells()[0];
+    for cell in footprint.perimeter_cells() {
+        let kind = if cell == gate_cell {
+            BuildingKind::Gate
+        } else {
+            BuildingKind::Wall
+        };
+        add_team_one_building(world, map, BuildingId(*next_id), kind, cell, true);
+        *next_id += 1;
+    }
+}
+
 fn add_alien(world: &mut World, id: UnitId, map: &GridMap, cell: GridPos) -> bevy::prelude::Entity {
     spawn_unit(
         world,
@@ -787,6 +805,190 @@ fn launch_rejected_core_attack_moves_fall_back_to_a_reachable_wall() {
 }
 
 #[test]
+fn launch_uses_distance_ranked_fallback_when_core_has_no_approach_slots() {
+    let mut world = World::new();
+    world.insert_resource(IdAllocator::new(1, 100, 1));
+    let mut map = GridMap::new(128, 96);
+    let core = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(62, 46),
+        true,
+    );
+    let far_low_id = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Wall,
+        GridPos::new(18, 70),
+        true,
+    );
+    let near_high_id = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(99),
+        BuildingKind::Wall,
+        GridPos::new(62, 9),
+        true,
+    );
+    let core_footprint = *world.get::<Footprint>(core).unwrap();
+    let mut next_id = 100;
+    add_gate_wall_ring(&mut world, &mut map, core_footprint, &mut next_id);
+    assert!(objective_slots(&map, core_footprint).is_empty());
+
+    launch_wave(&mut world, &mut map, 1);
+
+    let near_footprint = *world.get::<Footprint>(near_high_id).unwrap();
+    let far_footprint = *world.get::<Footprint>(far_low_id).unwrap();
+    let assignments = live_alien_ids(&world, TeamId(2))
+        .into_iter()
+        .filter_map(|id| {
+            let entity = world.resource::<UnitIndex>().entity(id)?;
+            let CombatOrder::AttackMove { destination, .. } = world.get::<CombatOrder>(entity)?
+            else {
+                return None;
+            };
+            Some(*destination)
+        })
+        .collect::<Vec<_>>();
+    assert!(!assignments.is_empty());
+    assert!(assignments.iter().all(|destination| {
+        let point = map.cell_center(*destination);
+        near_footprint.closest_point(point).distance_squared(point)
+            < far_footprint.closest_point(point).distance_squared(point)
+    }));
+}
+
+#[test]
+fn retry_uses_distance_ranked_fallback_when_core_has_no_approach_slots() {
+    let mut world = World::new();
+    let mut map = GridMap::new(48, 40);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(4, 20));
+    let core = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(30, 18),
+        true,
+    );
+    let far_low_id = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Wall,
+        GridPos::new(18, 5),
+        true,
+    );
+    let near_high_id = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(99),
+        BuildingKind::Wall,
+        GridPos::new(10, 20),
+        true,
+    );
+    let core_footprint = *world.get::<Footprint>(core).unwrap();
+    let mut next_id = 100;
+    add_gate_wall_ring(&mut world, &mut map, core_footprint, &mut next_id);
+    assert!(objective_slots(&map, core_footprint).is_empty());
+
+    retry_stranded_aliens(&mut world, &mut map);
+
+    let near_footprint = *world.get::<Footprint>(near_high_id).unwrap();
+    let far_footprint = *world.get::<Footprint>(far_low_id).unwrap();
+    let CombatOrder::AttackMove {
+        destination,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("the nearest reachable structure receives a normal AttackMove")
+    };
+    assert!(near_footprint.is_immediately_adjacent(*destination));
+    assert!(!far_footprint.is_immediately_adjacent(*destination));
+}
+
+#[test]
+fn acquired_core_route_falls_back_after_a_map_change_seals_its_pursuit() {
+    let mut world = World::new();
+    let mut map = GridMap::new(40, 32);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(23, 14));
+    let core = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(30, 14),
+        true,
+    );
+    let core_footprint = *world.get::<Footprint>(core).unwrap();
+    let (_, core_slots) = alien_objective(&world, &map).unwrap();
+    assert!(command_accepted(
+        &dispatch_attack_move(&mut world, &mut map, UnitId(1), core_slots[0]),
+        UnitId(1)
+    ));
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(2), core_footprint));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(matches!(
+        world.get::<CombatOrder>(alien),
+        Some(CombatOrder::AttackMove {
+            target: Some(CombatTarget::Building(BuildingId(1))),
+            ..
+        })
+    ));
+    assert!(world.get::<MoveOrder>(alien).is_some());
+
+    for y in 0..map.height() {
+        if y != 14 {
+            map.set_blocked(GridPos::new(25, y), true);
+        }
+    }
+    let fallback = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(3),
+        BuildingKind::Wall,
+        GridPos::new(25, 14),
+        true,
+    );
+    step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<MoveOrder>(alien).unwrap().last_failed_replan,
+        Some(map.revision())
+    );
+
+    retry_stranded_aliens(&mut world, &mut map);
+
+    let CombatOrder::AttackMove {
+        destination,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("an acquired but unreachable core pursuit must use fallback")
+    };
+    assert!(
+        world
+            .get::<Footprint>(fallback)
+            .unwrap()
+            .is_immediately_adjacent(*destination)
+    );
+    assert!(world.get::<MoveOrder>(alien).is_some());
+    assert!(
+        world
+            .get::<MoveOrder>(alien)
+            .unwrap()
+            .last_failed_replan
+            .is_none()
+    );
+}
+
+#[test]
 fn preserved_core_route_falls_back_after_a_wall_closes_its_only_path_and_recovers_after_breach() {
     let mut world = World::new();
     let mut map = GridMap::new(40, 32);
@@ -1123,6 +1325,8 @@ fn siege_path_calls_are_measured_for_150_aliens_on_a_wall_ring_revision_bump() {
         MAX_LIVE_ALIENS as usize
     );
 
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
     retry_stranded_aliens(&mut world, &mut map);
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     let live = live_alien_ids(&world, TeamId(2));
@@ -1177,15 +1381,39 @@ fn siege_path_calls_are_measured_for_150_aliens_on_a_wall_ring_revision_bump() {
     let before = map.path_call_count();
     destroy_building(&mut world, &mut map, wall);
     assert_eq!(map.revision(), revision + 1);
-    step_movement(&mut world, &map, SIM_STEP_SECONDS);
-    let delta = map.path_call_count() - before;
-    assert!(delta > 0);
+    let revision_after_breach = map.revision();
+    let cycle_started = std::time::Instant::now();
+    let mut retry_boundary_path_calls = 0;
+    let mut retry_boundary_elapsed_us = 0;
+    for tick in 0..20 {
+        let wave_step_calls = map.path_call_count();
+        let wave_step_started = std::time::Instant::now();
+        step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
+        if tick == 19 {
+            retry_boundary_path_calls = map.path_call_count() - wave_step_calls;
+            retry_boundary_elapsed_us = wave_step_started.elapsed().as_micros();
+        }
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        refresh_visibility(&mut world, &map);
+    }
+    let cycle_elapsed_us = cycle_started.elapsed().as_micros();
+    let cycle_path_calls = map.path_call_count() - before;
+    let combat_movement_path_calls = cycle_path_calls - retry_boundary_path_calls;
+    let revisions_during_cycle = map.revision() - revision_after_breach;
+    assert!(cycle_path_calls > 0);
+    assert_eq!(world.resource::<WaveState>().elapsed.floor(), 1.0);
     println!(
-        "HPA450_SIEGE census={} attack_move_orders={} engaged={} active_routes={} revision_path_calls={}",
+        "HPA450_SIEGE census={} attack_move_orders={} engaged={} active_routes={} breach_revision_bumps=1 cycle_seconds=1.0 ticks=20 cycle_path_calls={} retry_boundary_path_calls={} combat_movement_path_calls={} cycle_elapsed_us={} retry_boundary_elapsed_us={} revisions_during_cycle={}",
         live.len(),
         attacking,
         engaged,
         moving,
-        delta
+        cycle_path_calls,
+        retry_boundary_path_calls,
+        combat_movement_path_calls,
+        cycle_elapsed_us,
+        retry_boundary_elapsed_us,
+        revisions_during_cycle
     );
 }
