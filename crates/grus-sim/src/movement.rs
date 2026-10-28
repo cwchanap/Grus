@@ -97,22 +97,21 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         let mut worker_route_failed = false;
 
         if let Some(active_order) = snapshot.order.as_ref() {
-            if let Some(mut candidate_order) = refresh_route(
-                active_order,
-                snapshot.position.current,
-                snapshot.unit.team,
-                map,
-            ) {
+            let team = snapshot.unit.team;
+            if let Some(mut candidate_order) =
+                refresh_route(active_order, snapshot.position.current, team, map)
+            {
                 let route_candidate = advance_along_route(
                     snapshot.position.current,
                     &mut candidate_order,
                     snapshot.unit.speed * delta_seconds.max(0.0),
                 );
 
-                if map.is_walkable(map.world_to_cell(route_candidate)) {
+                if map.is_traversable_for(team, map.world_to_cell(route_candidate)) {
                     let separation = separation_for(snapshot, &snapshots);
                     let separated = route_candidate + separation;
-                    position.current = if map.is_walkable(map.world_to_cell(separated)) {
+                    position.current = if map.is_traversable_for(team, map.world_to_cell(separated))
+                    {
                         separated
                     } else {
                         route_candidate
@@ -136,12 +135,9 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     // recorded so we do not re-run A* on every step while the
                     // map is unchanged.
                     if active_order.last_failed_replan != Some(map.revision()) {
-                        if let Some(forced_order) = compute_route(
-                            active_order.goal,
-                            snapshot.position.current,
-                            snapshot.unit.team,
-                            map,
-                        ) {
+                        if let Some(forced_order) =
+                            compute_route(active_order.goal, snapshot.position.current, team, map)
+                        {
                             order = Some(forced_order);
                         } else if snapshot.active_worker_task {
                             // The worker's required route is impossible: idle

@@ -205,7 +205,11 @@ pub fn validate_placement(
     // then cannot reach — the first movement replan fails and it idles.
     let mut occupied_map = map.clone();
     for cell in footprint.cells() {
-        occupied_map.set_blocked(cell, true);
+        if kind == BuildingKind::Gate {
+            occupied_map.set_gate(cell);
+        } else {
+            occupied_map.set_blocked(cell, true);
+        }
     }
     let (slot, route) =
         reachable_builder_slot(world, &occupied_map, issuer, entity, footprint, None)?;
@@ -285,7 +289,11 @@ pub(crate) fn apply_place_building(
     retarget_footprint_goals(world, map, plan.footprint);
 
     for cell in plan.footprint.cells() {
-        map.set_blocked(cell, true);
+        if kind == BuildingKind::Gate {
+            map.set_gate(cell);
+        } else {
+            map.set_blocked(cell, true);
+        }
     }
 
     let building_entity = world
