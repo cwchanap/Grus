@@ -32,6 +32,9 @@ var _feedback_revision := -1
 var _left_press_position := Vector2.ZERO
 var _left_pressed := false
 var _placement_kind := ""
+var _placement_generation := 0
+var _next_placement_request_id := 1
+var _pending_placement_requests: Array[Dictionary] = []
 var _idle_cursor := 0
 var _session_phase := ""
 var _attack_move_armed := false
@@ -70,13 +73,34 @@ func _ready() -> void:
 	quit_button.pressed.connect(_on_quit_pressed)
 
 func _process(_delta: float) -> void:
+	var placement_feedback_handled := _consume_placement_results()
 	var revision := int(GrusBridge.command_feedback_revision())
 	if revision != _feedback_revision:
 		_feedback_revision = revision
-		command_status.text = str(GrusBridge.command_feedback())
+		if not placement_feedback_handled:
+			command_status.text = str(GrusBridge.command_feedback())
 	_refresh_session()
 	_reconcile_selection()
 	_refresh_hud()
+
+func _consume_placement_results() -> bool:
+	var unresolved: Array[Dictionary] = []
+	var handled_feedback := false
+	for request in _pending_placement_requests:
+		var result: Dictionary = GrusBridge.take_placement_command_result(int(request.get("id", -1)))
+		if not bool(result.get("complete", false)):
+			unresolved.append(request)
+			continue
+		handled_feedback = true
+		if int(request.get("generation", -1)) != _placement_generation \
+				or str(request.get("kind", "")) != _placement_kind:
+			continue
+		command_status.text = str(result.get("feedback", "Placement rejected"))
+		if bool(result.get("accepted", false)) \
+				and _placement_kind != "Wall" and _placement_kind != "Gate":
+			_cancel_placement()
+	_pending_placement_requests = unresolved
+	return handled_feedback
 
 ## Reads the session once per frame: drives the overlay and drains
 ## current-tick combat events while Playing — plus once on the first Result
@@ -556,6 +580,7 @@ func _restart_match() -> void:
 	_control_groups.clear()
 	_idle_cursor = 0
 	_attack_move_armed = false
+	_pending_placement_requests.clear()
 	_cancel_placement()
 	_fx.clear_all()
 
@@ -596,10 +621,12 @@ func _on_build_pressed(kind: String) -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
+	_placement_generation += 1
 	_placement_kind = kind
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
 
 func _cancel_placement() -> void:
+	_placement_generation += 1
 	_placement_kind = ""
 	_preview_box.visible = false
 
@@ -637,16 +664,26 @@ func _try_placement(screen_position: Vector2) -> void:
 	if builder <= 0:
 		command_status.text = "Select a worker to build"
 		return
+	for request in _pending_placement_requests:
+		if int(request.get("generation", -1)) == _placement_generation:
+			command_status.text = "Placement queued"
+			return
 	var anchor_x := floori(target.x)
 	var anchor_y := floori(target.y)
 	var preview: Dictionary = GrusBridge.placement_preview(builder, _placement_kind, anchor_x, anchor_y)
 	if not bool(preview.get("valid", false)):
 		command_status.text = "Placement blocked (code %d)" % int(preview.get("reject_code", -1))
 		return
-	if GrusBridge.place_building(builder, _placement_kind, anchor_x, anchor_y):
+	var request_id := _next_placement_request_id
+	_next_placement_request_id += 1
+	var kind := _placement_kind
+	if GrusBridge.place_building_request(builder, kind, anchor_x, anchor_y, request_id):
+		_pending_placement_requests.append({
+			"id": request_id,
+			"generation": _placement_generation,
+			"kind": kind,
+		})
 		command_status.text = "Placement queued"
-		if _placement_kind != "Wall" and _placement_kind != "Gate":
-			_cancel_placement()
 	else:
 		command_status.text = "Placement rejected"
 
