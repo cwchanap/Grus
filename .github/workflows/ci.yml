@@ -195,6 +195,18 @@ jobs:
             echo "::error::wave smoke contract held but godot exited $rc"
             exit 1
           fi
+      - name: Run HPA-450 defense journey smoke
+        # Drives the build UI against the real wave director, fog, Gate
+        # traversal/breach, turret combat, and building-origin tracer.
+        run: |
+          set -o pipefail
+          timeout 90s godot --headless --path godot res://scenes/defenses_smoke_test.tscn 2>&1 | tee defenses-smoke.log || rc=$?
+          rc=${rc:-0}
+          grep -q "GRUS_DEFENSE_SMOKE_OK" defenses-smoke.log || exit 1
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::defense smoke contract held but godot exited $rc"
+            exit 1
+          fi
       - name: Test packaging stale-archive guard
         # Pure-bash contract test: stubs cargo/godot in a scratch repo and
         # asserts a failed package run never leaves a stale release archive.
@@ -295,9 +307,9 @@ jobs:
             --locked \
             -- --test-threads=1
       - name: Capture teardown backtrace
-        # Best-effort postmortem: if any step above failed, rerun all four
-        # headless smokes under gdb and dump all thread backtraces so a
-        # recurring teardown fault reports the faulting frame. All four run
+        # Best-effort postmortem: if any step above failed, rerun every
+        # headless smoke under gdb and dump all thread backtraces so a
+        # recurring teardown fault reports the faulting frame. All six run
         # because the 139 seen at 163bcc1 hit only some smokes (economy and
         # combat), so rerunning just the bridge smoke would likely watch a
         # clean exit. The staged .so is the e2e build by now, so first
@@ -310,7 +322,7 @@ jobs:
         run: |
           command -v gdb || { sudo apt-get update -qq && sudo apt-get install -y gdb; }
           cp target/libgrus_godot_noe2e.so godot/bin/libgrus_godot.so
-          for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test wave_smoke_test; do
+          for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test wave_smoke_test defenses_smoke_test; do
             echo "=== gdb run: $scene" | tee -a gdb-teardown.log
             timeout -k 10s 150s gdb -batch -ex run -ex 'thread apply all bt' --args godot --headless --path godot "res://scenes/$scene.tscn" 2>&1 | tee -a gdb-teardown.log || true
           done

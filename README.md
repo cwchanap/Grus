@@ -22,7 +22,7 @@ HPA-448 moved Team 1's 4×4 Research Center to the map midpoint (footprint ancho
 
 The old central lane barriers are gone. The only static blockers are sparse authored **ruins**: one `RUINS: &[(GridPos, GridPos)]` inclusive-rectangle table in `fixture.rs`, applied through `GridMap::set_blocked_rect` and exposed read-only to Godot as `GrusBridge.obstacle_rects()`. `godot/scripts/ruins.gd` stamps one primitive `BoxMesh` per rectangle from that payload — ruin coordinates exist in exactly one place. The ruins stay clear of the human base, every authored source and worker cell, the central construction/gather ring, the N/E/S/W access lanes, and benchmark staging regions; fixture tests prove each exclusion.
 
-The active catalogue is the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
+The active catalogue builds on the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks / Wall / Gate / Gun Turret** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
 
 ## HPA-449 alien survival
 
@@ -30,13 +30,17 @@ After Start, the match has a 300-second preparation countdown. The wave director
 
 The wave HUD shows preparation/current wave, next arrival, incoming directions and live alien count. Brief minimap rings use the announced fixture anchors; individual alien markers and picking still require vision. Swarmer, Spitter, Brute and Behemoth use distinct primitive scales and role markers. See the [wave director contract](docs/superpowers/specs/2026-10-24-hpa-449-wave-director-design.md) and [verification evidence](docs/hpa-449-wave-director-evidence.md).
 
+## HPA-450 defensive structures
+
+The build panel offers Walls, Gates, and Gun Turrets. Walls block both teams; a Gate is passable to human units from placement and blocks alien routes until it is destroyed. Wall and Gate placement stays armed for consecutive clicks. When barriers seal the Research Center, aliens use AttackMove to reach and attack a reachable structure under normal visibility rules. Completed Gun Turrets automatically fire at visible aliens in range and award Crystals through the shared combat path.
+
 ### Economy architecture
 
 Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-sim/src/catalog.rs`) is the single source of costs, build/train seconds, footprints, unlocks, population values, speeds, and gather rates. Gameplay lives in four modules:
 
 - **commands** — player command application, ownership validation, `RejectReason` codes, unit spawning
 - **economy** — worker tasks, gather/carry/deposit, resource sources, drop-off routing
-- **buildings** — placement validation, construction, completion grants (Dropoff, production queues)
+- **buildings** — placement validation, construction, completion grants (Dropoff, production queues, turret combat)
 - **production** — FIFO queues, population caps, spawn clearance, rally points
 
 Systems tick in a fixed order (commands → waves → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
@@ -91,9 +95,10 @@ godot --headless --path godot res://scenes/reset_test.tscn
 godot --headless --path godot res://scenes/economy_smoke_test.tscn
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
 godot --headless --path godot res://scenes/wave_smoke_test.tscn
+godot --headless --path godot res://scenes/defenses_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence and interpolated presentation. It pins battlefield contracts: the boot camera frames the live Research Center, rendered `Ruins` match `GrusBridge.obstacle_rects()`, blocked-ground clicks receive `unreachable` feedback, and a human scout reveals an expansion resource before leaving it explored under fog. Every pre-wave Playing smoke checks the shared wave snapshot before exit or reset. The reset smoke requires exactly 4 unit views / 1 building view / 18 resource views, unique stable ids and the starting 200/300/150/0 stockpile. The economy smoke retains its full real-UI gather/build/train/rally/reject loop at 20×, split into two guarded preparation legs. The combat lifecycle smoke uses live controller attack-move and visible-alien right-click input, checks fog-gated markers and a Crystal kill reward, freezes combat while Paused, resumes into an alien-caused Defeat, and checks Result input lock and restart freshness. The dedicated wave smoke adds Start/Pause countdown freeze, HUD warning text, authoritative minimap-anchor pings and their expiry, plus labeled white-box checks of all four role silhouettes.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence and interpolated presentation. It pins battlefield contracts: the boot camera frames the live Research Center, rendered `Ruins` match `GrusBridge.obstacle_rects()`, blocked-ground clicks receive `unreachable` feedback, and a human scout reveals an expansion resource before leaving it explored under fog. Every pre-wave Playing smoke checks the shared wave snapshot before exit or reset. The reset smoke requires exactly 4 unit views / 1 building view / 18 resource views, unique stable ids and the starting 200/300/150/0 stockpile. The economy smoke retains its full real-UI gather/build/train/rally/reject loop at 20×, split into two guarded preparation legs. The combat lifecycle smoke uses live controller attack-move and visible-alien right-click input, checks fog-gated markers and a Crystal kill reward, freezes combat while Paused, resumes into an alien-caused Defeat, and checks Result input lock and restart freshness. The dedicated wave smoke adds Start/Pause countdown freeze, HUD warning text, authoritative minimap-anchor pings and their expiry, plus labeled white-box checks of all four role silhouettes. The HPA-450 defense smoke builds a wall ring from the live Research Center footprint through the UI, proves human Gate traversal, observes a fogged alien Gate breach and post-breach structure damage, and verifies a Gun Turret Crystal kill and building-origin tracer.
 
 ### Controls
 
@@ -123,7 +128,7 @@ The full reference:
 - Mouse wheel: zoom
 - Middle drag: pan the camera
 - Minimap (bottom right): left-click recenters the camera on that map cell (view only — no commands, no reveal)
-- Build buttons (bottom panel): arm placement for Bunkhouse/Depot/Barracks; the ground preview renders green when valid and red when blocked; left-click places, right-click or `Esc` cancels
+- Build buttons (bottom panel): arm placement for Bunkhouse/Depot/Barracks/Gun Turret; Wall and Gate placement stays armed for consecutive left-clicks. The ground preview renders green when valid and red when blocked; right-click or `Esc` cancels placement without issuing a world command.
 - Train buttons: queue Worker on a selected Research Center, or Guard/Rifleman on a selected Barracks
 - Idle button (top right): selects and navigates to the next idle worker
 
@@ -160,7 +165,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave/defense smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 
