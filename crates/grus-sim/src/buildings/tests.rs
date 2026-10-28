@@ -572,6 +572,40 @@ fn accepted_bunkhouse_deducts_fifty_scrap_and_blocks_four_cells() {
 }
 
 #[test]
+fn gun_turret_gets_attack_cooldown_only_when_construction_completes() {
+    let (mut world, mut map, worker) = setup_build_test();
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::GunTurret,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert_eq!(result.reject, None);
+
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(10))
+        .expect("turret site is indexed");
+    assert!(world.get::<AttackCooldown>(entity).is_none());
+    assert!(!world.get::<Building>(entity).unwrap().construction.complete);
+
+    world.entity_mut(worker).insert(WorkerTask::Constructing {
+        building: BuildingId(10),
+    });
+    step_construction(&mut world, 25.0);
+
+    assert!(world.get::<Building>(entity).unwrap().construction.complete);
+    assert_eq!(
+        world.get::<AttackCooldown>(entity),
+        Some(&AttackCooldown::default())
+    );
+}
+
+#[test]
 fn two_builders_never_double_speed() {
     let (mut world, mut map, first, building) = setup_active_builder();
     let building_id = world.get::<Building>(building).unwrap().id;

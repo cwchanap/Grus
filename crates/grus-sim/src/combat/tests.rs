@@ -107,6 +107,9 @@ fn spawn_building(
     world
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(id, entity);
+    if kind == BuildingKind::GunTurret {
+        world.entity_mut(entity).insert(AttackCooldown::default());
+    }
     entity
 }
 
@@ -173,7 +176,7 @@ fn melee_attacker_in_range_hits_without_pathing() {
     assert_eq!(
         recorded[0],
         CombatEvent {
-            attacker: UnitId(1),
+            attacker: CombatTarget::Unit(UnitId(1)),
             target: CombatTarget::Unit(UnitId(2)),
             damage: 10,
             position: Vec2::new(6.5, 5.5),
@@ -1707,7 +1710,9 @@ fn attack_move_never_acquires_a_target_killed_earlier_in_the_step() {
     // that kill — the dead unit is the only enemy in its radius.
     assert!(world.resource::<UnitIndex>().entity(UnitId(2)).is_none());
     assert_eq!(events(&world).len(), 1, "only the killing blow landed");
-    assert!(events(&world)[0].killed && events(&world)[0].attacker == UnitId(1));
+    assert!(
+        events(&world)[0].killed && events(&world)[0].attacker == CombatTarget::Unit(UnitId(1))
+    );
     assert_eq!(
         attack_move_target(world.get::<CombatOrder>(scavenger)),
         None,
@@ -1772,7 +1777,9 @@ fn attack_move_never_acquires_a_building_destroyed_earlier_in_the_step() {
             .is_none()
     );
     assert_eq!(events(&world).len(), 1, "only the killing blow landed");
-    assert!(events(&world)[0].killed && events(&world)[0].attacker == UnitId(1));
+    assert!(
+        events(&world)[0].killed && events(&world)[0].attacker == CombatTarget::Unit(UnitId(1))
+    );
     assert_eq!(
         attack_move_target(world.get::<CombatOrder>(scavenger)),
         None,
@@ -1883,7 +1890,7 @@ fn dead_later_attacker_is_skipped_in_the_same_combat_step() {
     assert!(world.get::<Health>(right).is_none(), "destroyed atomically");
     let recorded = events(&world);
     assert_eq!(recorded.len(), 1, "the dead later attacker never acted");
-    assert_eq!(recorded[0].attacker, UnitId(1));
+    assert_eq!(recorded[0].attacker, CombatTarget::Unit(UnitId(1)));
     assert!(recorded[0].killed);
     assert_eq!(
         world.get::<Health>(left).unwrap().current,
@@ -2761,4 +2768,140 @@ fn runtime_fog_hides_missing_and_hidden_buildings_behind_one_reject_code() {
         ),
     );
     assert_eq!(accepted.accepted_units, vec![UnitId(1)]);
+}
+
+#[test]
+fn gun_turret_uses_the_nearest_footprint_point_at_its_range_boundary() {
+    for (target_x, expected_health) in [(20.0, 30), (20.01, 40)] {
+        let mut world = World::new();
+        let mut map = open_map();
+        let turret = spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(1),
+            TeamId(1),
+            BuildingKind::GunTurret,
+            GridPos::new(10, 10),
+        );
+        let target = spawn_combatant(
+            &mut world,
+            UnitId(2),
+            TeamId(2),
+            Vec2::new(target_x, 10.5),
+            UnitKind::Swarmer,
+        );
+
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(
+            world.get::<Health>(target).unwrap().current,
+            expected_health
+        );
+        assert_eq!(world.get::<CombatOrder>(turret), None);
+        if target_x == 20.0 {
+            assert_eq!(
+                world.get::<AttackCooldown>(turret),
+                Some(&AttackCooldown(1.0))
+            );
+            assert_eq!(
+                events(&world)[0].attacker,
+                CombatTarget::Building(BuildingId(1))
+            );
+        } else {
+            assert!(events(&world).is_empty());
+        }
+    }
+}
+
+#[test]
+fn gun_turret_requires_visibility_uses_spitter_counter_and_obeys_cooldown() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let turret = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 10),
+    );
+    let nearer_non_alien = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(12.5, 10.5),
+        UnitKind::Guard,
+    );
+    let spitter = spawn_combatant(
+        &mut world,
+        UnitId(3),
+        TeamId(2),
+        Vec2::new(16.5, 10.5),
+        UnitKind::Spitter,
+    );
+    world.insert_resource(VisibilityMap::default());
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(world.get::<Health>(spitter).unwrap().current, 70);
+    assert!(events(&world).is_empty(), "a hidden target is not acquired");
+
+    refresh_visibility(&mut world, &map);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(world.get::<Health>(spitter).unwrap().current, 55);
+    assert_eq!(world.get::<Health>(nearer_non_alien).unwrap().current, 100);
+    assert_eq!(
+        events(&world)[0].damage,
+        15,
+        "Spitter counter bonus applies"
+    );
+    assert_eq!(
+        events(&world)[0].target,
+        CombatTarget::Unit(UnitId(3)),
+        "the turret only acquires enemy alien kinds"
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(turret),
+        Some(&AttackCooldown(1.0))
+    );
+
+    step_combat(&mut world, &mut map, 0.5);
+    assert_eq!(world.get::<Health>(spitter).unwrap().current, 55);
+    assert!(events(&world).is_empty(), "cooldown blocks another shot");
+    assert_eq!(world.resource::<CombatEventTotal>().0, 1);
+}
+
+#[test]
+fn gun_turret_kill_awards_crystals_once_with_building_attacker_identity() {
+    let mut world = World::new();
+    let mut map = open_map();
+    set_team_one_crystals(&mut world, 0);
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 10),
+    );
+    let target = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(13.5, 10.5),
+        UnitKind::Swarmer,
+    );
+    world.get_mut::<Health>(target).unwrap().current = 5;
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(world.get::<Unit>(target).is_none());
+    assert_eq!(team_one_crystals(&world), 1);
+    assert_eq!(
+        events(&world)[0].attacker,
+        CombatTarget::Building(BuildingId(1))
+    );
+    assert!(events(&world)[0].killed);
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(team_one_crystals(&world), 1);
+    assert_eq!(world.resource::<CombatEventTotal>().0, 1);
 }

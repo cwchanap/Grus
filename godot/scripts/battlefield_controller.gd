@@ -123,7 +123,13 @@ func _playing() -> bool:
 func _dispatch_combat_event(event: Dictionary) -> void:
 	var hit := Vector3(float(event.get("x", 0.0)), 1.0, float(event.get("y", 0.0)))
 	if bool(event.get("ranged", false)):
-		var attacker := _unit_view(int(event.get("attacker", -1)))
+		var attacker: Node3D = null
+		var attacker_id := int(event.get("attacker", -1))
+		match str(event.get("attacker_kind", "")):
+			"unit":
+				attacker = _unit_view(attacker_id)
+			"building":
+				attacker = _building_view(attacker_id)
 		if attacker != null:
 			_fx.spawn_tracer(attacker.global_position + Vector3(0.0, 0.8, 0.0), hit)
 	_fx.spawn_hit(hit)

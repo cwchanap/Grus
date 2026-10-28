@@ -8,7 +8,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::catalog::{BuildingKind, UnitKind, building_spec};
-use crate::combat::{CombatOrder, Health, with_destination};
+use crate::combat::{AttackCooldown, CombatOrder, Health, with_destination};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
 use crate::economy::{Dropoff, ResourceIndex, TeamEconomy, WorkerTask, cancel_unit_activity};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
@@ -824,6 +824,11 @@ pub fn step_construction(world: &mut World, seconds: f32) {
         world.entity_mut(builder_entity).insert(WorkerTask::Idle);
         if kind == BuildingKind::Depot {
             world.entity_mut(building_entity).insert(Dropoff { team });
+        }
+        if kind == BuildingKind::GunTurret {
+            world
+                .entity_mut(building_entity)
+                .insert(AttackCooldown::default());
         }
         if is_producer(kind) {
             // Completed producers own their FIFO production queue from birth.
