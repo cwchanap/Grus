@@ -4,6 +4,8 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Resource};
 use pathfinding::prelude::astar;
 
+use crate::ids::TeamId;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct GridPos {
     pub x: i32,
@@ -127,6 +129,7 @@ pub struct GridMap {
     width: i32,
     height: i32,
     blocked: HashSet<GridPos>,
+    gates: HashSet<GridPos>,
     revision: u64,
     /// Test-only count of `find_path` invocations, used by performance
     /// regressions to prove A* is not re-run every simulation step. Absent in
@@ -141,6 +144,7 @@ impl Clone for GridMap {
             width: self.width,
             height: self.height,
             blocked: self.blocked.clone(),
+            gates: self.gates.clone(),
             revision: self.revision,
             #[cfg(test)]
             path_calls: std::sync::atomic::AtomicU64::new(
@@ -157,6 +161,7 @@ impl GridMap {
             width,
             height,
             blocked: HashSet::new(),
+            gates: HashSet::new(),
             revision: 0,
             #[cfg(test)]
             path_calls: std::sync::atomic::AtomicU64::new(0),
@@ -189,6 +194,10 @@ impl GridMap {
         self.in_bounds(pos) && !self.blocked.contains(&pos)
     }
 
+    pub fn is_traversable_for(&self, team: TeamId, pos: GridPos) -> bool {
+        self.is_walkable(pos) || (team == TeamId(1) && self.gates.contains(&pos))
+    }
+
     pub fn set_blocked(&mut self, pos: GridPos, blocked: bool) -> bool {
         if !self.in_bounds(pos) {
             return false;
@@ -197,12 +206,25 @@ impl GridMap {
         let changed = if blocked {
             self.blocked.insert(pos)
         } else {
+            self.gates.remove(&pos);
             self.blocked.remove(&pos)
         };
         if changed {
             self.revision = self.revision.wrapping_add(1);
         }
         changed
+    }
+
+    /// Claims a free cell for a Gate site and records its human-only passage.
+    pub fn set_gate(&mut self, pos: GridPos) -> bool {
+        if !self.is_walkable(pos) {
+            return false;
+        }
+
+        self.blocked.insert(pos);
+        self.gates.insert(pos);
+        self.revision = self.revision.wrapping_add(1);
+        true
     }
 
     pub fn set_blocked_rect(&mut self, min: GridPos, max_inclusive: GridPos) {
@@ -226,12 +248,12 @@ impl GridMap {
         Vec2::new(cell.x as f32 + 0.5, cell.y as f32 + 0.5)
     }
 
-    pub fn find_path(&self, start: GridPos, goal: GridPos) -> Option<Vec<GridPos>> {
+    pub fn find_path(&self, team: TeamId, start: GridPos, goal: GridPos) -> Option<Vec<GridPos>> {
         #[cfg(test)]
         self.path_calls
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        if !self.is_walkable(start) || !self.is_walkable(goal) {
+        if !self.is_traversable_for(team, start) || !self.is_walkable(goal) {
             return None;
         }
 
@@ -245,7 +267,7 @@ impl GridMap {
                     GridPos::new(pos.x, pos.y - 1),
                 ]
                 .into_iter()
-                .filter(|candidate| self.is_walkable(*candidate))
+                .filter(|candidate| self.is_traversable_for(team, *candidate))
                 .map(|candidate| (candidate, 1_u32))
                 .collect::<Vec<_>>()
             },

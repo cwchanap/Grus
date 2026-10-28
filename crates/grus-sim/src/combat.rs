@@ -547,6 +547,9 @@ fn pursue(
                 return;
             };
             let start = world_to_cell(position.current);
+            let Some(team) = world.get::<Unit>(attacker).map(|unit| unit.team) else {
+                return;
+            };
             let mut used: HashMap<GridPos, usize> = HashMap::new();
             let others: Vec<Entity> = world
                 .get_resource::<UnitIndex>()
@@ -575,7 +578,7 @@ fn pursue(
                 distance_a.total_cmp(&distance_b)
             });
             for slot in candidates {
-                if let Some(path) = map.find_path(start, slot) {
+                if let Some(path) = map.find_path(team, start, slot) {
                     let waypoints: Vec<Vec2> = path
                         .into_iter()
                         .skip(1)

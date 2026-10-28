@@ -146,6 +146,9 @@ fn buildings_carry_catalogue_health() {
         (BuildingKind::Bunkhouse, 250),
         (BuildingKind::Depot, 300),
         (BuildingKind::Barracks, 400),
+        (BuildingKind::Wall, 400),
+        (BuildingKind::Gate, 600),
+        (BuildingKind::GunTurret, 350),
     ];
     for (kind, max_health) in expected {
         assert_eq!(
@@ -171,7 +174,15 @@ fn winter_human_roster_stays_separate_from_the_full_catalogue() {
     let building_names: Vec<String> = BuildingKind::ALL.iter().map(|k| format!("{k:?}")).collect();
     assert_eq!(
         building_names,
-        ["ResearchCenter", "Bunkhouse", "Depot", "Barracks"]
+        [
+            "ResearchCenter",
+            "Bunkhouse",
+            "Depot",
+            "Barracks",
+            "Wall",
+            "Gate",
+            "GunTurret"
+        ]
     );
 }
 
@@ -233,6 +244,28 @@ fn winter_costs_and_producers_are_pinned() {
             ..Cost::default()
         }
     );
+    assert_eq!(
+        building_spec(BuildingKind::Wall).cost,
+        Cost {
+            scrap: 10,
+            ..Cost::default()
+        }
+    );
+    assert_eq!(
+        building_spec(BuildingKind::Gate).cost,
+        Cost {
+            scrap: 30,
+            ..Cost::default()
+        }
+    );
+    assert_eq!(
+        building_spec(BuildingKind::GunTurret).cost,
+        Cost {
+            scrap: 100,
+            coal: 20,
+            ..Cost::default()
+        }
+    );
 
     // Producer compatibility: ResearchCenter -> Worker; Barracks -> Guard,
     // Rifleman. Nothing else produces, and the Bunkhouse/Depot produce nothing.
@@ -276,6 +309,9 @@ fn winter_costs_and_producers_are_pinned() {
         (BuildingKind::Bunkhouse, 2, 2, 10),
         (BuildingKind::Depot, 2, 2, 0),
         (BuildingKind::Barracks, 3, 3, 0),
+        (BuildingKind::Wall, 1, 1, 0),
+        (BuildingKind::Gate, 1, 1, 0),
+        (BuildingKind::GunTurret, 2, 2, 0),
     ];
     for (kind, width, height, population) in footprints {
         let spec = building_spec(kind);
@@ -285,6 +321,32 @@ fn winter_costs_and_producers_are_pinned() {
             "{kind:?} footprint/population"
         );
     }
+}
+
+#[test]
+fn only_gun_turret_has_building_combat_tuning() {
+    for kind in [
+        BuildingKind::ResearchCenter,
+        BuildingKind::Bunkhouse,
+        BuildingKind::Depot,
+        BuildingKind::Barracks,
+        BuildingKind::Wall,
+        BuildingKind::Gate,
+    ] {
+        assert!(building_spec(kind).combat.is_none(), "{kind:?} combat");
+    }
+
+    assert_eq!(building_spec(BuildingKind::Wall).build_seconds, 5);
+    assert_eq!(building_spec(BuildingKind::Gate).build_seconds, 8);
+    let turret = building_spec(BuildingKind::GunTurret);
+    assert_eq!(turret.build_seconds, 25);
+    let combat = turret.combat.expect("Gun Turret combat");
+    assert_eq!(combat.damage, 10);
+    assert_eq!(combat.attack_range, 8.0);
+    assert_eq!(combat.cooldown_seconds, 1.0);
+    assert_eq!(combat.counter_target, UnitKind::Spitter);
+    assert_eq!(combat.counter_bonus, 5);
+    assert!(combat.ranged);
 }
 
 #[test]

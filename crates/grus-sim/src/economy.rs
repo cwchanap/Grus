@@ -433,7 +433,7 @@ pub(crate) fn apply_gather(
             let keys: HashSet<GridPos> = used.keys().copied().collect();
             let candidates =
                 approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
-            pick_reachable_slot(map, start, &candidates)
+            pick_reachable_slot(map, issuer, start, &candidates)
                 .map(|(slot, route)| (WorkerTask::ToSource { source, slot }, slot, route))
         };
 
@@ -474,6 +474,7 @@ pub(crate) fn apply_gather(
 /// slots exist at all, `Err(Unreachable)` when none of them is pathable.
 fn pick_reachable_slot(
     map: &GridMap,
+    team: TeamId,
     start: GridPos,
     candidates: &[GridPos],
 ) -> Result<(GridPos, Vec<Vec2>), RejectReason> {
@@ -481,7 +482,7 @@ fn pick_reachable_slot(
         .iter()
         .copied()
         .find_map(|slot| {
-            map.find_path(start, slot).map(|path| {
+            map.find_path(team, start, slot).map(|path| {
                 (
                     slot,
                     path.into_iter()
@@ -545,7 +546,7 @@ fn nearest_reachable_dropoff(
     for (id, footprint, _) in dropoffs {
         for slot in approach_slots(map, footprint, &keys, footprint.perimeter_cells().len()) {
             any_free_slot = true;
-            if let Some(path) = map.find_path(start, slot) {
+            if let Some(path) = map.find_path(team, start, slot) {
                 let route = path
                     .into_iter()
                     .skip(1)
@@ -784,7 +785,11 @@ fn route_back_to_source(
     let used = seed_used_excluding(world, map, worker);
     let keys: HashSet<GridPos> = used.keys().copied().collect();
     let candidates = approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
-    pick_reachable_slot(map, start, &candidates)
+    let team = world
+        .get::<Unit>(worker)
+        .map(|unit| unit.team)
+        .ok_or(RejectReason::UnknownUnit)?;
+    pick_reachable_slot(map, team, start, &candidates)
 }
 
 /// Seeds reference-counted reservations from every live unit's current cell

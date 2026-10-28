@@ -97,9 +97,12 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
         let mut worker_route_failed = false;
 
         if let Some(active_order) = snapshot.order.as_ref() {
-            if let Some(mut candidate_order) =
-                refresh_route(active_order, snapshot.position.current, map)
-            {
+            if let Some(mut candidate_order) = refresh_route(
+                active_order,
+                snapshot.position.current,
+                snapshot.unit.team,
+                map,
+            ) {
                 let route_candidate = advance_along_route(
                     snapshot.position.current,
                     &mut candidate_order,
@@ -133,9 +136,12 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
                     // recorded so we do not re-run A* on every step while the
                     // map is unchanged.
                     if active_order.last_failed_replan != Some(map.revision()) {
-                        if let Some(forced_order) =
-                            compute_route(active_order.goal, snapshot.position.current, map)
-                        {
+                        if let Some(forced_order) = compute_route(
+                            active_order.goal,
+                            snapshot.position.current,
+                            snapshot.unit.team,
+                            map,
+                        ) {
                             order = Some(forced_order);
                         } else if snapshot.active_worker_task {
                             // The worker's required route is impossible: idle
@@ -185,16 +191,21 @@ pub fn step_movement(world: &mut World, map: &GridMap, delta_seconds: f32) {
     }
 }
 
-fn refresh_route(order: &MoveOrder, current: Vec2, map: &GridMap) -> Option<MoveOrder> {
+fn refresh_route(
+    order: &MoveOrder,
+    current: Vec2,
+    team: TeamId,
+    map: &GridMap,
+) -> Option<MoveOrder> {
     if order.map_revision == map.revision() {
         return Some(order.clone());
     }
 
-    compute_route(order.goal, current, map)
+    compute_route(order.goal, current, team, map)
 }
 
-fn compute_route(goal: GridPos, current: Vec2, map: &GridMap) -> Option<MoveOrder> {
-    let path = map.find_path(map.world_to_cell(current), goal)?;
+fn compute_route(goal: GridPos, current: Vec2, team: TeamId, map: &GridMap) -> Option<MoveOrder> {
+    let path = map.find_path(team, map.world_to_cell(current), goal)?;
     let waypoints = path
         .into_iter()
         .skip(1)
