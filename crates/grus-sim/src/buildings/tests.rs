@@ -1456,6 +1456,112 @@ fn seen_then_hidden_enemy_building_footprint_never_rejects_preview_occupied() {
     );
 }
 
+#[test]
+fn hidden_enemy_wall_does_not_change_gate_preview_but_commit_rejects_overlap() {
+    let (mut world, mut map, worker) = setup_build_test();
+    let gate = GridPos::new(13, 10);
+    for y in 0..map.height() {
+        if y != gate.y {
+            map.set_blocked(GridPos::new(gate.x, y), true);
+        }
+    }
+    world
+        .entity_mut(worker)
+        .insert(SimPosition::new(Vec2::new(16.5, 10.5)));
+
+    // Reserve all approach slots on the builder's side. The only remaining
+    // slot requires a route through the Gate cell in the cloned post-placement map.
+    for (index, slot) in [
+        GridPos::new(14, 9),
+        GridPos::new(14, 10),
+        GridPos::new(14, 11),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let entity = spawn_unit(
+            &mut world,
+            UnitId(2 + index as u32),
+            TeamId(1),
+            Vec2::new(1.5 + index as f32, 50.5),
+            UnitKind::Worker,
+            unit_spec(UnitKind::Worker).speed,
+        );
+        world.entity_mut(entity).insert(MoveOrder {
+            waypoints: Vec::new(),
+            next: 0,
+            goal: slot,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+    }
+
+    reveal(&mut world, &map);
+    world
+        .entity_mut(worker)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), gate) && !visible_to(&world, TeamId(1), gate),
+        "the empty ground should be explored but hidden"
+    );
+
+    let empty_ground_plan =
+        validate_placement(&world, &map, TeamId(1), UnitId(1), BuildingKind::Gate, gate)
+            .expect("empty ground Gate preview should find the west-side slot");
+    assert!(empty_ground_plan.route.contains(&map.cell_center(gate)));
+
+    map.set_blocked(gate, true);
+    let enemy_wall = world
+        .spawn((
+            Building {
+                id: BuildingId(77),
+                team: TeamId(2),
+                kind: BuildingKind::Wall,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(gate, 1, 1),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(BuildingId(77), enemy_wall);
+    refresh_visibility(&mut world, &map);
+    assert!(
+        explored_by(&world, TeamId(1), gate) && !visible_to(&world, TeamId(1), gate),
+        "the enemy Wall should be hidden in explored fog"
+    );
+
+    let hidden_plan =
+        validate_placement(&world, &map, TeamId(1), UnitId(1), BuildingKind::Gate, gate)
+            .expect("hidden occupancy must preview like identical empty ground");
+    assert_eq!(hidden_plan.slot, empty_ground_plan.slot);
+    assert_eq!(hidden_plan.route, empty_ground_plan.route);
+
+    let stockpile_before = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    let revision_before = map.revision();
+    let committed = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Gate,
+            anchor: gate,
+        },
+    );
+    assert_eq!(committed.reject, Some(RejectReason::Occupied));
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        stockpile_before
+    );
+    assert_eq!(map.revision(), revision_before);
+}
+
 /// Current vision keeps the honest rejection: a *visible* enemy building
 /// footprint still surfaces `Occupied` — the seam only hides what the
 /// issuer genuinely cannot see.
