@@ -155,15 +155,15 @@ func _run() -> void:
 			8.0, "the Scrap gather command was rejected"):
 		return
 
+	var turret_scrap := int(turret_spec.get("scrap", 0))
+	if not await _wait_until(func(): return int(GrusBridge.economy_snapshot().get("scrap", 0)) >= turret_scrap,
+			25.0, "workers did not gather enough Scrap for the Gun Turret"):
+		return
 	var turret_anchor := Vector2i(rc_anchor.x - 1, _ring_max.y + 3)
 	var turret_preview: Dictionary = GrusBridge.placement_preview(
 		int(builder.get_meta("unit_id", -1)), "GunTurret", turret_anchor.x, turret_anchor.y)
 	if not bool(turret_preview.get("valid", false)):
 		_fail("derived southern turret site is not reachable: %s" % [turret_preview])
-		return
-	var turret_scrap := int(turret_spec.get("scrap", 0))
-	if not await _wait_until(func(): return int(GrusBridge.economy_snapshot().get("scrap", 0)) >= turret_scrap,
-			25.0, "workers did not gather enough Scrap for the Gun Turret"):
 		return
 	if not await _arm_build("GunTurret"):
 		return
