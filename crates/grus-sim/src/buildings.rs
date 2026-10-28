@@ -204,14 +204,13 @@ pub fn validate_placement(
     // only exists through those cells would charge for a site the builder
     // then cannot reach — the first movement replan fails and it idles.
     let mut occupied_map = map.clone();
-    if kind == BuildingKind::Gate {
-        // Hidden enemy footprints must not affect preview reachability.
-        for cell in &hidden_enemy_cells {
-            occupied_map.set_blocked(*cell, false);
-        }
-    }
     for cell in footprint.cells() {
         if kind == BuildingKind::Gate {
+            // Ignore hidden occupancy only within this proposed footprint;
+            // other blockers must still constrain the builder's route.
+            if hidden_enemy_cells.contains(&cell) {
+                occupied_map.set_blocked(cell, false);
+            }
             occupied_map.set_gate(cell);
         } else {
             occupied_map.set_blocked(cell, true);
