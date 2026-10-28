@@ -958,39 +958,71 @@ fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
     // GDScript: a hidden enemy attacker must not expose its stable id as a
     // tracer origin (GDScript never re-looks-up live attackers). The event's
     // position is the target's — always a friendly (always visible) when the
-    // attacker is a hidden enemy — so hit/death feedback stays intact. Id 0
-    // matches every id-reject convention: no live unit carries it.
+    // attacker is a hidden enemy — so hit/death feedback stays intact. Unit(0)
+    // is the one absent identity, with no original kind to leak.
     for event in &mut events {
         if !attacker_presentable(world, event.attacker) {
-            event.attacker = UnitId(0);
+            event.attacker = CombatTarget::Unit(UnitId(0));
         }
     }
     events
 }
 
-/// The attacker's stable id may reach GDScript only when it exists and is
-/// either friendly or currently visible to the local team. A missing attacker
-/// (already despawned) is scrubbed too — dead men leak no positions.
-fn attacker_presentable(world: &World, attacker: UnitId) -> bool {
-    let Some(entity) = world
-        .get_resource::<UnitIndex>()
-        .and_then(|index| index.entity(attacker))
-    else {
-        return false;
-    };
-    let Some(unit) = world.get::<Unit>(entity) else {
-        return false;
-    };
-    if unit.team == TeamId(1) {
-        return true;
+/// The attacker's stable identity may reach GDScript only when it exists and
+/// is either friendly or currently visible to the local team. Missing or
+/// fog-hidden units/buildings are scrubbed to the same absent identity.
+fn attacker_presentable(world: &World, attacker: CombatTarget) -> bool {
+    match attacker {
+        CombatTarget::Unit(id) => {
+            let Some(entity) = world
+                .get_resource::<UnitIndex>()
+                .and_then(|index| index.entity(id))
+            else {
+                return false;
+            };
+            let Some(unit) = world.get::<Unit>(entity) else {
+                return false;
+            };
+            if world
+                .get::<Health>(entity)
+                .is_none_or(|health| health.current == 0)
+            {
+                return false;
+            }
+            if unit.team == TeamId(1) {
+                return true;
+            }
+            let Some(map) = world.get_resource::<GridMap>() else {
+                return true;
+            };
+            world.get::<SimPosition>(entity).is_some_and(|position| {
+                visible_to(world, TeamId(1), map.world_to_cell(position.current))
+            })
+        }
+        CombatTarget::Building(id) => {
+            let Some(entity) = world
+                .get_resource::<BuildingIndex>()
+                .and_then(|index| index.entity(id))
+            else {
+                return false;
+            };
+            let Some(building) = world.get::<Building>(entity) else {
+                return false;
+            };
+            if world
+                .get::<Health>(entity)
+                .is_none_or(|health| health.current == 0)
+            {
+                return false;
+            }
+            if building.team == TeamId(1) {
+                return true;
+            }
+            world
+                .get::<Footprint>(entity)
+                .is_some_and(|footprint| visible_to(world, TeamId(1), *footprint))
+        }
     }
-    let Some(map) = world.get_resource::<GridMap>() else {
-        return true;
-    };
-    let Some(position) = world.get::<SimPosition>(entity) else {
-        return false;
-    };
-    visible_to(world, TeamId(1), map.world_to_cell(position.current))
 }
 
 /// A building is fog-hidden from the local player when it is an enemy whose
@@ -1032,7 +1064,9 @@ fn unit_hidden_from_local_player(world: &World, entity: Entity) -> bool {
 
 fn combat_event_dict(event: CombatEvent) -> VarDictionary {
     let mut dict = VarDictionary::new();
-    dict.set("attacker", i64::from(event.attacker.0));
+    let (attacker_kind, attacker_id) = combat_attacker_kind_and_id(event.attacker);
+    dict.set("attacker_kind", &GString::from(attacker_kind));
+    dict.set("attacker", i64::from(attacker_id));
     dict.set(
         "target_kind",
         &GString::from(match event.target {
@@ -1053,6 +1087,13 @@ fn combat_event_dict(event: CombatEvent) -> VarDictionary {
     dict.set("ranged", event.ranged);
     dict.set("killed", event.killed);
     dict
+}
+
+fn combat_attacker_kind_and_id(attacker: CombatTarget) -> (&'static str, u32) {
+    match attacker {
+        CombatTarget::Unit(id) => ("unit", id.0),
+        CombatTarget::Building(id) => ("building", id.0),
+    }
 }
 
 fn with_app<T>(read: impl FnOnce(&App) -> T) -> Option<T> {
@@ -1771,7 +1812,7 @@ mod tests {
     #[test]
     fn combat_event_drain_blocks_frozen_but_releases_result() {
         let event = CombatEvent {
-            attacker: UnitId(1),
+            attacker: CombatTarget::Unit(UnitId(1)),
             target: CombatTarget::Unit(UnitId(2)),
             damage: 3,
             position: Vec2::new(4.0, 5.0),
@@ -1790,10 +1831,10 @@ mod tests {
         }
 
         // Without a UnitIndex the attacker's existence (and therefore its
-        // presentation permission) cannot be verified: the id is scrubbed
-        // to 0 while the target-position feedback survives.
+        // presentation permission) cannot be verified: the identity is
+        // scrubbed to the uniform absent unit while hit feedback survives.
         let mut scrubbed = event;
-        scrubbed.attacker = UnitId(0);
+        scrubbed.attacker = CombatTarget::Unit(UnitId(0));
 
         // Result releases the settle tick's buffer once — `strike()` records
         // the killing blow and resolves the match in the same fixed tick —
@@ -1816,6 +1857,19 @@ mod tests {
         world.remove_resource::<MatchSession>();
         world.insert_resource(CombatEvents(vec![event]));
         assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
+    }
+
+    #[test]
+    fn combat_event_payload_identity_preserves_unit_and_building_kinds() {
+        for (attacker, expected_kind, expected_id) in [
+            (CombatTarget::Unit(UnitId(7)), "unit", 7),
+            (CombatTarget::Building(BuildingId(8)), "building", 8),
+        ] {
+            assert_eq!(
+                combat_attacker_kind_and_id(attacker),
+                (expected_kind, expected_id)
+            );
+        }
     }
 
     /// Runtime setup fog: the fixture boots with a fresh `VisibilityMap`, an
@@ -1910,7 +1964,7 @@ mod tests {
             phase: MatchPhase::Playing,
         });
 
-        let event_from = |attacker: UnitId| CombatEvent {
+        let event_from = |attacker: CombatTarget| CombatEvent {
             attacker,
             target: CombatTarget::Unit(UnitId(1)),
             damage: 2,
@@ -1927,40 +1981,163 @@ mod tests {
             UnitKind::Swarmer,
             unit_spec(UnitKind::Swarmer).speed,
         );
+        let seen_cell = Footprint::new(MapFixture::team_starts()[0].research_center_anchor, 4, 4)
+            .perimeter_cells()[0];
+        let home_anchor = MapFixture::team_starts()[0].research_center_anchor;
+        let visible_anchor = GridPos::new(home_anchor.x + 1, home_anchor.y - 2);
+        let hidden_anchor =
+            GridPos::new(EntryZone::East.anchor().x - 4, EntryZone::East.anchor().y);
+        world.resource_mut::<TeamEconomy>().insert_team(
+            TeamId(2),
+            grus_sim::ResourceStockpile {
+                scrap: 500,
+                coal: 200,
+                ..grus_sim::ResourceStockpile::default()
+            },
+        );
+        for (builder_id, anchor) in [(UnitId(50), hidden_anchor), (UnitId(51), visible_anchor)] {
+            let builder_cell = GridPos::new(anchor.x - 2, anchor.y);
+            spawn_unit(
+                &mut world,
+                builder_id,
+                TeamId(2),
+                map.cell_center(builder_cell),
+                UnitKind::Worker,
+                unit_spec(UnitKind::Worker).speed,
+            );
+        }
+        refresh_visibility(&mut world, &map);
+        let place_attacker_tower =
+            |world: &mut World, map: &mut GridMap, builder: UnitId, anchor: GridPos| {
+                let result = apply_player_command(
+                    world,
+                    map,
+                    PlayerCommand::PlaceBuilding {
+                        issuer: TeamId(2),
+                        builder,
+                        kind: BuildingKind::GunTurret,
+                        anchor,
+                    },
+                );
+                assert_eq!(result.reject, None);
+                world
+                    .resource::<BuildingIndex>()
+                    .iter()
+                    .find_map(|(id, entity)| {
+                        (world
+                            .get::<Building>(*entity)
+                            .is_some_and(|building| building.team == TeamId(2))
+                            && world
+                                .get::<Footprint>(*entity)
+                                .is_some_and(|footprint| footprint.anchor == anchor))
+                        .then_some(*id)
+                    })
+                    .expect("placed enemy turret has a stable identity")
+            };
+        let hidden_building = place_attacker_tower(&mut world, &mut map, UnitId(50), hidden_anchor);
+        let visible_building =
+            place_attacker_tower(&mut world, &mut map, UnitId(51), visible_anchor);
+        world.insert_resource(map.clone());
         let missing = UnitId(999);
         world.insert_resource(CombatEvents(vec![
-            event_from(UnitId(1)),
-            event_from(enemy_at_home),
-            event_from(missing),
+            event_from(CombatTarget::Unit(UnitId(1))),
+            event_from(CombatTarget::Unit(enemy_at_home)),
+            event_from(CombatTarget::Unit(missing)),
+            event_from(CombatTarget::Building(BuildingId(1))),
+            event_from(CombatTarget::Building(hidden_building)),
+            event_from(CombatTarget::Building(BuildingId(92))),
+            event_from(CombatTarget::Building(visible_building)),
         ]));
         let drained = take_presentable_events(&mut world);
-        assert_eq!(drained[0].attacker, UnitId(1), "friendly attacker stays");
+        assert_eq!(
+            drained[0].attacker,
+            CombatTarget::Unit(UnitId(1)),
+            "friendly attacker stays"
+        );
         assert_eq!(
             drained[1].attacker,
-            UnitId(0),
+            CombatTarget::Unit(UnitId(0)),
             "hidden enemy attacker must not expose its stable id"
         );
-        assert_eq!(drained[1].position, event_from(enemy_at_home).position);
+        assert_eq!(
+            drained[1].position,
+            event_from(CombatTarget::Unit(enemy_at_home)).position
+        );
         assert_eq!(
             drained[2].attacker,
-            UnitId(0),
+            CombatTarget::Unit(UnitId(0)),
             "missing attacker is scrubbed"
+        );
+        assert_eq!(
+            drained[3].attacker,
+            CombatTarget::Building(BuildingId(1)),
+            "friendly building attacker stays"
+        );
+        assert_eq!(
+            drained[4].attacker,
+            CombatTarget::Unit(UnitId(0)),
+            "hidden building ID and kind are both scrubbed"
+        );
+        assert_eq!(
+            drained[5].attacker,
+            CombatTarget::Unit(UnitId(0)),
+            "missing building attacker is scrubbed"
+        );
+        assert_eq!(
+            drained[6].attacker,
+            CombatTarget::Building(visible_building),
+            "visible building attacker may present"
+        );
+        assert_eq!(
+            combat_attacker_kind_and_id(drained[4].attacker),
+            ("unit", 0),
+            "a scrubbed hidden building serializes only the absent unit identity"
+        );
+        world.remove_resource::<GridMap>();
+        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Building(
+            hidden_building,
+        ))]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(
+            drained[0].attacker,
+            CombatTarget::Unit(UnitId(0)),
+            "building visibility is checked from its footprint without a GridMap resource"
+        );
+        world.insert_resource(map.clone());
+        let dead_building = world
+            .resource::<BuildingIndex>()
+            .entity(visible_building)
+            .unwrap();
+        world.get_mut::<Health>(dead_building).unwrap().current = 0;
+        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Building(
+            visible_building,
+        ))]));
+        let drained = take_presentable_events(&mut world);
+        assert_eq!(
+            drained[0].attacker,
+            CombatTarget::Unit(UnitId(0)),
+            "dead building attacker IDs and kinds are scrubbed"
+        );
+        assert_eq!(
+            combat_attacker_kind_and_id(drained[0].attacker),
+            ("unit", 0)
         );
 
         // March the enemy unit into Team-1 vision — a cell on the immediate
         // perimeter of the authored central Research Center — and its id
         // becomes presentable.
-        let seen_cell = Footprint::new(MapFixture::team_starts()[0].research_center_anchor, 4, 4)
-            .perimeter_cells()[0];
         let enemy_entity = world.resource::<UnitIndex>().entity(enemy_at_home).unwrap();
         world
             .entity_mut(enemy_entity)
             .insert(SimPosition::new(map.cell_center(seen_cell)));
         refresh_visibility(&mut world, &map);
-        world.insert_resource(CombatEvents(vec![event_from(enemy_at_home)]));
+        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Unit(
+            enemy_at_home,
+        ))]));
         let drained = take_presentable_events(&mut world);
         assert_eq!(
-            drained[0].attacker, enemy_at_home,
+            drained[0].attacker,
+            CombatTarget::Unit(enemy_at_home),
             "a visible enemy attacker may present"
         );
     }
@@ -2230,7 +2407,7 @@ mod tests {
             session.phase = MatchPhase::Result(MatchResult(TeamId(2)));
         }
         world.insert_resource(CombatEvents(vec![CombatEvent {
-            attacker: UnitId(1),
+            attacker: CombatTarget::Unit(UnitId(1)),
             target: CombatTarget::Unit(UnitId(2)),
             damage: 1,
             position: Vec2::ZERO,

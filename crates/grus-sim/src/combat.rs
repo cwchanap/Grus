@@ -8,7 +8,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
-use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, unit_spec};
+use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, building_spec, unit_spec};
 use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
 use crate::economy::{TeamEconomy, WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
 use crate::ids::{BuildingId, TeamId, UnitId};
@@ -59,7 +59,7 @@ pub struct AttackCooldown(pub f32);
 /// damage, hit position, ranged/melee, and whether the target died.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CombatEvent {
-    pub attacker: UnitId,
+    pub attacker: CombatTarget,
     pub target: CombatTarget,
     pub damage: u32,
     pub position: Vec2,
@@ -82,6 +82,14 @@ pub struct CombatEvents(pub Vec<CombatEvent>);
 /// at zero.
 #[derive(Debug, Default, Resource)]
 pub struct CombatEventTotal(pub u64);
+
+#[derive(Clone, Copy)]
+struct AttackerContext {
+    entity: Entity,
+    identity: CombatTarget,
+    team: TeamId,
+    spec: CombatSpec,
+}
 
 /// Stable lookup of one attackable target: entity, owning team, and health.
 pub(crate) fn resolve_target(
@@ -152,11 +160,12 @@ fn target_visible(world: &World, team: TeamId, target: CombatTarget, entity: Ent
 /// Advances combat one fixed tick; runs before movement. Clears
 /// `CombatEvents` (Result ticks preserve the settle tick's buffer for the
 /// bridge drain), decrements cooldowns, then lets every attacker act in
-/// ascending stable-ID order: refresh/validate its target, acquire one for
-/// AttackMove, strike when in range and cooldown-ready, or refresh pursuit.
-/// An attacker destroyed earlier in the same step is skipped via its
-/// `UnitIndex` re-resolution; dead units and buildings are destroyed
-/// atomically.
+/// ascending stable-ID order: units first, then completed Team-1 Gun
+/// Turrets. Units refresh/validate their orders, acquire one for AttackMove,
+/// strike when in range and cooldown-ready, or refresh pursuit. Turrets use
+/// the same acquisition snapshot and strike path without an order or route.
+/// An attacker destroyed earlier in the step is skipped through its stable
+/// index; dead units and buildings are destroyed atomically.
 pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     // Draining the presentation-feedback buffer is bookkeeping, not
     // gameplay: it must happen even on frozen ticks, or the last Playing
@@ -259,12 +268,92 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
             // resume_destination re-paths toward the destination.
             world.entity_mut(entity).remove::<MoveOrder>();
             if cooldown_ready {
-                strike(world, map, entity, &unit, spec, target, point);
+                strike(
+                    world,
+                    map,
+                    AttackerContext {
+                        entity,
+                        identity: CombatTarget::Unit(unit.id),
+                        team: unit.team,
+                        spec,
+                    },
+                    target,
+                    point,
+                );
                 acquisition.refresh_struck(world, target);
             }
         } else {
             pursue(world, map, entity, &position, &order, target);
         }
+    }
+
+    // Turrets have no CombatOrder or movement route. Keep the existing unit
+    // attacker pass untouched, then process completed Team-1 turrets in
+    // stable building-ID order against the same per-tick acquisition table.
+    let mut building_ids: Vec<BuildingId> = world
+        .get_resource::<BuildingIndex>()
+        .map(|index| index.iter().map(|(id, _)| *id).collect())
+        .unwrap_or_default();
+    building_ids.sort_unstable();
+    for id in building_ids {
+        if !gameplay_active(world) {
+            break;
+        }
+        let Some(entity) = world
+            .get_resource::<BuildingIndex>()
+            .and_then(|index| index.entity(id))
+        else {
+            continue;
+        };
+        let Some((team, kind, complete)) = world
+            .get::<Building>(entity)
+            .map(|building| (building.team, building.kind, building.construction.complete))
+        else {
+            continue;
+        };
+        if team != TeamId(1) || kind != BuildingKind::GunTurret || !complete {
+            continue;
+        }
+        let Some(spec) = building_spec(kind).combat else {
+            continue;
+        };
+        let Some(footprint) = world.get::<Footprint>(entity).copied() else {
+            continue;
+        };
+        if !world
+            .get::<AttackCooldown>(entity)
+            .is_some_and(|cooldown| cooldown.0 <= 0.0)
+        {
+            continue;
+        }
+        let target = acquire_target(
+            world,
+            &acquisition,
+            team,
+            footprint.center(),
+            spec.attack_range,
+            Some(footprint),
+            true,
+        );
+        let Some(target) = target else {
+            continue;
+        };
+        let Some(point) = target_position(world, footprint.center(), target) else {
+            continue;
+        };
+        strike(
+            world,
+            map,
+            AttackerContext {
+                entity,
+                identity: CombatTarget::Building(id),
+                team,
+                spec,
+            },
+            target,
+            point,
+        );
+        acquisition.refresh_struck(world, target);
     }
 }
 
@@ -305,7 +394,15 @@ fn refresh_target(
             };
             let target = match target {
                 Some(target) => Some(target),
-                None => acquire_target(world, acquisition, attacker_team, attacker_position),
+                None => acquire_target(
+                    world,
+                    acquisition,
+                    attacker_team,
+                    attacker_position,
+                    ATTACK_MOVE_RADIUS,
+                    None,
+                    false,
+                ),
             };
             let retained = input_target.is_some() && input_target == target;
             let last_target_cell = if retained { last_target_cell } else { None };
@@ -334,6 +431,7 @@ struct AcquisitionSnapshot {
 struct UnitCandidate {
     id: UnitId,
     team: TeamId,
+    alien: bool,
     position: Vec2,
     cell: GridPos,
     alive: bool,
@@ -365,6 +463,7 @@ impl AcquisitionSnapshot {
                 snapshot.units.push(UnitCandidate {
                     id: *id,
                     team: unit.team,
+                    alien: unit_spec(unit.kind).alien.is_some(),
                     position: position.current,
                     cell: world_to_cell(position.current),
                     alive: health.current > 0,
@@ -414,16 +513,21 @@ impl AcquisitionSnapshot {
     }
 }
 
-/// Nearest eligible target within `ATTACK_MOVE_RADIUS`: distance ties break
+/// Nearest eligible target within `range`: distance ties break
 /// by stable identity, units before buildings. Reads the per-tick
 /// `AcquisitionSnapshot`; the `VisibilityMap` resource fetch is hoisted to
 /// once per call, and the visibility check is the same `visible_to`
-/// contract (no map means everything is visible).
+/// contract (no map means everything is visible). A building attacker uses
+/// its closest footprint point to each candidate; `alien_units_only` keeps
+/// turrets on the enemy unit kinds and out of building targets.
 fn acquire_target(
     world: &World,
     acquisition: &AcquisitionSnapshot,
     attacker_team: TeamId,
     position: Vec2,
+    range: f32,
+    attacker_footprint: Option<Footprint>,
+    alien_units_only: bool,
 ) -> Option<CombatTarget> {
     let visibility = world.get_resource::<VisibilityMap>();
     let visible = |subject: VisibilitySubject| match visibility {
@@ -434,8 +538,13 @@ fn acquire_target(
     // Radius first: the visibility lookup only runs for the few candidates
     // actually in reach.
     for unit in &acquisition.units {
-        let distance = position.distance(unit.position);
-        if distance <= ATTACK_MOVE_RADIUS
+        if alien_units_only && !unit.alien {
+            continue;
+        }
+        let origin =
+            attacker_footprint.map_or(position, |footprint| footprint.closest_point(unit.position));
+        let distance = origin.distance(unit.position);
+        if distance <= range
             && target_passes(
                 attacker_team,
                 unit.team,
@@ -446,22 +555,27 @@ fn acquire_target(
             candidates.push((distance, 0, unit.id.0, CombatTarget::Unit(unit.id)));
         }
     }
-    for building in &acquisition.buildings {
-        let distance = position.distance(building.footprint.closest_point(position));
-        if distance <= ATTACK_MOVE_RADIUS
-            && target_passes(
-                attacker_team,
-                building.team,
-                building.alive,
-                visible(building.footprint.into()),
-            )
-        {
-            candidates.push((
-                distance,
-                1,
-                building.id.0,
-                CombatTarget::Building(building.id),
-            ));
+    if !alien_units_only {
+        for building in &acquisition.buildings {
+            let target_point = building.footprint.closest_point(position);
+            let origin = attacker_footprint
+                .map_or(position, |footprint| footprint.closest_point(target_point));
+            let distance = origin.distance(target_point);
+            if distance <= range
+                && target_passes(
+                    attacker_team,
+                    building.team,
+                    building.alive,
+                    visible(building.footprint.into()),
+                )
+            {
+                candidates.push((
+                    distance,
+                    1,
+                    building.id.0,
+                    CombatTarget::Building(building.id),
+                ));
+            }
         }
     }
     candidates
@@ -699,12 +813,16 @@ fn resume_destination(
 fn strike(
     world: &mut World,
     map: &mut GridMap,
-    attacker: Entity,
-    unit: &Unit,
-    spec: CombatSpec,
+    attacker: AttackerContext,
     target: CombatTarget,
     position: Vec2,
 ) {
+    let AttackerContext {
+        entity: attacker_entity,
+        identity,
+        team: attacker_team,
+        spec,
+    } = attacker;
     let Some((target_entity, _, mut health)) = resolve_target(world, target) else {
         return;
     };
@@ -720,12 +838,12 @@ fn strike(
     if let Some(mut state) = world.get_mut::<Health>(target_entity) {
         *state = health;
     }
-    if let Some(mut cooldown) = world.get_mut::<AttackCooldown>(attacker) {
+    if let Some(mut cooldown) = world.get_mut::<AttackCooldown>(attacker_entity) {
         cooldown.0 = spec.cooldown_seconds;
     }
     if let Some(mut events) = world.get_resource_mut::<CombatEvents>() {
         events.0.push(CombatEvent {
-            attacker: unit.id,
+            attacker: identity,
             target,
             damage,
             position,
@@ -739,7 +857,7 @@ fn strike(
     if killed {
         match target {
             CombatTarget::Unit(_) => {
-                if unit.team == TeamId(1)
+                if attacker_team == TeamId(1)
                     && let Some(reward) = world
                         .get::<Unit>(target_entity)
                         .filter(|victim| victim.team == TeamId(2))
@@ -759,7 +877,7 @@ fn strike(
                     .is_some_and(|building| building.kind == BuildingKind::ResearchCenter);
                 destroy_building(world, map, target_entity);
                 if research_center {
-                    resolve_result(world, unit.team);
+                    resolve_result(world, attacker_team);
                 }
             }
         }
