@@ -105,7 +105,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
         step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         step_production(&mut world, &mut map, SIM_STEP_SECONDS);
     }
     // The completion tick: both arrivals are visible to their consumers in
@@ -159,7 +159,7 @@ fn production_completion_spawns_after_movement_so_the_rallied_unit_marches_next_
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
     step_movement(&mut world, &map, SIM_STEP_SECONDS);
     step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-    step_construction(&mut world, SIM_STEP_SECONDS);
+    step_construction(&mut world, &map, SIM_STEP_SECONDS);
     step_production(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_ne!(
         world.get::<SimPosition>(spawned).unwrap().current,
@@ -416,7 +416,7 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
         .entity_mut(builder)
         .insert(SimPosition::new(map.cell_center(slot)));
     for _ in 0..450 {
-        step_construction(&mut world, SIM_STEP_SECONDS);
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
         if world.get::<Building>(depot).unwrap().construction.complete {
             break;
         }

@@ -28,7 +28,7 @@ fn drive(world: &mut World, map: &mut GridMap, cap: usize, mut done: impl FnMut(
     for _ in 0..cap {
         step_movement(world, map, SIM_STEP_SECONDS);
         step_economy(world, map, SIM_STEP_SECONDS);
-        step_construction(world, SIM_STEP_SECONDS);
+        step_construction(world, map, SIM_STEP_SECONDS);
         if done(world) {
             return;
         }

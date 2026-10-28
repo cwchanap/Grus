@@ -143,6 +143,24 @@ layout_mode = 2
 text = "Barracks"
 metadata/kind = "Barracks"
 
+[node name="WallButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Wall"
+metadata/kind = "Wall"
+
+[node name="GateButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Gate"
+metadata/kind = "Gate"
+
+[node name="GunTurretButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Gun Turret"
+metadata/kind = "GunTurret"
+
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 8.0

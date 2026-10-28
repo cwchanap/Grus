@@ -41,6 +41,7 @@ var _producer_kinds: Array[String] = []
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
+	var buildings: Dictionary = catalogue.get("buildings", {})
 	var producers := {}
 	var units: Dictionary = catalogue.get("units", {})
 	for kind in units:
@@ -50,7 +51,15 @@ func _ready() -> void:
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
 	for button in _build_grid.get_children():
-		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
+		var kind := str(button.get_meta("kind"))
+		var entry: Dictionary = buildings.get(kind, {})
+		var costs := PackedStringArray()
+		for resource in ["food", "scrap", "coal", "crystals"]:
+			var amount := int(entry.get(resource, 0))
+			if amount > 0:
+				costs.append("%d %s" % [amount, resource.capitalize()])
+		button.tooltip_text = "Cost: %s\nBuild: %ds" % [", ".join(costs), int(entry.get("seconds", 0))]
+		button.pressed.connect(_on_build_pressed.bind(kind))
 	for button in _train_grid.get_children():
 		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
 	idle_button.pressed.connect(_on_idle_pressed)
@@ -636,9 +645,10 @@ func _try_placement(screen_position: Vector2) -> void:
 		return
 	if GrusBridge.place_building(builder, _placement_kind, anchor_x, anchor_y):
 		command_status.text = "Placement queued"
+		if _placement_kind != "Wall" and _placement_kind != "Gate":
+			_cancel_placement()
 	else:
 		command_status.text = "Placement rejected"
-	_cancel_placement()
 
 func _on_train_pressed(kind: String) -> void:
 	if not _playing():

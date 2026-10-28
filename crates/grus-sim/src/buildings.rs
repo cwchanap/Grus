@@ -745,9 +745,9 @@ pub(crate) fn nearest_open_cell(
 /// `ToConstruction → Constructing` once its current cell equals the stored
 /// slot; each building then advances only while its single `active_builder` is
 /// the worker in `Constructing` state, so a second builder can never double
-/// the rate. Completion clears the assignment, idles the builder, and grants
-/// a Depot its `Dropoff` marker — each exactly once.
-pub fn step_construction(world: &mut World, seconds: f32) {
+/// the rate. Completion clears the assignment, hands the builder to the
+/// nearest reachable unassigned site, and grants completion-time markers.
+pub fn step_construction(world: &mut World, map: &GridMap, seconds: f32) {
     if !gameplay_active(world) {
         return;
     }
@@ -810,13 +810,13 @@ pub fn step_construction(world: &mut World, seconds: f32) {
 
         let progress = state.progress_seconds + seconds;
         if progress >= building_spec(kind).build_seconds as f32 {
-            completions.push((building_entity, builder_entity, kind, team));
+            completions.push((building_entity, builder_entity, builder, kind, team));
         } else if let Some(mut building) = world.get_mut::<Building>(building_entity) {
             building.construction.progress_seconds = progress;
         }
     }
 
-    for (building_entity, builder_entity, kind, team) in completions {
+    for (building_entity, builder_entity, builder, kind, team) in completions {
         if let Some(mut building) = world.get_mut::<Building>(building_entity) {
             building.construction.complete = true;
             building.construction.active_builder = None;
@@ -835,6 +835,50 @@ pub fn step_construction(world: &mut World, seconds: f32) {
             world
                 .entity_mut(building_entity)
                 .insert(ProductionQueue::default());
+        }
+        resume_nearest_unassigned_site(world, map, team, builder_entity, builder);
+    }
+}
+
+fn resume_nearest_unassigned_site(
+    world: &mut World,
+    map: &GridMap,
+    team: TeamId,
+    builder_entity: Entity,
+    builder: UnitId,
+) {
+    let Some(position) = world
+        .get::<SimPosition>(builder_entity)
+        .map(|position| position.current)
+    else {
+        return;
+    };
+    let mut candidates = {
+        let mut query = world.query::<(&Building, &Footprint)>();
+        query
+            .iter(world)
+            .filter_map(|(building, footprint)| {
+                (!building.construction.complete
+                    && building.construction.active_builder.is_none()
+                    && building.team == team)
+                    .then_some((
+                        footprint.closest_point(position).distance_squared(position),
+                        building.id,
+                    ))
+            })
+            .collect::<Vec<_>>()
+    };
+    candidates.sort_by(|(distance_a, id_a), (distance_b, id_b)| {
+        distance_a
+            .total_cmp(distance_b)
+            .then_with(|| id_a.cmp(id_b))
+    });
+    for (_, building) in candidates {
+        if apply_resume_construction(world, map, team, builder, building)
+            .reject
+            .is_none()
+        {
+            return;
         }
     }
 }
