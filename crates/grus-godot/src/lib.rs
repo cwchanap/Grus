@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bevy::prelude::*;
 use godot::builtin::{GString, PackedInt32Array, VarDictionary, Vector2};
@@ -24,7 +24,20 @@ use grus_sim::{
 mod e2e;
 
 #[derive(Default, Resource)]
-struct PendingCommands(Vec<PlayerCommand>);
+struct PendingCommands(Vec<PendingCommand>);
+
+struct PendingCommand {
+    command: PlayerCommand,
+    placement_request_id: Option<i64>,
+}
+
+#[derive(Default, Resource)]
+struct PlacementCommandResults(HashMap<i64, PlacementCommandResult>);
+
+struct PlacementCommandResult {
+    accepted: bool,
+    feedback: String,
+}
 
 #[derive(Resource)]
 struct CommandFeedback {
@@ -169,6 +182,66 @@ impl GrusBridgeNode {
             kind,
             anchor: GridPos::new(anchor_x, anchor_y),
         })
+    }
+
+    /// Queue a building placement and retain its authoritative result until
+    /// the requesting presentation code consumes it. The shared feedback
+    /// surface only keeps the latest result per fixed tick, so this separate
+    /// ticket prevents another command from masking this placement's result.
+    #[func]
+    fn place_building_request(
+        &self,
+        builder_id: i32,
+        kind: GString,
+        anchor_x: i32,
+        anchor_y: i32,
+        request_id: i64,
+    ) -> bool {
+        let Some(kind) = parse_building_kind(&kind) else {
+            return false;
+        };
+        let Ok(builder) = u32::try_from(builder_id) else {
+            return false;
+        };
+        if request_id <= 0 {
+            return false;
+        }
+        queue_placement_command(
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(builder),
+                kind,
+                anchor: GridPos::new(anchor_x, anchor_y),
+            },
+            request_id,
+        )
+    }
+
+    /// Consume one request-scoped placement result. An empty dictionary means
+    /// the fixed-step command has not completed yet.
+    #[func]
+    fn take_placement_command_result(&mut self, request_id: i64) -> VarDictionary {
+        let Some(mut app_node) = bevy_app_singleton() else {
+            return VarDictionary::new();
+        };
+        let mut app_node = app_node.bind_mut();
+        let Some(app) = app_node.get_app_mut() else {
+            return VarDictionary::new();
+        };
+        let Some(mut results) = app
+            .world_mut()
+            .get_resource_mut::<PlacementCommandResults>()
+        else {
+            return VarDictionary::new();
+        };
+        let Some(result) = results.0.remove(&request_id) else {
+            return VarDictionary::new();
+        };
+        let mut dict = VarDictionary::new();
+        dict.set("complete", true);
+        dict.set("accepted", result.accepted);
+        dict.set("feedback", &GString::from(result.feedback.as_str()));
+        dict
     }
 
     #[func]
@@ -795,6 +868,7 @@ fn build_app(app: &mut App) {
         .add_plugins(GodotPackedScenePlugin)
         .insert_resource(Time::<Fixed>::from_seconds(f64::from(SIM_STEP_SECONDS)))
         .init_resource::<PendingCommands>()
+        .init_resource::<PlacementCommandResults>()
         .init_resource::<CommandFeedback>()
         .init_resource::<LastRouteReject>()
         .add_systems(Startup, setup_fixture)
@@ -924,6 +998,17 @@ fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
 }
 
 fn queue_command(command: PlayerCommand) -> bool {
+    queue_command_with_placement_request(command, None)
+}
+
+fn queue_placement_command(command: PlayerCommand, request_id: i64) -> bool {
+    queue_command_with_placement_request(command, Some(request_id))
+}
+
+fn queue_command_with_placement_request(
+    command: PlayerCommand,
+    placement_request_id: Option<i64>,
+) -> bool {
     let Some(mut app_node) = bevy_app_singleton() else {
         return false;
     };
@@ -934,7 +1019,10 @@ fn queue_command(command: PlayerCommand) -> bool {
     let Some(mut pending) = app.world_mut().get_resource_mut::<PendingCommands>() else {
         return false;
     };
-    pending.0.push(command);
+    pending.0.push(PendingCommand {
+        command,
+        placement_request_id,
+    });
     true
 }
 
@@ -1462,6 +1550,9 @@ fn clear_gameplay_world(world: &mut World) {
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
     }
+    if let Some(mut results) = world.get_resource_mut::<PlacementCommandResults>() {
+        results.0.clear();
+    }
     if let Some(mut feedback) = world.get_resource_mut::<CommandFeedback>() {
         feedback.revision = feedback.revision.wrapping_add(1);
         feedback.text = "Ready".to_string();
@@ -1484,12 +1575,24 @@ fn apply_pending_commands(world: &mut World) {
 
     let mut latest_feedback: Option<(String, Option<RejectReason>)> = None;
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        for command in commands {
-            let result = apply_player_command(world, &mut map, command);
+        for pending in commands {
+            let result = apply_player_command(world, &mut map, pending.command);
             let reject_code = result
                 .reject
                 .or_else(|| result.rejected_units.first().map(|(_, reason)| *reason));
-            latest_feedback = Some((format_command_result(&result), reject_code));
+            let feedback = format_command_result(&result);
+            if let Some(request_id) = pending.placement_request_id
+                && let Some(mut results) = world.get_resource_mut::<PlacementCommandResults>()
+            {
+                results.0.insert(
+                    request_id,
+                    PlacementCommandResult {
+                        accepted: result.reject.is_none(),
+                        feedback: feedback.clone(),
+                    },
+                );
+            }
+            latest_feedback = Some((feedback, reject_code));
         }
     });
 
@@ -2347,6 +2450,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn placement_result_stays_attributed_when_later_feedback_overwrites_latest() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        start_match(&mut world);
+        world.insert_resource(PendingCommands::default());
+        world.insert_resource(PlacementCommandResults::default());
+        world.insert_resource(CommandFeedback::default());
+        world.resource_mut::<PendingCommands>().0.extend([
+            PendingCommand {
+                command: PlayerCommand::PlaceBuilding {
+                    issuer: TeamId(1),
+                    builder: UnitId(1),
+                    kind: BuildingKind::Wall,
+                    anchor: GridPos::new(-1, -1),
+                },
+                placement_request_id: Some(71),
+            },
+            PendingCommand {
+                command: PlayerCommand::Units(UnitCommand {
+                    issuer: TeamId(1),
+                    units: vec![UnitId(1)],
+                    kind: UnitCommandKind::Stop,
+                }),
+                placement_request_id: None,
+            },
+        ]);
+
+        apply_pending_commands(&mut world);
+
+        let placement = world
+            .resource_mut::<PlacementCommandResults>()
+            .0
+            .remove(&71)
+            .expect("tracked placement result is retained");
+        assert!(!placement.accepted);
+        assert_eq!(placement.feedback, "Command rejected (OutOfBounds)");
+        assert_eq!(
+            world.resource::<CommandFeedback>().text,
+            "Command accepted for 1 unit(s)",
+            "the unrelated later result remains the shared latest feedback"
+        );
+    }
+
     /// The full survival-fixture contract after setup/reset: seeded ids,
     /// indexes, stockpiles, a Start session, and no combat transients.
     fn assert_fixture_restored(world: &World) {
@@ -2439,13 +2586,16 @@ mod tests {
         world
             .resource_mut::<PendingCommands>()
             .0
-            .push(PlayerCommand::Units(UnitCommand {
-                issuer: TeamId(1),
-                units: vec![UnitId(1)],
-                kind: UnitCommandKind::Move {
-                    target: Vec2::new(60.5, 60.5),
-                },
-            }));
+            .push(PendingCommand {
+                command: PlayerCommand::Units(UnitCommand {
+                    issuer: TeamId(1),
+                    units: vec![UnitId(1)],
+                    kind: UnitCommandKind::Move {
+                        target: Vec2::new(60.5, 60.5),
+                    },
+                }),
+                placement_request_id: None,
+            });
 
         // Use the fog: a scout reveals a live alien at an authored entry.
         let fixture = MapFixture::battlefield();

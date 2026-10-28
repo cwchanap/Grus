@@ -149,7 +149,8 @@ func _accepted_since(revision: int) -> bool:
 	return int(GrusBridge.command_feedback_revision()) > revision \
 		and str(GrusBridge.command_feedback()).begins_with("Command accepted")
 
-func _defense_placement_anchor(builder_id: int, kind: String) -> Vector2i:
+func _defense_placement_anchor(
+		builder_id: int, kind: String, reserved_footprints: Array[Rect2i] = []) -> Vector2i:
 	var worker := _unit_view(builder_id)
 	if worker == null:
 		return Vector2i(-1, -1)
@@ -161,7 +162,17 @@ func _defense_placement_anchor(builder_id: int, kind: String) -> Vector2i:
 					continue
 				var candidate := origin + Vector2i(x, y)
 				var preview: Dictionary = GrusBridge.placement_preview(builder_id, kind, candidate.x, candidate.y)
-				if bool(preview.get("valid", false)):
+				if not bool(preview.get("valid", false)):
+					continue
+				var footprint := Rect2i(
+					Vector2i(int(preview.get("anchor_x", candidate.x)), int(preview.get("anchor_y", candidate.y))),
+					Vector2i(int(preview.get("width", 1)), int(preview.get("height", 1))))
+				var overlaps_reserved := false
+				for reserved in reserved_footprints:
+					if footprint.intersects(reserved):
+						overlaps_reserved = true
+						break
+				if not overlaps_reserved:
 					return candidate
 	return Vector2i(-1, -1)
 
@@ -186,7 +197,8 @@ func _place_defense_at(main: Node3D, camera: Camera3D, kind: String, anchor: Vec
 	_push_mouse_click(screen, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(
 			func(): return _accepted_since(revision) \
-				and get_tree().get_nodes_in_group("building_views").size() == building_count + 1,
+				and get_tree().get_nodes_in_group("building_views").size() == building_count + 1 \
+				and main.get("_pending_placement_requests").is_empty(),
 			10.0, "%s placement was not accepted and rendered at %s" % [kind, anchor]):
 		return false
 	if str(main.get("_placement_kind")) != kind:
@@ -807,6 +819,60 @@ func _run() -> void:
 			_fail("%s build button does not display its catalogue cost/time: %s" % [listed_kind, catalogue_button.tooltip_text])
 			return
 
+	# Queue an ordinary building, then choose another build mode before the
+	# authoritative result arrives. The older acceptance must not replace the
+	# player's newer mode or its status text.
+	var bunkhouse_button := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
+	if not await _arm_defense(main, bunkhouse_button, "Bunkhouse"):
+		return
+	var stale_anchor := _defense_placement_anchor(1, "Bunkhouse")
+	if stale_anchor.x < 0:
+		_fail("could not find a valid Bunkhouse anchor for the stale-response probe")
+		return
+	var buildings_before_stale := get_tree().get_nodes_in_group("building_views").size()
+	_push_mouse_click(
+		camera.unproject_position(Vector3(stale_anchor.x + 0.25, 0.0, stale_anchor.y + 0.25)),
+		MOUSE_BUTTON_LEFT)
+	if str(main.get("_placement_kind")) != "Bunkhouse":
+		_fail("ordinary placement cancelled before its authoritative response")
+		return
+	var wall_button := get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button
+	_push_mouse_click(wall_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	var wall_selection_status := command_status.text
+	if str(main.get("_placement_kind")) != "Wall" or not wall_selection_status.begins_with("Placing Wall"):
+		_fail("the newer Wall selection did not replace the pending Bunkhouse placement")
+		return
+	if not await _wait_until(
+			func(): return get_tree().get_nodes_in_group("building_views").size() == buildings_before_stale + 1 \
+				and main.get("_pending_placement_requests").is_empty(),
+			10.0, "queued Bunkhouse was not authoritatively accepted"):
+		return
+	if str(main.get("_placement_kind")) != "Wall" or command_status.text != wall_selection_status:
+		_fail("the old Bunkhouse acceptance overrode the newer Wall selection")
+		return
+
+	# With no later selection, an ordinary placement remains armed while
+	# queued, then cancels only after its authoritative acceptance.
+	if not await _arm_defense(main, bunkhouse_button, "Bunkhouse"):
+		return
+	var one_shot_anchor := _defense_placement_anchor(1, "Bunkhouse")
+	if one_shot_anchor.x < 0:
+		_fail("could not find a second valid Bunkhouse anchor for the one-shot probe")
+		return
+	var buildings_before_one_shot := get_tree().get_nodes_in_group("building_views").size()
+	_push_mouse_click(
+		camera.unproject_position(Vector3(one_shot_anchor.x + 0.25, 0.0, one_shot_anchor.y + 0.25)),
+		MOUSE_BUTTON_LEFT)
+	if str(main.get("_placement_kind")) != "Bunkhouse":
+		_fail("ordinary Bunkhouse placement cancelled before authoritative acceptance")
+		return
+	if not await _wait_until(
+			func(): return get_tree().get_nodes_in_group("building_views").size() == buildings_before_one_shot + 1 \
+				and main.get("_pending_placement_requests").is_empty() \
+				and str(main.get("_placement_kind")) == "",
+			10.0, "ordinary Bunkhouse placement did not cancel after authoritative acceptance"):
+		return
+
 	for defense_kind in ["Wall", "Gate"]:
 		var build_button := get_node("Main/HUD/CommandPanel/BuildGrid/%sButton" % defense_kind) as Button
 		if not await _arm_defense(main, build_button, defense_kind):
@@ -835,6 +901,56 @@ func _run() -> void:
 					or command_status.text != status_before_right_click:
 				_fail("right-click while placing did not cancel without a contextual command")
 				return
+
+	# Each preview is affordable against the current stockpile. Queue one
+	# turret for another worker, then submit the visible-button placement before
+	# the next fixed tick. The first spend makes the second command fail with
+	# InsufficientResources, and the rejected ordinary mode must stay armed.
+	var gun_turret_button := get_node("Main/HUD/CommandPanel/BuildGrid/GunTurretButton") as Button
+	if not await _arm_defense(main, gun_turret_button, "GunTurret"):
+		return
+	var turret_cost := int(building_catalogue.get("GunTurret", {}).get("scrap", 0))
+	var current_scrap := int(GrusBridge.economy_snapshot().get("scrap", 0))
+	if turret_cost <= 0 or current_scrap < turret_cost or current_scrap >= turret_cost * 2:
+		_fail("delayed rejection probe expected stock for one turret only: scrap=%d cost=%d" % [current_scrap, turret_cost])
+		return
+	var spending_anchor := _defense_placement_anchor(2, "GunTurret")
+	if spending_anchor.x < 0:
+		_fail("could not find a valid pre-spend GunTurret anchor for Worker 2")
+		return
+	var spending_preview: Dictionary = GrusBridge.placement_preview(2, "GunTurret", spending_anchor.x, spending_anchor.y)
+	var reserved_footprints: Array[Rect2i] = [Rect2i(
+		Vector2i(int(spending_preview.get("anchor_x", spending_anchor.x)), int(spending_preview.get("anchor_y", spending_anchor.y))),
+		Vector2i(int(spending_preview.get("width", 1)), int(spending_preview.get("height", 1))))]
+	var rejected_anchor := _defense_placement_anchor(1, "GunTurret", reserved_footprints)
+	if rejected_anchor.x < 0:
+		_fail("could not find a non-overlapping valid GunTurret anchor for the delayed rejection probe")
+		return
+	var rejected_preview: Dictionary = GrusBridge.placement_preview(1, "GunTurret", rejected_anchor.x, rejected_anchor.y)
+	if not bool(spending_preview.get("valid", false)) or not bool(rejected_preview.get("valid", false)):
+		_fail("both turret previews must be valid before the queued spend executes")
+		return
+	var buildings_before_delayed_reject := get_tree().get_nodes_in_group("building_views").size()
+	if not GrusBridge.place_building(2, "GunTurret", spending_anchor.x, spending_anchor.y):
+		_fail("pre-spend GunTurret command was not queued")
+		return
+	var feedback_before_delayed_reject := int(GrusBridge.command_feedback_revision())
+	_push_mouse_click(
+		camera.unproject_position(Vector3(rejected_anchor.x + 0.25, 0.0, rejected_anchor.y + 0.25)),
+		MOUSE_BUTTON_LEFT)
+	if str(main.get("_placement_kind")) != "GunTurret" \
+			or int(GrusBridge.command_feedback_revision()) != feedback_before_delayed_reject:
+		_fail("ordinary placement did not remain armed while awaiting delayed rejection")
+		return
+	if not await _wait_until(
+			func(): return get_tree().get_nodes_in_group("building_views").size() == buildings_before_delayed_reject + 1 \
+				and main.get("_pending_placement_requests").is_empty() \
+				and command_status.text == "Command rejected (InsufficientResources)",
+			10.0, "preview-valid GunTurret placement was not retained after authoritative resource rejection"):
+		return
+	if str(main.get("_placement_kind")) != "GunTurret":
+		_fail("authoritative placement rejection cancelled the ordinary GunTurret mode")
+		return
 
 	var phase_before_escape := str(GrusBridge.session_snapshot().get("phase", ""))
 	var status_before_escape := command_status.text
