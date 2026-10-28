@@ -1397,6 +1397,29 @@ fn spawn_enemy_building(world: &mut World, map: &mut GridMap, team: TeamId, anch
         .insert(id, entity);
 }
 
+fn spawn_enemy_wall(world: &mut World, map: &mut GridMap, cell: GridPos) {
+    map.set_blocked(cell, true);
+    let id = BuildingId(77);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team: TeamId(2),
+                kind: BuildingKind::Wall,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            Footprint::new(cell, 1, 1),
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+}
+
 /// A previously scouted, now hidden enemy building footprint must answer
 /// the preview exactly like identical empty explored ground — `Occupied`
 /// from walkability would map the hidden building directly. The committed
@@ -1511,25 +1534,7 @@ fn hidden_enemy_wall_does_not_change_gate_preview_but_commit_rejects_overlap() {
             .expect("empty ground Gate preview should find the west-side slot");
     assert!(empty_ground_plan.route.contains(&map.cell_center(gate)));
 
-    map.set_blocked(gate, true);
-    let enemy_wall = world
-        .spawn((
-            Building {
-                id: BuildingId(77),
-                team: TeamId(2),
-                kind: BuildingKind::Wall,
-                construction: ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            Footprint::new(gate, 1, 1),
-        ))
-        .id();
-    world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(BuildingId(77), enemy_wall);
+    spawn_enemy_wall(&mut world, &mut map, gate);
     refresh_visibility(&mut world, &map);
     assert!(
         explored_by(&world, TeamId(1), gate) && !visible_to(&world, TeamId(1), gate),
@@ -1560,6 +1565,59 @@ fn hidden_enemy_wall_does_not_change_gate_preview_but_commit_rejects_overlap() {
         stockpile_before
     );
     assert_eq!(map.revision(), revision_before);
+}
+
+#[test]
+fn hidden_blocker_outside_gate_footprint_keeps_builder_route_unreachable() {
+    let (mut world, mut map, worker) = setup_build_test();
+    let hidden_blocker = GridPos::new(13, 10);
+    let gate = GridPos::new(12, 10);
+    for y in 0..map.height() {
+        if y != hidden_blocker.y {
+            map.set_blocked(GridPos::new(hidden_blocker.x, y), true);
+        }
+    }
+
+    reveal(&mut world, &map);
+    world
+        .entity_mut(worker)
+        .insert(SimPosition::new(Vec2::new(50.5, 50.5)));
+    refresh_visibility(&mut world, &map);
+    assert!(explored_by(&world, TeamId(1), hidden_blocker));
+    assert!(!visible_to(&world, TeamId(1), hidden_blocker));
+
+    let empty_ground_plan =
+        validate_placement(&world, &map, TeamId(1), UnitId(1), BuildingKind::Gate, gate)
+            .expect("empty chokepoint should be reachable");
+    assert!(
+        empty_ground_plan
+            .route
+            .contains(&map.cell_center(hidden_blocker))
+    );
+
+    spawn_enemy_wall(&mut world, &mut map, hidden_blocker);
+    refresh_visibility(&mut world, &map);
+    assert!(!visible_to(&world, TeamId(1), hidden_blocker));
+    let stockpile_before = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    let revision_before = map.revision();
+
+    let result = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::Gate,
+            anchor: gate,
+        },
+    );
+    assert_eq!(result.reject, Some(RejectReason::Unreachable));
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        stockpile_before
+    );
+    assert_eq!(map.revision(), revision_before);
+    assert_eq!(world.resource::<BuildingIndex>().iter().count(), 1);
 }
 
 /// Current vision keeps the honest rejection: a *visible* enemy building
