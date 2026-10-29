@@ -20,9 +20,13 @@ The runtime fixture has one human start: four Workers around one Research Center
 
 HPA-448 moved Team 1's 4×4 Research Center to the map midpoint (footprint anchor (62,46), center (64,48)) and authored Barracks/Depot anchors around the safe ring. Its two-base fixture and passive Team 2 start were removed by HPA-449. Resource ids 13–18 remain the authored northwest/southeast expansion nodes.
 
-The old central lane barriers are gone. The only static blockers are sparse authored **ruins**: one `RUINS: &[(GridPos, GridPos)]` inclusive-rectangle table in `fixture.rs`, applied through `GridMap::set_blocked_rect` and exposed read-only to Godot as `GrusBridge.obstacle_rects()`. `godot/scripts/ruins.gd` stamps one primitive `BoxMesh` per rectangle from that payload — ruin coordinates exist in exactly one place. The ruins stay clear of the human base, every authored source and worker cell, the central construction/gather ring, the N/E/S/W access lanes, and benchmark staging regions; fixture tests prove each exclusion.
+The old central lane barriers are gone. The only static blockers are sparse authored **ruins**: one `RUINS: &[(GridPos, GridPos)]` inclusive-rectangle table in `fixture.rs`, applied through `GridMap::set_blocked_rect` and exposed read-only to Godot as `GrusBridge.obstacle_rects()`. `godot/scripts/ruins.gd` fits one imported ruin prop to each rectangle from that payload — ruin coordinates exist in exactly one place. The ruins stay clear of the human base, every authored source and worker cell, the central construction/gather ring, the N/E/S/W access lanes, and benchmark staging regions; fixture tests prove each exclusion.
 
 The active catalogue is the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
+
+## HPA-290 winter terrain and ruined-city art
+
+The 128×96 ground uses a textured snow material. Static blockers cycle between snow-covered collapsed buildings, wrecked transports and frozen debris; Food, Scrap and Coal sources use distinct ration-cache, salvage-frame and coal-seam models. The [winter art pack](godot/assets/winter/README.md) includes all six GLBs, the snow texture, import settings, provenance and Blender regeneration source. The smoke checks actual imported geometry against bridge footprints and resource cells, checks the full visible resource silhouette against gathering picks at maximum zoom, and rejects physics bodies in static art. Simulation, occupancy, resource identities, fog and picking retain their existing contracts.
 
 ## HPA-449 alien survival
 

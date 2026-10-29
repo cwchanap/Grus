@@ -80,6 +80,16 @@ func _find_unit(units: Array[Node], id: int) -> Node3D:
 func _ring(unit: Node3D) -> MeshInstance3D:
 	return unit.get_node("SelectionRing") as MeshInstance3D
 
+func _art_bounds(root: Node3D) -> AABB:
+	var bounds := AABB()
+	var first := true
+	for node in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		var local_bounds: AABB = root.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
+		bounds = local_bounds if first else bounds.merge(local_bounds)
+		first = false
+	return bounds
+
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	for _frame in frame_budget:
@@ -264,10 +274,7 @@ func _run() -> void:
 		_fail("central Research Center projects outside the viewport's central half: %s" % center_screen)
 		return
 
-	# Rendered-ruins contract: the bridge hands over the same inclusive
-	# rectangles the simulation blocks, and the battlefield instantiates
-	# exactly one BoxMesh per rect whose size/center derive from the
-	# payload — never a copied coordinate.
+	# Imported art must stay inside the simulation's blocked rectangles.
 	var ruin_rects: PackedInt32Array = GrusBridge.obstacle_rects()
 	if ruin_rects.is_empty() or ruin_rects.size() % 4 != 0:
 		_fail("obstacle_rects payload is malformed: %s" % [ruin_rects])
@@ -281,14 +288,50 @@ func _run() -> void:
 		var min_cell := Vector2i(ruin_rects[i * 4], ruin_rects[i * 4 + 1])
 		var max_cell := Vector2i(ruin_rects[i * 4 + 2], ruin_rects[i * 4 + 3])
 		var cells := max_cell - min_cell + Vector2i.ONE
-		var ruin := ruins_root.get_node("Ruin%d" % i) as MeshInstance3D
-		var mesh := ruin.mesh as BoxMesh
-		var want_size := Vector3(cells.x, 2.0, cells.y)
-		var want_center := Vector3(min_cell.x + cells.x * 0.5, 1.0, min_cell.y + cells.y * 0.5)
-		if mesh == null or mesh.size != want_size or ruin.position != want_center:
-			_fail("ruin %d rendered %s at %s != bridge-derived %s at %s" % [
-				i, mesh.size if mesh != null else Vector3.ZERO, ruin.position, want_size, want_center])
+		var ruin := ruins_root.get_node("Ruin%d" % i) as Node3D
+		if not ruin.scene_file_path.ends_with(".glb"):
+			_fail("ruin %d is not imported glTF art" % i)
 			return
+		if not ruin.find_children("*", "PhysicsBody3D", true, false).is_empty():
+			_fail("ruin %d art imported a gameplay physics body" % i)
+			return
+		var bounds := _art_bounds(ruin)
+		var world_bounds: AABB = ruin.transform * bounds
+		var want_center := Vector3(min_cell.x + cells.x * 0.5, 0.0, min_cell.y + cells.y * 0.5)
+		if ruin.position != want_center or bounds.size.length() < 0.1 \
+				or world_bounds.position.x < min_cell.x - 0.01 or world_bounds.end.x > max_cell.x + 1.01 \
+				or world_bounds.position.z < min_cell.y - 0.01 or world_bounds.end.z > max_cell.y + 1.01 \
+				or world_bounds.position.y < -0.01 or world_bounds.end.y > 2.01:
+			_fail("ruin %d art extends outside its bridge footprint: %s" % [i, world_bounds])
+			return
+	var ground := get_node("Main/Battlefield/Ground") as MeshInstance3D
+	if ground.material_override.albedo_texture == null:
+		_fail("winter ground has no snow texture")
+		return
+	var resource_models := {"Food": "ration_cache.glb", "Scrap": "scrap_ruin.glb", "Coal": "coal_seam.glb"}
+	var controller := get_node("Main")
+	var art_camera_size := camera.size
+	camera.size = controller.MIN_CAMERA_SIZE
+	for resource in get_tree().get_nodes_in_group("resource_views"):
+		var model := resource.get_node_or_null("Model") as Node3D
+		var kind := str(resource.get_meta("resource_kind", ""))
+		if model == null or not model.scene_file_path.ends_with(resource_models.get(kind, "missing")):
+			_fail("resource %s has no matching imported art" % kind)
+			return
+		var bounds := _art_bounds(model)
+		if bounds.size.length() < 0.1 or bounds.position.x < -0.5 or bounds.end.x > 0.5 \
+				or bounds.position.z < -0.5 or bounds.end.z > 0.5 or bounds.position.y < -0.01:
+			_fail("resource %s art extends outside its gather cell: %s" % [kind, bounds])
+			return
+		if resource.is_visible_in_tree():
+			for node in model.find_children("*", "MeshInstance3D", true, false):
+				var mesh := node as MeshInstance3D
+				for vertex in mesh.mesh.get_faces():
+					var screen_point := camera.unproject_position(mesh.global_transform * vertex)
+					if controller._gatherable_resource_id(screen_point) != int(resource.get_meta("resource_id")):
+						_fail("resource %s silhouette extends outside its click target at maximum zoom" % kind)
+						return
+	camera.size = art_camera_size
 
 	var size_before_zoom := camera.size
 	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
@@ -580,5 +623,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_bounds_checked" % max_visual_step)
 	get_tree().quit(0)
