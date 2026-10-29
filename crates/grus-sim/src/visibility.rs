@@ -35,6 +35,14 @@ pub struct VisibilityMap {
 struct TeamVision {
     explored: HashSet<GridPos>,
     visible: HashSet<GridPos>,
+    /// Cached reveal-circle union of this team's completed-building edge
+    /// cells — walls and other static origins cost their circles once per
+    /// building-set or map change (`static_signature`), not every tick.
+    /// Units still re-reveal each refresh.
+    static_visible: HashSet<GridPos>,
+    /// (map revision, completed-building count, Σ building ids) the
+    /// `static_visible` set was computed from. `None` forces a recompute.
+    static_signature: Option<(u64, u64, u64)>,
 }
 
 /// What a knowledge predicate is checked against: a unit's single current
@@ -226,15 +234,26 @@ pub fn refresh_visibility(world: &mut World, map: &GridMap) {
             .push(map.world_to_cell(position.current));
     }
 
+    // Building origins are static between changes, so they collect into a
+    // separate per-team map whose reveal union is cached on TeamVision;
+    // the signature rebuilds it only when the completed-building set or
+    // the map revision moves. A wall ring then adds edge cells to this
+    // scan once, not a reveal circle per segment per tick.
+    let mut building_origins: HashMap<TeamId, Vec<GridPos>> = HashMap::new();
+    let mut completed_count = 0_u64;
+    let mut id_sum = 0_u64;
     let mut buildings = world.query::<(&Building, &Footprint)>();
     for (building, footprint) in buildings.iter(world) {
         if building.construction.complete {
-            origins
+            completed_count += 1;
+            id_sum = id_sum.wrapping_add(u64::from(building.id.0));
+            building_origins
                 .entry(building.team)
                 .or_default()
                 .extend(footprint.edge_cells());
         }
     }
+    let static_signature = (map.revision(), completed_count, id_sum);
 
     let Some(mut visibility) = world.get_resource_mut::<VisibilityMap>() else {
         return;
@@ -248,12 +267,19 @@ pub fn refresh_visibility(world: &mut World, map: &GridMap) {
         .teams
         .keys()
         .chain(origins.keys())
+        .chain(building_origins.keys())
         .copied()
         .collect();
     let mut changed = false;
     for team in teams {
-        let visible = reveal_circle(map, origins.get(&team).map_or(&[], |cells| cells));
+        let mut visible = reveal_circle(map, origins.get(&team).map_or(&[], |cells| cells));
         let vision = visibility.teams.entry(team).or_default();
+        if vision.static_signature != Some(static_signature) {
+            vision.static_visible =
+                reveal_circle(map, building_origins.get(&team).map_or(&[], |cells| cells));
+            vision.static_signature = Some(static_signature);
+        }
+        visible.extend(vision.static_visible.iter().copied());
         if vision.visible != visible {
             changed = true;
         }

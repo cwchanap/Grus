@@ -11,7 +11,7 @@ use crate::catalog::{
     WAVE_PREPARATION_SECONDS, WAVE_SWARMER_RESERVE_DIVISOR, WAVE_THREE_ZONE_START,
     WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS, unit_spec,
 };
-use crate::combat::{CombatOrder, Health};
+use crate::combat::{CombatOrder, Health, PursuitBlocked};
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,
     apply_player_command, approach_slots, destination_slots, sorted_unit_ids, spawn_unit,
@@ -182,6 +182,18 @@ struct FailedFallbackRevision(u64);
 #[derive(Component)]
 struct FallbackObjective(BuildingId);
 
+/// One resolved horde objective: the standoff footprint stranded aliens
+/// measure "already engaged" against and the approach slots new orders
+/// target. `mobile` marks an objective anchored on a live unit's cell: its
+/// reachability moves with the human instead of tracking
+/// `GridMap::revision`, so a `FailedFallbackRevision` recorded against a
+/// previous cell must not suppress re-dispatching it.
+struct AlienObjective {
+    standoff: Footprint,
+    slots: Vec<GridPos>,
+    mobile: bool,
+}
+
 impl Default for WaveState {
     fn default() -> Self {
         Self {
@@ -312,14 +324,13 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
     for (index, id) in spawned.into_iter().enumerate() {
         let target = objective
             .as_ref()
-            .and_then(|(_, targets)| targets.get(index % targets.len()))
+            .and_then(|objective| objective.slots.get(index % objective.slots.len()))
             .copied();
         match target {
             Some(target) => {
                 let result = dispatch_attack_move(world, map, id, target);
                 if command_accepted(&result, id) {
-                    clear_failed_fallback_revision(world, id);
-                    clear_fallback_objective(world, id);
+                    clear_fallback_state(world, id);
                 } else if command_rejected_unreachable(&result, id) {
                     // The objective dispatch and its rejection are one transaction;
                     // preserve the failed MoveOrder until a fallback is accepted.
@@ -333,6 +344,10 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
 
 fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
     let objective = alien_objective(world, map);
+    // A recorded fallback failure suppresses the retry only while the
+    // objective is static: a unit-anchored objective keeps moving, so the
+    // alien may become dispatchable again without any map change.
+    let static_objective = objective.as_ref().is_none_or(|o| !o.mobile);
     let mut target_index = 0;
     for id in live_alien_ids(world, TeamId(2)) {
         let Some(entity) = world
@@ -342,10 +357,13 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
             continue;
         };
         if let Some(failed) = world.get::<FailedFallbackRevision>(entity) {
-            if failed.0 == map.revision() {
+            let recorded = failed.0;
+            if recorded == map.revision() && static_objective {
                 continue;
             }
-            world.entity_mut(entity).remove::<FailedFallbackRevision>();
+            if recorded != map.revision() {
+                world.entity_mut(entity).remove::<FailedFallbackRevision>();
+            }
         }
         let Some(position) = world.get::<SimPosition>(entity) else {
             continue;
@@ -353,6 +371,13 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         let failed_route = world
             .get::<MoveOrder>(entity)
             .is_some_and(|order| order.last_failed_replan == Some(map.revision()));
+        // A pursuit proven sealed at this revision (target alive and
+        // visible but unreachable) produces no MoveOrder, so it must not
+        // count as busy on its CombatOrder alone — the alien stays
+        // retry-eligible for a reachable retarget.
+        let pursuit_blocked = world
+            .get::<PursuitBlocked>(entity)
+            .is_some_and(|blocked| blocked.revision == map.revision());
         let combat_order = world.get::<CombatOrder>(entity);
         // An accepted fallback `AttackMove` stays targetless until combat
         // acquisition sees the structure: while the alien waits on the
@@ -373,6 +398,7 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         );
         if matches!(combat_order, Some(CombatOrder::Attack { .. }))
             || (!failed_route
+                && !pursuit_blocked
                 && (world.get::<MoveOrder>(entity).is_some()
                     || matches!(
                         combat_order,
@@ -385,26 +411,25 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         {
             continue;
         }
-        let in_core_range = objective.as_ref().is_some_and(|(standoff, _)| {
+        let in_core_range = objective.as_ref().is_some_and(|o| {
             position
                 .current
-                .distance(standoff.closest_point(position.current))
+                .distance(o.standoff.closest_point(position.current))
                 <= ATTACK_MOVE_RADIUS
         });
-        if !failed_route && in_core_range {
+        if !failed_route && !pursuit_blocked && in_core_range {
             continue;
         }
 
         let target = objective
             .as_ref()
-            .and_then(|(_, targets)| targets.get(target_index % targets.len()))
+            .and_then(|o| o.slots.get(target_index % o.slots.len()))
             .copied();
         if let Some(target) = target {
             let result = dispatch_attack_move(world, map, id, target);
             target_index += 1;
             if command_accepted(&result, id) {
-                clear_failed_fallback_revision(world, id);
-                clear_fallback_objective(world, id);
+                clear_fallback_state(world, id);
             } else if command_rejected_unreachable(&result, id) {
                 try_reachable_structure_fallback(world, map, id);
             }
@@ -457,19 +482,18 @@ fn try_reachable_structure_fallback(world: &mut World, map: &mut GridMap, id: Un
     });
 
     let start = map.world_to_cell(position.current);
+    // One flood from the alien answers every structure's slot reachability;
+    // the per-slot A* it replaces re-searched the same region once per
+    // perimeter cell of each building.
+    let parents = map.reachable_from(TeamId(2), start);
     for (_, building_id, footprint) in buildings {
-        let slots = approach_slots(
-            map,
-            footprint,
-            &HashSet::new(),
-            footprint.perimeter_cells().len(),
-        );
+        let slots = objective_slots(map, footprint);
         let reachable_slot = slots
             .into_iter()
-            .find(|slot| map.find_path(TeamId(2), start, *slot).is_some());
+            .find(|slot| *slot == start || parents.contains_key(slot));
         if let Some(slot) = reachable_slot {
             if command_accepted(&dispatch_attack_move(world, map, id, slot), id) {
-                clear_failed_fallback_revision(world, id);
+                clear_fallback_state(world, id);
                 world
                     .entity_mut(entity)
                     .insert(FallbackObjective(building_id));
@@ -496,21 +520,17 @@ fn command_rejected_unreachable(result: &CommandResult, id: UnitId) -> bool {
         .contains(&(id, RejectReason::Unreachable))
 }
 
-fn clear_failed_fallback_revision(world: &mut World, id: UnitId) {
+/// Drops both fallback markers after an accepted dispatch — a recorded
+/// probe failure and the previous fallback destination become moot
+/// together, so they clear through one call.
+fn clear_fallback_state(world: &mut World, id: UnitId) {
     if let Some(entity) = world
         .get_resource::<UnitIndex>()
         .and_then(|index| index.entity(id))
     {
-        world.entity_mut(entity).remove::<FailedFallbackRevision>();
-    }
-}
-
-fn clear_fallback_objective(world: &mut World, id: UnitId) {
-    if let Some(entity) = world
-        .get_resource::<UnitIndex>()
-        .and_then(|index| index.entity(id))
-    {
-        world.entity_mut(entity).remove::<FallbackObjective>();
+        let mut entity = world.entity_mut(entity);
+        entity.remove::<FailedFallbackRevision>();
+        entity.remove::<FallbackObjective>();
     }
 }
 
@@ -542,8 +562,10 @@ fn fallback_objective_in_range(world: &World, id: BuildingId, position: Vec2) ->
 /// target. The lowest-id team-1 Research Center leads while it stands;
 /// without it the lowest-id team-1 building — then the lowest-id live
 /// team-1 unit's cell — keeps the horde tasked, so a session-free world
-/// (the benchmark) retains alien intent after the core dies.
-fn alien_objective(world: &World, map: &GridMap) -> Option<(Footprint, Vec<GridPos>)> {
+/// (the benchmark) retains alien intent after the core dies. The
+/// unit-anchored case is `mobile`, which the retry treats differently:
+/// a recorded fallback failure gates only static objectives.
+fn alien_objective(world: &World, map: &GridMap) -> Option<AlienObjective> {
     let mut buildings: Vec<(bool, BuildingId, Footprint)> = world
         .get_resource::<BuildingIndex>()
         .map(|index| {
@@ -569,10 +591,18 @@ fn alien_objective(world: &World, map: &GridMap) -> Option<(Footprint, Vec<GridP
             // eligible. Returning `None` sends launch and retry through the
             // distance-ranked structure probe instead of selecting the
             // lowest-ID non-core building as a substitute core objective.
-            return (!slots.is_empty()).then_some((footprint, slots));
+            return (!slots.is_empty()).then_some(AlienObjective {
+                standoff: footprint,
+                slots,
+                mobile: false,
+            });
         }
         if !slots.is_empty() {
-            return Some((footprint, slots));
+            return Some(AlienObjective {
+                standoff: footprint,
+                slots,
+                mobile: false,
+            });
         }
     }
     for id in sorted_unit_ids(world, TeamId(1), |_| true) {
@@ -586,7 +616,11 @@ fn alien_objective(world: &World, map: &GridMap) -> Option<(Footprint, Vec<GridP
         let footprint = Footprint::new(map.world_to_cell(position.current), 1, 1);
         let slots = objective_slots(map, footprint);
         if !slots.is_empty() {
-            return Some((footprint, slots));
+            return Some(AlienObjective {
+                standoff: footprint,
+                slots,
+                mobile: true,
+            });
         }
     }
     None

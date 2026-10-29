@@ -45,8 +45,9 @@ fn gatherer_deposits_through_gate_after_ring_closes() {
     assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
     drive(&mut world, &mut map, 400); // ~20 sim-s: reaches the source
 
-    // Ring geometry mirrors the smoke: RC anchor (62,46) 4x4, ring at +/-2..+5.
-    let rc_anchor = GridPos::new(62, 46);
+    // Ring geometry mirrors the smoke: RC anchor from the team-start table,
+    // ring at +/-2..+5 around the 4x4 footprint.
+    let rc_anchor = MapFixture::team_starts()[0].research_center_anchor;
     let ring_min = GridPos::new(rc_anchor.x - 2, rc_anchor.y - 2);
     let ring_max = GridPos::new(rc_anchor.x + 5, rc_anchor.y + 5);
     let gate = GridPos::new(rc_anchor.x + 2, ring_min.y);

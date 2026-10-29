@@ -33,7 +33,6 @@ var _left_press_position := Vector2.ZERO
 var _left_pressed := false
 var _placement_kind := ""
 var _placement_generation := 0
-var _next_placement_request_id := 1
 var _pending_placement_requests: Array[Dictionary] = []
 var _idle_cursor := 0
 var _session_phase := ""
@@ -91,10 +90,16 @@ func _consume_placement_results() -> bool:
 		if not bool(result.get("complete", false)):
 			unresolved.append(request)
 			continue
-		handled_feedback = true
 		if int(request.get("generation", -1)) != _placement_generation \
 				or str(request.get("kind", "")) != _placement_kind:
+			# A dropped result must mask only its own echo: the shared channel
+			# keeps the last command's text per tick, so identical text is this
+			# stale acceptance while a different text is unrelated feedback
+			# (a move/route rejection) that still applies.
+			if str(result.get("feedback", "")) == str(GrusBridge.command_feedback()):
+				handled_feedback = true
 			continue
+		handled_feedback = true
 		command_status.text = str(result.get("feedback", "Placement rejected"))
 		if bool(result.get("accepted", false)) \
 				and _placement_kind != "Wall" and _placement_kind != "Gate":
@@ -717,7 +722,7 @@ func _try_placement(screen_position: Vector2) -> void:
 		return
 	for request in _pending_placement_requests:
 		if int(request.get("generation", -1)) == _placement_generation:
-			command_status.text = "Placement queued"
+			command_status.text = "Previous placement still resolving"
 			return
 	var anchor_x := floori(target.x)
 	var anchor_y := floori(target.y)
@@ -725,8 +730,7 @@ func _try_placement(screen_position: Vector2) -> void:
 	if not bool(preview.get("valid", false)):
 		command_status.text = "Placement blocked (code %d)" % int(preview.get("reject_code", -1))
 		return
-	var request_id := _next_placement_request_id
-	_next_placement_request_id += 1
+	var request_id := int(GrusBridge.next_placement_request_id())
 	var kind := _placement_kind
 	if GrusBridge.place_building_request(builder, kind, anchor_x, anchor_y, request_id):
 		_pending_placement_requests.append({

@@ -532,3 +532,42 @@ fn hundred_unit_group_finishes_representative_battlefield_route() {
         "100-unit group collapsed onto shared destination cells"
     );
 }
+
+#[test]
+fn a_replan_while_standing_on_the_goal_completes_instead_of_failing() {
+    let mut world = World::new();
+    let mut map = GridMap::new(16, 16);
+    let cell = GridPos::new(4, 4);
+    let entity = spawn_unit(
+        &mut world,
+        UnitId(3),
+        TeamId(1),
+        map.cell_center(cell),
+        UnitKind::Worker,
+        4.0,
+    );
+    // A stale-revision order whose goal the unit already stands on: the
+    // empty route a replan produces is arrival, not a failed route — the
+    // pre-fix `None` return recorded `last_failed_replan` and preserved the
+    // order, so a settled worker/attacker could be re-failed on every map
+    // change.
+    world.entity_mut(entity).insert(MoveOrder {
+        waypoints: Vec::new(),
+        next: 0,
+        goal: cell,
+        map_revision: map.revision(),
+        last_failed_replan: None,
+    });
+    map.set_blocked(GridPos::new(0, 0), true);
+
+    step_movement(&mut world, &map, SIM_STEP_SECONDS);
+
+    assert!(
+        world.get::<MoveOrder>(entity).is_none(),
+        "an arrived order must complete on replan, not persist as a failure"
+    );
+    assert_vec2_near(
+        world.get::<SimPosition>(entity).unwrap().current,
+        map.cell_center(cell),
+    );
+}

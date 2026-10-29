@@ -9,7 +9,9 @@ use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{ATTACK_MOVE_RADIUS, BuildingKind, CombatSpec, building_spec, unit_spec};
-use crate::commands::{UnitIndex, approach_slots, assign_move_toward, reserve_slot};
+use crate::commands::{
+    UnitIndex, approach_slots, assign_move_toward, destination_slots, reserve_slot,
+};
 use crate::economy::{TeamEconomy, WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
@@ -55,6 +57,21 @@ pub enum CombatOrder {
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq)]
 pub struct AttackCooldown(pub f32);
 
+/// Records that pursuit of `target` found no reachable route on the static
+/// map at `revision` — every approach slot for a building target, or every
+/// destination slot for the target unit's current cell (`cell` anchors the
+/// check). While the stamp holds, `pursue` skips its pathing instead of
+/// re-running a doomed A* every tick; a map-revision change or a move to a
+/// different cell reopens the attempt. Waves retry treats the stamp like a
+/// failed route so a blocked alien is re-tasked to another structure.
+/// `cancel_unit_activity` clears it so a new command starts fresh.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PursuitBlocked {
+    pub target: CombatTarget,
+    pub cell: GridPos,
+    pub revision: u64,
+}
+
 /// One hit recorded during a single combat tick: attacker/target identity,
 /// damage, hit position, ranged/melee, and whether the target died.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,10 +109,9 @@ struct AttackerContext {
 }
 
 /// Stable lookup of one attackable target: entity, owning team, and health.
-pub(crate) fn resolve_target(
-    world: &World,
-    target: CombatTarget,
-) -> Option<(Entity, TeamId, Health)> {
+/// The companion of `target_eligible`: callers that already resolved a
+/// target reuse this rather than re-walking the indexes.
+pub fn resolve_target(world: &World, target: CombatTarget) -> Option<(Entity, TeamId, Health)> {
     match target {
         CombatTarget::Unit(id) => {
             let entity = world.get_resource::<UnitIndex>()?.entity(id)?;
@@ -288,11 +304,25 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
     }
 
     // Turrets have no CombatOrder or movement route. Keep the existing unit
-    // attacker pass untouched, then process completed Team-1 turrets in
-    // stable building-ID order against the same per-tick acquisition table.
+    // attacker pass untouched, then process completed Team-1 combat
+    // buildings in stable building-ID order against the same per-tick
+    // acquisition table. Filter on the combat spec before sorting so walls
+    // and other passive buildings never join the pass.
     let mut building_ids: Vec<BuildingId> = world
         .get_resource::<BuildingIndex>()
-        .map(|index| index.iter().map(|(id, _)| *id).collect())
+        .map(|index| {
+            index
+                .iter()
+                .filter(|(_, entity)| {
+                    world.get::<Building>(**entity).is_some_and(|building| {
+                        building.team == TeamId(1)
+                            && building.construction.complete
+                            && building_spec(building.kind).combat.is_some()
+                    })
+                })
+                .map(|(id, _)| *id)
+                .collect()
+        })
         .unwrap_or_default();
     building_ids.sort_unstable();
     for id in building_ids {
@@ -305,18 +335,16 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         else {
             continue;
         };
-        let Some((team, kind, complete)) = world
-            .get::<Building>(entity)
-            .map(|building| (building.team, building.kind, building.construction.complete))
-        else {
+        let Some(building) = world.get::<Building>(entity) else {
             continue;
         };
-        if team != TeamId(1) || kind != BuildingKind::GunTurret || !complete {
+        if building.team != TeamId(1) || !building.construction.complete {
             continue;
         }
-        let Some(spec) = building_spec(kind).combat else {
+        let Some(spec) = building_spec(building.kind).combat else {
             continue;
         };
+        let team = building.team;
         let Some(footprint) = world.get::<Footprint>(entity).copied() else {
             continue;
         };
@@ -632,13 +660,41 @@ fn pursue(
             if last_target_cell == Some(target_cell) && route_active {
                 return;
             }
-            assign_move_toward(
-                world,
-                map,
-                attacker,
-                world_to_cell(position.current),
-                target_cell,
-            );
+            if pursuit_blocked(world, map, attacker, target, target_cell) {
+                return;
+            }
+            let start = world_to_cell(position.current);
+            let assigned = assign_move_toward(world, map, attacker, start, target_cell).is_some();
+            if assigned {
+                world.entity_mut(attacker).remove::<PursuitBlocked>();
+            } else {
+                // Stamp only a static seal — every reservation-free
+                // destination cell unreachable. Reservation-only failures
+                // can clear when other units move, without a map change, so
+                // they stay transient and retry next tick.
+                let Some(team) = world.get::<Unit>(attacker).map(|unit| unit.team) else {
+                    return;
+                };
+                let static_destinations: HashSet<GridPos> =
+                    destination_slots(map, target_cell, 1, &HashSet::new())
+                        .into_iter()
+                        .collect();
+                let mut pending = static_destinations.clone();
+                let parents = map.reachable_until(team, start, |cell| {
+                    pending.remove(cell);
+                    pending.is_empty()
+                });
+                if static_destinations
+                    .iter()
+                    .all(|slot| *slot != start && !parents.contains_key(slot))
+                {
+                    world.entity_mut(attacker).insert(PursuitBlocked {
+                        target,
+                        cell: target_cell,
+                        revision: map.revision(),
+                    });
+                }
+            }
             world
                 .entity_mut(attacker)
                 .insert(with_last_target_cell(order, Some(target_cell)));
@@ -664,6 +720,11 @@ fn pursue(
             let Some(team) = world.get::<Unit>(attacker).map(|unit| unit.team) else {
                 return;
             };
+            // A pursuit proven sealed at this map revision waits for the
+            // next map change instead of re-running the flood every tick.
+            if pursuit_blocked(world, map, attacker, target, footprint.anchor) {
+                return;
+            }
             let mut used: HashMap<GridPos, usize> = HashMap::new();
             let others: Vec<Entity> = world
                 .get_resource::<UnitIndex>()
@@ -691,8 +752,24 @@ fn pursue(
                 let distance_b = map.cell_center(*b).distance_squared(position.current);
                 distance_a.total_cmp(&distance_b)
             });
-            for slot in candidates {
-                if let Some(path) = map.find_path(team, start, slot) {
+            // One flood from the attacker answers every candidate's
+            // reachability — per-slot A* would search the same unreachable
+            // region once per ring cell. It stops as soon as the full static
+            // ring (candidates ignoring reservations) has been examined, so
+            // the seal check below is decided against every possible slot,
+            // not only the unreserved ones.
+            let static_slots: HashSet<GridPos> =
+                approach_slots(map, footprint, &HashSet::new(), usize::MAX)
+                    .into_iter()
+                    .collect();
+            let mut pending = static_slots.clone();
+            let parents = map.reachable_until(team, start, |cell| {
+                pending.remove(cell);
+                pending.is_empty()
+            });
+            let reached = |slot: GridPos| slot == start || parents.contains_key(&slot);
+            if let Some(slot) = candidates.into_iter().find(|slot| reached(*slot)) {
+                if let Some(path) = map.flood_path(start, &parents, slot) {
                     let waypoints: Vec<Vec2> = path
                         .into_iter()
                         .skip(1)
@@ -710,11 +787,38 @@ fn pursue(
                             .entity_mut(attacker)
                             .insert(with_last_target_cell(order, Some(slot)));
                     }
-                    break;
                 }
+                world.entity_mut(attacker).remove::<PursuitBlocked>();
+                return;
+            }
+            // Stamp only a static seal — no approach cell reachable even
+            // ignoring reservations. Unreserved-failures from crowding stay
+            // transient and retry next tick like before.
+            if static_slots.iter().all(|slot| !reached(*slot)) {
+                world.entity_mut(attacker).insert(PursuitBlocked {
+                    target,
+                    cell: footprint.anchor,
+                    revision: map.revision(),
+                });
             }
         }
     }
+}
+
+/// Whether `attacker`'s recorded pursuit failure still holds: same target,
+/// same cell anchor, same static-map revision.
+fn pursuit_blocked(
+    world: &World,
+    map: &GridMap,
+    attacker: Entity,
+    target: CombatTarget,
+    cell: GridPos,
+) -> bool {
+    world
+        .get::<PursuitBlocked>(attacker)
+        .is_some_and(|blocked| {
+            blocked.target == target && blocked.cell == cell && blocked.revision == map.revision()
+        })
 }
 
 fn world_to_cell(point: Vec2) -> GridPos {

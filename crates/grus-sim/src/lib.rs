@@ -25,7 +25,7 @@ pub use catalog::{
 };
 pub use combat::{
     AttackCooldown, CombatEvent, CombatEventTotal, CombatEvents, CombatOrder, CombatTarget, Health,
-    step_combat, target_eligible,
+    resolve_target, step_combat, target_eligible,
 };
 pub use commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex,

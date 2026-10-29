@@ -1166,7 +1166,7 @@ fn acquired_core_route_falls_back_after_a_map_change_seals_its_pursuit() {
         true,
     );
     let core_footprint = *world.get::<Footprint>(core).unwrap();
-    let (_, core_slots) = alien_objective(&world, &map).unwrap();
+    let core_slots = alien_objective(&world, &map).unwrap().slots;
     assert!(command_accepted(
         &dispatch_attack_move(&mut world, &mut map, UnitId(1), core_slots[0]),
         UnitId(1)
@@ -1250,7 +1250,7 @@ fn preserved_core_route_falls_back_after_a_wall_closes_its_only_path_and_recover
         GridPos::new(14, 16),
         true,
     );
-    let (_, core_slots) = alien_objective(&world, &map).unwrap();
+    let core_slots = alien_objective(&world, &map).unwrap().slots;
     assert!(command_accepted(
         &dispatch_attack_move(&mut world, &mut map, UnitId(1), core_slots[0]),
         UnitId(1)
@@ -1657,4 +1657,107 @@ fn siege_path_calls_are_measured_for_150_aliens_on_a_wall_ring_revision_bump() {
         retry_boundary_elapsed_us,
         revisions_during_cycle
     );
+}
+
+#[test]
+fn a_pursuit_sealed_at_the_static_map_stays_retry_eligible() {
+    let mut world = World::new();
+    let mut map = GridMap::new(32, 24);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(4, 12));
+    add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(24, 10),
+        true,
+    );
+    // An impassable column seals the core; a lone wall stays reachable.
+    for y in 0..map.height() {
+        map.set_blocked(GridPos::new(16, y), true);
+    }
+    let reachable = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Wall,
+        GridPos::new(8, 12),
+        true,
+    );
+    let reachable_footprint = *world.get::<Footprint>(reachable).unwrap();
+
+    // The alien acquired the core through its AttackMove and stands outside
+    // the seal: pursuit finds no reachable approach slot and stamps the
+    // failure — before the stamp existed it re-ran the search every tick
+    // while the retry saw `target: Some(_)` as busy and never retasked it.
+    world.entity_mut(alien).insert(CombatOrder::AttackMove {
+        destination: GridPos::new(24, 8),
+        target: Some(CombatTarget::Building(BuildingId(1))),
+        last_target_cell: None,
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world
+            .get::<PursuitBlocked>(alien)
+            .is_some_and(|blocked| blocked.revision == map.revision()),
+        "the sealed pursuit records its failure"
+    );
+
+    retry_stranded_aliens(&mut world, &mut map);
+    let CombatOrder::AttackMove {
+        destination,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("a pursuit-blocked alien must be retasked to a reachable structure")
+    };
+    assert!(
+        reachable_footprint.is_immediately_adjacent(*destination),
+        "the retask heads for the nearest reachable structure"
+    );
+    assert_eq!(
+        world.get::<FallbackObjective>(alien).unwrap().0,
+        BuildingId(2)
+    );
+}
+
+#[test]
+fn a_recorded_fallback_failure_does_not_suppress_a_mobile_objective() {
+    let mut world = World::new();
+    let mut map = GridMap::new(24, 24);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(4, 12));
+    let human = crate::commands::spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        map.cell_center(GridPos::new(20, 12)),
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
+    );
+    // The human starts sealed behind an impassable column: the objective
+    // dispatch and the structure-free fallback both fail at this revision.
+    for y in 0..map.height() {
+        map.set_blocked(GridPos::new(16, y), true);
+    }
+    retry_stranded_aliens(&mut world, &mut map);
+    assert!(
+        world
+            .get::<FailedFallbackRevision>(alien)
+            .is_some_and(|failed| failed.0 == map.revision()),
+        "the failed probe is recorded at the current revision"
+    );
+    assert!(world.get::<MoveOrder>(alien).is_none());
+
+    // The objective is anchored on a live unit: it walking back to the
+    // reachable side makes the alien dispatchable again at the SAME
+    // revision — the stamp must not freeze it until an unrelated map edit.
+    world.get_mut::<SimPosition>(human).unwrap().current = map.cell_center(GridPos::new(14, 12));
+    retry_stranded_aliens(&mut world, &mut map);
+    let order = world
+        .get::<MoveOrder>(alien)
+        .expect("a mobile objective reopens the retry despite the same-revision stamp");
+    assert!(order.goal.x <= 15, "the retask stays on the reachable side");
+    assert_eq!(order.last_failed_replan, None);
+    assert!(world.get::<FailedFallbackRevision>(alien).is_none());
 }
