@@ -458,9 +458,9 @@ func _ground_target(screen_position: Vector2):
 	var hit := origin + direction * distance
 	return Vector2(hit.x, hit.z)
 
-func _nearest_view(group: String, screen_position: Vector2, team_filter := 0) -> Node3D:
+func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, radius := CLICK_RADIUS) -> Node3D:
 	var nearest: Node3D = null
-	var nearest_distance := CLICK_RADIUS
+	var nearest_distance := radius
 	for node in get_tree().get_nodes_in_group(group):
 		if not node.is_visible_in_tree():
 			# Fog is a gameplay contract, not a rendering detail: a hidden view
@@ -559,10 +559,61 @@ func _lowest_selected_worker_id() -> int:
 func _gatherable_resource_id(screen_position: Vector2) -> int:
 	# Only standalone finite sources are gatherable; buildings never carry
 	# resource metadata.
-	var resource := _nearest_view("resource_views", screen_position)
+	var resource := _resource_at(screen_position)
 	if resource != null:
 		return int(resource.get_meta("resource_id", -1))
 	return -1
+
+## A resource is gathered by clicking anywhere on its projected art bounds
+## — the silhouette itself, including height, at any window size or zoom —
+## or inside the projected-cell radius floor that keeps zoomed-out picking
+## forgiving. Nearest center wins on overlap, like _nearest_view.
+func _resource_at(screen_position: Vector2) -> Node3D:
+	var nearest: Node3D = null
+	var nearest_distance := INF
+	for node in get_tree().get_nodes_in_group("resource_views"):
+		var view := node as Node3D
+		if view == null or not view.is_visible_in_tree() \
+				or camera.is_position_behind(view.global_position):
+			continue
+		var center_px := camera.unproject_position(view.global_position)
+		var distance := center_px.distance_to(screen_position)
+		var hit := distance <= _resource_pick_radius() \
+				or _projected_art_rect(view).has_point(screen_position)
+		if hit and distance < nearest_distance:
+			nearest = view
+			nearest_distance = distance
+	return nearest
+
+func _resource_pick_radius() -> float:
+	var viewport_height := maxf(get_viewport().get_visible_rect().size.y, 1.0)
+	var pixels_per_unit := viewport_height / maxf(camera.size, 0.001)
+	return maxf(CLICK_RADIUS, pixels_per_unit * sqrt(0.5) + 1.0)
+
+func _projected_art_rect(view: Node3D) -> Rect2:
+	var bounds := _view_art_bounds(view)
+	var rect := Rect2()
+	var first := true
+	for x in [bounds.position.x, bounds.end.x]:
+		for y in [bounds.position.y, bounds.end.y]:
+			for z in [bounds.position.z, bounds.end.z]:
+				var point := camera.unproject_position(view.global_transform * Vector3(x, y, z))
+				rect = Rect2(point, Vector2.ZERO) if first else rect.expand(point)
+				first = false
+	return rect
+
+func _view_art_bounds(view: Node3D) -> AABB:
+	var bounds := AABB()
+	var first := true
+	for node in view.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		var local: AABB = view.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
+		bounds = local if first else bounds.merge(local)
+		first = false
+	if bounds.size.length() < 0.001:
+		# No art yet (kind meta arrives a frame late): fall back to the cell.
+		bounds = AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
+	return bounds
 
 func _building_complete(building_id: int) -> bool:
 	if building_id <= 0:
