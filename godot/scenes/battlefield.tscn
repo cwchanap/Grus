@@ -1,11 +1,15 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/fog_of_war.gd" id="1_fog"]
 [ext_resource type="Script" path="res://scripts/ruins.gd" id="2_ruins"]
+[ext_resource type="Texture2D" path="res://assets/winter/snow_albedo.png" id="3_snow"]
 
 [sub_resource type="StandardMaterial3D" id="Material_ground"]
-albedo_color = Color(0.23, 0.34, 0.22, 1)
+albedo_texture = ExtResource("3_snow")
 roughness = 0.95
+uv1_scale = Vector3(0.125, 0.125, 0.125)
+uv1_triplanar = true
+uv1_world_triplanar = true
 
 [sub_resource type="BoxMesh" id="BoxMesh_ground"]
 size = Vector3(128, 0.2, 96)

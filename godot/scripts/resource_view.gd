@@ -1,6 +1,11 @@
 extends Node3D
 
-@onready var body: MeshInstance3D = $Body
+const MODELS := {
+	"Food": preload("res://assets/winter/ration_cache.glb"),
+	"Scrap": preload("res://assets/winter/scrap_ruin.glb"),
+	"Coal": preload("res://assets/winter/coal_seam.glb"),
+}
+
 var _styled_kind := ""
 
 func _ready() -> void:
@@ -13,10 +18,11 @@ func _process(_delta: float) -> void:
 	if kind == _styled_kind:
 		return
 	_styled_kind = kind
-	match kind:
-		"Food":
-			body.material_override.albedo_color = Color(0.72, 0.32, 0.38, 1.0)
-		"Scrap":
-			body.material_override.albedo_color = Color(0.7, 0.4, 0.18, 1.0)
-		"Coal":
-			body.material_override.albedo_color = Color(0.18, 0.19, 0.24, 1.0)
+	var previous := get_node_or_null("Model")
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
+	if MODELS.has(kind):
+		var model: Node3D = MODELS[kind].instantiate()
+		model.name = "Model"
+		add_child(model)
