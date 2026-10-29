@@ -171,6 +171,16 @@ pub struct WaveState {
 #[derive(Component)]
 struct FailedFallbackRevision(u64);
 
+/// The Team-1 building an accepted reachable-structure fallback sent this
+/// alien toward. Gives the retry predicate objective identity for a
+/// targetless `AttackMove`: an alien standing on its accepted fallback
+/// destination is still tasked while the recorded structure lives, so retry
+/// cannot replace the order before fog acquisition. Cleared by any accepted
+/// non-fallback dispatch; a dead recorded structure leaves the alien
+/// retry-eligible so survivors retask.
+#[derive(Component)]
+struct FallbackObjective(BuildingId);
+
 impl Default for WaveState {
     fn default() -> Self {
         Self {
@@ -308,6 +318,7 @@ fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
                 let result = dispatch_attack_move(world, map, id, target);
                 if command_accepted(&result, id) {
                     clear_failed_fallback_revision(world, id);
+                    clear_fallback_objective(world, id);
                 } else if command_rejected_unreachable(&result, id) {
                     // The objective dispatch and its rejection are one transaction;
                     // preserve the failed MoveOrder until a fallback is accepted.
@@ -335,10 +346,27 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
             }
             world.entity_mut(entity).remove::<FailedFallbackRevision>();
         }
+        let Some(position) = world.get::<SimPosition>(entity) else {
+            continue;
+        };
         let failed_route = world
             .get::<MoveOrder>(entity)
             .is_some_and(|order| order.last_failed_replan == Some(map.revision()));
         let combat_order = world.get::<CombatOrder>(entity);
+        // An accepted fallback `AttackMove` stays targetless until combat
+        // acquisition sees the structure: while the alien waits on the
+        // recorded destination and that structure lives, it is tasked — not
+        // stranded — and retry must not replace the order pre-acquisition.
+        let awaiting_fallback = matches!(
+            combat_order,
+            Some(CombatOrder::AttackMove {
+                destination,
+                target: None,
+                ..
+            }) if *destination == map.world_to_cell(position.current)
+        ) && world
+            .get::<FallbackObjective>(entity)
+            .is_some_and(|objective| building_alive(world, objective.0));
         if matches!(combat_order, Some(CombatOrder::Attack { .. }))
             || (!failed_route
                 && (world.get::<MoveOrder>(entity).is_some()
@@ -348,13 +376,11 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
                             target: Some(_),
                             ..
                         })
-                    )))
+                    )
+                    || awaiting_fallback))
         {
             continue;
         }
-        let Some(position) = world.get::<SimPosition>(entity) else {
-            continue;
-        };
         let in_core_range = objective.as_ref().is_some_and(|(standoff, _)| {
             position
                 .current
@@ -374,6 +400,7 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
             target_index += 1;
             if command_accepted(&result, id) {
                 clear_failed_fallback_revision(world, id);
+                clear_fallback_objective(world, id);
             } else if command_rejected_unreachable(&result, id) {
                 try_reachable_structure_fallback(world, map, id);
             }
@@ -426,7 +453,7 @@ fn try_reachable_structure_fallback(world: &mut World, map: &mut GridMap, id: Un
     });
 
     let start = map.world_to_cell(position.current);
-    for (_, _, footprint) in buildings {
+    for (_, building_id, footprint) in buildings {
         let slots = approach_slots(
             map,
             footprint,
@@ -439,6 +466,9 @@ fn try_reachable_structure_fallback(world: &mut World, map: &mut GridMap, id: Un
         if let Some(slot) = reachable_slot {
             if command_accepted(&dispatch_attack_move(world, map, id, slot), id) {
                 clear_failed_fallback_revision(world, id);
+                world
+                    .entity_mut(entity)
+                    .insert(FallbackObjective(building_id));
             }
             // The nearest statically reachable structure is selected. A
             // command rejection here is transient crowding, so leave the
@@ -469,6 +499,28 @@ fn clear_failed_fallback_revision(world: &mut World, id: UnitId) {
     {
         world.entity_mut(entity).remove::<FailedFallbackRevision>();
     }
+}
+
+fn clear_fallback_objective(world: &mut World, id: UnitId) {
+    if let Some(entity) = world
+        .get_resource::<UnitIndex>()
+        .and_then(|index| index.entity(id))
+    {
+        world.entity_mut(entity).remove::<FallbackObjective>();
+    }
+}
+
+/// Live means indexed and not yet destroyed: a `Health` of zero counts as
+/// dead even if the atomic destroy has not reclaimed the entity.
+fn building_alive(world: &World, id: BuildingId) -> bool {
+    world
+        .get_resource::<BuildingIndex>()
+        .and_then(|index| index.entity(id))
+        .is_some_and(|entity| {
+            world
+                .get::<Health>(entity)
+                .is_some_and(|health| health.current > 0)
+        })
 }
 
 /// The director's live objective: the standoff footprint stranded aliens

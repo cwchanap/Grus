@@ -733,6 +733,159 @@ fn gate_in_a_full_wall_ring_is_never_an_alien_route_through() {
 }
 
 #[test]
+fn retry_preserves_an_accepted_fallback_order_waiting_at_a_hidden_slot() {
+    let mut world = World::new();
+    let mut map = GridMap::new(48, 48);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(4, 23));
+    // The sealed core sits far away so its standoff footprint cannot cover
+    // the forward wall's approach slot through the `in_core_range` skip. The
+    // ring is two cells thick: `plan_move_route`'s four-candidate
+    // destination scan must stay inside it, or the objective dispatch
+    // escapes to an outer cell and the fallback never runs.
+    add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(38, 38),
+        true,
+    );
+    let mut next_id = 3;
+    for y in 35..45 {
+        for x in 35..45 {
+            if x > 36 && x < 43 && y > 36 && y < 43 {
+                continue;
+            }
+            add_team_one_building(
+                &mut world,
+                &mut map,
+                BuildingId(next_id),
+                BuildingKind::Wall,
+                GridPos::new(x, y),
+                true,
+            );
+            next_id += 1;
+        }
+    }
+    let forward_wall = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Wall,
+        GridPos::new(16, 16),
+        true,
+    );
+    let forward_footprint = *world.get::<Footprint>(forward_wall).unwrap();
+
+    world.insert_resource(VisibilityMap::default());
+    refresh_visibility(&mut world, &map);
+    assert!(
+        !visible_to(&world, TeamId(2), forward_footprint),
+        "the fallback structure begins outside real alien vision"
+    );
+
+    retry_stranded_aliens(&mut world, &mut map);
+    let CombatOrder::AttackMove {
+        destination,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("a sealed core still falls back to a reachable wall")
+    };
+    let fallback_slot = *destination;
+    let objective = world.get::<FallbackObjective>(alien).unwrap().0;
+    assert_eq!(objective, BuildingId(2), "the nearest reachable structure");
+    assert!(forward_footprint.is_immediately_adjacent(fallback_slot));
+    assert!(
+        !visible_to(&world, TeamId(2), forward_footprint),
+        "marching does not run the end-of-tick reveal"
+    );
+
+    // March to the approach slot without combat or visibility steps: the
+    // structure stays hidden, so the order sits pre-acquisition exactly as
+    // it does on the arrival tick in a live run.
+    for _ in 0..2000 {
+        if world.get::<MoveOrder>(alien).is_none() {
+            break;
+        }
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+    }
+    assert!(world.get::<MoveOrder>(alien).is_none());
+    assert_eq!(
+        map.world_to_cell(world.get::<SimPosition>(alien).unwrap().current),
+        fallback_slot,
+        "the route must finish on the accepted approach slot"
+    );
+    assert!(!visible_to(&world, TeamId(2), forward_footprint));
+
+    // A retry boundary inside the pre-acquisition window must not replace
+    // the order or re-run the objective/fallback probes.
+    let order_at_slot = world.get::<CombatOrder>(alien).unwrap().clone();
+    let calls_at_slot = map.path_call_count();
+    retry_stranded_aliens(&mut world, &mut map);
+    retry_stranded_aliens(&mut world, &mut map);
+    assert_eq!(map.path_call_count(), calls_at_slot);
+    assert_eq!(
+        world.get::<CombatOrder>(alien).unwrap(),
+        &order_at_slot,
+        "a live fallback objective keeps the targetless AttackMove"
+    );
+    assert_eq!(world.get::<FallbackObjective>(alien).unwrap().0, objective);
+    assert!(world.get::<MoveOrder>(alien).is_none());
+
+    // The held order still acquires on the next real fog reveal.
+    refresh_visibility(&mut world, &map);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(matches!(
+        world.get::<CombatOrder>(alien),
+        Some(CombatOrder::AttackMove {
+            target: Some(CombatTarget::Building(id)),
+            ..
+        }) if *id == objective
+    ));
+
+    // A dead recorded structure releases the alien back to ordinary retry:
+    // the sealed core stays unreachable, so fallback re-dispatches to the
+    // next nearest reachable ring wall and re-records the objective.
+    let objective_entity = world.resource::<BuildingIndex>().entity(objective).unwrap();
+    destroy_building(&mut world, &mut map, objective_entity);
+    world.entity_mut(alien).insert(CombatOrder::AttackMove {
+        destination: fallback_slot,
+        target: None,
+        last_target_cell: None,
+    });
+    retry_stranded_aliens(&mut world, &mut map);
+    let CombatOrder::AttackMove {
+        destination: retasked,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("a dead fallback objective returns the alien to retry")
+    };
+    let ring_walls: Vec<Footprint> = (3..next_id)
+        .filter_map(|id| {
+            world
+                .resource::<BuildingIndex>()
+                .entity(BuildingId(id))
+                .and_then(|entity| world.get::<Footprint>(entity).copied())
+        })
+        .collect();
+    assert!(
+        ring_walls
+            .iter()
+            .any(|footprint| footprint.is_immediately_adjacent(*retasked)),
+        "the retasked objective is another reachable ring wall"
+    );
+    assert_ne!(
+        world.get::<FallbackObjective>(alien).unwrap().0,
+        objective,
+        "the retask records the new structure, not the dead one"
+    );
+}
+
+#[test]
 fn launch_rejected_core_attack_moves_fall_back_to_a_reachable_wall() {
     let mut world = World::new();
     world.insert_resource(IdAllocator::new(1, 100, 1));
