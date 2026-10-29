@@ -886,6 +886,94 @@ fn retry_preserves_an_accepted_fallback_order_waiting_at_a_hidden_slot() {
 }
 
 #[test]
+fn retry_retasks_a_fallback_waiter_parked_outside_acquisition_range() {
+    let mut world = World::new();
+    let mut map = GridMap::new(48, 48);
+    let alien = add_alien(&mut world, UnitId(1), &map, GridPos::new(4, 23));
+    // Same sealed core as the preservation test: the objective dispatch
+    // rejects Unreachable, so the fallback path runs.
+    add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(38, 38),
+        true,
+    );
+    let mut next_id = 3;
+    for y in 35..45 {
+        for x in 35..45 {
+            if x > 36 && x < 43 && y > 36 && y < 43 {
+                continue;
+            }
+            add_team_one_building(
+                &mut world,
+                &mut map,
+                BuildingId(next_id),
+                BuildingKind::Wall,
+                GridPos::new(x, y),
+                true,
+            );
+            next_id += 1;
+        }
+    }
+    let forward_wall = add_team_one_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Wall,
+        GridPos::new(16, 16),
+        true,
+    );
+    let forward_footprint = *world.get::<Footprint>(forward_wall).unwrap();
+
+    retry_stranded_aliens(&mut world, &mut map);
+    assert_eq!(
+        world.get::<FallbackObjective>(alien).unwrap().0,
+        BuildingId(2)
+    );
+
+    // Reservation crowding can push `plan_move_route`'s candidate scan past
+    // the perimeter, so the accepted goal lands outside the recorded
+    // structure's acquisition reach. Stand the alien on that dead route end
+    // exactly as arrival leaves it: no MoveOrder, targetless AttackMove
+    // anchored to the accepted cell.
+    let parked = GridPos::new(5, 5);
+    assert!(map.is_walkable(parked));
+    let parked_center = map.cell_center(parked);
+    assert!(
+        parked_center.distance(forward_footprint.closest_point(parked_center)) > ATTACK_MOVE_RADIUS,
+        "the substituted destination must sit outside acquisition reach"
+    );
+    world.entity_mut(alien).insert(CombatOrder::AttackMove {
+        destination: parked,
+        target: None,
+        last_target_cell: None,
+    });
+    world.entity_mut(alien).remove::<MoveOrder>();
+    world.get_mut::<SimPosition>(alien).unwrap().current = parked_center;
+
+    retry_stranded_aliens(&mut world, &mut map);
+
+    // Out of the recorded structure's reach the parked alien is stranded,
+    // not tasked: the retry re-dispatches toward a reachable structure
+    // instead of preserving the dead route end.
+    let CombatOrder::AttackMove {
+        destination,
+        target: None,
+        ..
+    } = world.get::<CombatOrder>(alien).unwrap()
+    else {
+        panic!("the retasked alien keeps an ordinary AttackMove")
+    };
+    assert_ne!(*destination, parked);
+    assert!(
+        forward_footprint.is_immediately_adjacent(*destination),
+        "the nearest reachable structure is the forward wall"
+    );
+}
+
+#[test]
 fn launch_rejected_core_attack_moves_fall_back_to_a_reachable_wall() {
     let mut world = World::new();
     world.insert_resource(IdAllocator::new(1, 100, 1));
