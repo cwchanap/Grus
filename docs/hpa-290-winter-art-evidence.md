@@ -1,6 +1,6 @@
 # HPA-290 winter-city art verification
 
-Local verification on 2026-10-28, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compatibility`), Rust 1.95.0 and Blender 5.2.1 LTS. Base `ba5429b`. No simulation or bridge source changes.
+Local verification on 2026-10-28, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compatibility`), Rust 1.95.0 and Blender 5.2.1 LTS. Base `ba5429b`. No simulation source changes; the third review round below added one read-only bridge snapshot (`unit_task_snapshot`).
 
 ## Delivered
 
