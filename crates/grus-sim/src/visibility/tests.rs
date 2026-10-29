@@ -330,3 +330,48 @@ fn edge_cell_origins_reveal_the_same_union_as_every_cell() {
         );
     }
 }
+
+#[test]
+fn a_destroyed_buildings_reveal_drops_on_the_next_refresh() {
+    // The cached static union must rebuild when the completed-building set
+    // shrinks — a lingering signature would keep a dead wall's circle
+    // visible forever.
+    let mut world = World::new();
+    let map = GridMap::new(64, 64);
+    let anchor = GridPos::new(30, 30);
+    let footprint = Footprint::new(anchor, 1, 1);
+    let entity = world
+        .spawn((
+            Building {
+                id: crate::ids::BuildingId(1),
+                team: TeamId(1),
+                kind: BuildingKind::Wall,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world.insert_resource(VisibilityMap::default());
+    let near_wall = GridPos::new(30 + VISION_RADIUS_CELLS - 1, 30);
+
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), near_wall));
+    // Unchanged refresh: the cache returns the same static union.
+    refresh_visibility(&mut world, &map);
+    assert!(visible_to(&world, TeamId(1), near_wall));
+
+    world.despawn(entity);
+    refresh_visibility(&mut world, &map);
+    assert!(
+        !visible_to(&world, TeamId(1), near_wall),
+        "a despawned building must not keep revealing"
+    );
+    assert!(
+        explored_by(&world, TeamId(1), near_wall),
+        "explored state still retains the dead wall's reveal"
+    );
+}

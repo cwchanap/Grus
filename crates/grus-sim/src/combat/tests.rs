@@ -2905,3 +2905,122 @@ fn gun_turret_kill_awards_crystals_once_with_building_attacker_identity() {
     assert_eq!(team_one_crystals(&world), 1);
     assert_eq!(world.resource::<CombatEventTotal>().0, 1);
 }
+
+#[test]
+fn sealed_building_pursuit_stamps_blocked_and_stops_researching() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(4.5, 12.5),
+        UnitKind::Swarmer,
+    );
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(24, 10),
+    );
+    // An impassable column seals every approach cell on the outside.
+    for y in 0..map.height() {
+        map.set_blocked(GridPos::new(16, y), true);
+    }
+    world.entity_mut(attacker).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(BuildingId(1)),
+        last_target_cell: None,
+    });
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world
+            .get::<PursuitBlocked>(attacker)
+            .is_some_and(|blocked| blocked.revision == map.revision()),
+        "a sealed building pursuit records its failure once"
+    );
+    assert!(world.get::<MoveOrder>(attacker).is_none());
+
+    let calls = map.path_call_count();
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        map.path_call_count(),
+        calls,
+        "a stamped sealed pursuit runs no search per tick at an unchanged revision"
+    );
+
+    // A map change reopens the pursuit: the stamp from the old revision
+    // stops matching and the flood runs again — now successfully.
+    map.set_blocked(GridPos::new(16, 12), false);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_some(),
+        "breaching the seal replans the pursuit leg"
+    );
+    assert!(world.get::<PursuitBlocked>(attacker).is_none());
+}
+
+#[test]
+fn sealed_unit_pursuit_stamps_and_recovers_when_the_target_moves() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(4.5, 12.5),
+        UnitKind::Swarmer,
+    );
+    let worker_cell = GridPos::new(24, 12);
+    spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        map.cell_center(worker_cell),
+        UnitKind::Worker,
+    );
+    // The chased worker stands behind an impassable column.
+    for y in 0..map.height() {
+        map.set_blocked(GridPos::new(16, y), true);
+    }
+    world.entity_mut(attacker).insert(CombatOrder::Attack {
+        target: CombatTarget::Unit(UnitId(2)),
+        last_target_cell: None,
+    });
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world
+            .get::<PursuitBlocked>(attacker)
+            .is_some_and(|blocked| {
+                blocked.revision == map.revision() && blocked.cell == worker_cell
+            }),
+        "an unreachable chased unit records the pursuit failure"
+    );
+
+    let calls = map.path_call_count();
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        map.path_call_count(),
+        calls,
+        "the stamp suppresses per-tick re-searches at the same cell+revision"
+    );
+
+    // The target stepping off the stamped cell reopens the attempt without
+    // any map change — still behind the column, so the failure restamps at
+    // the new cell rather than searching every tick.
+    let sealed_cell = GridPos::new(24, 20);
+    let worker = world.resource::<UnitIndex>().entity(UnitId(2)).unwrap();
+    world.get_mut::<SimPosition>(worker).unwrap().current = map.cell_center(sealed_cell);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world
+            .get::<PursuitBlocked>(attacker)
+            .is_some_and(|blocked| blocked.cell == sealed_cell),
+        "a moved target restamps at its new cell"
+    );
+    assert!(world.get::<MoveOrder>(attacker).is_none());
+}

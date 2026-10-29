@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use bevy::math::Vec2;
 use bevy::prelude::{Component, Resource};
-use pathfinding::prelude::astar;
+use pathfinding::prelude::{astar, build_path, dijkstra_partial};
 
 use crate::ids::TeamId;
 
@@ -275,6 +275,62 @@ impl GridMap {
             |pos| *pos == goal,
         )
         .map(|(path, _)| path)
+    }
+
+    /// Flood-fill reachability from `start` over `team`-traversable cells:
+    /// a single search answering every per-candidate "is a route possible"
+    /// probe that callers would otherwise run as one A* each. `stop` ends
+    /// the flood early when the caller has found enough; the returned map
+    /// holds every cell examined before it fired (every node but `start`,
+    /// which is always reachable) and feeds `flood_path`.
+    pub fn reachable_until(
+        &self,
+        team: TeamId,
+        start: GridPos,
+        mut stop: impl FnMut(&GridPos) -> bool,
+    ) -> HashMap<GridPos, (GridPos, u32)> {
+        #[cfg(test)]
+        self.path_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        if !self.is_traversable_for(team, start) {
+            return HashMap::new();
+        }
+
+        dijkstra_partial(
+            &start,
+            |pos| {
+                [
+                    GridPos::new(pos.x + 1, pos.y),
+                    GridPos::new(pos.x - 1, pos.y),
+                    GridPos::new(pos.x, pos.y + 1),
+                    GridPos::new(pos.x, pos.y - 1),
+                ]
+                .into_iter()
+                .filter(|candidate| self.is_traversable_for(team, *candidate))
+                .map(|candidate| (candidate, 1_u32))
+                .collect::<Vec<_>>()
+            },
+            |pos| stop(pos),
+        )
+        .0
+    }
+
+    /// Flood-fill over every `team`-traversable cell reachable from `start`.
+    pub fn reachable_from(&self, team: TeamId, start: GridPos) -> HashMap<GridPos, (GridPos, u32)> {
+        self.reachable_until(team, start, |_| false)
+    }
+
+    /// Rebuilds a `start`→`goal` cell path from a `reachable_*` flood's
+    /// parent map (`start` is not recorded in it). Returns `None` when
+    /// `goal` is neither `start` itself nor a reached cell.
+    pub fn flood_path(
+        &self,
+        start: GridPos,
+        parents: &HashMap<GridPos, (GridPos, u32)>,
+        goal: GridPos,
+    ) -> Option<Vec<GridPos>> {
+        (goal == start || parents.contains_key(&goal)).then(|| build_path(&goal, parents))
     }
 }
 

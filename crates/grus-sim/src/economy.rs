@@ -10,7 +10,7 @@ use bevy::prelude::{Component, Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex, worker_at_slot};
 use crate::catalog::{BASE_GATHER_RATE, CARRY_LIMIT, Cost, ResourceKind, UnitKind};
-use crate::combat::CombatOrder;
+use crate::combat::{CombatOrder, PursuitBlocked};
 use crate::commands::{
     CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity, release_slot,
     reserve_slot,
@@ -212,6 +212,7 @@ pub(crate) fn cancel_unit_activity(world: &mut World, entity: Entity) {
     world.entity_mut(entity).insert(GatherProgress::default());
     world.entity_mut(entity).remove::<MoveOrder>();
     world.entity_mut(entity).remove::<CombatOrder>();
+    world.entity_mut(entity).remove::<PursuitBlocked>();
 }
 
 /// Most recent route-failure reject per team, drained by the bridge into its
@@ -601,9 +602,9 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
         } else {
             world.entity_mut(entity).insert(WorkerTask::Idle);
         }
-        // Arrival is cell-based while the order completes at the cell centre;
-        // a lingering order re-plans against the next map revision and would
-        // idle the worker when its goal cell already contains it.
+        // Arrival is cell-based while the order completes at the cell
+        // centre; drop the finished leg so the worker does not keep walking
+        // to the waypoint past its slot.
         world.entity_mut(entity).remove::<MoveOrder>();
     }
 

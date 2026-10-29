@@ -16,8 +16,9 @@ use grus_sim::{
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
     active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
     idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
-    seed_skirmish, set_paused, start_match, step_combat, step_construction, step_economy,
-    step_movement, step_production, step_waves, validate_placement, visible_to,
+    resolve_target, seed_skirmish, set_paused, start_match, step_combat, step_construction,
+    step_economy, step_movement, step_production, step_waves, target_eligible, validate_placement,
+    visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -72,6 +73,10 @@ struct GrusBridgeNode {
     /// pure waste. `VarDictionary` is refcounted, so the cache hit clones a
     /// handle, not the payload.
     visibility_cache: Option<(i64, VarDictionary)>,
+    /// Monotonic ticket counter behind `next_placement_request_id`; node
+    /// state outlives a controller reload, so ids stay unique while their
+    /// results remain pending.
+    next_placement_request_id: i64,
 }
 
 #[godot_api]
@@ -80,6 +85,7 @@ impl INode for GrusBridgeNode {
         Self {
             base,
             visibility_cache: None,
+            next_placement_request_id: 1,
         }
     }
 }
@@ -93,13 +99,16 @@ impl GrusBridgeNode {
             return false;
         }
 
-        queue_command(PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units,
-            kind: UnitCommandKind::Move {
-                target: Vec2::new(target.x, target.y),
-            },
-        }))
+        queue_command(
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units,
+                kind: UnitCommandKind::Move {
+                    target: Vec2::new(target.x, target.y),
+                },
+            }),
+            None,
+        )
     }
 
     #[func]
@@ -116,11 +125,14 @@ impl GrusBridgeNode {
         if units.is_empty() {
             return false;
         }
-        queue_command(PlayerCommand::Attack {
-            issuer: TeamId(1),
-            units,
-            target,
-        })
+        queue_command(
+            PlayerCommand::Attack {
+                issuer: TeamId(1),
+                units,
+                target,
+            },
+            None,
+        )
     }
 
     #[func]
@@ -129,13 +141,16 @@ impl GrusBridgeNode {
         if units.is_empty() {
             return false;
         }
-        queue_command(PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units,
-            kind: UnitCommandKind::AttackMove {
-                target: Vec2::new(target.x, target.y),
-            },
-        }))
+        queue_command(
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units,
+                kind: UnitCommandKind::AttackMove {
+                    target: Vec2::new(target.x, target.y),
+                },
+            }),
+            None,
+        )
     }
 
     #[func]
@@ -145,11 +160,14 @@ impl GrusBridgeNode {
             return false;
         }
 
-        queue_command(PlayerCommand::Units(UnitCommand {
-            issuer: TeamId(1),
-            units,
-            kind: UnitCommandKind::Stop,
-        }))
+        queue_command(
+            PlayerCommand::Units(UnitCommand {
+                issuer: TeamId(1),
+                units,
+                kind: UnitCommandKind::Stop,
+            }),
+            None,
+        )
     }
 
     #[func]
@@ -161,27 +179,19 @@ impl GrusBridgeNode {
         let Ok(source) = u32::try_from(source_id) else {
             return false;
         };
-        queue_command(PlayerCommand::Gather {
-            issuer: TeamId(1),
-            workers,
-            source: ResourceId(source),
-        })
+        queue_command(
+            PlayerCommand::Gather {
+                issuer: TeamId(1),
+                workers,
+                source: ResourceId(source),
+            },
+            None,
+        )
     }
 
     #[func]
     fn place_building(&self, builder_id: i32, kind: GString, anchor_x: i32, anchor_y: i32) -> bool {
-        let Some(kind) = parse_building_kind(&kind) else {
-            return false;
-        };
-        let Ok(builder) = u32::try_from(builder_id) else {
-            return false;
-        };
-        queue_command(PlayerCommand::PlaceBuilding {
-            issuer: TeamId(1),
-            builder: UnitId(builder),
-            kind,
-            anchor: GridPos::new(anchor_x, anchor_y),
-        })
+        queue_place_building(builder_id, &kind, anchor_x, anchor_y, None)
     }
 
     /// Queue a building placement and retain its authoritative result until
@@ -197,24 +207,19 @@ impl GrusBridgeNode {
         anchor_y: i32,
         request_id: i64,
     ) -> bool {
-        let Some(kind) = parse_building_kind(&kind) else {
-            return false;
-        };
-        let Ok(builder) = u32::try_from(builder_id) else {
-            return false;
-        };
-        if request_id <= 0 {
-            return false;
-        }
-        queue_placement_command(
-            PlayerCommand::PlaceBuilding {
-                issuer: TeamId(1),
-                builder: UnitId(builder),
-                kind,
-                anchor: GridPos::new(anchor_x, anchor_y),
-            },
-            request_id,
-        )
+        request_id > 0
+            && queue_place_building(builder_id, &kind, anchor_x, anchor_y, Some(request_id))
+    }
+
+    /// Placement request tickets handed to GDScript callers. The counter
+    /// lives on this autoload node — the same lifetime as the world-side
+    /// results map — so a reloaded controller cannot reuse an id whose
+    /// result is still pending there.
+    #[func]
+    fn next_placement_request_id(&mut self) -> i64 {
+        let id = self.next_placement_request_id;
+        self.next_placement_request_id += 1;
+        id
     }
 
     /// Consume one request-scoped placement result. An empty dictionary means
@@ -252,11 +257,14 @@ impl GrusBridgeNode {
         let Ok(building) = u32::try_from(building_id) else {
             return false;
         };
-        queue_command(PlayerCommand::ResumeConstruction {
-            issuer: TeamId(1),
-            builder: UnitId(builder),
-            building: BuildingId(building),
-        })
+        queue_command(
+            PlayerCommand::ResumeConstruction {
+                issuer: TeamId(1),
+                builder: UnitId(builder),
+                building: BuildingId(building),
+            },
+            None,
+        )
     }
 
     #[func]
@@ -267,11 +275,14 @@ impl GrusBridgeNode {
         let Ok(building) = u32::try_from(building_id) else {
             return false;
         };
-        queue_command(PlayerCommand::EnqueueUnit {
-            issuer: TeamId(1),
-            building: BuildingId(building),
-            kind,
-        })
+        queue_command(
+            PlayerCommand::EnqueueUnit {
+                issuer: TeamId(1),
+                building: BuildingId(building),
+                kind,
+            },
+            None,
+        )
     }
 
     #[func]
@@ -279,11 +290,14 @@ impl GrusBridgeNode {
         let Ok(building) = u32::try_from(building_id) else {
             return false;
         };
-        queue_command(PlayerCommand::SetRally {
-            issuer: TeamId(1),
-            building: BuildingId(building),
-            target: GridPos::new(target_x, target_y),
-        })
+        queue_command(
+            PlayerCommand::SetRally {
+                issuer: TeamId(1),
+                building: BuildingId(building),
+                target: GridPos::new(target_x, target_y),
+            },
+            None,
+        )
     }
 
     #[func]
@@ -950,18 +964,34 @@ fn bevy_app_singleton() -> Option<Gd<BevyApp>> {
         .try_get_node_as::<BevyApp>("BevyAppSingleton")
 }
 
-fn queue_command(command: PlayerCommand) -> bool {
-    queue_command_with_placement_request(command, None)
-}
-
-fn queue_placement_command(command: PlayerCommand, request_id: i64) -> bool {
-    queue_command_with_placement_request(command, Some(request_id))
-}
-
-fn queue_command_with_placement_request(
-    command: PlayerCommand,
-    placement_request_id: Option<i64>,
+/// Shared placement queueing for `place_building`/`place_building_request`:
+/// parses the kind and builder once and pushes the pending command, with
+/// the result ticket attached only for the request-scoped variant.
+fn queue_place_building(
+    builder_id: i32,
+    kind: &GString,
+    anchor_x: i32,
+    anchor_y: i32,
+    request_id: Option<i64>,
 ) -> bool {
+    let Some(kind) = parse_building_kind(kind) else {
+        return false;
+    };
+    let Ok(builder) = u32::try_from(builder_id) else {
+        return false;
+    };
+    queue_command(
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(builder),
+            kind,
+            anchor: GridPos::new(anchor_x, anchor_y),
+        },
+        request_id,
+    )
+}
+
+fn queue_command(command: PlayerCommand, placement_request_id: Option<i64>) -> bool {
     let Some(mut app_node) = bevy_app_singleton() else {
         return false;
     };
@@ -1012,58 +1042,12 @@ fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
 /// The attacker's stable identity may reach GDScript only when it exists and
 /// is either friendly or currently visible to the local team. Missing or
 /// fog-hidden units/buildings are scrubbed to the same absent identity.
+/// Enemy attackers reuse the sim's one eligibility rule (foreign, live,
+/// currently visible) instead of a parallel per-kind copy.
 fn attacker_presentable(world: &World, attacker: CombatTarget) -> bool {
-    match attacker {
-        CombatTarget::Unit(id) => {
-            let Some(entity) = world
-                .get_resource::<UnitIndex>()
-                .and_then(|index| index.entity(id))
-            else {
-                return false;
-            };
-            let Some(unit) = world.get::<Unit>(entity) else {
-                return false;
-            };
-            if world
-                .get::<Health>(entity)
-                .is_none_or(|health| health.current == 0)
-            {
-                return false;
-            }
-            if unit.team == TeamId(1) {
-                return true;
-            }
-            let Some(map) = world.get_resource::<GridMap>() else {
-                return true;
-            };
-            world.get::<SimPosition>(entity).is_some_and(|position| {
-                visible_to(world, TeamId(1), map.world_to_cell(position.current))
-            })
-        }
-        CombatTarget::Building(id) => {
-            let Some(entity) = world
-                .get_resource::<BuildingIndex>()
-                .and_then(|index| index.entity(id))
-            else {
-                return false;
-            };
-            let Some(building) = world.get::<Building>(entity) else {
-                return false;
-            };
-            if world
-                .get::<Health>(entity)
-                .is_none_or(|health| health.current == 0)
-            {
-                return false;
-            }
-            if building.team == TeamId(1) {
-                return true;
-            }
-            world
-                .get::<Footprint>(entity)
-                .is_some_and(|footprint| visible_to(world, TeamId(1), *footprint))
-        }
-    }
+    resolve_target(world, attacker).is_some_and(|(_, team, health)| {
+        health.current > 0 && (team == TeamId(1) || target_eligible(world, TeamId(1), attacker))
+    })
 }
 
 /// A building is fog-hidden from the local player when it is an enemy whose

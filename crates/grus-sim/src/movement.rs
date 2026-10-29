@@ -201,6 +201,19 @@ fn refresh_route(
 }
 
 fn compute_route(goal: GridPos, current: Vec2, team: TeamId, map: &GridMap) -> Option<MoveOrder> {
+    // Standing on the goal cell is arrival, not a route failure: a revision
+    // replan for a unit already at its goal produces an empty path, which
+    // must not record `last_failed_replan` or the unit waits out the next
+    // map change for a route it already finished.
+    if map.world_to_cell(current) == goal {
+        return Some(MoveOrder {
+            waypoints: Vec::new(),
+            next: 0,
+            goal,
+            map_revision: map.revision(),
+            last_failed_replan: None,
+        });
+    }
     let path = map.find_path(team, map.world_to_cell(current), goal)?;
     let waypoints = path
         .into_iter()
