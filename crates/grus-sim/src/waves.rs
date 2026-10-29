@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
+use bevy::math::Vec2;
 use bevy::prelude::{Component, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
@@ -174,10 +175,10 @@ struct FailedFallbackRevision(u64);
 /// The Team-1 building an accepted reachable-structure fallback sent this
 /// alien toward. Gives the retry predicate objective identity for a
 /// targetless `AttackMove`: an alien standing on its accepted fallback
-/// destination is still tasked while the recorded structure lives, so retry
-/// cannot replace the order before fog acquisition. Cleared by any accepted
-/// non-fallback dispatch; a dead recorded structure leaves the alien
-/// retry-eligible so survivors retask.
+/// destination inside the living structure's acquisition reach is still
+/// tasked, so retry cannot replace the order before fog acquisition.
+/// Cleared by any accepted non-fallback dispatch; a dead recorded
+/// structure leaves the alien retry-eligible so survivors retask.
 #[derive(Component)]
 struct FallbackObjective(BuildingId);
 
@@ -355,8 +356,11 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
         let combat_order = world.get::<CombatOrder>(entity);
         // An accepted fallback `AttackMove` stays targetless until combat
         // acquisition sees the structure: while the alien waits on the
-        // recorded destination and that structure lives, it is tasked — not
-        // stranded — and retry must not replace the order pre-acquisition.
+        // recorded destination inside the living structure's acquisition
+        // reach, it is tasked — not stranded — and retry must not replace
+        // the order pre-acquisition. A destination substituted outside
+        // that reach is a dead route end, so the parked alien stays
+        // retry-eligible.
         let awaiting_fallback = matches!(
             combat_order,
             Some(CombatOrder::AttackMove {
@@ -364,9 +368,9 @@ fn retry_stranded_aliens(world: &mut World, map: &mut GridMap) {
                 target: None,
                 ..
             }) if *destination == map.world_to_cell(position.current)
-        ) && world
-            .get::<FallbackObjective>(entity)
-            .is_some_and(|objective| building_alive(world, objective.0));
+        ) && world.get::<FallbackObjective>(entity).is_some_and(
+            |objective| fallback_objective_in_range(world, objective.0, position.current),
+        );
         if matches!(combat_order, Some(CombatOrder::Attack { .. }))
             || (!failed_route
                 && (world.get::<MoveOrder>(entity).is_some()
@@ -510,9 +514,16 @@ fn clear_fallback_objective(world: &mut World, id: UnitId) {
     }
 }
 
-/// Live means indexed and not yet destroyed: a `Health` of zero counts as
-/// dead even if the atomic destroy has not reclaimed the entity.
-fn building_alive(world: &World, id: BuildingId) -> bool {
+/// A parked fallback waiter counts as tasked only while its recorded
+/// structure is alive AND inside the waiting `AttackMove`'s acquisition
+/// reach — the same footprint closest-point metric `acquire_target` uses.
+/// Reservation crowding can push `plan_move_route`'s candidate scan past
+/// the perimeter and anchor the accepted goal beyond that reach: holding
+/// such an alien out of retry would strand it forever, so the dead route
+/// end stays retry-eligible. Live means indexed and not yet destroyed —
+/// a `Health` of zero counts as dead even if the atomic destroy has not
+/// reclaimed the entity.
+fn fallback_objective_in_range(world: &World, id: BuildingId, position: Vec2) -> bool {
     world
         .get_resource::<BuildingIndex>()
         .and_then(|index| index.entity(id))
@@ -520,6 +531,9 @@ fn building_alive(world: &World, id: BuildingId) -> bool {
             world
                 .get::<Health>(entity)
                 .is_some_and(|health| health.current > 0)
+                && world.get::<Footprint>(entity).is_some_and(|footprint| {
+                    position.distance(footprint.closest_point(position)) <= ATTACK_MOVE_RADIUS
+                })
         })
 }
 
