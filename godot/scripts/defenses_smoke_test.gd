@@ -3,6 +3,10 @@ extends "res://scripts/combat_lifecycle_smoke_test.gd"
 ## HPA-450 integrated journey. Defences are placed through the real build UI;
 ## only the wave clock is accelerated, through the normal sim-speed bridge.
 
+## RejectReason declaration order; moving-worker occupancy can be transient
+## while a perimeter cell is being placed.
+const REJECT_OCCUPIED := 10
+
 var _defense_ids: Array[int] = []
 var _ring_min := Vector2i.ZERO
 var _ring_max := Vector2i.ZERO
@@ -58,6 +62,38 @@ func _run() -> void:
 	if int(GrusBridge.economy_snapshot().get("scrap", 0)) < required_scrap:
 		_fail("fixture scrap cannot afford the authored wall ring: need %d" % required_scrap)
 		return
+	var builder_id := int(builder.get_meta("unit_id", -1))
+	var gatherer := _other_friendly_worker(builder_id)
+	if gatherer == null:
+		_fail("a second friendly Worker is required for concurrent gathering")
+		return
+	var scrap_source := _scrap_source_view(gatherer)
+	if scrap_source == null:
+		_fail("a visible Scrap source is required for concurrent gathering")
+		return
+	var gatherer_id := int(gatherer.get_meta("unit_id", -1))
+	var turret_scrap := int(turret_spec.get("scrap", 0))
+	if gatherer_id == builder_id:
+		_fail("Gun Turret Scrap gatherer must be independent from the construction Worker")
+		return
+
+	# Start the second Worker gathering before construction. The ring spends all
+	# 300 starting Scrap, so delaying this command until the ring completes can
+	# make the turret miss the first-wave deadline even with frame-perfect input.
+	if not await _select_worker(gatherer):
+		return
+	var gather_revision := int(GrusBridge.command_feedback_revision())
+	await _mouse_click(_main.camera.unproject_position(scrap_source.global_position), MOUSE_BUTTON_RIGHT)
+	if str(_main.command_status.text) != "Gather command queued":
+		_fail("controller did not queue a real concurrent Scrap gather: %s" % [_main.command_status.text])
+		return
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > gather_revision \
+				and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
+			8.0, "the independent Worker's Scrap gather command was rejected"):
+		return
+	if not await _wait_for_gatherer_settled(gatherer, scrap_source, 8.0):
+		return
 
 	if not await _select_worker(builder):
 		return
@@ -65,7 +101,8 @@ func _run() -> void:
 	if not await _arm_build("Gate"):
 		return
 	var gate_feedback_revision := int(GrusBridge.command_feedback_revision())
-	await _click_cell(_gate_cell, MOUSE_BUTTON_LEFT)
+	if not await _place_armed_defense("Gate", _gate_cell, gate_before + 1, 8.0):
+		return
 	if not await _wait_until(func(): return _building_ids_of_kind("Gate").size() == gate_before + 1 \
 			and int(GrusBridge.command_feedback_revision()) > gate_feedback_revision,
 			8.0, "Gate placement did not appear through the controller"):
@@ -87,10 +124,7 @@ func _run() -> void:
 		if cell == _gate_cell:
 			continue
 		var before := _building_ids_of_kind("Wall").size()
-		await _click_cell(cell, MOUSE_BUTTON_LEFT)
-		if not await _wait_until(
-				func(): return _building_ids_of_kind("Wall").size() == before + 1,
-				8.0, "Wall placement at %s did not reach the simulation" % [cell]):
+		if not await _place_armed_defense("Wall", cell, before + 1, 8.0):
 			return
 		if str(_main._placement_kind) != "Wall":
 			_fail("successful Wall placement did not keep placement armed")
@@ -140,24 +174,8 @@ func _run() -> void:
 			return builder.global_position.distance_to(_cell_world(outside_gate)) < 0.8,
 			8.0, "the Worker did not cross the completed Gate"):
 		return
-	var scrap_source := _scrap_source_view()
-	if scrap_source == null:
-		_fail("no visible Scrap source is available for the Gun Turret cost")
-		return
-	var gather_revision := int(GrusBridge.command_feedback_revision())
-	await _mouse_click(_main.camera.unproject_position(scrap_source.global_position), MOUSE_BUTTON_RIGHT)
-	if str(_main.command_status.text) != "Gather command queued":
-		_fail("controller did not queue a real Scrap gather for the Gun Turret: %s" % [_main.command_status.text])
-		return
-	if not await _wait_until(func():
-			return int(GrusBridge.command_feedback_revision()) > gather_revision \
-				and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
-			8.0, "the Scrap gather command was rejected"):
-		return
-
-	var turret_scrap := int(turret_spec.get("scrap", 0))
 	if not await _wait_until(func(): return int(GrusBridge.economy_snapshot().get("scrap", 0)) >= turret_scrap,
-			25.0, "workers did not gather enough Scrap for the Gun Turret"):
+			8.0, "the independent Worker did not gather enough Scrap during wall construction"):
 		return
 	var turret_anchor := Vector2i(rc_anchor.x - 1, _ring_max.y + 3)
 	var turret_preview: Dictionary = GrusBridge.placement_preview(
@@ -168,9 +186,7 @@ func _run() -> void:
 	if not await _arm_build("GunTurret"):
 		return
 	var turret_before := _building_ids_of_kind("GunTurret").size()
-	await _click_cell(turret_anchor, MOUSE_BUTTON_LEFT)
-	if not await _wait_until(func(): return _building_ids_of_kind("GunTurret").size() == turret_before + 1,
-			8.0, "Gun Turret placement did not reach the simulation"):
+	if not await _place_armed_defense("GunTurret", turret_anchor, turret_before + 1, 8.0):
 		return
 	var turret_id := _building_ids_of_kind("GunTurret")[0]
 	if not await _wait_until(_building_complete.bind(turret_id), 20.0,
@@ -249,7 +265,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d gate_human_traversal=true alien_gate_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_gate_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, int(scrap_source.get_meta("resource_id", -1)), float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	get_tree().quit(0)
 
 func _perimeter_cells() -> Array[Vector2i]:
@@ -273,11 +289,94 @@ func _building_ids_of_kind(kind: String) -> Array[int]:
 	ids.sort()
 	return ids
 
-func _scrap_source_view() -> Node3D:
+func _other_friendly_worker(excluding_id: int) -> Node3D:
+	var candidate: Node3D = null
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if str(node.get_meta("unit_kind", "")) != "Worker" \
+				or int(node.get_meta("team_id", -1)) != 1 \
+				or int(node.get_meta("unit_id", -1)) == excluding_id:
+			continue
+		if candidate == null \
+				or int(node.get_meta("unit_id", -1)) < int(candidate.get_meta("unit_id", -1)):
+			candidate = node as Node3D
+	return candidate
+
+func _scrap_source_view(worker: Node3D) -> Node3D:
+	var source: Node3D = null
+	var nearest_distance := INF
 	for node in get_tree().get_nodes_in_group("resource_views"):
-		if str(node.get_meta("resource_kind", "")) == "Scrap":
-			return node as Node3D
-	return null
+		if str(node.get_meta("resource_kind", "")) != "Scrap" or not node.is_visible_in_tree():
+			continue
+		var view := node as Node3D
+		var distance := worker.global_position.distance_squared_to(view.global_position)
+		if distance < nearest_distance:
+			nearest_distance = distance
+			source = view
+	return source
+
+func _wait_for_gatherer_settled(worker: Node3D, source: Node3D, timeout_s: float) -> bool:
+	var settled := {"position": worker.global_position, "frames": 0}
+	return await _wait_until(func():
+			var current := worker.global_position
+			var previous: Vector3 = settled["position"]
+			if current.distance_to(source.global_position) <= 1.6 \
+					and current.distance_to(previous) < 0.05:
+				settled["frames"] = int(settled["frames"]) + 1
+			else:
+				settled["frames"] = 0
+			settled["position"] = current
+			return int(settled["frames"]) >= 2,
+		timeout_s, "independent Worker did not settle beside the visible Scrap source")
+
+func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, timeout_s: float) -> bool:
+	var builder_id := int(_main.call("_lowest_selected_worker_id"))
+	var deadline_msec := Time.get_ticks_msec() + int(timeout_s * 1000.0)
+	var last_preview: Dictionary = {}
+	while Time.get_ticks_msec() < deadline_msec:
+		if _building_ids_of_kind(kind).size() >= expected_count:
+			return true
+		last_preview = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
+		if not bool(last_preview.get("valid", false)):
+			var reject_code := int(last_preview.get("reject_code", -1))
+			if reject_code != REJECT_OCCUPIED:
+				_fail("%s preview at %s failed with non-transient code %d: %s" % [kind, cell, reject_code, last_preview])
+				return false
+			await get_tree().physics_frame
+			continue
+
+		await _click_cell(cell, MOUSE_BUTTON_LEFT)
+		if not _main._pending_placement_requests.is_empty():
+			while Time.get_ticks_msec() < deadline_msec \
+					and not _main._pending_placement_requests.is_empty():
+				await get_tree().physics_frame
+			if not _main._pending_placement_requests.is_empty():
+				_fail("%s placement at %s never returned an authoritative result" % [kind, cell])
+				return false
+			if _building_ids_of_kind(kind).size() >= expected_count:
+				return true
+			var feedback := str(_main.command_status.text)
+			if feedback == "Command accepted":
+				while Time.get_ticks_msec() < deadline_msec \
+						and _building_ids_of_kind(kind).size() < expected_count:
+					await get_tree().physics_frame
+				if _building_ids_of_kind(kind).size() >= expected_count:
+					return true
+				_fail("simulation accepted %s placement at %s but its view never appeared" % [kind, cell])
+				return false
+			if feedback != "Command rejected (Occupied)":
+				_fail("%s placement at %s was rejected: %s" % [kind, cell, feedback])
+				return false
+		else:
+			var status := str(_main.command_status.text)
+			last_preview = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
+			if status == ("Placement blocked (code %d)" % REJECT_OCCUPIED):
+				await get_tree().physics_frame
+				continue
+			_fail("%s placement at %s was not queued: %s; preview=%s" % [kind, cell, status, last_preview])
+			return false
+
+	_fail("%s placement at %s did not become valid and reach the simulation: %s" % [kind, cell, last_preview])
+	return false
 
 func _all_defenses_complete() -> bool:
 	for id in _defense_ids:
@@ -319,8 +418,9 @@ func _observe_turret(turret: Node3D, crystals_before_wave: int) -> void:
 
 func _select_worker(worker: Node3D) -> bool:
 	await _mouse_click(_main.camera.unproject_position(worker.global_position), MOUSE_BUTTON_LEFT)
-	if not _main.selected_ids.has(int(worker.get_meta("unit_id", -1))):
-		_fail("real controller input did not select the Worker")
+	var worker_id := int(worker.get_meta("unit_id", -1))
+	if _main.selected_ids.size() != 1 or not _main.selected_ids.has(worker_id):
+		_fail("real controller input did not select only Worker %d: %s" % [worker_id, _main.selected_ids])
 		return false
 	return true
 
