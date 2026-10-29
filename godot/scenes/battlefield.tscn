@@ -7,7 +7,7 @@
 [sub_resource type="StandardMaterial3D" id="Material_ground"]
 albedo_texture = ExtResource("3_snow")
 roughness = 0.95
-uv1_scale = Vector3(16, 1, 12)
+uv1_scale = Vector3(48, 24, 1)
 
 [sub_resource type="BoxMesh" id="BoxMesh_ground"]
 size = Vector3(128, 0.2, 96)
