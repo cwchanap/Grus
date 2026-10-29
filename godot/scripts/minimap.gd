@@ -11,9 +11,9 @@ extends Control
 const MAP_WIDTH := 128
 const MAP_HEIGHT := 96
 
-const COLOR_UNEXPLORED := Color(0.05, 0.06, 0.05)
-const COLOR_EXPLORED := Color(0.14, 0.2, 0.13)
-const COLOR_VISIBLE := Color(0.26, 0.36, 0.24)
+const COLOR_UNEXPLORED := Color(0.05, 0.06, 0.09)
+const COLOR_EXPLORED := Color(0.17, 0.2, 0.27)
+const COLOR_VISIBLE := Color(0.5, 0.57, 0.64)
 const FRIENDLY_COLOR := Color(0.3, 0.6, 1.0)
 const ENEMY_COLOR := Color(1.0, 0.35, 0.3)
 const RESOURCE_COLOR := Color(0.95, 0.8, 0.3)

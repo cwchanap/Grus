@@ -90,6 +90,18 @@ func _art_bounds(root: Node3D) -> AABB:
 		first = false
 	return bounds
 
+## Static imported art must never smuggle in gameplay nodes: the .import
+## files disable name/type suffixes, and this sweep is the regression
+## tripwire for physics bodies, colliders, navigation regions and
+## occluders arriving via a future glTF.
+func _foreign_nodes(root: Node) -> PackedStringArray:
+	var found := PackedStringArray()
+	for node in root.find_children("*", "", true, false):
+		if node is PhysicsBody3D or node is CollisionShape3D or node is CollisionPolygon3D \
+				or node is NavigationRegion3D or node is OccluderInstance3D:
+			found.append("%s (%s)" % [node.name, node.get_class()])
+	return found
+
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	for _frame in frame_budget:
@@ -292,46 +304,45 @@ func _run() -> void:
 		if not ruin.scene_file_path.ends_with(".glb"):
 			_fail("ruin %d is not imported glTF art" % i)
 			return
-		if not ruin.find_children("*", "PhysicsBody3D", true, false).is_empty():
-			_fail("ruin %d art imported a gameplay physics body" % i)
+		var foreign := _foreign_nodes(ruin)
+		if not foreign.is_empty():
+			_fail("ruin %d art imported gameplay nodes: %s" % [i, foreign])
 			return
 		var bounds := _art_bounds(ruin)
-		var world_bounds: AABB = ruin.transform * bounds
+		var world_bounds: AABB = ruin.global_transform * bounds
 		var want_center := Vector3(min_cell.x + cells.x * 0.5, 0.0, min_cell.y + cells.y * 0.5)
-		if ruin.position != want_center or bounds.size.length() < 0.1 \
-				or world_bounds.position.x < min_cell.x - 0.01 or world_bounds.end.x > max_cell.x + 1.01 \
-				or world_bounds.position.z < min_cell.y - 0.01 or world_bounds.end.z > max_cell.y + 1.01 \
+		var bounds_center := world_bounds.get_center()
+		# Art covers the blocked rect exactly: same footprint size and
+		# center, no under-coverage that would render blocked cells open.
+		if ruin.global_position != want_center or bounds.size.length() < 0.1 \
+				or absf(world_bounds.size.x - cells.x) > 0.01 \
+				or absf(world_bounds.size.z - cells.y) > 0.01 \
+				or absf(bounds_center.x - want_center.x) > 0.01 \
+				or absf(bounds_center.z - want_center.z) > 0.01 \
 				or world_bounds.position.y < -0.01 or world_bounds.end.y > 2.01:
-			_fail("ruin %d art extends outside its bridge footprint: %s" % [i, world_bounds])
+			_fail("ruin %d art does not exactly cover its %dx%d bridge footprint: bounds %s" % [
+				i, cells.x, cells.y, world_bounds])
 			return
 	var ground := get_node("Main/Battlefield/Ground") as MeshInstance3D
 	if ground.material_override.albedo_texture == null:
 		_fail("winter ground has no snow texture")
 		return
 	var resource_models := {"Food": "ration_cache.glb", "Scrap": "scrap_ruin.glb", "Coal": "coal_seam.glb"}
-	var controller := get_node("Main")
-	var art_camera_size := camera.size
-	camera.size = controller.MIN_CAMERA_SIZE
 	for resource in get_tree().get_nodes_in_group("resource_views"):
 		var model := resource.get_node_or_null("Model") as Node3D
 		var kind := str(resource.get_meta("resource_kind", ""))
 		if model == null or not model.scene_file_path.ends_with(resource_models.get(kind, "missing")):
 			_fail("resource %s has no matching imported art" % kind)
 			return
+		var foreign := _foreign_nodes(model)
+		if not foreign.is_empty():
+			_fail("resource %s art imported gameplay nodes: %s" % [kind, foreign])
+			return
 		var bounds := _art_bounds(model)
 		if bounds.size.length() < 0.1 or bounds.position.x < -0.5 or bounds.end.x > 0.5 \
 				or bounds.position.z < -0.5 or bounds.end.z > 0.5 or bounds.position.y < -0.01:
 			_fail("resource %s art extends outside its gather cell: %s" % [kind, bounds])
 			return
-		if resource.is_visible_in_tree():
-			for node in model.find_children("*", "MeshInstance3D", true, false):
-				var mesh := node as MeshInstance3D
-				for vertex in mesh.mesh.get_faces():
-					var screen_point := camera.unproject_position(mesh.global_transform * vertex)
-					if controller._gatherable_resource_id(screen_point) != int(resource.get_meta("resource_id")):
-						_fail("resource %s silhouette extends outside its click target at maximum zoom" % kind)
-						return
-	camera.size = art_camera_size
 
 	var size_before_zoom := camera.size
 	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
@@ -353,6 +364,84 @@ func _run() -> void:
 
 	if not _ring(unit_one).visible:
 		_fail("left-click input did not select friendly unit 1 after camera pan/zoom")
+		return
+
+	# Resource gathering through real input only: at maximum zoom, a
+	# right-click on the farthest-projected art corner of every visible
+	# resource must queue a gather — the pick target scales with the cell,
+	# not with a fixed pixel radius.
+	var controller := get_node("Main")
+	var gather_zoom_start := camera.size
+	for _step in range(16):
+		if camera.size <= controller.MIN_CAMERA_SIZE:
+			break
+		_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
+		await get_tree().process_frame
+	if camera.size > controller.MIN_CAMERA_SIZE:
+		_fail("wheel zoom never reached the minimum camera size: %s" % camera.size)
+		return
+	var gathered := 0
+	# Click points must reach _unhandled_input: skip any spot a HUD Control
+	# would consume (shield, minimap, panels, buttons).
+	var hud_rects: Array[Rect2] = []
+	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
+		var control := node as Control
+		if control != null and control.is_visible_in_tree() \
+				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			hud_rects.append(control.get_global_rect())
+	for resource in get_tree().get_nodes_in_group("resource_views"):
+		if not resource.is_visible_in_tree():
+			continue
+		var center_px := camera.unproject_position(resource.global_position)
+		var art_bounds := _art_bounds(resource)
+		var farthest := Vector2.ZERO
+		var farthest_distance := -1.0
+		for x in [art_bounds.position.x, art_bounds.end.x]:
+			for y in [art_bounds.position.y, art_bounds.end.y]:
+				for z in [art_bounds.position.z, art_bounds.end.z]:
+					var point := camera.unproject_position(
+						resource.global_transform * Vector3(x, y, z))
+					var on_hud := hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(point))
+					var distance := center_px.distance_to(point)
+					if distance > farthest_distance and not on_hud \
+							and Rect2(Vector2.ZERO, viewport_size).has_point(point):
+						farthest = point
+						farthest_distance = distance
+		if farthest_distance < 0.0:
+			continue
+		var click_at := center_px + (farthest - center_px) * 0.95
+		# push_input dispatches through the same window->viewport routing a
+		# real click takes, synchronously: "Gather command queued" is set by
+		# _issue_context_command and read before the bridge feedback text
+		# overwrites the label. A pick miss would read "Move command queued"
+		# instead, so the assertion discriminates gather from ground move.
+		var gather_press := InputEventMouseButton.new()
+		gather_press.button_index = MOUSE_BUTTON_RIGHT
+		gather_press.position = click_at
+		gather_press.pressed = true
+		get_tree().root.push_input(gather_press)
+		var gather_release := InputEventMouseButton.new()
+		gather_release.button_index = MOUSE_BUTTON_RIGHT
+		gather_release.position = click_at
+		gather_release.pressed = false
+		get_tree().root.push_input(gather_release)
+		if command_status.text != "Gather command queued":
+			_fail("right-click on resource %s art queued no gather: %s" % [
+				resource.get_meta("resource_kind", "?"), command_status.text])
+			return
+		gathered += 1
+	if gathered == 0:
+		_fail("no visible resource art accepted a real gather click")
+		return
+	# Restore the prior zoom through real input: later legs unproject
+	# targets that only land inside the viewport at this camera size.
+	for _step in range(16):
+		if camera.size >= gather_zoom_start:
+			break
+		_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_DOWN)
+		await get_tree().process_frame
+	if camera.size != gather_zoom_start:
+		_fail("wheel zoom never restored the pre-gather camera size: %s" % camera.size)
 		return
 
 	var start := unit_one.global_position
@@ -623,5 +712,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_bounds_checked" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather" % max_visual_step)
 	get_tree().quit(0)
