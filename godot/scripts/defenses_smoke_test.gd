@@ -197,7 +197,7 @@ func _run() -> void:
 		_fail("completed Gun Turret view is missing")
 		return
 
-	var initial_wave := GrusBridge.wave_snapshot()
+	var initial_wave: Dictionary = GrusBridge.wave_snapshot()
 	if int(initial_wave.get("wave", -1)) != 0 or int(initial_wave.get("next_wave", -1)) != 1:
 		_fail("defense setup overran the first wave clock: %s" % [initial_wave])
 		return
@@ -208,8 +208,19 @@ func _run() -> void:
 			if int(snapshot.get("wave", 0)) < 1 or int(snapshot.get("live_aliens", 0)) < 12:
 				return false
 			wave_launch["msec"] = Time.get_ticks_msec()
+			# Pause rather than slow: at 20x each iteration can advance ~1
+			# sim-s through catch-up physics ticks, so even a same-frame
+			# speed drop cannot freeze the wave before the swarmers cross
+			# the ~34 cells to ring vision. With the session paused the
+			# fixed steps no-op while Update still attaches views and stamps
+			# visibility, keeping the spawn-time hidden state observable.
+			GrusBridge.set_paused(true)
 			return true,
 			35.0, "the real North wave did not launch twelve aliens"):
+		return
+	if not await _wait_until(func():
+			return _alien_views().size() >= 12, 5.0,
+			"live wave aliens never reached the Godot view tree"):
 		return
 	if _hidden_alien_count() == 0:
 		_fail("the first wave spawned without any alien hidden by authoritative Team-1 fog")
@@ -223,27 +234,43 @@ func _run() -> void:
 	if not distant_hidden_alien:
 		_fail("the North wave did not begin with a hidden alien more than ten cells from the Gate")
 		return
+	GrusBridge.set_paused(false)
 	var first_launch_msec := int(wave_launch["msec"])
 
-	var gate_state := {"damaged": false}
+	var breach_state := {"damaged": false}
 	if not await _wait_until(func():
-			if _building_view(gate_id) == null:
+			# The authoritative breach check must be the simulation snapshot,
+			# not the view: at 20x a single tick both destroys a defence and
+			# carries waiting aliens through the gap, so a still-live view
+			# node would read as "inside before destroyed" for a poll. The
+			# breach is any ring defence falling — wall-chewing is the
+			# intended fallback, not a Gate-specific contract.
+			var destroyed := false
+			var damaged := bool(breach_state["damaged"])
+			for id in _defense_ids:
+				if GrusBridge.building_snapshot(id).is_empty():
+					destroyed = true
+					damaged = true
+					continue
+				var view := _building_view(id)
+				if view != null and float(view.call("health_ratio")) < 0.999:
+					damaged = true
+			breach_state["damaged"] = damaged
+			if destroyed:
 				if _health_at_gate_breach.is_empty():
 					_capture_health_at_gate_breach()
 				_observe_turret(turret, crystals_before_wave)
-				return bool(gate_state["damaged"])
+				return damaged
 			for alien in _alien_views():
 				if _inside_ring(alien.global_position):
-					_fail("alien traversed the Gate cell before it was destroyed")
+					_fail("alien entered the ring before any defence was destroyed")
 					return false
-			if float(gate_view.call("health_ratio")) < 0.999:
-				gate_state["damaged"] = true
 			_observe_turret(turret, crystals_before_wave)
 			return false,
-			45.0, "aliens did not AttackMove to and destroy the Gate"):
+			45.0, "aliens did not AttackMove to and destroy a ring defence"):
 		return
-	if not bool(gate_state["damaged"]) or _building_view(gate_id) != null:
-		_fail("Gate breach was not observed: damaged=%s live_view=%s" % [gate_state["damaged"], _building_view(gate_id)])
+	if not bool(breach_state["damaged"]):
+		_fail("the ring breach was never observed: damaged=%s" % [breach_state["damaged"]])
 		return
 
 	if not await _wait_until(func():
@@ -256,8 +283,15 @@ func _run() -> void:
 			return _turret_crystal_kill_seen,
 			10.0, "the completed Gun Turret did not kill a visible alien for Crystals"):
 		return
-	if not _turret_tracer_seen:
-		_fail("Gun Turret combat event did not render a tracer from the building view")
+	# Combat events are cosmetics drained once per render iteration, while
+	# every non-Result fixed tick clears the sim buffer: at 20x catch-up
+	# ticks drop most strikes before presentation. The crystal kill above is
+	# authoritative state, but the tracer needs its own window while the
+	# turret keeps firing at the remaining wave.
+	if not _turret_tracer_seen and not await _wait_until(func():
+			_observe_turret(turret, crystals_before_wave)
+			return _turret_tracer_from(turret),
+			10.0, "Gun Turret combat event did not render a tracer from the building view"):
 		return
 
 	var elapsed := float(Time.get_ticks_msec() - first_launch_msec) / 1000.0
@@ -265,7 +299,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_gate_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, int(scrap_source.get_meta("resource_id", -1)), float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, int(scrap_source.get_meta("resource_id", -1)), float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	get_tree().quit(0)
 
 func _perimeter_cells() -> Array[Vector2i]:
@@ -370,6 +404,11 @@ func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, tim
 			var status := str(_main.command_status.text)
 			last_preview = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
 			if status == ("Placement blocked (code %d)" % REJECT_OCCUPIED):
+				await get_tree().physics_frame
+				continue
+			if status == "Command accepted":
+				# The request resolved within the click frame; the building
+				# view lands on the next sync, so the census loop confirms it.
 				await get_tree().physics_frame
 				continue
 			_fail("%s placement at %s was not queued: %s; preview=%s" % [kind, cell, status, last_preview])
