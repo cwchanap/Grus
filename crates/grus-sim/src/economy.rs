@@ -601,6 +601,10 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
         } else {
             world.entity_mut(entity).insert(WorkerTask::Idle);
         }
+        // Arrival is cell-based while the order completes at the cell centre;
+        // a lingering order re-plans against the next map revision and would
+        // idle the worker when its goal cell already contains it.
+        world.entity_mut(entity).remove::<MoveOrder>();
     }
 
     for (entity, source) in dropoff_arrivals {
@@ -610,6 +614,9 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
                 world
                     .entity_mut(entity)
                     .insert(WorkerTask::ToSource { source, slot });
+                // Drop the deposit route before the conditional re-route: an
+                // empty replacement must not leave the old order walking.
+                world.entity_mut(entity).remove::<MoveOrder>();
                 if !route.is_empty() {
                     world.entity_mut(entity).insert(MoveOrder {
                         waypoints: route,
@@ -666,6 +673,7 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
                     world
                         .entity_mut(entity)
                         .insert(WorkerTask::ToSource { source, slot });
+                    world.entity_mut(entity).remove::<MoveOrder>();
                     if !route.is_empty() {
                         world.entity_mut(entity).insert(MoveOrder {
                             waypoints: route,
@@ -757,6 +765,7 @@ fn leave_gathering(
     world.entity_mut(worker).insert(GatherProgress::default());
     if carry.amount_or_zero() == 0 {
         world.entity_mut(worker).insert(WorkerTask::Idle);
+        world.entity_mut(worker).remove::<MoveOrder>();
         return;
     }
     reroute_dropoff_worker(world, map, worker, source);

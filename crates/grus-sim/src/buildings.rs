@@ -768,6 +768,10 @@ pub fn step_construction(world: &mut World, map: &GridMap, seconds: f32) {
         world
             .entity_mut(entity)
             .insert(WorkerTask::Constructing { building });
+        // Cell-based arrival counts the order as fulfilled even while its
+        // final centre waypoint is still pending; a lingering order re-plans
+        // against the next map revision and would idle the builder.
+        world.entity_mut(entity).remove::<MoveOrder>();
     }
 
     let buildings: Vec<(Entity, BuildingId, BuildingKind, TeamId, ConstructionState)> = {
