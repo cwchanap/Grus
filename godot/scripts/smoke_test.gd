@@ -380,7 +380,10 @@ func _run() -> void:
 	if camera.size > controller.MIN_CAMERA_SIZE:
 		_fail("wheel zoom never reached the minimum camera size: %s" % camera.size)
 		return
-	var gathered := 0
+	# Every Food/Scrap/Coal model kind needs at least one targeted pick —
+	# their imported bounds differ, so a silhouette that picks nothing or
+	# the wrong neighbour can no longer pass on a stale status label.
+	var gathered := {}
 	# Click points must reach _unhandled_input: skip any spot a HUD Control
 	# would consume (shield, minimap, panels, buttons).
 	var hud_rects: Array[Rect2] = []
@@ -409,7 +412,13 @@ func _run() -> void:
 						farthest_distance = distance
 		if farthest_distance < 0.0:
 			continue
+		var resource_id := int(resource.get_meta("resource_id", -1))
 		var click_at := center_px + (farthest - center_px) * 0.95
+		# Sentinel reset: only a fresh _issue_context_command write replaces
+		# it, so input swallowed before _unhandled_input fails here instead
+		# of passing on the previous click's stale "Gather command queued".
+		command_status.text = "<no command issued>"
+		var feedback_before := int(GrusBridge.command_feedback_revision())
 		# push_input dispatches through the same window->viewport routing a
 		# real click takes, synchronously: "Gather command queued" is set by
 		# _issue_context_command and read before the bridge feedback text
@@ -429,10 +438,24 @@ func _run() -> void:
 			_fail("right-click on resource %s art queued no gather: %s" % [
 				resource.get_meta("resource_kind", "?"), command_status.text])
 			return
-		gathered += 1
-	if gathered == 0:
-		_fail("no visible resource art accepted a real gather click")
-		return
+		# Queued is not accepted, and a gather accepted for any resource is
+		# not this one: the feedback revision must advance past the click's
+		# baseline with an accept, then every commanded worker's task must
+		# name this resource's own id.
+		if not await _wait_until(_accepted_since.bind(feedback_before), 10.0,
+				"gather queued on resource %d was not accepted by the sim" % resource_id):
+			return
+		for worker_id in controller.selected_ids:
+			var task: Dictionary = GrusBridge.unit_task_snapshot(worker_id)
+			if int(task.get("source", -1)) != resource_id:
+				_fail("right-click on resource %d tasked worker %d with %s" % [
+					resource_id, worker_id, task])
+				return
+		gathered[str(resource.get_meta("resource_kind", "?"))] = resource_id
+	for kind in resource_models:
+		if not gathered.has(kind):
+			_fail("no %s resource art accepted a targeted gather pick" % kind)
+			return
 	# Restore the prior zoom through real input: later legs unproject
 	# targets that only land inside the viewport at this camera size.
 	for _step in range(16):

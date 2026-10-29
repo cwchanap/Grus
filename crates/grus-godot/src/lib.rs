@@ -14,7 +14,7 @@ use grus_sim::{
     PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
-    active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
+    WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
     idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
     seed_skirmish, set_paused, start_match, step_combat, step_construction, step_economy,
     step_movement, step_production, step_waves, validate_placement, visible_to,
@@ -632,6 +632,53 @@ impl GrusBridgeNode {
         .unwrap_or_default()
     }
 
+    /// One unit's `WorkerTask` for command round-trip assertions: the task
+    /// variant name plus the resource/building ids it names (-1 when the
+    /// task names none). Empty dict for a missing unit, a unit with no
+    /// worker task, or a fog-hidden enemy — task data must not leak
+    /// through stale ids.
+    #[func]
+    fn unit_task_snapshot(&self, unit_id: i32) -> VarDictionary {
+        with_app(|app| {
+            let world = app.world();
+            let mut dict = VarDictionary::new();
+            let Ok(raw_id) = u32::try_from(unit_id) else {
+                return dict;
+            };
+            let Some(entity) = world
+                .get_resource::<UnitIndex>()
+                .and_then(|index| index.entity(UnitId(raw_id)))
+            else {
+                return dict;
+            };
+            if unit_hidden_from_local_player(world, entity) {
+                return dict;
+            }
+            let Some(task) = world.get::<WorkerTask>(entity) else {
+                return dict;
+            };
+            let (name, source, building) = match task {
+                WorkerTask::Idle => ("Idle", -1, -1),
+                WorkerTask::ToSource { source, .. } => ("ToSource", i64::from(source.0), -1),
+                WorkerTask::Gathering { source } => ("Gathering", i64::from(source.0), -1),
+                WorkerTask::ToDropoff {
+                    source, dropoff, ..
+                } => ("ToDropoff", i64::from(source.0), i64::from(dropoff.0)),
+                WorkerTask::ToConstruction { building, .. } => {
+                    ("ToConstruction", -1, i64::from(building.0))
+                }
+                WorkerTask::Constructing { building } => {
+                    ("Constructing", -1, i64::from(building.0))
+                }
+            };
+            dict.set("task", &GString::from(name));
+            dict.set("source", source);
+            dict.set("building", building);
+            dict
+        })
+        .unwrap_or_default()
+    }
+
     /// Read-only placement validation through the authoritative
     /// `validate_placement`; mutates nothing. Reports the spec footprint plus
     /// validity and reject code (-1 = valid).
@@ -961,6 +1008,26 @@ fn building_hidden_from_local_player(world: &World, entity: Entity) -> bool {
         Some(footprint) => !visible_to(world, TeamId(1), *footprint),
         None => false,
     }
+}
+
+/// A unit is fog-hidden from the local player when it is an enemy whose
+/// current cell is not Team-1 visible. Friendly units are always
+/// presentable — the `unit_task_snapshot` mirror of
+/// `building_hidden_from_local_player`.
+fn unit_hidden_from_local_player(world: &World, entity: Entity) -> bool {
+    let Some(unit) = world.get::<Unit>(entity) else {
+        return true;
+    };
+    if unit.team == TeamId(1) {
+        return false;
+    }
+    let (Some(map), Some(position)) = (
+        world.get_resource::<GridMap>(),
+        world.get::<SimPosition>(entity),
+    ) else {
+        return true;
+    };
+    !visible_to(world, TeamId(1), map.world_to_cell(position.current))
 }
 
 fn combat_event_dict(event: CombatEvent) -> VarDictionary {
