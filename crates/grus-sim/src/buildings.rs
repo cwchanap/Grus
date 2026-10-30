@@ -48,7 +48,10 @@ impl BuildingIndex {
         self.0.iter()
     }
 
-    pub(crate) fn insert(&mut self, id: BuildingId, entity: Entity) {
+    /// Registers a spawned building entity under its id — the write half of
+    /// the stable lookup, public so fixtures outside the crate can seed
+    /// buildings without the placement command path.
+    pub fn insert(&mut self, id: BuildingId, entity: Entity) {
         self.0.insert(id, entity);
     }
 
@@ -101,9 +104,13 @@ pub fn validate_placement(
         return Err(RejectReason::NotWorker);
     }
 
-    // 2. kind buildable. Research Centers are seeded, never placed.
+    // 2. kind buildable. Research Centers are seeded, never placed. Gate and
+    // GunTurret are Team-1-only: a Team-2 Gate would seal its own team while
+    // passing Team 1, and the combat pass fires only Team-1 turrets.
     let spec = building_spec(kind);
-    if kind == BuildingKind::ResearchCenter {
+    if kind == BuildingKind::ResearchCenter
+        || (issuer != TeamId(1) && matches!(kind, BuildingKind::Gate | BuildingKind::GunTurret))
+    {
         return Err(RejectReason::Locked);
     }
 
