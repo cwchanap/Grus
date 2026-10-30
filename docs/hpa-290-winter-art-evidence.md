@@ -1,6 +1,6 @@
 # HPA-290 winter-city art verification
 
-Local verification on 2026-10-28, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compatibility`), Rust 1.95.0 and Blender 5.2.1 LTS. Base `ba5429b`. No simulation source changes; the third review round below added one read-only bridge snapshot (`unit_task_snapshot`).
+Local verification on 2026-10-28–29, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compatibility`), Rust 1.95.0 and Blender 5.2.1 LTS. Base `ba5429b`. No simulation source changes; the third review round below added one read-only bridge snapshot (`unit_task_snapshot`).
 
 ## Delivered
 
@@ -18,7 +18,7 @@ Local verification on 2026-10-28, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compati
 | `cargo test --workspace --locked` | 244 tests passed across 8 suites |
 | Fresh Godot editor import with the generated `.godot` cache moved aside | Passed; no warnings/errors |
 | Reimport after final resource sizing | Passed; no warnings/errors |
-| `res://scenes/smoke_test.tscn` | `GRUS_GODOT_SMOKE_OK`, max visual step 0.174; exact-cover ruin bounds, foreign-node sweep and real-input gather picks at max zoom |
+| `res://scenes/smoke_test.tscn` | `GRUS_GODOT_SMOKE_OK`, max visual step 0.090; exact-cover ruin bounds, foreign-node sweep and targeted real-input gather picks at max zoom |
 | `res://scenes/reset_test.tscn` | `GRUS_RESET_SMOKE_OK`, fixture 4/1/18 and starting stockpile/fog preserved |
 | `res://scenes/economy_smoke_test.tscn` | `GRUS_ECONOMY_SMOKE_OK`, real UI gather/build/train/rally flow |
 | `res://scenes/combat_lifecycle_smoke_test.tscn` | `GRUS_COMBAT_LIFECYCLE_SMOKE_OK`, Crystal reward, pause, Defeat, restart |
@@ -26,7 +26,7 @@ Local verification on 2026-10-28, macOS / Apple M1 Pro, Godot 4.7.1 (`gl_compati
 | Blender exporter self-checks | All six assets passed bounds and triangle budgets, 84–396 triangles each |
 | `git diff --check` | Passed |
 
-All five final smokes ran sequentially, exited 0, emitted their success marker and reported no errors or warnings. An earlier run overlapped the main timing-sensitive smoke with rendered capture and failed interpolation (`max_step=0.552`); isolated runs passed at 0.052 and 0.059 before the picking correction, and the final complete run passed at 0.126. Render capture runs separately from gameplay smokes.
+All five final smokes ran sequentially, exited 0, emitted their success marker and reported no errors or warnings. An earlier run overlapped the main timing-sensitive smoke with rendered capture and failed interpolation (`max_step=0.552`); isolated runs passed at 0.052 and 0.059 before the picking correction. Bridge-smoke `max_step` history: 0.126 was the final run before the review follow-ups, 0.174 the re-run on the second-round revision, and 0.090 the final run on the current tree after the third-round gather asserts — the table reports the current-tree figure. Render capture runs separately from gameplay smokes.
 
 ## Regressions caught and fixed
 
@@ -50,4 +50,6 @@ Both captures use the actual Godot-imported GLBs and ground material, with the g
 
 ## Limits
 
-Linux export, exported-build e2e, hosted CI and reference-hardware performance acceptance were not run. This is local art integration and gameplay-smoke evidence. Nothing has been pushed or merged.
+The checks above are local validation on macOS / Apple M1 Pro. Hosted results: the branch is pushed and CI run [#231](https://github.com/cwchanap/Grus/actions/runs/40921850258) passed all three Linux jobs — fmt/clippy/workspace build, the 90%-line coverage gate plus `grus-godot` unit and e2e-selector tests, all five headless Godot smokes (bridge `max_step` 0.067), the packaged x86_64 export running the full bridge-smoke contract (`max_step` 0.066), the 10-second software-GL benchmark and the bevy-e2e exported-game test.
+
+Still outstanding: reference Linux hardware performance acceptance. CI's benchmark ran under llvmpipe software GL on a shared runner (mean 488 ms/frame), which gates the benchmark contract but is not a hardware measurement. Not merged.
