@@ -1742,8 +1742,8 @@ mod tests {
     use grus_sim::map::{GridMap, GridPos};
     use grus_sim::seed_skirmish;
     use grus_sim::{
-        CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder, WorkerTask,
-        sorted_unit_ids, spawn_unit,
+        AttackCooldown, CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder,
+        WorkerTask, sorted_unit_ids, spawn_unit,
     };
 
     use super::*;
@@ -2009,56 +2009,42 @@ mod tests {
         let visible_anchor = GridPos::new(home_anchor.x + 1, home_anchor.y - 2);
         let hidden_anchor =
             GridPos::new(EntryZone::East.anchor().x - 4, EntryZone::East.anchor().y);
-        world.resource_mut::<TeamEconomy>().insert_team(
-            TeamId(2),
-            grus_sim::ResourceStockpile {
-                scrap: 500,
-                coal: 200,
-                ..grus_sim::ResourceStockpile::default()
-            },
-        );
-        for (builder_id, anchor) in [(UnitId(50), hidden_anchor), (UnitId(51), visible_anchor)] {
-            let builder_cell = GridPos::new(anchor.x - 2, anchor.y);
-            spawn_unit(
-                &mut world,
-                builder_id,
-                TeamId(2),
-                map.cell_center(builder_cell),
-                UnitKind::Worker,
-                unit_spec(UnitKind::Worker).speed,
-            );
-        }
-        refresh_visibility(&mut world, &map);
-        let place_attacker_tower =
-            |world: &mut World, map: &mut GridMap, builder: UnitId, anchor: GridPos| {
-                let result = apply_player_command(
-                    world,
-                    map,
-                    PlayerCommand::PlaceBuilding {
-                        issuer: TeamId(2),
-                        builder,
+        // Enemy towers are seeded directly like the sim's completed-building
+        // helper: Team-2 issuers cannot place Gate/GunTurret through the
+        // command path at all.
+        let seed_attacker_tower = |world: &mut World, map: &mut GridMap, anchor: GridPos| {
+            let spec = building_spec(BuildingKind::GunTurret);
+            let footprint = Footprint::new(anchor, spec.width, spec.height);
+            for cell in footprint.cells() {
+                map.set_blocked(cell, true);
+            }
+            let id = world.resource_mut::<IdAllocator>().allocate_building();
+            let entity = world
+                .spawn((
+                    Building {
+                        id,
+                        team: TeamId(2),
                         kind: BuildingKind::GunTurret,
-                        anchor,
+                        construction: ConstructionState {
+                            progress_seconds: 0.0,
+                            complete: true,
+                            active_builder: None,
+                        },
                     },
-                );
-                assert_eq!(result.reject, None);
-                world
-                    .resource::<BuildingIndex>()
-                    .iter()
-                    .find_map(|(id, entity)| {
-                        (world
-                            .get::<Building>(*entity)
-                            .is_some_and(|building| building.team == TeamId(2))
-                            && world
-                                .get::<Footprint>(*entity)
-                                .is_some_and(|footprint| footprint.anchor == anchor))
-                        .then_some(*id)
-                    })
-                    .expect("placed enemy turret has a stable identity")
-            };
-        let hidden_building = place_attacker_tower(&mut world, &mut map, UnitId(50), hidden_anchor);
-        let visible_building =
-            place_attacker_tower(&mut world, &mut map, UnitId(51), visible_anchor);
+                    footprint,
+                    Health {
+                        current: spec.max_health,
+                        max: spec.max_health,
+                    },
+                ))
+                .id();
+            world.entity_mut(entity).insert(AttackCooldown::default());
+            world.resource_mut::<BuildingIndex>().insert(id, entity);
+            id
+        };
+        let hidden_building = seed_attacker_tower(&mut world, &mut map, hidden_anchor);
+        let visible_building = seed_attacker_tower(&mut world, &mut map, visible_anchor);
+        refresh_visibility(&mut world, &map);
         world.insert_resource(map.clone());
         let missing = UnitId(999);
         world.insert_resource(CombatEvents(vec![

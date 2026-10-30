@@ -744,6 +744,15 @@ fn pursue(
             let keys: HashSet<GridPos> = used.keys().copied().collect();
             let mut candidates =
                 approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
+            // Every approach slot claimed is reservation crowding — a
+            // transient state that retries next tick. Running the flood
+            // anyway could never find a route, and because reserved cells
+            // stay reachable the seal check cannot stamp either, so a
+            // crowded siege would re-search the whole exterior per waiting
+            // attacker per tick.
+            if candidates.is_empty() {
+                return;
+            }
             // Combat-site-only ordering: nearest perimeter cell to the
             // attacker first. Stable sort keeps approach_slots' ring order on
             // distance ties. The global approach_slots ordering is unchanged.
@@ -754,15 +763,18 @@ fn pursue(
             });
             // One flood from the attacker answers every candidate's
             // reachability — per-slot A* would search the same unreachable
-            // region once per ring cell. It stops as soon as the full static
-            // ring (candidates ignoring reservations) has been examined, so
-            // the seal check below is decided against every possible slot,
-            // not only the unreserved ones.
+            // region once per ring cell. It stops as soon as every usable
+            // candidate has been examined: unreachable slots elsewhere on
+            // the ring must not hold a found route hostage. When no
+            // candidate is reached the flood exhausts the region anyway, so
+            // the seal check below still sees the complete parent map and
+            // can decide against every static slot, not only the
+            // unreserved ones.
             let static_slots: HashSet<GridPos> =
                 approach_slots(map, footprint, &HashSet::new(), usize::MAX)
                     .into_iter()
                     .collect();
-            let mut pending = static_slots.clone();
+            let mut pending: HashSet<GridPos> = candidates.iter().copied().collect();
             let parents = map.reachable_until(team, start, |cell| {
                 pending.remove(cell);
                 pending.is_empty()

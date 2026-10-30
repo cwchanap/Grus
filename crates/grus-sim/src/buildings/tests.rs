@@ -725,6 +725,43 @@ fn invalid_placement_never_charges_or_reserves() {
     assert_eq!(world.resource::<IdAllocator>().next_building, 10);
 }
 
+/// A Team-2 Gate would seal its own team while passing Team 1, and a Team-2
+/// GunTurret never joins the Team-1-only combat pass — neither kind is
+/// placeable by a non-Team-1 issuer. Walls stay legal for any team.
+#[test]
+fn gate_and_gun_turret_reject_non_team_one_issuers() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(30.5, 30.5),
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
+    );
+
+    for kind in [BuildingKind::Gate, BuildingKind::GunTurret] {
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(2),
+                builder: UnitId(2),
+                kind,
+                anchor: GridPos::new(32, 30),
+            },
+        );
+        assert_eq!(result.reject, Some(RejectReason::Locked), "{kind:?}");
+    }
+    assert_eq!(
+        world
+            .get_resource::<BuildingIndex>()
+            .map(|index| index.iter().count())
+            .unwrap_or(0),
+        0
+    );
+}
+
 #[test]
 fn accepted_bunkhouse_deducts_fifty_scrap_and_blocks_four_cells() {
     let (mut world, mut map, worker) = setup_build_test();

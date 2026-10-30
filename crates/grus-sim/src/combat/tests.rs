@@ -3024,3 +3024,70 @@ fn sealed_unit_pursuit_stamps_and_recovers_when_the_target_moves() {
     );
     assert!(world.get::<MoveOrder>(attacker).is_none());
 }
+
+#[test]
+fn crowded_building_pursuit_skips_the_flood_until_a_slot_frees() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let attacker = spawn_combatant(
+        &mut world,
+        UnitId(1),
+        TeamId(2),
+        Vec2::new(4.5, 12.5),
+        UnitKind::Swarmer,
+    );
+    let building = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(24, 10),
+    );
+    // A siege crowd standing on every immediate approach slot leaves the
+    // attacker no usable candidate: every slot is reservation-held, so the
+    // failure is transient crowding rather than a static seal.
+    let footprint = *world.get::<Footprint>(building).unwrap();
+    let blockers: Vec<Entity> = approach_slots(&map, footprint, &HashSet::new(), usize::MAX)
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            spawn_combatant(
+                &mut world,
+                UnitId(10 + i as u32),
+                TeamId(2),
+                map.cell_center(*slot),
+                UnitKind::Swarmer,
+            )
+        })
+        .collect();
+    world.entity_mut(attacker).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(BuildingId(1)),
+        last_target_cell: None,
+    });
+
+    let calls = map.path_call_count();
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        map.path_call_count(),
+        calls,
+        "a fully reserved ring must not pay a reachability search per tick"
+    );
+    assert!(world.get::<MoveOrder>(attacker).is_none());
+    assert!(
+        world.get::<PursuitBlocked>(attacker).is_none(),
+        "reservation crowding is transient and never stamps"
+    );
+
+    // One blocker stepping aside reopens a usable slot: the flood runs and
+    // assigns a pursuit leg without any map revision change.
+    world
+        .entity_mut(blockers[0])
+        .insert(SimPosition::new(Vec2::new(4.5, 40.5)));
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert!(
+        world.get::<MoveOrder>(attacker).is_some(),
+        "a freed approach slot replans the pursuit on the next tick"
+    );
+}
