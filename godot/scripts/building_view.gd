@@ -1,10 +1,16 @@
 extends Node3D
 
+const TEAM_WARM_BLUE := Color(0.2, 0.55, 0.95, 1.0)
+const TEAM_RED := Color(0.9, 0.3, 0.25, 1.0)
+## Icy cold tint: visibly desaturated/whitened, never the saturated warm blue.
+const TEAM_COLD_ICE := Color(0.72, 0.82, 0.95, 1.0)
+
 @onready var body: MeshInstance3D = $Body
 @onready var health_bar: MeshInstance3D = $HealthBar
 var _styled_team := -1
 var _styled_kind := ""
 var _health_ratio := 1.0
+var _cold := false
 
 func _ready() -> void:
 	add_to_group("building_views")
@@ -16,13 +22,9 @@ func _process(_delta: float) -> void:
 	if kind != _styled_kind:
 		_style_kind(kind)
 	var team := int(get_meta("team_id"))
-	if team == _styled_team:
-		return
-	_styled_team = team
-	if team == 1:
-		body.material_override.albedo_color = Color(0.2, 0.55, 0.95, 1.0)
-	else:
-		body.material_override.albedo_color = Color(0.9, 0.3, 0.25, 1.0)
+	if team != _styled_team:
+		_styled_team = team
+		_apply_team_color()
 
 func _style_kind(kind: String) -> void:
 	_styled_kind = kind
@@ -54,6 +56,26 @@ func _add_gate_part(part_name: String, size: Vector3, position: Vector3) -> void
 	part.material_override = body.material_override
 	part.position = position
 	add_child(part)
+
+## Called from the Rust side every Update with the live cold value. The
+## cached flag skips redundant material writes; an early call before team
+## metadata exists just caches, and the team styling below reapplies the
+## cold material once metadata lands (late-attached views included).
+func set_cold(cold: bool) -> void:
+	if cold == _cold:
+		return
+	_cold = cold
+	_apply_team_color()
+
+## Team color plus the cached cold state in one write, so re-styling a
+## view's team can never leave a stale warm/cold material behind.
+func _apply_team_color() -> void:
+	if not has_meta("team_id"):
+		return
+	if int(get_meta("team_id")) == 1:
+		body.material_override.albedo_color = TEAM_COLD_ICE if _cold else TEAM_WARM_BLUE
+	else:
+		body.material_override.albedo_color = TEAM_RED
 
 ## Called from the Rust side on Changed<Health>; the bar appears and shrinks
 ## once a building takes damage. Full health stays hidden.
