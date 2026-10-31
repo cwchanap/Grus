@@ -10,15 +10,14 @@ use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
     BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
     CombatEventTotal, CombatEvents, CombatTarget, CommandResult, EntryZone, Footprint, GridMap,
-    GridPos, Health, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
+    GridPos, Health, HeatState, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
     PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
     WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
     idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
-    resolve_target, seed_skirmish, set_paused, start_match, step_combat, step_construction,
-    step_economy, step_movement, step_production, step_waves, target_eligible, validate_placement,
-    visible_to,
+    resolve_target, seed_skirmish, set_paused, start_match, step_tick, target_eligible,
+    validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -900,13 +899,7 @@ fn build_app(app: &mut App) {
             FixedUpdate,
             (
                 apply_pending_commands,
-                advance_waves,
-                advance_combat,
-                advance_movement,
-                advance_economy,
-                advance_construction,
-                advance_production,
-                advance_visibility,
+                advance_sim,
                 drain_route_reject_feedback,
             )
                 .chain(),
@@ -1530,6 +1523,9 @@ fn clear_gameplay_world(world: &mut World) {
     world.remove_resource::<CombatEvents>();
     world.remove_resource::<CombatEventTotal>();
     world.remove_resource::<WaveState>();
+    // Heat dies with the match: a stale supply/demand between clear and
+    // reseed would read wrong, while absence reads neutral full efficiency.
+    world.remove_resource::<HeatState>();
     world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
@@ -1651,20 +1647,17 @@ fn format_command_result(result: &CommandResult) -> String {
     text
 }
 
-// ponytail: each advance_* system takes one coarse Time<Fixed>::delta() per
-// tick (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy
-// inside the tick if a high-speed scenario ever shows tunneling or overshoot.
-fn advance_waves(world: &mut World) {
+// ponytail: advance_sim takes one coarse Time<Fixed>::delta() per tick
+// (speed 20 → 1.0 sim-s per 0.05 s tick); sub-step movement/economy inside
+// the tick if a high-speed scenario ever shows tunneling or overshoot.
+/// The one fixed-step gameplay system: reads the fixed delta and runs the
+/// canonical grus-sim `step_tick` order inside a single scoped `GridMap`
+/// borrow. Command application runs before it and the route-reject drain
+/// after it; everything between them is `step_tick`'s contract.
+fn advance_sim(world: &mut World) {
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_waves(world, &mut map, seconds);
-    });
-}
-
-fn advance_combat(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_combat(world, &mut map, seconds);
+        step_tick(world, &mut map, seconds);
     });
 }
 
@@ -1705,41 +1698,6 @@ fn wave_zone_dict(zone: EntryZone, anchor: GridPos) -> VarDictionary {
     dict.set("anchor_x", i64::from(anchor.x));
     dict.set("anchor_y", i64::from(anchor.y));
     dict
-}
-
-fn advance_movement(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, map: Mut<GridMap>| {
-        step_movement(world, &map, seconds);
-    });
-}
-
-fn advance_economy(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_economy(world, &mut map, seconds);
-    });
-}
-
-fn advance_construction(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, map: Mut<GridMap>| {
-        step_construction(world, &map, seconds);
-    });
-}
-
-fn advance_production(world: &mut World) {
-    let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
-    world.resource_scope(|world, mut map: Mut<GridMap>| {
-        step_production(world, &mut map, seconds);
-    });
-}
-
-/// Canonical post-production step: presentation consumes the same freshly
-/// computed fog (every team's cells are refreshed) that the command
-/// validation of the next tick will enforce.
-fn advance_visibility(world: &mut World) {
-    world.resource_scope(|world, map: Mut<GridMap>| refresh_visibility(world, &map));
 }
 
 /// Drains the sim's latest Team-1 worker route-failure reject into the
