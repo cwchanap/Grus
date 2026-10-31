@@ -43,10 +43,11 @@ pub enum BuildingKind {
     Wall,
     Gate,
     GunTurret,
+    CoalFurnace,
 }
 
 impl BuildingKind {
-    pub const ALL: [BuildingKind; 7] = [
+    pub const ALL: [BuildingKind; 8] = [
         BuildingKind::ResearchCenter,
         BuildingKind::Bunkhouse,
         BuildingKind::Depot,
@@ -54,6 +55,7 @@ impl BuildingKind {
         BuildingKind::Wall,
         BuildingKind::Gate,
         BuildingKind::GunTurret,
+        BuildingKind::CoalFurnace,
     ];
 }
 
@@ -113,6 +115,10 @@ pub struct BuildingSpec {
     pub max_health: u32,
     /// Present on buildings that attack without unit orders.
     pub combat: Option<CombatSpec>,
+    /// Completed-building heat contribution. Furnace supply counts only
+    /// while fueled; construction sites never count at all.
+    pub heat_supply: u32,
+    pub heat_demand: u32,
 }
 
 pub const CARRY_LIMIT: u32 = 10;
@@ -141,6 +147,11 @@ pub const ATTACK_MOVE_RADIUS: f32 = 8.0;
 /// `dx*dx + dy*dy <= radius*radius` from its origin. Must never be narrower
 /// than `ATTACK_MOVE_RADIUS` (locked by a catalogue regression).
 pub const VISION_RADIUS_CELLS: i32 = 10;
+/// Burn rate of one completed, fueled Coal Furnace in Coal per simulated
+/// second, pooled fractionally in `HeatState` and debited in whole units.
+pub const FURNACE_COAL_PER_SECOND: f32 = 0.5;
+/// Surface efficiency floor under a severe heat deficit.
+pub const MIN_SURFACE_EFFICIENCY: f32 = 0.25;
 
 pub fn unit_spec(kind: UnitKind) -> UnitSpec {
     match kind {
@@ -282,6 +293,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 10,
             max_health: 800,
             combat: None,
+            heat_supply: 15,
+            heat_demand: 10,
         },
         BuildingKind::Bunkhouse => BuildingSpec {
             cost: Cost {
@@ -294,6 +307,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 10,
             max_health: 250,
             combat: None,
+            heat_supply: 0,
+            heat_demand: 1,
         },
         BuildingKind::Depot => BuildingSpec {
             cost: Cost {
@@ -306,6 +321,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 0,
             max_health: 300,
             combat: None,
+            heat_supply: 0,
+            heat_demand: 1,
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
@@ -318,6 +335,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 0,
             max_health: 400,
             combat: None,
+            heat_supply: 0,
+            heat_demand: 3,
         },
         BuildingKind::Wall => BuildingSpec {
             cost: Cost {
@@ -330,6 +349,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 0,
             max_health: 400,
             combat: None,
+            heat_supply: 0,
+            heat_demand: 0,
         },
         BuildingKind::Gate => BuildingSpec {
             cost: Cost {
@@ -342,6 +363,8 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             population_capacity: 0,
             max_health: 600,
             combat: None,
+            heat_supply: 0,
+            heat_demand: 0,
         },
         BuildingKind::GunTurret => BuildingSpec {
             cost: Cost {
@@ -362,6 +385,22 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
                 counter_bonus: 5,
                 ranged: true,
             }),
+            heat_supply: 0,
+            heat_demand: 2,
+        },
+        BuildingKind::CoalFurnace => BuildingSpec {
+            cost: Cost {
+                scrap: 80,
+                ..Cost::default()
+            },
+            build_seconds: 20,
+            width: 2,
+            height: 2,
+            population_capacity: 0,
+            max_health: 300,
+            combat: None,
+            heat_supply: 12,
+            heat_demand: 0,
         },
     }
 }

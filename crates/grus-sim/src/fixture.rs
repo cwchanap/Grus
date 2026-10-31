@@ -12,6 +12,7 @@ use crate::economy::{
     Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
     spawn_resource_source,
 };
+use crate::heat::HeatState;
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::SIM_STEP_SECONDS;
@@ -218,6 +219,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     );
     world.insert_resource(economy);
     world.insert_resource(WaveState::default());
+    world.insert_resource(HeatState::default());
 
     let mut unit_counter: u32 = 0;
     let research_center_health = building_spec(BuildingKind::ResearchCenter).max_health;

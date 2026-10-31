@@ -725,11 +725,12 @@ fn invalid_placement_never_charges_or_reserves() {
     assert_eq!(world.resource::<IdAllocator>().next_building, 10);
 }
 
-/// A Team-2 Gate would seal its own team while passing Team 1, and a Team-2
-/// GunTurret never joins the Team-1-only combat pass — neither kind is
+/// A Team-2 Gate would seal its own team while passing Team 1, a Team-2
+/// GunTurret never joins the Team-1-only combat pass, and the one-player
+/// winter fixture has no Team-2 furnace economy — none of these kinds is
 /// placeable by a non-Team-1 issuer. Walls stay legal for any team.
 #[test]
-fn gate_and_gun_turret_reject_non_team_one_issuers() {
+fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
     let (mut world, mut map, _worker) = setup_build_test();
     spawn_unit(
         &mut world,
@@ -740,7 +741,11 @@ fn gate_and_gun_turret_reject_non_team_one_issuers() {
         unit_spec(UnitKind::Worker).speed,
     );
 
-    for kind in [BuildingKind::Gate, BuildingKind::GunTurret] {
+    for kind in [
+        BuildingKind::Gate,
+        BuildingKind::GunTurret,
+        BuildingKind::CoalFurnace,
+    ] {
         let result = apply_player_command(
             &mut world,
             &mut map,
