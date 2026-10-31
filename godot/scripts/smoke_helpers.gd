@@ -43,6 +43,23 @@ static func barracks_anchor(builder_id: int, research_center: Node3D) -> Vector2
 			return candidate
 	return Vector2i(-1, -1)
 
+## A valid anchor for `kind` probed through the read-only placement preview
+## in a ring around the live Research Center footprint — the heat leg's
+## Depot/Gun Turret/Coal Furnace slots: barracks_anchor generalized to any
+## building kind and all four directions. Placements already on the ground
+## invalidate their own cells, so successive probes never collide. Returns
+## (-1,-1) when no candidate validates so the caller can fail loudly.
+static func ring_anchor(builder_id: int, kind: String, research_center: Node3D) -> Vector2i:
+	var rc_anchor := footprint_anchor(research_center)
+	for offset in range(3, 14):
+		for direction in [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP]:
+			var candidate: Vector2i = rc_anchor + (direction as Vector2i) * offset
+			var preview: Dictionary = GrusBridge.placement_preview(
+				builder_id, kind, candidate.x, candidate.y)
+			if bool(preview.get("valid", false)):
+				return candidate
+	return Vector2i(-1, -1)
+
 ## Fog overlay contract: the two MultiMesh layers are discrete tiles
 ## compacted in row-major order by state — Unexplored (opaque) and
 ## Explored (translucent); Visible cells draw no tile. The buffers must

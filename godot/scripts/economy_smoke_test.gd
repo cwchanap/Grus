@@ -27,6 +27,13 @@ const TARGET_SCRAP := 400
 const TARGET_FOOD := 320
 const TARGET_COAL := 160
 
+## Post-reset heat leg solvency: Barracks 120 + Depot 75 + Gun Turret 100 +
+## Coal Furnace 80 + the 40-Scrap Rifleman queue = 415, so the reset's 300
+## starting Scrap forces at least 115 extra Scrap through real gather
+## cycles inside that same leg. The Turret's 20 Coal comes out of the
+## untouched 150 stockpile, leaving fuel for the Furnace burn proof.
+const HEAT_FUNDING_SCRAP := 415
+
 ## Free anchors: a Bunkhouse slot beside the central city's south-east
 ## worker corner and a Depot beside the scouted northwest expansion salvage.
 ## The Barracks slot and the Occupied probe cell come from the live Research
@@ -195,6 +202,37 @@ func _stockpiles_at_least(scrap: int, food: int, coal: int) -> bool:
 func _building_complete_at(id: int) -> bool:
 	return bool(GrusBridge.building_snapshot(id).get("complete", false))
 
+## Heat boundary stage: the Rust snapshot's supply/demand/efficiency and the
+## rendered HUD third line must both report the expected stage — the HUD
+## text is the acceptance surface, the snapshot pins the exact fraction.
+func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: String) -> bool:
+	var economy: Dictionary = GrusBridge.economy_snapshot()
+	if int(economy.get("heat_supply", -1)) != supply \
+			or int(economy.get("heat_demand", -1)) != demand \
+			or absf(float(economy.get("surface_efficiency", 0.0)) - efficiency) > 0.0001:
+		return false
+	var lines := (get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label).text.split("\n")
+	return lines.size() > 2 and str(lines[2]) == hud_line
+
+## A building view's body tint matches the icy or warm-blue material its
+## Rust-pushed set_cold flag should currently produce (building_view.gd
+## owns both colors; they are read off its script, never re-typed).
+func _tint_is(view: Node3D, cold: bool) -> bool:
+	var body := view.get_node("Body") as MeshInstance3D
+	if body == null or body.material_override == null:
+		return false
+	var building_script: Script = view.get_script()
+	if building_script == null:
+		return false
+	var want: Color = building_script.TEAM_COLD_ICE if cold else building_script.TEAM_WARM_BLUE
+	return body.material_override.albedo_color.is_equal_approx(want)
+
+func _all_tinted(views: Array, cold: bool) -> bool:
+	for view in views:
+		if not _tint_is(view, cold):
+			return false
+	return true
+
 ## Delivery proof for the Depot: a Scrap stockpile credit that lands while
 ## the worker stands near the Depot. Its far-tree gather slots sit a few
 ## cells from the Depot origin and ~30 from the Research Center, so only a
@@ -347,6 +385,19 @@ func _run() -> void:
 		if catalogue_units.has(removed) or catalogue.get("buildings", {}).has(removed):
 			_fail("catalogue still advertises the deleted %s" % removed)
 			return
+	# HPA-181: the Coal Furnace build button exists and reads its footprint
+	# and cost/build time from this same catalogue snapshot — no Godot
+	# balance literals.
+	var furnace_entry: Dictionary = catalogue.get("buildings", {}).get("CoalFurnace", {})
+	if int(furnace_entry.get("scrap", -1)) != 80 or int(furnace_entry.get("seconds", -1)) != 20 \
+			or int(furnace_entry.get("width", -1)) != 2 or int(furnace_entry.get("height", -1)) != 2:
+		_fail("catalogue snapshot is missing the 2x2 / 80-Scrap / 20 s Coal Furnace: %s" % [furnace_entry])
+		return
+	var furnace_button := get_node_or_null("Main/HUD/CommandPanel/BuildGrid/CoalFurnaceButton") as Button
+	if furnace_button == null or furnace_button.tooltip_text != "Cost: 80 Scrap\nBuild: 20s":
+		_fail("Coal Furnace build button does not show the catalogue-derived tooltip: \"%s\"" %
+				(furnace_button.tooltip_text if furnace_button != null else "<missing>"))
+		return
 	if catalogue.has("age_up"):
 		_fail("catalogue still advertises the deleted Age-up job")
 		return
@@ -390,9 +441,15 @@ func _run() -> void:
 	# Crystals rides the Population line so the first currency line stays
 	# narrow enough for the authored rectangle.
 	var hud_lines := economy_label.text.split("\n")
-	if hud_lines.size() != 2 or hud_lines[0].contains("Crystals") \
+	if hud_lines.size() != 3 or hud_lines[0].contains("Crystals") \
 			or not hud_lines[1].contains("Crystals") or not hud_lines[1].contains("Population"):
 		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_label.text)
+		return
+	# HPA-181: the third line is the live heat boundary. The boot is still at
+	# Start, whose ticks recompute supply/demand without burning anything, so
+	# the label must show the warm Research Center baseline exactly.
+	if hud_lines[2] != "Heat 15 / 10 · surface 100%":
+		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_label.text)
 		return
 	var research_center := _building_view(1)
 	if research_center == null:
@@ -574,6 +631,20 @@ func _run() -> void:
 		_fail("second economy smoke leg did not reach Playing")
 		return
 
+	# HPA-181 heat leg funding: the reset's 300 starting Scrap cannot cover
+	# the Barracks plus the three heat placements plus the Rifleman queue
+	# (= 415), so workers 1-3 bank real gather/deposit cycles off the salvage
+	# source while the builder constructs the Barracks — the stockpile only
+	# moves on deposits, so reaching the target proves the funding.
+	for worker_id in [1, 2, 3]:
+		var gatherer := _unit_view(worker_id)
+		var salvage := _resource_view(SALVAGE_ID)
+		if gatherer == null or salvage == null:
+			_fail("heat-leg gatherer or salvage view missing for worker %d" % worker_id)
+			return
+		await _click_view(gatherer, MOUSE_BUTTON_LEFT)
+		await _click_view(salvage, MOUSE_BUTTON_RIGHT)
+
 	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
 	# The ring slot west of the city is probed off the live RC view.
@@ -591,6 +662,98 @@ func _run() -> void:
 	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "":
 		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s" % [_blocked_reason(barracks_id), _queue_label(barracks_id)])
 		return
+
+	# HPA-181 heat boundary leg, all through real UI placement paths and
+	# funded inside this post-reset leg. Warm baseline first: the Research
+	# Center (15 supply / 10 demand) plus the completed Barracks (+3 demand)
+	# reads 15/13, still a full 100%.
+	if not await _wait_until(
+			_heat_stage_ok.bind(15, 13, 1.0, "Heat 15 / 13 · surface 100%"),
+			10.0, "heat baseline after the Barracks never read 15/13 at 100%"):
+		return
+	if not await _wait_until(
+			func(): return int(GrusBridge.economy_snapshot().get("scrap", -1)) >= HEAT_FUNDING_SCRAP,
+			120.0, "heat leg never banked %d Scrap through real gather cycles" % HEAT_FUNDING_SCRAP):
+		return
+	# Funding proven — retire the gatherers like the first leg: finite
+	# sources idle workers at drop-off slots at 20x, and the later
+	# stockpile-unchanged assertions (queue charge, enqueue rejects) need a
+	# quiet Scrap flow to stay exact.
+	for worker_id in [1, 2, 3]:
+		var gatherer := _unit_view(worker_id)
+		if gatherer == null:
+			_fail("heat-leg gatherer %d view went missing before retirement" % worker_id)
+			return
+		await _park_at_staging(gatherer)
+
+	# Cold demand: Depot (+1) and Gun Turret (+2) push demand past supply —
+	# 15/16 ≈ 93.75%, reported as 94% (a deficit never rounds up to 100%) —
+	# and every completed demand-bearing friendly view must show the icy
+	# tint while the deficit stands.
+	var depot_anchor := SmokeHelpers.ring_anchor(4, "Depot", research_center)
+	if depot_anchor.x < 0:
+		_fail("no valid heat-leg Depot anchor near the Research Center")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/DepotButton") as Button, depot_anchor)
+	var heat_depot := await _wait_building("Depot", 25.0)
+	if heat_depot == null:
+		return
+	var heat_depot_id := int(heat_depot.get_meta("building_id"))
+	if not await _wait_until(_building_complete_at.bind(heat_depot_id), 30.0, "heat-leg Depot never completed"):
+		return
+
+	var turret_anchor := SmokeHelpers.ring_anchor(4, "GunTurret", research_center)
+	if turret_anchor.x < 0:
+		_fail("no valid heat-leg Gun Turret anchor near the Research Center")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/GunTurretButton") as Button, turret_anchor)
+	var heat_turret := await _wait_building("GunTurret", 25.0)
+	if heat_turret == null:
+		return
+	var heat_turret_id := int(heat_turret.get_meta("building_id"))
+	if not await _wait_until(_building_complete_at.bind(heat_turret_id), 35.0, "heat-leg Gun Turret never completed"):
+		return
+	if not await _wait_until(
+			_heat_stage_ok.bind(15, 16, 0.9375, "Heat 15 / 16 · surface 94%"),
+			10.0, "cold stage after Depot+Turret never read 15/16 at 94%"):
+		return
+	var heat_views: Array[Node3D] = [research_center, barracks, heat_depot, heat_turret]
+	if not await _wait_until(_all_tinted.bind(heat_views, true), 10.0,
+			"cold tint never reached the completed demand-bearing views"):
+		return
+
+	# The fueled Coal Furnace (+12 supply) restores 27/16 — clamped back to
+	# a full 100% — and every cold view must recover the warm team blue. The
+	# Furnace itself demands no heat, so it never tints. Then the burn: the
+	# completed Furnace drains whole Coal from the Team-1 stockpile while
+	# Playing, so the stockpile must visibly decrease.
+	var furnace_anchor := SmokeHelpers.ring_anchor(4, "CoalFurnace", research_center)
+	if furnace_anchor.x < 0:
+		_fail("no valid heat-leg Coal Furnace anchor near the Research Center")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/CoalFurnaceButton") as Button, furnace_anchor)
+	var heat_furnace := await _wait_building("CoalFurnace", 25.0)
+	if heat_furnace == null:
+		return
+	var furnace_id := int(heat_furnace.get_meta("building_id"))
+	if not await _wait_until(_building_complete_at.bind(furnace_id), 30.0, "heat-leg Coal Furnace never completed"):
+		return
+	if not await _wait_until(
+			_heat_stage_ok.bind(27, 16, 1.0, "Heat 27 / 16 · surface 100%"),
+			10.0, "warm stage after the Coal Furnace never read 27/16 at 100%"):
+		return
+	if not await _wait_until(_all_tinted.bind(heat_views, false), 10.0,
+			"warm tint never recovered after the Coal Furnace completed"):
+		return
+	if not _tint_is(heat_furnace, false):
+		_fail("the Coal Furnace (zero heat demand) took the cold tint")
+		return
+	var coal_before_burn := int(GrusBridge.economy_snapshot().get("coal", -1))
+	if not await _wait_until(
+			func(): return int(GrusBridge.economy_snapshot().get("coal", -1)) < coal_before_burn,
+			15.0, "fueled Coal Furnace never decreased the Coal stockpile"):
+		return
+
 	await _park_at_staging(builder)
 	await _select_building(barracks)
 	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
@@ -713,9 +876,13 @@ func _run() -> void:
 		# The rejected click changed nothing: identical stockpiles, queue
 		# and building census — the enqueue was refused before any state
 		# was touched.
+		# The Coal Furnace burns 0.5 Coal per simulated second while Playing,
+		# so at most one whole-Coal decrement can land between the two
+		# snapshots — an enqueue itself never touches Coal, and Food/Scrap
+		# must match exactly (every gatherer is retired by now).
 		if int(after_click.get("food", -1)) != before_click["food"] \
 				or int(after_click.get("scrap", -1)) != before_click["scrap"] \
-				or int(after_click.get("coal", -1)) != before_click["coal"]:
+				or int(after_click.get("coal", -1)) not in [before_click["coal"], before_click["coal"] - 1]:
 			_fail("rejected Guard enqueue still moved the stockpile")
 			return
 		if _queue_label(barracks_id) != before_click["queue"] \
@@ -755,9 +922,11 @@ func _run() -> void:
 	if int(unaffordable_after.get("last_reject_code", -1)) != REJECT_INSUFFICIENT:
 		_fail("unaffordable Guard enqueue did not reject InsufficientResources: %s" % unaffordable_after)
 		return
+	# Same one-whole-Coal burn allowance as the drain loop above: the
+	# Furnace's live burn, never the rejected enqueue, may decrement Coal.
 	if int(unaffordable_after.get("food", -1)) != unaffordable_before["food"] \
 			or int(unaffordable_after.get("scrap", -1)) != unaffordable_before["scrap"] \
-			or int(unaffordable_after.get("coal", -1)) != unaffordable_before["coal"]:
+			or int(unaffordable_after.get("coal", -1)) not in [unaffordable_before["coal"], unaffordable_before["coal"] - 1]:
 		_fail("rejected Guard enqueue still moved the stockpile")
 		return
 	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0:
