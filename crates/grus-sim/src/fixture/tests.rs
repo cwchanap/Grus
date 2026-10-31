@@ -325,13 +325,7 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .get_resource::<crate::combat::CombatEventTotal>()
             .map_or(0, |total| total.0);
         for _ in 0..20 {
-            step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
-            crate::combat::step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
-            crate::movement::step_movement(&mut world, &map, SIM_STEP_SECONDS);
-            crate::economy::step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-            crate::buildings::step_construction(&mut world, &map, SIM_STEP_SECONDS);
-            crate::production::step_production(&mut world, &mut map, SIM_STEP_SECONDS);
-            crate::visibility::refresh_visibility(&mut world, &map);
+            crate::tick::step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
         }
         let moving = world.resource::<UnitIndex>().iter().any(|(id, entity)| {
             positions.get(id).is_some_and(|before| {

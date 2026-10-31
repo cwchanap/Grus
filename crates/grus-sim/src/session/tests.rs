@@ -4,20 +4,21 @@ use bevy::math::Vec2;
 use bevy::prelude::World;
 
 use super::*;
-use crate::buildings::{Building, BuildingIndex, step_construction};
+use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{BuildingKind, UnitKind, unit_spec};
 use crate::combat::{AttackCooldown, CombatOrder, CombatTarget, Health, step_combat};
 use crate::commands::{
     PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command,
     spawn_unit,
 };
-use crate::economy::{ResourceStockpile, TeamEconomy, WorkerTask, step_economy};
+use crate::economy::{ResourceStockpile, TeamEconomy, WorkerTask};
 use crate::fixture::{MapFixture, seed_skirmish};
 use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{GridMap, GridPos};
 use crate::movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, step_movement};
-use crate::production::{ProductionJob, ProductionKind, ProductionQueue, step_production};
-use crate::waves::{WaveState, step_waves};
+use crate::production::{ProductionJob, ProductionKind, ProductionQueue};
+use crate::tick::step_tick;
+use crate::waves::WaveState;
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -240,11 +241,7 @@ fn frozen_fixed_steps_perform_no_gameplay_mutation() {
 
         let health_before = world.get::<Health>(research_center).unwrap().current;
 
-        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
-        step_movement(&mut world, &map, SIM_STEP_SECONDS);
-        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        step_construction(&mut world, &map, SIM_STEP_SECONDS);
-        step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+        step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
 
         assert_eq!(
             world.get::<Health>(research_center).unwrap().current,
@@ -394,15 +391,10 @@ const JOURNEY_BUDGET: u32 = 6_000;
 /// Full match ticks inspected after Result to prove the freeze holds.
 const FREEZE_TICKS: u32 = 40;
 
-/// One canonical fixed-step match tick in the production order: waves,
-/// combat, movement, economy, construction, production.
+/// One canonical fixed-step match tick through `step_tick` — the same
+/// function the runtime bridge runs.
 fn step_match(world: &mut World, map: &mut GridMap) {
-    step_waves(world, map, SIM_STEP_SECONDS);
-    step_combat(world, map, SIM_STEP_SECONDS);
-    step_movement(world, map, SIM_STEP_SECONDS);
-    step_economy(world, map, SIM_STEP_SECONDS);
-    step_construction(world, map, SIM_STEP_SECONDS);
-    step_production(world, map, SIM_STEP_SECONDS);
+    step_tick(world, map, SIM_STEP_SECONDS);
 }
 
 fn is_result(world: &World) -> bool {

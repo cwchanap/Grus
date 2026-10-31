@@ -10,6 +10,7 @@ pub mod map;
 pub mod movement;
 pub mod production;
 pub mod session;
+pub mod tick;
 pub mod visibility;
 pub mod waves;
 
@@ -54,6 +55,7 @@ pub use session::{
     MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,
     set_paused, start_match,
 };
+pub use tick::step_tick;
 pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };

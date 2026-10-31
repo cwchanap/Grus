@@ -2,10 +2,11 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::ConstructionState;
-use crate::catalog::{building_spec, unit_spec};
+use crate::catalog::{MIN_SURFACE_EFFICIENCY, building_spec, unit_spec};
 use crate::combat::{Health, destroy_building, destroy_unit};
 use crate::commands::{PlayerCommand, apply_player_command};
 use crate::economy::ResourceStockpile;
+use crate::heat::HeatState;
 use crate::ids::{IdAllocator, UnitId};
 use crate::movement::SIM_STEP_SECONDS;
 
@@ -1168,4 +1169,67 @@ fn aliens_are_rejected_by_normal_enqueue_commands_without_spending() {
         .entity(BuildingId(100))
         .expect("the completed Barracks");
     assert!(world.get::<ProductionQueue>(barracks).is_none());
+}
+
+/// Cold surface efficiency slows the queue head: one tick at the 25% floor
+/// advances a Worker job by `0.05 × 0.25` and the job stays queued, with the
+/// blocked/spawn rules untouched (nothing is ready to block here).
+#[test]
+fn cold_surface_efficiency_slows_the_queue_head() {
+    let (mut world, mut map) = open_world();
+    let rc = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(10, 10),
+        TEAM,
+    );
+    let result = enqueue(&mut world, &mut map, BuildingId(1), UnitKind::Worker);
+    assert_eq!(result.reject, None);
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let queue = world.get::<ProductionQueue>(rc).unwrap();
+    let expected = SIM_STEP_SECONDS * MIN_SURFACE_EFFICIENCY;
+    assert!(
+        (queue.progress_seconds - expected).abs() < 1e-6,
+        "cold queue head advanced {}, expected {expected}",
+        queue.progress_seconds
+    );
+    assert!(!queue.jobs.is_empty());
+    assert_eq!(queue.blocked, None);
+}
+
+/// Without a `HeatState` resource the head advances at the full rate and
+/// nothing panics — the neutral `surface_efficiency` fallback.
+#[test]
+fn missing_heat_state_keeps_the_queue_head_at_full_rate() {
+    let (mut world, mut map) = open_world();
+    let rc = complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(10, 10),
+        TEAM,
+    );
+    let result = enqueue(&mut world, &mut map, BuildingId(1), UnitKind::Worker);
+    assert_eq!(result.reject, None);
+    assert!(world.get_resource::<HeatState>().is_none());
+
+    step_production(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let queue = world.get::<ProductionQueue>(rc).unwrap();
+    assert!(
+        (queue.progress_seconds - SIM_STEP_SECONDS).abs() < 1e-6,
+        "warm queue head advanced {}, expected {}",
+        queue.progress_seconds,
+        SIM_STEP_SECONDS
+    );
 }

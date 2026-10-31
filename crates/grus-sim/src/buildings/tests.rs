@@ -7,6 +7,7 @@ use crate::commands::{
 use crate::economy::{
     Carry, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
 };
+use crate::heat::HeatState;
 use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
 use crate::session::{MatchPhase, MatchSession};
@@ -2719,4 +2720,35 @@ fn resume_on_a_hidden_enemy_building_answers_building_missing() {
         },
     );
     assert_eq!(visible.reject, Some(RejectReason::NotOwned));
+}
+
+/// Cold surface efficiency never touches construction: one Constructing
+/// builder advances exactly real time under a freezing HeatState.
+#[test]
+fn cold_surface_efficiency_does_not_slow_construction() {
+    let (mut world, map, _builder, building) = setup_active_builder();
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    let start = world
+        .get::<Building>(building)
+        .unwrap()
+        .construction
+        .progress_seconds;
+    for _ in 0..40 {
+        step_construction(&mut world, &map, SIM_STEP_SECONDS);
+    }
+    let end = world
+        .get::<Building>(building)
+        .unwrap()
+        .construction
+        .progress_seconds;
+    let expected = 40.0 * SIM_STEP_SECONDS;
+    assert!(
+        (end - start - expected).abs() < 1e-3,
+        "cold construction advanced {start} → {end}, expected unscaled {expected}"
+    );
 }
