@@ -13,6 +13,7 @@ use crate::commands::{
     UnitIndex, approach_slots, assign_move_toward, destination_slots, reserve_slot,
 };
 use crate::economy::{TeamEconomy, WorkerTask, cancel_unit_activity, reroute_dropoff_worker};
+use crate::heat::surface_efficiency;
 use crate::ids::{BuildingId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -175,7 +176,9 @@ fn target_visible(world: &World, team: TeamId, target: CombatTarget, entity: Ent
 
 /// Advances combat one fixed tick; runs before movement. Clears
 /// `CombatEvents` (Result ticks preserve the settle tick's buffer for the
-/// bridge drain), decrements cooldowns, then lets every attacker act in
+/// bridge drain), decrements cooldowns — units at real time, completed
+/// building/turret attackers at surface efficiency — then lets every
+/// attacker act in
 /// ascending stable-ID order: units first, then completed Team-1 Gun
 /// Turrets. Units refresh/validate their orders, acquire one for AttackMove,
 /// strike when in range and cooldown-ready, or refresh pursuit. Turrets use
@@ -204,9 +207,22 @@ pub fn step_combat(world: &mut World, map: &mut GridMap, seconds: f32) {
         return;
     }
 
-    let mut cooldowns = world.query::<&mut AttackCooldown>();
-    for mut cooldown in cooldowns.iter_mut(world) {
-        cooldown.0 = (cooldown.0 - seconds).max(0.0);
+    // Cooldowns tick per attacker class: unit attackers at real time,
+    // completed building/turret attackers at surface efficiency (heat
+    // computed earlier in the canonical tick). `strike` installs the
+    // nominal cooldown either way. Nothing else carries `AttackCooldown`;
+    // unknown carriers keep the unscaled legacy behavior.
+    let efficiency = surface_efficiency(world);
+    let mut cooldowns = world.query::<(&mut AttackCooldown, Option<&Unit>, Option<&Building>)>();
+    for (mut cooldown, unit, building) in cooldowns.iter_mut(world) {
+        let delta = if unit.is_some() {
+            seconds
+        } else if building.is_some_and(|building| building.construction.complete) {
+            seconds * efficiency
+        } else {
+            seconds
+        };
+        cooldown.0 = (cooldown.0 - delta).max(0.0);
     }
 
     let mut attacker_ids: Vec<UnitId> = world

@@ -8,6 +8,7 @@ use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
 use crate::fixture::{MapFixture, seed_skirmish};
+use crate::heat::HeatState;
 use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
 use crate::visibility::{VisibilityMap, explored_by, refresh_visibility, visible_to};
@@ -1432,5 +1433,47 @@ fn hidden_units_do_not_reserve_gather_approach_cells() {
         outcome.rejected_units,
         vec![(UnitId(2), RejectReason::Crowded)],
         "a visible occupant still reserves the approach cell"
+    );
+}
+
+/// Cold surface efficiency never touches the gather loop: the proven
+/// ten-ticks-per-food contract holds unchanged with a freezing HeatState.
+#[test]
+fn cold_surface_efficiency_does_not_slow_gathering() {
+    let (mut world, mut map) = skirmish_world();
+
+    // Park the worker beside the authored ration cache and task it directly.
+    let food_cell = MapFixture::starting_resources()
+        .into_iter()
+        .find(|spawn| spawn.id == ResourceId(1))
+        .expect("the authored ration cache")
+        .cell;
+    let slot = GridPos::new(food_cell.x - 1, food_cell.y);
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    world.entity_mut(worker).insert((
+        SimPosition::new(map.cell_center(slot)),
+        WorkerTask::ToSource {
+            source: ResourceId(1),
+            slot,
+        },
+    ));
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    // Arrival tick plus the ten gather ticks that bank one whole food warm.
+    for _ in 0..11 {
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+
+    assert_eq!(
+        world.get::<Carry>(worker),
+        Some(&Carry::Holding {
+            kind: ResourceKind::Food,
+            amount: NonZeroU32::new(1).unwrap()
+        }),
+        "cold must leave the gather cadence at real time"
     );
 }

@@ -5,7 +5,9 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{BuildingKind, ResourceKind, UnitKind, building_spec, unit_spec};
+use crate::catalog::{
+    BuildingKind, MIN_SURFACE_EFFICIENCY, ResourceKind, UnitKind, building_spec, unit_spec,
+};
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitCommand, UnitCommandKind, apply_player_command,
     spawn_unit,
@@ -14,6 +16,7 @@ use crate::economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceStockpile, TeamEconomy, WorkerTask,
 };
 use crate::fixture::{MapFixture, seed_skirmish};
+use crate::heat::HeatState;
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
@@ -3089,5 +3092,141 @@ fn crowded_building_pursuit_skips_the_flood_until_a_slot_frees() {
     assert!(
         world.get::<MoveOrder>(attacker).is_some(),
         "a freed approach slot replans the pursuit on the next tick"
+    );
+}
+
+/// Cooldown ticking splits by attacker class: in the same cold world and
+/// the same tick, a unit attacker drains at real time while a completed Gun
+/// Turret drains at surface efficiency.
+#[test]
+fn cold_world_ticks_turret_cooldowns_scaled_and_unit_cooldowns_realtime() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let turret = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 10),
+    );
+    let unit = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(20.5, 20.5),
+        UnitKind::Guard,
+    );
+    world.get_mut::<AttackCooldown>(turret).unwrap().0 = 1.0;
+    world.get_mut::<AttackCooldown>(unit).unwrap().0 = 1.0;
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let expected_unit = (1.0 - SIM_STEP_SECONDS).max(0.0);
+    let expected_turret = (1.0 - SIM_STEP_SECONDS * MIN_SURFACE_EFFICIENCY).max(0.0);
+    assert_eq!(
+        world.get::<AttackCooldown>(unit),
+        Some(&AttackCooldown(expected_unit)),
+        "unit attackers keep real-time cooldowns under cold"
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(turret),
+        Some(&AttackCooldown(expected_turret)),
+        "completed turret attackers drain at surface efficiency"
+    );
+}
+
+/// A cold turret's strike still installs the NOMINAL catalogue cooldown —
+/// only the drain is scaled, never the installed value.
+#[test]
+fn cold_turret_strike_installs_the_nominal_cooldown() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let turret = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 10),
+    );
+    let swarmer = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(12.5, 10.5),
+        UnitKind::Swarmer,
+    );
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        world.get::<Health>(swarmer).unwrap().current,
+        30,
+        "the strike lands at full nominal damage"
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(turret),
+        Some(&AttackCooldown(1.0)),
+        "the strike installs the nominal cooldown regardless of cold"
+    );
+}
+
+/// Cold recovery cadence: a nominal 1.0 s cooldown drains 79 cold ticks down
+/// to a sliver (0.25× rate), and the moment the world warms the remaining
+/// fraction clears at the full rate on the very next tick.
+#[test]
+fn cold_turret_cooldown_recovers_at_full_rate_once_warm() {
+    let mut world = World::new();
+    let mut map = open_map();
+    let turret = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 10),
+    );
+    world.get_mut::<AttackCooldown>(turret).unwrap().0 = 1.0;
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 4,
+        ..HeatState::default()
+    });
+
+    for _ in 0..79 {
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    }
+    let cold_remaining = world.get::<AttackCooldown>(turret).unwrap().0;
+    let expected = 1.0 - 79.0 * SIM_STEP_SECONDS * MIN_SURFACE_EFFICIENCY;
+    assert!(
+        cold_remaining > 0.0,
+        "cold must not clear one nominal second within 79 ticks"
+    );
+    assert!(
+        (cold_remaining - expected).abs() < 1e-4,
+        "cold drain {cold_remaining} deviates from the 0.25× rate {expected}"
+    );
+
+    world.insert_resource(HeatState {
+        supply: 1,
+        demand: 0,
+        ..HeatState::default()
+    });
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<AttackCooldown>(turret),
+        Some(&AttackCooldown(0.0)),
+        "warming clears the remaining fraction at the full rate"
     );
 }

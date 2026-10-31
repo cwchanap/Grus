@@ -11,6 +11,7 @@ use crate::buildings::{Building, BuildingIndex, commandable_building_entity};
 use crate::catalog::{BuildingKind, Cost, MAX_POPULATION, UnitKind, building_spec, unit_spec};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, assign_move_toward, spawn_unit};
 use crate::economy::{Carry, GatherProgress, TeamEconomy, WorkerTask};
+use crate::heat::surface_efficiency;
 use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -231,15 +232,22 @@ fn push_job(world: &mut World, building_entity: Entity, job: ProductionJob) {
 /// same tick. Far below one 50ms simulation step.
 const PROGRESS_EPSILON: f32 = 0.01;
 
-/// Advances production one fixed tick. Every queue head advances (clamped at
-/// 100%); ready producers then complete in ascending `BuildingId` order,
-/// recomputing population after each successful spawn so same-tick completions
-/// cannot both consume the final slot. Runs after construction in the
-/// fixed-step chain; visibility refresh and the reject drain follow it.
+/// Advances production one fixed tick. Every queue head advances at
+/// `seconds × surface_efficiency(world)` — cold slows every completed
+/// producer, and all `ProductionQueue` holders are completed Research
+/// Centers/Barracks — clamped at 100%; ready producers then complete in
+/// ascending `BuildingId` order, recomputing population after each
+/// successful spawn so same-tick completions cannot both consume the final
+/// slot. Runs after construction in the canonical tick; the visibility
+/// refresh and the reject drain follow it.
 pub fn step_production(world: &mut World, map: &mut GridMap, seconds: f32) {
     if !gameplay_active(world) {
         return;
     }
+    // Heat computed earlier in the tick (step_heat runs before production
+    // in the canonical order) scales this tick's training; a world without
+    // `HeatState` reads neutral full efficiency.
+    let efficiency = surface_efficiency(world);
     let mut producers: Vec<(Entity, BuildingId, TeamId)> = world
         .get_resource::<BuildingIndex>()
         .map(|index| {
@@ -274,7 +282,7 @@ pub fn step_production(world: &mut World, map: &mut GridMap, seconds: f32) {
                 .get_mut::<ProductionQueue>(entity)
                 .expect("producer queue collected above");
             if queue.progress_seconds < required {
-                let next = queue.progress_seconds + seconds;
+                let next = queue.progress_seconds + seconds * efficiency;
                 queue.progress_seconds = if next + PROGRESS_EPSILON >= required {
                     required
                 } else {
