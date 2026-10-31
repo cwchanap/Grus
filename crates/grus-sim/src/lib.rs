@@ -4,6 +4,7 @@ pub mod combat;
 pub mod commands;
 pub mod economy;
 pub mod fixture;
+pub mod heat;
 pub mod ids;
 pub mod map;
 pub mod movement;
@@ -18,8 +19,9 @@ pub use buildings::{
 };
 pub use catalog::{
     ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE, BuildingKind, BuildingSpec, CARRY_LIMIT,
-    CombatSpec, Cost, MAX_LIVE_ALIENS, MAX_POPULATION, ResourceKind, UnitKind, UnitSpec,
-    WAVE_BUDGET_BASE, WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
+    CombatSpec, Cost, FURNACE_COAL_PER_SECOND, MAX_LIVE_ALIENS, MAX_POPULATION,
+    MIN_SURFACE_EFFICIENCY, ResourceKind, UnitKind, UnitSpec, WAVE_BUDGET_BASE,
+    WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
     WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
     resource_amount,
 };
@@ -40,6 +42,7 @@ pub use fixture::{
     ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart,
     extend_with_benchmark_workload, seed_skirmish,
 };
+pub use heat::{HeatState, step_heat, surface_efficiency};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 pub use map::{Footprint, GridMap, GridPos};
 pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};

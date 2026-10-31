@@ -104,12 +104,18 @@ pub fn validate_placement(
         return Err(RejectReason::NotWorker);
     }
 
-    // 2. kind buildable. Research Centers are seeded, never placed. Gate and
-    // GunTurret are Team-1-only: a Team-2 Gate would seal its own team while
-    // passing Team 1, and the combat pass fires only Team-1 turrets.
+    // 2. kind buildable. Research Centers are seeded, never placed. Gate,
+    // GunTurret and CoalFurnace are Team-1-only: a Team-2 Gate would seal
+    // its own team while passing Team 1, the combat pass fires only Team-1
+    // turrets, and the one-player winter fixture has no Team-2 furnace
+    // economy.
     let spec = building_spec(kind);
     if kind == BuildingKind::ResearchCenter
-        || (issuer != TeamId(1) && matches!(kind, BuildingKind::Gate | BuildingKind::GunTurret))
+        || (issuer != TeamId(1)
+            && matches!(
+                kind,
+                BuildingKind::Gate | BuildingKind::GunTurret | BuildingKind::CoalFurnace
+            ))
     {
         return Err(RejectReason::Locked);
     }

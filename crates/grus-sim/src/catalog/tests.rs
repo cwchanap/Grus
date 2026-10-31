@@ -149,6 +149,7 @@ fn buildings_carry_catalogue_health() {
         (BuildingKind::Wall, 400),
         (BuildingKind::Gate, 600),
         (BuildingKind::GunTurret, 350),
+        (BuildingKind::CoalFurnace, 300),
     ];
     for (kind, max_health) in expected {
         assert_eq!(
@@ -181,7 +182,8 @@ fn winter_human_roster_stays_separate_from_the_full_catalogue() {
             "Barracks",
             "Wall",
             "Gate",
-            "GunTurret"
+            "GunTurret",
+            "CoalFurnace"
         ]
     );
 }
@@ -266,6 +268,13 @@ fn winter_costs_and_producers_are_pinned() {
             ..Cost::default()
         }
     );
+    assert_eq!(
+        building_spec(BuildingKind::CoalFurnace).cost,
+        Cost {
+            scrap: 80,
+            ..Cost::default()
+        }
+    );
 
     // Producer compatibility: ResearchCenter -> Worker; Barracks -> Guard,
     // Rifleman. Nothing else produces, and the Bunkhouse/Depot produce nothing.
@@ -312,6 +321,7 @@ fn winter_costs_and_producers_are_pinned() {
         (BuildingKind::Wall, 1, 1, 0),
         (BuildingKind::Gate, 1, 1, 0),
         (BuildingKind::GunTurret, 2, 2, 0),
+        (BuildingKind::CoalFurnace, 2, 2, 0),
     ];
     for (kind, width, height, population) in footprints {
         let spec = building_spec(kind);
@@ -332,6 +342,7 @@ fn only_gun_turret_has_building_combat_tuning() {
         BuildingKind::Barracks,
         BuildingKind::Wall,
         BuildingKind::Gate,
+        BuildingKind::CoalFurnace,
     ] {
         assert!(building_spec(kind).combat.is_none(), "{kind:?} combat");
     }
@@ -365,4 +376,38 @@ fn attack_move_radius_is_eight_world_units() {
 fn vision_radius_covers_attack_move_radius() {
     // Attack-move must never acquire targets the owning team cannot see.
     assert!(VISION_RADIUS_CELLS as f32 >= ATTACK_MOVE_RADIUS);
+}
+
+#[test]
+fn heat_supply_and_demand_are_catalogued_per_building() {
+    let expected = [
+        (BuildingKind::ResearchCenter, 15, 10),
+        (BuildingKind::Bunkhouse, 0, 1),
+        (BuildingKind::Depot, 0, 1),
+        (BuildingKind::Barracks, 0, 3),
+        (BuildingKind::Wall, 0, 0),
+        (BuildingKind::Gate, 0, 0),
+        (BuildingKind::GunTurret, 0, 2),
+        (BuildingKind::CoalFurnace, 12, 0),
+    ];
+    for (kind, supply, demand) in expected {
+        let spec = building_spec(kind);
+        assert_eq!(spec.heat_supply, supply, "{kind:?} heat supply");
+        assert_eq!(spec.heat_demand, demand, "{kind:?} heat demand");
+    }
+    assert_eq!(expected.len(), BuildingKind::ALL.len());
+}
+
+#[test]
+fn coal_furnace_matches_the_depot_envelope_at_twenty_seconds() {
+    let furnace = building_spec(BuildingKind::CoalFurnace);
+    assert_eq!(furnace.build_seconds, 20);
+    assert_eq!(furnace.max_health, 300);
+    assert_eq!((furnace.width, furnace.height), (2, 2));
+}
+
+#[test]
+fn furnace_burn_rate_and_efficiency_floor_are_named_constants() {
+    assert_eq!(FURNACE_COAL_PER_SECOND, 0.5);
+    assert_eq!(MIN_SURFACE_EFFICIENCY, 0.25);
 }
