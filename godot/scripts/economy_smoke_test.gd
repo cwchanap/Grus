@@ -30,7 +30,8 @@ const TARGET_COAL := 160
 ## Post-reset heat leg solvency: Barracks 120 + Depot 75 + Gun Turret 100 +
 ## Coal Furnace 80 + the 40-Scrap Rifleman queue = 415, so the reset's 300
 ## starting Scrap forces at least 115 extra Scrap through real gather
-## cycles inside that same leg. The Turret's 20 Coal comes out of the
+## cycles before any of the five spenditures (the funding wait runs before
+## the Barracks placement). The Turret's 20 Coal comes out of the
 ## untouched 150 stockpile, leaving fuel for the Furnace burn proof.
 const HEAT_FUNDING_SCRAP := 415
 
@@ -632,10 +633,11 @@ func _run() -> void:
 		return
 
 	# HPA-181 heat leg funding: the reset's 300 starting Scrap cannot cover
-	# the Barracks plus the three heat placements plus the Rifleman queue
-	# (= 415), so workers 1-3 bank real gather/deposit cycles off the salvage
-	# source while the builder constructs the Barracks — the stockpile only
-	# moves on deposits, so reaching the target proves the funding.
+	# the five spenditures — Barracks 120 + Depot 75 + Gun Turret 100 + Coal
+	# Furnace 80 + the 40-Scrap Rifleman queue = 415 — so before placing
+	# anything, workers 1-3 bank real gather/deposit cycles off the salvage
+	# source; the stockpile only moves on deposits, so reaching the target
+	# proves the funding (300 start + ≥115 gathered ≥ 415).
 	for worker_id in [1, 2, 3]:
 		var gatherer := _unit_view(worker_id)
 		var salvage := _resource_view(SALVAGE_ID)
@@ -644,6 +646,10 @@ func _run() -> void:
 			return
 		await _click_view(gatherer, MOUSE_BUTTON_LEFT)
 		await _click_view(salvage, MOUSE_BUTTON_RIGHT)
+	if not await _wait_until(
+			func(): return int(GrusBridge.economy_snapshot().get("scrap", -1)) >= HEAT_FUNDING_SCRAP,
+			120.0, "heat leg never banked %d Scrap through real gather cycles" % HEAT_FUNDING_SCRAP):
+		return
 
 	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
@@ -671,11 +677,8 @@ func _run() -> void:
 			_heat_stage_ok.bind(15, 13, 1.0, "Heat 15 / 13 · surface 100%"),
 			10.0, "heat baseline after the Barracks never read 15/13 at 100%"):
 		return
-	if not await _wait_until(
-			func(): return int(GrusBridge.economy_snapshot().get("scrap", -1)) >= HEAT_FUNDING_SCRAP,
-			120.0, "heat leg never banked %d Scrap through real gather cycles" % HEAT_FUNDING_SCRAP):
-		return
-	# Funding proven — retire the gatherers like the first leg: finite
+	# Funding proven earlier in the leg — retire the gatherers like the
+	# first leg: finite
 	# sources idle workers at drop-off slots at 20x, and the later
 	# stockpile-unchanged assertions (queue charge, enqueue rejects) need a
 	# quiet Scrap flow to stay exact.
@@ -876,13 +879,13 @@ func _run() -> void:
 		# The rejected click changed nothing: identical stockpiles, queue
 		# and building census — the enqueue was refused before any state
 		# was touched.
-		# The Coal Furnace burns 0.5 Coal per simulated second while Playing,
-		# so at most one whole-Coal decrement can land between the two
-		# snapshots — an enqueue itself never touches Coal, and Food/Scrap
+		# A rejected enqueue can never add Coal, so only an increase fails:
+		# the Furnace's live burn may freely drop Coal while the
+		# click-to-feedback window spans any number of ticks. Food/Scrap
 		# must match exactly (every gatherer is retired by now).
 		if int(after_click.get("food", -1)) != before_click["food"] \
 				or int(after_click.get("scrap", -1)) != before_click["scrap"] \
-				or int(after_click.get("coal", -1)) not in [before_click["coal"], before_click["coal"] - 1]:
+				or int(after_click.get("coal", -1)) > before_click["coal"]:
 			_fail("rejected Guard enqueue still moved the stockpile")
 			return
 		if _queue_label(barracks_id) != before_click["queue"] \
@@ -922,11 +925,11 @@ func _run() -> void:
 	if int(unaffordable_after.get("last_reject_code", -1)) != REJECT_INSUFFICIENT:
 		_fail("unaffordable Guard enqueue did not reject InsufficientResources: %s" % unaffordable_after)
 		return
-	# Same one-whole-Coal burn allowance as the drain loop above: the
-	# Furnace's live burn, never the rejected enqueue, may decrement Coal.
+	# A rejected enqueue can never add Coal; the Furnace's live burn, never
+	# the rejected enqueue, is free to decrement Coal across the window.
 	if int(unaffordable_after.get("food", -1)) != unaffordable_before["food"] \
 			or int(unaffordable_after.get("scrap", -1)) != unaffordable_before["scrap"] \
-			or int(unaffordable_after.get("coal", -1)) not in [unaffordable_before["coal"], unaffordable_before["coal"] - 1]:
+			or int(unaffordable_after.get("coal", -1)) > unaffordable_before["coal"]:
 		_fail("rejected Guard enqueue still moved the stockpile")
 		return
 	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0:

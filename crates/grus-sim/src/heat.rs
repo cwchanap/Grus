@@ -96,6 +96,15 @@ pub fn step_heat(world: &mut World, seconds: f32) {
         supply += furnaces * building_spec(BuildingKind::CoalFurnace).heat_supply;
     }
 
+    // A purchase (not a burn) that empties the stockpile between ticks skips
+    // the debit branch below, so drop the stale fraction right here — no
+    // phantom debt may survive to a refuel.
+    if gameplay_active(world) && !fueled {
+        world
+            .get_resource_or_insert_with(HeatState::default)
+            .burn_remainder = 0.0;
+    }
+
     if gameplay_active(world) && fueled {
         let pooled = world
             .get_resource::<HeatState>()

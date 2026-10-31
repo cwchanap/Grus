@@ -1500,7 +1500,6 @@ fn building_is_cold(world: &World, team: TeamId, kind: BuildingKind, complete: b
 /// GDScript snapshot polling. Re-evaluating the value every frame covers
 /// late-attached views and heating recovery; the view script caches the
 /// flag and skips redundant material writes.
-#[allow(clippy::type_complexity)]
 fn update_cold_tints(world: &mut World) {
     let mut query = world.query::<(&Building, &GodotNodeHandle)>();
     let batch: Vec<(TeamId, BuildingKind, bool, GodotNodeHandle)> = query

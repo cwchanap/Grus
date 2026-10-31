@@ -291,6 +291,46 @@ fn refueling_reenables_furnaces_from_a_clean_remainder() {
     assert!((state.burn_remainder - 0.05).abs() < 1e-6);
 }
 
+/// A purchase that empties the stockpile mid-fraction leaves no stale debt:
+/// the next Playing tick clears the remainder even though the burn branch
+/// is skipped, so after a refuel the first whole-Coal debit lands exactly
+/// on schedule — never early.
+#[test]
+fn purchase_emptied_stockpile_refuels_without_early_debt() {
+    let (mut world, mut map) = battlefield();
+    seed_two_furnaces(&mut world, &mut map);
+
+    // Nineteen fueled ticks pool 0.95 Coal without debiting.
+    for _ in 0..19 {
+        step_heat(&mut world, SIM_STEP_SECONDS);
+    }
+    assert_eq!(team_coal(&world), 150);
+
+    // A 20-Coal purchase spends the last stockpiled Coal between ticks
+    // while the fractional pool is hot; later unfueled ticks skip the burn
+    // branch, which must still drop the stale fraction.
+    set_team_coal(&mut world, 0);
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    let state = heat(&world);
+    assert_eq!(state.burn_remainder, 0.0);
+    assert_eq!(
+        state.supply, 15,
+        "an empty stockpile supplies no furnace heat"
+    );
+    assert_eq!(team_coal(&world), 0);
+
+    // Refuel: the next 19 ticks stay fractional, the 20th debits exactly
+    // one whole unit — on schedule, with no phantom 0.95 debt.
+    set_team_coal(&mut world, 5);
+    for _ in 0..19 {
+        step_heat(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(team_coal(&world), 5, "fractional burn must not debit early");
+    }
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(team_coal(&world), 4);
+    assert!(heat(&world).burn_remainder.abs() < 1e-4);
+}
+
 /// Paused and Result steps still refresh supply/demand — fueled furnace
 /// output included — but never touch Coal or the burn remainder.
 #[test]
