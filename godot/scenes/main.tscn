@@ -75,7 +75,7 @@ mouse_filter = 0
 offset_left = 1000.0
 offset_top = 8.0
 offset_right = 1268.0
-offset_bottom = 108.0
+offset_bottom = 130.0
 mouse_filter = 0
 
 [node name="EconomyLabel" type="Label" parent="HUD/EconomyPanel"]
@@ -83,22 +83,22 @@ layout_mode = 0
 offset_left = 8.0
 offset_top = 6.0
 offset_right = 258.0
-offset_bottom = 64.0
-text = "Food 0   Scrap 0   Coal 0\nCrystals 0   Population 0/0"
+offset_bottom = 86.0
+text = "Food 0   Scrap 0   Coal 0\nCrystals 0   Population 0/0\nHeat 0 / 0 · surface 100%"
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
 offset_left = 8.0
-offset_top = 68.0
+offset_top = 90.0
 offset_right = 258.0
-offset_bottom = 100.0
+offset_bottom = 122.0
 text = "Idle: 0 — Next"
 
 [node name="SelectionPanel" type="Panel" parent="HUD"]
 offset_left = 1000.0
-offset_top = 116.0
+offset_top = 138.0
 offset_right = 1268.0
-offset_bottom = 268.0
+offset_bottom = 290.0
 mouse_filter = 0
 
 [node name="SelectionLabel" type="Label" parent="HUD/SelectionPanel"]
@@ -112,7 +112,7 @@ text = "Nothing selected"
 
 [node name="CommandPanel" type="Panel" parent="HUD"]
 offset_left = 8.0
-offset_top = 548.0
+offset_top = 500.0
 offset_right = 600.0
 offset_bottom = 712.0
 mouse_filter = 0
@@ -122,7 +122,7 @@ layout_mode = 0
 offset_left = 8.0
 offset_top = 8.0
 offset_right = 584.0
-offset_bottom = 84.0
+offset_bottom = 120.0
 columns = 3
 
 [node name="BunkhouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
@@ -161,12 +161,18 @@ layout_mode = 2
 text = "Gun Turret"
 metadata/kind = "GunTurret"
 
+[node name="CoalFurnaceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Coal Furnace"
+metadata/kind = "CoalFurnace"
+
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 8.0
-offset_top = 92.0
+offset_top = 128.0
 offset_right = 584.0
-offset_bottom = 168.0
+offset_bottom = 204.0
 columns = 3
 
 [node name="WorkerButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]

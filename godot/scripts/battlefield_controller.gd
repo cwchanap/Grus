@@ -207,13 +207,22 @@ func _reconcile_selection() -> void:
 
 func _refresh_hud() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
-	economy_label.text = "Food %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d" % [
+	var surface := float(economy.get("surface_efficiency", 1.0))
+	var surface_percent := roundi(surface * 100.0)
+	# A real deficit must never display as a full 100%: clamp the rounded
+	# value down to 99 while the sim reports any efficiency shortfall.
+	if surface_percent >= 100 and surface < 1.0:
+		surface_percent = 99
+	economy_label.text = "Food %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d\nHeat %d / %d · surface %d%%" % [
 		int(economy.get("food", 0)),
 		int(economy.get("scrap", 0)),
 		int(economy.get("coal", 0)),
 		int(economy.get("crystals", 0)),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
+		int(economy.get("heat_supply", 0)),
+		int(economy.get("heat_demand", 0)),
+		surface_percent,
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	var wave: Dictionary = GrusBridge.wave_snapshot()

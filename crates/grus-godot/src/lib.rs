@@ -16,8 +16,8 @@ use grus_sim::{
     Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
     WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
     idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
-    resolve_target, seed_skirmish, set_paused, start_match, step_tick, target_eligible,
-    validate_placement, visible_to,
+    resolve_target, seed_skirmish, set_paused, start_match, step_tick, surface_efficiency,
+    target_eligible, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -584,9 +584,13 @@ impl GrusBridgeNode {
     }
 
     /// Team 1 economy state: stockpile, population, idle workers, the
-    /// current gather rate, and the latest rejection code.
+    /// current gather rate, current surface heat, and the latest rejection
+    /// code.
     /// `last_reject_code` follows `RejectReason` discriminant order (-1 =
-    /// none); `gather_rate` is the team's current resources/second.
+    /// none); `gather_rate` is the team's current resources/second;
+    /// `heat_supply`/`heat_demand`/`surface_efficiency` mirror the sim's
+    /// heat totals with the one neutral-default efficiency accessor (an
+    /// absent state reads 0/0 at full efficiency).
     #[func]
     fn economy_snapshot(&self) -> VarDictionary {
         with_app(|app| {
@@ -609,6 +613,10 @@ impl GrusBridgeNode {
                 i64::from(population_cap(world, TeamId(1))),
             );
             dict.set("gather_rate", f64::from(BASE_GATHER_RATE));
+            let (heat_supply, heat_demand, efficiency) = heat_fields(world);
+            dict.set("heat_supply", i64::from(heat_supply));
+            dict.set("heat_demand", i64::from(heat_demand));
+            dict.set("surface_efficiency", f64::from(efficiency));
             let idle = idle_worker_ids(world, TeamId(1));
             dict.set("idle_workers", idle.len() as i64);
             dict.set(
@@ -893,6 +901,7 @@ fn build_app(app: &mut App) {
                 sync_view_visibility,
                 sync_interpolated_unit_transforms,
                 update_health_bars,
+                update_cold_tints,
             ),
         )
         .add_systems(
@@ -1463,6 +1472,62 @@ fn update_health_bars(
     }
 }
 
+/// Engine-free heat triple behind `economy_snapshot`'s heat fields: the
+/// live supply/demand totals and the exact fractional efficiency. A world
+/// without `HeatState` reports 0/0 at full efficiency — the sim's own
+/// neutral default, never a fake deficit.
+fn heat_fields(world: &World) -> (u32, u32, f32) {
+    let heat = world
+        .get_resource::<HeatState>()
+        .copied()
+        .unwrap_or_default();
+    (heat.supply, heat.demand, surface_efficiency(world))
+}
+
+/// The catalogue-derived cold condition for one building view: Team 1,
+/// construction complete, nonzero catalogue heat demand, and the live
+/// surface efficiency below 1. Zero-demand kinds (Wall, Gate, Furnace)
+/// can never read cold by construction.
+fn building_is_cold(world: &World, team: TeamId, kind: BuildingKind, complete: bool) -> bool {
+    team == TeamId(1)
+        && complete
+        && building_spec(kind).heat_demand > 0
+        && surface_efficiency(world) < 1.0
+}
+
+/// Pushes each building view's cold state from Rust every Update — the
+/// per-view projection beside `update_health_bars`, never per-building
+/// GDScript snapshot polling. Re-evaluating the value every frame covers
+/// late-attached views and heating recovery; the view script caches the
+/// flag and skips redundant material writes.
+#[allow(clippy::type_complexity)]
+fn update_cold_tints(world: &mut World) {
+    let mut query = world.query::<(&Building, &GodotNodeHandle)>();
+    let batch: Vec<(TeamId, BuildingKind, bool, GodotNodeHandle)> = query
+        .iter(world)
+        .map(|(building, handle)| {
+            (
+                building.team,
+                building.kind,
+                building.construction.complete,
+                *handle,
+            )
+        })
+        .collect();
+    for (team, kind, complete, handle) in batch {
+        set_view_cold(handle, building_is_cold(world, team, kind, complete));
+    }
+}
+
+/// Value-gated write; the view caches the flag so warm buildings skip the
+/// material write entirely.
+fn set_view_cold(handle: GodotNodeHandle, cold: bool) {
+    let Some(mut node) = node_from_handle(handle) else {
+        return;
+    };
+    node.call("set_cold", &[cold.to_variant()]);
+}
+
 fn reset_fixture_world(world: &mut World) {
     clear_gameplay_world(world);
     seed_match_world(world);
@@ -1766,6 +1831,7 @@ mod tests {
     use grus_sim::GatherProgress;
     use grus_sim::map::{GridMap, GridPos};
     use grus_sim::seed_skirmish;
+    use grus_sim::step_heat;
     use grus_sim::{
         AttackCooldown, CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder,
         WorkerTask, sorted_unit_ids, spawn_unit,
@@ -2660,6 +2726,154 @@ mod tests {
             world.resource::<LastRouteReject>().0.get(&TeamId(2)),
             Some(&RejectReason::Crowded),
             "a Team-2-only slot never publishes human feedback"
+        );
+    }
+
+    /// The heat fields behind `economy_snapshot`: neutral 0/0 at full
+    /// efficiency until the first scheduled heat step, then the seeded
+    /// Research Center's 15/10 live totals.
+    #[test]
+    fn economy_snapshot_heat_fields_read_the_seeded_fixture() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        assert_eq!(
+            heat_fields(&world),
+            (0, 0, 1.0),
+            "the default seed state reads neutral, never a fake deficit"
+        );
+        step_heat(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(
+            heat_fields(&world),
+            (15, 10, 1.0),
+            "the first heat step publishes the warm Research Center totals"
+        );
+    }
+
+    /// A world without `HeatState` (and an unstepped default) report 0/0 at
+    /// the full fractional efficiency; a deficit reports its exact fraction
+    /// and a severe one floors at `MIN_SURFACE_EFFICIENCY`.
+    #[test]
+    fn economy_snapshot_heat_fields_default_neutral_and_floor_deficits() {
+        let mut world = World::new();
+        assert_eq!(heat_fields(&world), (0, 0, 1.0));
+        world.insert_resource(HeatState::default());
+        assert_eq!(heat_fields(&world), (0, 0, 1.0));
+
+        world.insert_resource(HeatState {
+            supply: 15,
+            demand: 16,
+            burn_remainder: 0.0,
+        });
+        let (supply, demand, efficiency) = heat_fields(&world);
+        assert_eq!((supply, demand), (15, 16));
+        assert!(
+            (efficiency - 0.9375).abs() < 1e-6,
+            "15/16 must read as the exact fractional efficiency, got {efficiency}"
+        );
+
+        world.insert_resource(HeatState {
+            supply: 1,
+            demand: 16,
+            burn_remainder: 0.0,
+        });
+        let (_, _, efficiency) = heat_fields(&world);
+        assert!(
+            (efficiency - grus_sim::MIN_SURFACE_EFFICIENCY).abs() < 1e-6,
+            "a severe deficit floors at MIN_SURFACE_EFFICIENCY, got {efficiency}"
+        );
+    }
+
+    /// The cold-state selection: only completed friendly buildings with
+    /// catalogue heat demand tint while the live efficiency is below 1 —
+    /// construction sites and zero-demand kinds (Wall, Furnace) and enemy
+    /// structures never do.
+    #[test]
+    fn cold_state_selects_only_completed_friendly_heat_demanding_buildings() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        let seed_building =
+            |world: &mut World, id: u32, team: TeamId, kind: BuildingKind, complete: bool| {
+                let spec = building_spec(kind);
+                world
+                    .spawn((
+                        Building {
+                            id: BuildingId(id),
+                            team,
+                            kind,
+                            construction: ConstructionState {
+                                progress_seconds: 0.0,
+                                complete,
+                                active_builder: None,
+                            },
+                        },
+                        Footprint::new(GridPos::new(60, 60), spec.width, spec.height),
+                        Health {
+                            current: spec.max_health,
+                            max: spec.max_health,
+                        },
+                    ))
+                    .id()
+            };
+        seed_building(&mut world, 51, TeamId(1), BuildingKind::Bunkhouse, false);
+        seed_building(&mut world, 52, TeamId(1), BuildingKind::Wall, true);
+        seed_building(&mut world, 53, TeamId(1), BuildingKind::CoalFurnace, true);
+        seed_building(&mut world, 54, TeamId(2), BuildingKind::Depot, true);
+
+        let rc_entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(1))
+            .unwrap();
+        let (rc_team, rc_kind, rc_complete) = {
+            let rc = world.get::<Building>(rc_entity).unwrap();
+            (rc.team, rc.kind, rc.construction.complete)
+        };
+        assert_eq!(rc_team, TeamId(1));
+        assert!(rc_complete);
+        assert_eq!(building_spec(rc_kind).heat_demand, 10);
+
+        // A warm world tints nothing, the Research Center included.
+        assert!(!building_is_cold(&world, rc_team, rc_kind, rc_complete));
+
+        // A live deficit tints only the completed friendly heat consumers.
+        world.insert_resource(HeatState {
+            supply: 15,
+            demand: 16,
+            burn_remainder: 0.0,
+        });
+        assert!(building_is_cold(&world, rc_team, rc_kind, rc_complete));
+        assert!(
+            !building_is_cold(&world, TeamId(1), BuildingKind::Bunkhouse, false),
+            "construction sites never tint"
+        );
+        assert!(
+            !building_is_cold(&world, TeamId(1), BuildingKind::Wall, true),
+            "zero-demand Walls never tint"
+        );
+        assert!(
+            !building_is_cold(&world, TeamId(1), BuildingKind::CoalFurnace, true),
+            "zero-demand Furnaces never tint"
+        );
+        assert!(
+            !building_is_cold(&world, TeamId(2), BuildingKind::Depot, true),
+            "enemy buildings never tint"
+        );
+    }
+
+    /// HPA-181: the appended CoalFurnace kind must round-trip the wire
+    /// name — outbound serializer and inbound parser share `kind_name_str`.
+    #[test]
+    fn coal_furnace_catalogue_name_round_trips_the_parser() {
+        let name = kind_name_str(BuildingKind::CoalFurnace);
+        assert_eq!(name, "CoalFurnace");
+        assert_eq!(
+            parse_building_kind_str(&name),
+            Some(BuildingKind::CoalFurnace)
         );
     }
 }
