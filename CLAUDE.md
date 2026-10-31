@@ -59,25 +59,28 @@ The `bevy_e2e` out-of-process test needs an exported build: `godot --headless --
 
 ```rust
 apply_player_command(&mut world, &mut map, cmd) -> CommandResult
+step_tick(&mut world, &mut map, seconds)  // canonical tick: waves → heat → combat → movement → economy → construction → production → visibility
+step_waves(&mut world, &mut map, seconds)
 step_combat(&mut world, &mut map, seconds)
 step_movement(&mut world, &map, seconds)
 step_economy(&mut world, &mut map, seconds)
-step_construction(&mut world, seconds)
+step_construction(&mut world, &map, seconds)
 step_production(&mut world, &mut map, seconds)
+step_heat(&mut world, seconds)
 refresh_visibility(&mut world, &map)
 ```
 
-This is deliberate: sim tests build `World::new()` + `seed_skirmish` and call the steps directly, with no app, no schedule, and no engine. Keep new gameplay in this shape.
+This is deliberate: sim tests build `World::new()` + `seed_skirmish` and call the steps directly, with no app, no schedule, and no engine. Keep new gameplay in this shape. `step_tick` (`src/tick.rs`) is the single source of runtime tick order — the bridge runs nothing else; the individual `step_*` functions exist for tests that deliberately stop mid-tick.
 
-Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `fixture` (authored skirmish + benchmark seeds — the `TeamStart` table and `RUINS` table are the only layout coordinate sources), `ids`.
+Modules: `catalog` (the single source of costs, build/train seconds, footprints, unlocks, population, speeds, gather rates — change balance here, nowhere else), `commands` (ownership validation, `RejectReason`, spawning), `economy` (worker tasks, gather/carry/deposit, drop-off routing), `buildings` (placement validation, construction, completion grants), `production` (FIFO queues, pop cap, spawn clearance, rally), `movement` (A* + separation), `map` (`GridMap`, `GridPos`, `Footprint`), `heat` (per-tick surface supply/demand from completed Team-1 buildings, pooled Coal-furnace burn, the `surface_efficiency` accessor), `tick` (the canonical `step_tick` order), `fixture` (authored skirmish + benchmark seeds — the `TeamStart` table and `RUINS` table are the only layout coordinate sources), `ids`.
 
 **`crates/grus-godot`** — the GDExtension. `build_app` (`#[bevy_app]`) registers the godot-bevy plugins, sets `Time::<Fixed>` to `SIM_STEP_SECONDS` (0.05 → 20 Hz), and chains `FixedUpdate` in a fixed order:
 
 ```
-apply_pending_commands → advance_waves → advance_combat → advance_movement → advance_economy → advance_construction → advance_production → advance_visibility → drain_route_reject_feedback
+apply_pending_commands → advance_sim → drain_route_reject_feedback
 ```
 
-Order is a contract, not an accident: waves launch after commands and before combat/movement so a new alien can acquire a target in the launch tick; arrival is visible to economy/construction in the same tick, and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick. `advance_visibility` runs after the gameplay steps so presentation and the next tick's command validation consume the same freshly computed fog. `crates/grus-sim/tests/system_order.rs` locks this — if you reorder, that test should fail.
+Order is a contract, not an accident. `advance_sim` reads `Time<Fixed>` and runs grus-sim's `step_tick` — waves → heat → combat → movement → economy → construction → production → visibility — inside one scoped `GridMap` resource borrow: waves launch after commands and before combat/movement so a new alien can acquire a target in the launch tick; heat computed at the top of the tick scales that same tick's completed-turret cooldowns and production progress; arrival is visible to economy/construction in the same tick; construction completion (population cap, producer queues) feeds production; and production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick. The closing visibility refresh is what presentation and the next tick's command validation consume. `crates/grus-sim/tests/system_order.rs` calls `step_tick` itself, so reordering the canonical tick fails those tests.
 
 **`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `unit_task_snapshot`, `placement_preview`, `catalogue_snapshot`, `wave_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
 
