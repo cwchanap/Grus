@@ -205,10 +205,28 @@ func _run() -> void:
 	if int(economy.get("population_used", -1)) != 4 or int(economy.get("population_cap", -1)) != 10:
 		_fail("Team 1 population after reset is not 4/10: %s" % [economy])
 		return
+	# HPA-181: a fresh fixture reports the warm Research Center heat baseline
+	# — 15 supply / 10 demand at full efficiency — on the snapshot and the
+	# HUD's third line; the reset-seeded HeatState replaces any burn state.
+	# The label is polled: the reset's synchronous reseed leaves one frame
+	# whose _process write still shows the default 0/0 HeatState.
+	if int(economy.get("heat_supply", -1)) != 15 or int(economy.get("heat_demand", -1)) != 10 \
+			or absf(float(economy.get("surface_efficiency", 0.0)) - 1.0) > 0.0001:
+		_fail("heat baseline after reset is not 15 supply / 10 demand at 100 percent: %s" % [economy])
+		return
+	var heat_label_text := ""
+	for _frame in range(30):
+		heat_label_text = str((get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label).text)
+		if heat_label_text.contains("Heat 15 / 10 · surface 100%"):
+			break
+		await get_tree().process_frame
+	if not heat_label_text.contains("Heat 15 / 10 · surface 100%"):
+		_fail("reset smoke HUD does not show the warm heat baseline: \"%s\"" % heat_label_text)
+		return
 	wave_error = SmokeHelpers.no_launched_wave_error("reset smoke")
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
 
-	print("GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true")
+	print("GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true heat=15/10/100%")
 	get_tree().quit(0)
