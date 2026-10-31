@@ -22,7 +22,7 @@ HPA-448 moved Team 1's 4×4 Research Center to the map midpoint (footprint ancho
 
 The old central lane barriers are gone. The only static blockers are sparse authored **ruins**: one `RUINS: &[(GridPos, GridPos)]` inclusive-rectangle table in `fixture.rs`, applied through `GridMap::set_blocked_rect` and exposed read-only to Godot as `GrusBridge.obstacle_rects()`. `godot/scripts/ruins.gd` fits one imported ruin prop to each rectangle from that payload — ruin coordinates exist in exactly one place. The ruins stay clear of the human base, every authored source and worker cell, the central construction/gather ring, the N/E/S/W access lanes, and benchmark staging regions; fixture tests prove each exclusion.
 
-The active catalogue builds on the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks / Wall / Gate / Gun Turret** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
+The active catalogue builds on the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks / Wall / Gate / Gun Turret / Coal Furnace** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
 
 ## HPA-290 winter terrain and ruined-city art
 
@@ -47,7 +47,7 @@ Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-s
 - **buildings** — placement validation, construction, completion grants (Dropoff, production queues, turret combat)
 - **production** — FIFO queues, population caps, spawn clearance, rally points
 
-Systems tick in a fixed order (commands → waves → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+Systems tick in a fixed order (commands → waves → combat → movement → economy → construction → production → visibility → route feedback) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, heat supply/demand/surface efficiency, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
 ## HPA-472 combat and match lifecycle
 
@@ -70,6 +70,23 @@ The minimap is a **128x96 runtime `ImageTexture`** (1 px per cell) redrawn from 
 ### Runtime setup
 
 The runtime match is a **human Team 1 survival battle against alien waves**. It starts with one Research Center, four Workers, and the authored resource stockpile; aliens attack after the 300-second preparation period. Fog of war, the minimap, combat, Defeat, restart and the session-free benchmark remain operational. Restart returns the match to a fresh **Start** state: initial fog (explored cells back to Unexplored, aliens hidden again).
+
+## HPA-181 heat and cold: surface efficiency
+
+Completed Team-1 buildings demand heat; the Research Center supplies **+15** while alive and completed Coal Furnaces add **+12 each** while their fuel lasts. The economy HUD's third line reports the live flow as `Heat <supply> / <demand> · surface <p>%`, straight from `economy_snapshot`'s `heat_supply`/`heat_demand`/`surface_efficiency` — a real deficit is never rounded up to 100%. Friendly completed heat-demanding views show a desaturated icy tint while efficiency is below 100% and recover the normal team blue when warmed; Walls, Gates and Furnaces demand no heat and never tint.
+
+| Completed structure | Heat supply | Heat demand |
+| --- | ---: | ---: |
+| Research Center | +15 | 10 |
+| Bunkhouse | 0 | 1 |
+| Depot | 0 | 1 |
+| Barracks | 0 | 3 |
+| Gun Turret | 0 | 2 |
+| Wall / Gate | 0 | 0 |
+| Coal Furnace | +12 when fueled | 0 |
+| Any construction site | 0 | 0 |
+
+`efficiency = demand == 0 ? 1.0 : clamp(supply / demand, 0.25, 1.0)` — a deficit floors at **25%**. Cold slows only the surface work completed buildings perform: Research Center/Barracks training and completed Gun Turret firing scale with efficiency. **Cold does not slow** worker gathering/carrying, construction speed, unit movement, or unit combat — units have no surface efficiency. A completed Coal Furnace (2×2, 80 Scrap, 20 s, Team 1 only) burns **0.5 Coal per simulated second** from the team stockpile while Playing; when Coal runs out its output and burn stop on the next tick until gathering refuels. Heat is a live flow, not a stockpile — there is no heat currency or storage.
 
 ### Build and launch
 
@@ -102,7 +119,7 @@ godot --headless --path godot res://scenes/wave_smoke_test.tscn
 godot --headless --path godot res://scenes/defenses_smoke_test.tscn
 ```
 
-The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence and interpolated presentation. It pins battlefield contracts: the boot camera frames the live Research Center, rendered `Ruins` match `GrusBridge.obstacle_rects()`, blocked-ground clicks receive `unreachable` feedback, and a human scout reveals an expansion resource before leaving it explored under fog. Every pre-wave Playing smoke checks the shared wave snapshot before exit or reset. The reset smoke requires exactly 4 unit views / 1 building view / 18 resource views, unique stable ids and the starting 200/300/150/0 stockpile. The economy smoke retains its full real-UI gather/build/train/rally/reject loop at 20×, split into two guarded preparation legs. The combat lifecycle smoke uses live controller attack-move and visible-alien right-click input, checks fog-gated markers and a Crystal kill reward, freezes combat while Paused, resumes into an alien-caused Defeat, and checks Result input lock and restart freshness. The dedicated wave smoke adds Start/Pause countdown freeze, HUD warning text, authoritative minimap-anchor pings and their expiry, plus labeled white-box checks of all four role silhouettes. The HPA-450 defense smoke builds a wall ring from the live Research Center footprint through the UI, proves human Gate traversal, observes a fogged alien Gate breach and post-breach structure damage, and verifies a Gun Turret Crystal kill and building-origin tracer.
+The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence and interpolated presentation. It pins battlefield contracts: the boot camera frames the live Research Center, rendered `Ruins` match `GrusBridge.obstacle_rects()`, blocked-ground clicks receive `unreachable` feedback, and a human scout reveals an expansion resource before leaving it explored under fog. Every pre-wave Playing smoke checks the shared wave snapshot before exit or reset. The reset smoke requires exactly 4 unit views / 1 building view / 18 resource views, unique stable ids and the starting 200/300/150/0 stockpile. The economy smoke retains its full real-UI gather/build/train/rally/reject loop at 20×, split into two guarded preparation legs, and its second leg proves the HPA-181 heat boundary with real input: warm 15/13 baseline after the Barracks, a Depot+Gun Turret deficit (15/16 → `surface 94%` and icy tints), a fueled Coal Furnace restoring 27/16 with tint recovery, visibly decreasing Coal, and funding through real gather cycles. The combat lifecycle smoke uses live controller attack-move and visible-alien right-click input, checks fog-gated markers and a Crystal kill reward, freezes combat while Paused, resumes into an alien-caused Defeat, and checks Result input lock and restart freshness. The dedicated wave smoke adds Start/Pause countdown freeze, HUD warning text, authoritative minimap-anchor pings and their expiry, plus labeled white-box checks of all four role silhouettes. The HPA-450 defense smoke builds a wall ring from the live Research Center footprint through the UI, proves human Gate traversal, observes a fogged alien Gate breach and post-breach structure damage, and verifies a Gun Turret Crystal kill and building-origin tracer.
 
 ### Controls
 
@@ -132,7 +149,7 @@ The full reference:
 - Mouse wheel: zoom
 - Middle drag: pan the camera
 - Minimap (bottom right): left-click recenters the camera on that map cell (view only — no commands, no reveal)
-- Build buttons (bottom panel): arm placement for Bunkhouse/Depot/Barracks/Gun Turret; Wall and Gate placement stays armed for consecutive left-clicks. The ground preview renders green when valid and red when blocked; right-click or `Esc` cancels placement without issuing a world command.
+- Build buttons (bottom panel): arm placement for Bunkhouse/Depot/Barracks/Gun Turret/Coal Furnace; Wall and Gate placement stays armed for consecutive left-clicks. The ground preview renders green when valid and red when blocked; right-click or `Esc` cancels placement without issuing a world command.
 - Train buttons: queue Worker on a selected Research Center, or Guard/Rifleman on a selected Barracks
 - Idle button (top right): selects and navigates to the next idle worker
 
