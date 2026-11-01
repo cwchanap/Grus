@@ -10,6 +10,7 @@ use crate::fixture::{MapFixture, seed_skirmish};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement};
+use crate::research::ResearchState;
 use crate::session::{MatchPhase, MatchSession, resolve_result, set_paused, start_match};
 use crate::visibility::{VisibilityMap, refresh_visibility, visible_to};
 
@@ -359,11 +360,11 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
     assert_eq!(wave_budget(8), 65);
     assert_eq!(wave_budget(10), 88);
 
-    let wave1 = plan_roster(1);
+    let wave1 = plan_roster(1, wave_budget(1));
     assert_eq!(wave1.swarmers, 12);
     assert_eq!(wave1.total_threat(), 12);
 
-    let wave4 = plan_roster(4);
+    let wave4 = plan_roster(4, wave_budget(4));
     assert_eq!(
         (
             wave4.behemoths,
@@ -375,7 +376,7 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
     );
     assert_eq!(wave4.total_threat(), 30);
 
-    let wave8 = plan_roster(8);
+    let wave8 = plan_roster(8, wave_budget(8));
     assert_eq!(
         (
             wave8.behemoths,
@@ -387,7 +388,7 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
     );
     assert_eq!(wave8.total_threat(), 65);
 
-    let wave10 = plan_roster(10);
+    let wave10 = plan_roster(10, wave_budget(10));
     assert_eq!(
         (
             wave10.behemoths,
@@ -411,7 +412,7 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
         ]
     );
 
-    let capped_wave = plan_roster(100).ordered_prefix(MAX_LIVE_ALIENS as usize);
+    let capped_wave = plan_roster(100, wave_budget(100)).ordered_prefix(MAX_LIVE_ALIENS as usize);
     assert_eq!(capped_wave.len(), MAX_LIVE_ALIENS as usize);
     assert_eq!(capped_wave[0], UnitKind::Behemoth);
     assert!(capped_wave[1..].iter().all(|kind| *kind == UnitKind::Brute));
@@ -419,23 +420,265 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
 
 #[test]
 fn roster_unlocks_and_budget_overflow_are_deterministic() {
-    let wave1 = plan_roster(1);
+    let wave1 = plan_roster(1, wave_budget(1));
     assert_eq!((wave1.brutes, wave1.spitters, wave1.behemoths), (0, 0, 0));
 
-    let wave4 = plan_roster(4);
+    let wave4 = plan_roster(4, wave_budget(4));
     assert_eq!((wave4.brutes, wave4.behemoths), (0, 0));
     assert!(wave4.spitters > 0);
 
-    let wave8 = plan_roster(8);
+    let wave8 = plan_roster(8, wave_budget(8));
     assert!(wave8.brutes > 0);
     assert_eq!(wave8.behemoths, 0);
 
     assert_eq!(wave_budget(u64::MAX), u64::MAX);
-    let overflow_roster = plan_roster(u64::MAX);
+    let overflow_roster = plan_roster(u64::MAX, wave_budget(u64::MAX));
     assert_eq!(overflow_roster.total_threat(), u64::MAX);
     let capped_prefix = overflow_roster.ordered_prefix(usize::MAX);
     assert_eq!(capped_prefix.len(), MAX_LIVE_ALIENS as usize);
     assert!(capped_prefix.iter().all(|kind| *kind == UnitKind::Brute));
+}
+
+// ---- 75% research wave-budget escalation -------------------------------
+
+/// The boosted figure floor(base × 3 / 2), written with the catalogue's
+/// widened numerator/denominator arithmetic — the same shape
+/// `effective_wave_budget` uses, so tests never hard-code a second
+/// rounding rule.
+fn boosted_budget(wave: u64) -> u64 {
+    u64::try_from(
+        u128::from(wave_budget(wave)) * u128::from(RESEARCH_WAVE_BOOST_NUMERATOR)
+            / u128::from(RESEARCH_WAVE_BOOST_DENOMINATOR),
+    )
+    .unwrap_or(u64::MAX)
+}
+
+/// The launch budget reads live research against the catalogue-derived
+/// 6,750-point mark: a missing `ResearchState` and any total strictly
+/// below spend `wave_budget(wave)` unchanged; exactly at the threshold —
+/// and anywhere above — spends floor(base × 3 / 2).
+#[test]
+fn launch_budget_flips_exactly_at_75_percent_research() {
+    let threshold = unlock_points(RESEARCH_WAVE_BOOST_PERCENT);
+    assert_eq!(threshold, 6_750);
+
+    // The neutral missing-resource read is zero — never boosted.
+    let mut world = World::new();
+    assert_eq!(effective_wave_budget(&world, 1), wave_budget(1));
+
+    world.insert_resource(ResearchState {
+        points: f64::from(threshold) - 0.5,
+    });
+    assert_eq!(effective_wave_budget(&world, 1), wave_budget(1));
+    assert_eq!(effective_wave_budget(&world, 10), wave_budget(10));
+
+    world.resource_mut::<ResearchState>().points = f64::from(threshold);
+    // floor(12 × 1.5) = 18; floor(17 × 1.5) = 25 — integer truncation
+    // drops the odd budget's half point; floor(88 × 1.5) = 132.
+    assert_eq!(effective_wave_budget(&world, 1), 18);
+    assert_eq!(effective_wave_budget(&world, 2), 25);
+    assert_eq!(effective_wave_budget(&world, 10), 132);
+
+    world.resource_mut::<ResearchState>().points = f64::from(threshold) + 250.5;
+    assert_eq!(effective_wave_budget(&world, 1), 18);
+}
+
+/// A launch committed before the crossing keeps the plain roster; the
+/// FIRST launch after research reaches 75% spends the boosted budget —
+/// wave 1 at 6,749.5 buys 12 swarmers, wave 2 at 6,750 buys 25.
+#[test]
+fn first_launch_after_crossing_75_percent_uses_the_boosted_budget() {
+    let (mut world, mut map) = seeded_world();
+
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)) - 0.5;
+    launch_wave(&mut world, &mut map, 1);
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len() as u64,
+        plan_roster(1, wave_budget(1)).total_units()
+    );
+
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+    launch_wave(&mut world, &mut map, 2);
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len() as u64,
+        plan_roster(1, wave_budget(1)).total_units()
+            + plan_roster(2, boosted_budget(2)).total_units()
+    );
+}
+
+/// The multiplier is selected fresh at every launch, never compounded:
+/// three consecutive waves launched while research holds above 75% each
+/// spend exactly floor(base × 3 / 2) — the later boosted launches do not
+/// see ×2.25.
+#[test]
+fn repeated_boosted_launches_never_stack_the_multiplier() {
+    let (mut world, mut map) = seeded_world();
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)) + 90.0;
+
+    let mut spawned = 0_u64;
+    for wave in 1..=3_u64 {
+        launch_wave(&mut world, &mut map, wave);
+        let live = live_alien_ids(&world, TeamId(2)).len() as u64;
+        assert_eq!(
+            live - spawned,
+            plan_roster(wave, boosted_budget(wave)).total_units(),
+            "wave {wave} must spend exactly its own 1.5x budget"
+        );
+        spawned = live;
+    }
+}
+
+/// A wave committed before the crossing is never re-rolled: after
+/// research crosses 75% and a boosted wave lands, the earlier swarmers
+/// keep the exact kinds and health they launched with.
+#[test]
+fn crossing_75_percent_does_not_rebuff_an_already_launched_wave() {
+    let (mut world, mut map) = seeded_world();
+    launch_wave(&mut world, &mut map, 1);
+    let wave_one = live_alien_ids(&world, TeamId(2));
+    let committed: Vec<(UnitKind, Health)> = wave_one
+        .iter()
+        .map(|id| {
+            let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+            (
+                world.get::<Unit>(entity).unwrap().kind,
+                *world.get::<Health>(entity).unwrap(),
+            )
+        })
+        .collect();
+
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+    launch_wave(&mut world, &mut map, 2);
+
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len() as u64,
+        wave_one.len() as u64 + plan_roster(2, boosted_budget(2)).total_units()
+    );
+    for (id, (kind, health)) in wave_one.iter().zip(committed) {
+        let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+        assert_eq!(world.get::<Unit>(entity).unwrap().kind, kind);
+        assert_eq!(
+            world.get::<Health>(entity).unwrap(),
+            &health,
+            "the already-launched wave keeps its committed health"
+        );
+    }
+}
+
+/// Boosted budgets feed the unchanged zone rotation: wave 10's two-zone
+/// launch buys the full 58-unit roster from floor(88 × 1.5) = 132 and
+/// wave 20's three-zone launch buys 205 units from floor(248 × 1.5) =
+/// 372 — over the 150 cap, so the cap and overflow-health rules consume
+/// the boosted roster exactly like a normal one.
+#[test]
+fn boosted_budgets_apply_to_two_and_three_zone_waves() {
+    let (mut world, mut map) = seeded_world();
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+
+    launch_wave(&mut world, &mut map, 10);
+    assert_eq!(plan_roster(10, boosted_budget(10)).total_units(), 58);
+    assert_eq!(live_alien_ids(&world, TeamId(2)).len(), 58);
+    // The two-zone launch splits the boosted roster across both anchors.
+    let cells = unit_cells(&world, &map);
+    for zone in zones_for(10) {
+        let anchor = zone.anchor();
+        assert!(
+            cells
+                .iter()
+                .any(|cell| (cell.x - anchor.x).abs() <= 2 && (cell.y - anchor.y).abs() <= 2),
+            "no alien spawned near the {zone:?} anchor at {anchor:?}"
+        );
+    }
+
+    let (mut world, mut map) = seeded_world();
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+    launch_wave(&mut world, &mut map, 20);
+    let wave_twenty = live_alien_ids(&world, TeamId(2));
+    assert_eq!(plan_roster(20, boosted_budget(20)).total_units(), 205);
+    assert_eq!(wave_twenty.len(), MAX_LIVE_ALIENS as usize);
+    let cells = unit_cells(&world, &map);
+    for zone in zones_for(20) {
+        let anchor = zone.anchor();
+        assert!(
+            cells
+                .iter()
+                .any(|cell| (cell.x - anchor.x).abs() <= 2 && (cell.y - anchor.y).abs() <= 2),
+            "no alien spawned near the {zone:?} anchor at {anchor:?}"
+        );
+    }
+    // The 55 unspawned threat points fold into health: every capped
+    // spawn is buffed above its catalogue base.
+    for id in &wave_twenty {
+        let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
+        let kind = world.get::<Unit>(entity).unwrap().kind;
+        let health = world.get::<Health>(entity).unwrap();
+        assert!(
+            health.max > unit_spec(kind).max_health,
+            "{kind:?} must carry overflow health, got {}",
+            health.max
+        );
+        assert_eq!(health.current, health.max);
+    }
+}
+
+/// The live-alien cap consumes the boosted roster unchanged: with one
+/// slot free, boosted wave 10 still spawns only the priority-head
+/// Behemoth, folding the larger overflow — floor(88 × 1.5) = 132 budget,
+/// 92 unspawned threat — into 6,600 health where the unboosted launch
+/// grants 4,400.
+#[test]
+fn boosted_wave_overflow_buffs_the_capped_spawn_harder() {
+    let (mut world, mut map) = seeded_world();
+    add_team_two_aliens(&mut world, &map, MAX_LIVE_ALIENS as usize - 1);
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+
+    launch_wave(&mut world, &mut map, 10);
+
+    let ids = live_alien_ids(&world, TeamId(2));
+    assert_eq!(ids.len(), MAX_LIVE_ALIENS as usize);
+    let fresh = world
+        .resource::<UnitIndex>()
+        .entity(*ids.last().unwrap())
+        .unwrap();
+    assert_eq!(world.get::<Unit>(fresh).unwrap().kind, UnitKind::Behemoth);
+    assert_eq!(world.get::<Health>(fresh).unwrap().max, 6_600);
+    assert_eq!(world.get::<Health>(fresh).unwrap().current, 6_600);
+}
+
+/// `u64::MAX`-class budgets never wrap: the widened boost saturates, the
+/// roster builder's arithmetic saturates, and a real launch at the
+/// saturated budget still lands inside the 150-alien cap.
+#[test]
+fn extreme_boosted_budgets_saturate_instead_of_wrapping() {
+    let mut world = World::new();
+    world.insert_resource(ResearchState {
+        points: f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)),
+    });
+    // floor(u64::MAX × 3 / 2) exceeds u64 — saturates, never wraps to 0.
+    assert_eq!(effective_wave_budget(&world, u64::MAX), u64::MAX);
+
+    let roster = plan_roster(u64::MAX, u64::MAX);
+    assert_eq!(roster.total_threat(), u64::MAX);
+    assert_eq!(
+        roster.ordered_prefix(usize::MAX).len(),
+        MAX_LIVE_ALIENS as usize
+    );
+
+    let (mut world, mut map) = seeded_world();
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
+    launch_wave(&mut world, &mut map, u64::MAX);
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len(),
+        MAX_LIVE_ALIENS as usize
+    );
 }
 
 #[test]
