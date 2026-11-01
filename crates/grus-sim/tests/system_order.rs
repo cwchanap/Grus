@@ -8,11 +8,11 @@
 //! tick's research gain, and rallied production moves next.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use bevy::math::Vec2;
 use bevy::prelude::{Entity, World};
-use grus_sim::catalog::{building_spec, unit_spec};
+use grus_sim::catalog::{ANALYZE_COST, building_spec, unit_spec};
 use grus_sim::{
     AttackCooldown, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder,
     CombatTarget, ConstructionState, Dropoff, EntryZone, Footprint, GatherProgress, GridMap,
@@ -494,6 +494,31 @@ fn border_position(map: &GridMap, slot: GridPos) -> Vec2 {
     panic!("no walkable neighbour beside slot {slot:?}");
 }
 
+/// A walkable cell on `footprint`'s immediate perimeter with no live unit
+/// standing on it — close enough that any melee-range attacker strikes
+/// from the spawn position. Derived from the live building so a fixture
+/// relocation moves the firing position with it instead of stranding a
+/// copied cell.
+fn free_perimeter_cell(world: &World, map: &GridMap, footprint: Footprint) -> GridPos {
+    let occupied: HashSet<GridPos> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(_, entity)| {
+            map.world_to_cell(
+                world
+                    .get::<SimPosition>(*entity)
+                    .expect("an indexed unit carries a SimPosition")
+                    .current,
+            )
+        })
+        .collect();
+    footprint
+        .perimeter_cells()
+        .into_iter()
+        .find(|cell| map.is_walkable(*cell) && !occupied.contains(cell))
+        .expect("the live footprint must expose a free perimeter cell")
+}
+
 /// The cold surface of one tick: heat computed at the top of `step_tick`
 /// must scale the SAME tick's turret cooldown drain and queue-head progress.
 /// The seeded Research Center is poked incomplete so supply drops to 0 while
@@ -893,18 +918,24 @@ fn lethal_combat_wins_the_same_tick_tie_over_research() {
 
     // Research a fraction under the target — this tick's warm gain would
     // cross it — and a raider parked in range with a direct attack order,
-    // the core one Guard hit from destruction.
+    // the core one Guard hit from destruction. The firing cell derives
+    // from the live core footprint so a fixture relocation cannot strand it.
     world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS) - 0.05;
     let research_center = world
         .resource::<BuildingIndex>()
         .entity(RESEARCH_CENTER)
         .unwrap();
     world.get_mut::<Health>(research_center).unwrap().current = 10;
+    let raider_cell = free_perimeter_cell(
+        &world,
+        &map,
+        *world.get::<Footprint>(research_center).unwrap(),
+    );
     let raider = spawn_unit(
         &mut world,
         UnitId(100),
         TeamId(2),
-        map.cell_center(GridPos::new(61, 49)),
+        map.cell_center(raider_cell),
         UnitKind::Guard,
         unit_spec(UnitKind::Guard).speed,
     );
@@ -923,6 +954,95 @@ fn lethal_combat_wins_the_same_tick_tie_over_research() {
     assert!(
         world.resource::<ResearchState>().points < f64::from(RESEARCH_TARGET_POINTS),
         "the settled Result froze the accumulator before this tick's gain"
+    );
+}
+
+/// Command-before-combat is the other side of the same-tick tie contract:
+/// an accepted Analyze that reaches the target settles Team-1 Victory
+/// inside the command phase, BEFORE the next tick runs. The following
+/// `step_tick` then leaves the settled Result alone — combat is frozen by
+/// the session gate, so a raider already parked in lethal range never
+/// lands its blow: the core survives and the winner stays Team 1. The
+/// reverse ordering is what `lethal_combat_wins_the_same_tick_tie_over_research`
+/// pins for the command-free case.
+#[test]
+fn winning_analyze_survives_the_next_ticks_lethal_blow() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // One Analyze short of the target so the accepted command's +90
+    // crosses it; a raider already on the core's perimeter with a direct
+    // attack order, the core one Guard hit from destruction.
+    world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS) - 1.0;
+    world
+        .resource_mut::<TeamEconomy>()
+        .0
+        .get_mut(&TEAM)
+        .unwrap()
+        .stockpile
+        .crystals = ANALYZE_COST.crystals;
+    let research_center = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
+    let raider_cell = free_perimeter_cell(
+        &world,
+        &map,
+        *world.get::<Footprint>(research_center).unwrap(),
+    );
+    let raider = spawn_unit(
+        &mut world,
+        UnitId(100),
+        TeamId(2),
+        map.cell_center(raider_cell),
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
+    );
+    world.entity_mut(raider).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(RESEARCH_CENTER),
+        last_target_cell: None,
+    });
+
+    // The winning command resolves inside `apply_player_command` — the
+    // same command-phase path the bridge drains before every fixed step.
+    let accepted = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Analyze {
+            issuer: TEAM,
+            building: RESEARCH_CENTER,
+        },
+    );
+    assert_eq!(accepted.reject, None, "the winning Analyze rejected");
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TEAM)),
+        "the accepted Analyze must settle Victory inside the command phase"
+    );
+
+    // The would-be-lethal tick: the settled Result freezes combat before
+    // the parked raider can strike, so the core is never hit and Team 1's
+    // Victory stands — no result is ever rewritten.
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TEAM)),
+        "the settled Victory must survive the would-be-lethal tick"
+    );
+    let core_entity = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .expect("the frozen tick destroyed the Research Center");
+    assert!(
+        world.get::<Health>(core_entity).unwrap().current > 0,
+        "the frozen tick's parked raider hit the core"
     );
 }
 
