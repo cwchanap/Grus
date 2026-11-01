@@ -78,7 +78,7 @@ These are local development stages, **not additional Linear tickets or PRs**. Th
 - [ ] cargo clippy --workspace --all-targets -- -D warnings
 - [ ] cargo test --workspace --locked
 - [ ] cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
-- [ ] cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\\.rs$'
+- [ ] cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\.rs$'
 - [ ] Godot 4.7.1 import and existing bridge/reset/economy/combat/wave/defense smokes (including the new research boundary case), each with strict exit 0 and its sentinel
 - [ ] Linux x86_64 smoke export, packaged smoke, e2e-feature export and exported-game bevy-e2e
 - [ ] Existing 10-second CI benchmark survives and any relevant measured performance regression is explained
