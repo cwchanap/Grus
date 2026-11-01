@@ -1,14 +1,18 @@
 use bevy::prelude::{Entity, Or, With, World};
 
 use super::*;
-use crate::buildings::{Building, BuildingIndex};
-use crate::catalog::{ANALYZE_RESEARCH_GAIN, BuildingKind, MIN_SURFACE_EFFICIENCY, building_spec};
-use crate::commands::UnitIndex;
-use crate::economy::ResourceIndex;
+use crate::buildings::{Building, BuildingIndex, ConstructionState};
+use crate::catalog::{
+    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, MIN_SURFACE_EFFICIENCY, building_spec,
+};
+use crate::commands::{
+    CommandResult, PlayerCommand, RejectReason, UnitIndex, apply_player_command,
+};
+use crate::economy::{ResourceIndex, ResourceStockpile, TeamEconomy};
 use crate::fixture::{MapFixture, seed_skirmish};
 use crate::heat::HeatState;
-use crate::ids::{IdAllocator, TeamId};
-use crate::map::GridMap;
+use crate::ids::{BuildingId, IdAllocator, TeamId};
+use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{SIM_STEP_SECONDS, Unit};
 use crate::session::{MatchPhase, MatchResult, MatchSession};
 
@@ -242,4 +246,264 @@ fn clear_and_reseed_zeroes_research() {
     seed_skirmish(&mut world, &mut fresh_map, &fixture);
     assert_eq!(points(&world), 0.0);
     assert_eq!(research_points(&world), 0.0);
+}
+
+const TEAM: TeamId = TeamId(1);
+const ENEMY: TeamId = TeamId(2);
+/// The seeded skirmish core: `seed_skirmish` allocates `BuildingId(1)` to
+/// Team 1's completed Research Center.
+const RESEARCH_CENTER: BuildingId = BuildingId(1);
+
+fn analyze(world: &mut World, map: &mut GridMap, building: BuildingId) -> CommandResult {
+    apply_player_command(
+        world,
+        map,
+        PlayerCommand::Analyze {
+            issuer: TEAM,
+            building,
+        },
+    )
+}
+
+fn stockpile(world: &World, team: TeamId) -> ResourceStockpile {
+    world.resource::<TeamEconomy>().0[&team].stockpile
+}
+
+fn set_crystals(world: &mut World, team: TeamId, crystals: u32) {
+    world
+        .resource_mut::<TeamEconomy>()
+        .0
+        .get_mut(&team)
+        .unwrap()
+        .stockpile
+        .crystals = crystals;
+}
+
+/// A finished building registered in `BuildingIndex` with its footprint
+/// cells blocked — the same helper shape `production::tests` uses to stand
+/// up buildings without the placement command path.
+fn complete_building(
+    world: &mut World,
+    map: &mut GridMap,
+    id: BuildingId,
+    kind: BuildingKind,
+    anchor: GridPos,
+    team: TeamId,
+) {
+    let spec = building_spec(kind);
+    let footprint = Footprint::new(anchor, spec.width, spec.height);
+    for cell in footprint.cells() {
+        map.set_blocked(cell, true);
+    }
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+}
+
+/// An accepted Analyze converts exactly `ANALYZE_COST` (10 Crystals) into
+/// `ANALYZE_RESEARCH_GAIN` points in one immediate command — no queue, no
+/// timer — spending a stockpile that covers the price down to zero.
+#[test]
+fn analyze_with_exactly_ten_crystals_succeeds() {
+    let (mut world, mut map) = battlefield();
+    set_crystals(&mut world, TEAM, ANALYZE_COST.crystals);
+
+    let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+    assert_eq!(result.reject, None);
+    assert_eq!(
+        stockpile(&world, TEAM),
+        ResourceStockpile {
+            food: 200,
+            scrap: 300,
+            coal: 150,
+            crystals: 0,
+        },
+        "only the 10 Crystal leg is spent"
+    );
+    assert_eq!(research_points(&world), ANALYZE_RESEARCH_GAIN);
+}
+
+/// A short stockpile rejects `InsufficientResources` through the atomic
+/// `try_spend`: nothing is deducted — not even the affordable currencies —
+/// and no points are banked.
+#[test]
+fn analyze_short_on_crystals_rejects_and_spends_nothing() {
+    let (mut world, mut map) = battlefield();
+    set_crystals(&mut world, TEAM, ANALYZE_COST.crystals - 1);
+    let before = stockpile(&world, TEAM);
+
+    let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+    assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+    assert_eq!(stockpile(&world, TEAM), before, "a rejected Analyze spent");
+    assert_eq!(
+        research_points(&world),
+        0.0,
+        "a rejected Analyze banked points"
+    );
+}
+
+/// The commandable-building chain answers foreign, wrong-kind and absent
+/// targets before any spend: every rejection leaves the stockpile and the
+/// point total untouched.
+#[test]
+fn analyze_rejects_foreign_wrong_kind_and_missing_without_spending() {
+    let (mut world, mut map) = battlefield();
+    set_crystals(&mut world, TEAM, 100);
+    let before = stockpile(&world, TEAM);
+    // A foreign core answers NotOwned in the full-information world (a
+    // hidden one would answer BuildingMissing through the same gate).
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(50),
+        BuildingKind::ResearchCenter,
+        GridPos::new(10, 10),
+        ENEMY,
+    );
+    // A friendly non-core building is the wrong kind.
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(51),
+        BuildingKind::Depot,
+        GridPos::new(20, 20),
+        TEAM,
+    );
+
+    let foreign = analyze(&mut world, &mut map, BuildingId(50));
+    let wrong_kind = analyze(&mut world, &mut map, BuildingId(51));
+    let missing = analyze(&mut world, &mut map, BuildingId(999));
+
+    assert_eq!(foreign.reject, Some(RejectReason::NotOwned));
+    assert_eq!(wrong_kind.reject, Some(RejectReason::WrongProducer));
+    assert_eq!(missing.reject, Some(RejectReason::BuildingMissing));
+    assert_eq!(stockpile(&world, TEAM), before, "a rejected Analyze spent");
+    assert_eq!(
+        research_points(&world),
+        0.0,
+        "a rejected Analyze banked points"
+    );
+}
+
+/// A session outside Playing locks Analyze like every other command — the
+/// single `gameplay_active` gate rejects before validation or spend, so
+/// nothing is deducted and nothing is banked.
+#[test]
+fn analyze_rejects_outside_playing_without_spending() {
+    for phase in [
+        MatchPhase::Start,
+        MatchPhase::Paused,
+        MatchPhase::Result(MatchResult(ENEMY)),
+    ] {
+        let (mut world, mut map) = battlefield();
+        set_crystals(&mut world, TEAM, 100);
+        let before = stockpile(&world, TEAM);
+        world.insert_resource(MatchSession { phase });
+
+        let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+        assert_eq!(
+            result.reject,
+            Some(RejectReason::SessionLocked),
+            "{phase:?} must lock Analyze"
+        );
+        assert_eq!(stockpile(&world, TEAM), before);
+        assert_eq!(research_points(&world), 0.0);
+    }
+}
+
+/// Sequential Analyze commands each spend and bank independently until the
+/// stockpile runs dry; the first unaffordable one rejects while the
+/// earlier grants stand — one immediate command at a time, never a job.
+#[test]
+fn repeated_analyze_spends_and_banks_each_time() {
+    let (mut world, mut map) = battlefield();
+    set_crystals(&mut world, TEAM, 25); // two full payments, short of three
+
+    for index in 1..=2 {
+        let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+        assert_eq!(result.reject, None, "Analyze #{index} rejected");
+    }
+    assert_eq!(stockpile(&world, TEAM).crystals, 5);
+    assert_eq!(research_points(&world), 2.0 * ANALYZE_RESEARCH_GAIN);
+
+    let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+    assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
+    assert_eq!(stockpile(&world, TEAM).crystals, 5);
+    assert_eq!(research_points(&world), 2.0 * ANALYZE_RESEARCH_GAIN);
+}
+
+/// One Analyze carries the point total across each milestone threshold —
+/// 25% (2,250), 50% (4,500) and 75% (6,750) — seeded just below so the
+/// single +90 grant is what crosses the derived boundary.
+#[test]
+fn analyze_crosses_each_milestone_threshold() {
+    for percent in [25, 50, 75] {
+        let threshold = f64::from(unlock_points(percent));
+        let (mut world, mut map) = battlefield();
+        set_crystals(&mut world, TEAM, ANALYZE_COST.crystals);
+        world.resource_mut::<ResearchState>().points = threshold - 1.0;
+        assert!(research_points(&world) < threshold);
+
+        let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+        assert_eq!(result.reject, None, "{percent}% Analyze rejected");
+        assert!(
+            research_points(&world) >= threshold,
+            "{percent}%: {} must reach {threshold}",
+            research_points(&world)
+        );
+    }
+}
+
+/// Analyze at the cap banks exactly `RESEARCH_TARGET_POINTS` — the
+/// overshoot clamps, the Playing session resolves Team-1 Victory inside
+/// this same command phase, and the next Analyze queued in the batch is
+/// already `SessionLocked` with its Crystals unspent.
+#[test]
+fn analyze_at_the_target_clamps_resolves_victory_and_locks_the_batch() {
+    let (mut world, mut map) = battlefield();
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    set_crystals(&mut world, TEAM, 30);
+    world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS) - 10.0;
+
+    let first = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+    assert_eq!(first.reject, None);
+    assert_eq!(stockpile(&world, TEAM).crystals, 20);
+    assert_eq!(research_points(&world), f64::from(RESEARCH_TARGET_POINTS));
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TEAM))
+    );
+
+    // The queued-behind command sees the settled Result: rejected with
+    // nothing spent, and the winner never moves.
+    let second = analyze(&mut world, &mut map, RESEARCH_CENTER);
+    assert_eq!(second.reject, Some(RejectReason::SessionLocked));
+    assert_eq!(stockpile(&world, TEAM).crystals, 20);
+    assert_eq!(research_points(&world), f64::from(RESEARCH_TARGET_POINTS));
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TEAM))
+    );
 }

@@ -6,11 +6,15 @@
 
 use bevy::prelude::{Resource, World};
 
+use crate::buildings::{Building, commandable_building_entity};
 use crate::catalog::{
-    BuildingKind, RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, building_spec,
+    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, RESEARCH_BASE_PER_SECOND,
+    RESEARCH_TARGET_POINTS, building_spec,
 };
+use crate::commands::{CommandResult, RejectReason};
+use crate::economy::TeamEconomy;
 use crate::heat::surface_efficiency;
-use crate::ids::TeamId;
+use crate::ids::{BuildingId, TeamId};
 use crate::session::{gameplay_active, resolve_result};
 
 /// Team 1's accumulated research points, capped at
@@ -87,6 +91,69 @@ pub fn step_research(world: &mut World, seconds: f32) {
         return;
     }
     add_research(world, research_rate(world) * f64::from(seconds));
+}
+
+/// Applies an accepted `Analyze` on the issuer's Research Center: the
+/// commandable-building validation chain (exists → owned → completed →
+/// kind), then one atomic `try_spend` of `ANALYZE_COST` before the shared
+/// `add_research` banks `ANALYZE_RESEARCH_GAIN`. A rejection anywhere —
+/// validation or spend — deducts nothing and grants nothing; the command
+/// is immediate, never a production-queue job.
+pub(crate) fn apply_analyze(
+    world: &mut World,
+    issuer: TeamId,
+    building: BuildingId,
+) -> CommandResult {
+    let mut result = CommandResult::default();
+    if let Err(reason) = validate_analyze(world, issuer, building) {
+        result.reject = Some(reason);
+        return result;
+    }
+
+    // Atomic spend before the grant: a failed `try_spend` leaves every
+    // currency field unchanged and no points are banked.
+    let spent = world
+        .get_resource_mut::<TeamEconomy>()
+        .map(|mut economy| {
+            economy
+                .0
+                .get_mut(&issuer)
+                .is_some_and(|state| state.stockpile.try_spend(ANALYZE_COST))
+        })
+        .unwrap_or(false);
+    if !spent {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
+    }
+
+    add_research(world, ANALYZE_RESEARCH_GAIN);
+    result
+}
+
+/// Analyze validation, mirroring `production::validate_enqueue`: the
+/// commandable-building resolution (a hidden enemy is indistinguishable
+/// from absent — fog privacy) → owned → completed → the one
+/// research-capable kind. The Research Center is the only Analyze target.
+fn validate_analyze(
+    world: &World,
+    issuer: TeamId,
+    building: BuildingId,
+) -> Result<(), RejectReason> {
+    let building_entity = commandable_building_entity(world, issuer, building)?;
+    let state = world
+        .get::<Building>(building_entity)
+        .ok_or(RejectReason::BuildingMissing)?;
+    if state.team != issuer {
+        return Err(RejectReason::NotOwned);
+    }
+    // An incomplete core cannot analyze until construction completes.
+    if !state.construction.complete {
+        return Err(RejectReason::Locked);
+    }
+    if state.kind != BuildingKind::ResearchCenter {
+        return Err(RejectReason::WrongProducer);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ use crate::ids::{BuildingId, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_unit, apply_set_rally};
+use crate::research::apply_analyze;
 use crate::session::gameplay_active;
 use crate::visibility::{VisibilityMap, move_goal_counts_as_occupancy, unit_counts_as_occupancy};
 
@@ -64,6 +65,12 @@ pub enum PlayerCommand {
         issuer: TeamId,
         units: Vec<UnitId>,
         target: CombatTarget,
+    },
+    /// One immediate Crystals-to-research conversion at the issuer's
+    /// completed Research Center — never a production-queue job.
+    Analyze {
+        issuer: TeamId,
+        building: BuildingId,
     },
 }
 
@@ -221,6 +228,7 @@ pub fn apply_player_command(
             units,
             target,
         } => apply_attack(world, issuer, units, target),
+        PlayerCommand::Analyze { issuer, building } => apply_analyze(world, issuer, building),
     }
 }
 
