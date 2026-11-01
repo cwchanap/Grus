@@ -133,30 +133,6 @@ func _click_button(button: Button) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-## Recenters the camera's viewed ground cell through the minimap's own
-## click path — the camera move a player makes when a HUD panel covers the
-## target. push_input dispatches the same Window->Viewport GUI routing an
-## OS click takes; the buffered parse_input_event path is unreliable for
-## GUI clicks in headless runs (smoke_test's minimap leg does the same).
-func _minimap_recenter(cell: Vector2i) -> void:
-	var minimap := get_node("Main/HUD/Minimap") as Control
-	if minimap == null:
-		_fail("minimap is missing for the camera recenter")
-		return
-	var click_at := minimap.get_global_rect().position + Vector2(cell)
-	var press := InputEventMouseButton.new()
-	press.button_index = MOUSE_BUTTON_LEFT
-	press.position = click_at
-	press.pressed = true
-	get_tree().root.push_input(press)
-	var release := InputEventMouseButton.new()
-	release.button_index = MOUSE_BUTTON_LEFT
-	release.position = click_at
-	release.pressed = false
-	get_tree().root.push_input(release)
-	await get_tree().process_frame
-	await get_tree().process_frame
-
 ## Polls a condition every physics frame until it holds or the frame budget
 ## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
 func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
@@ -552,10 +528,6 @@ func _run() -> void:
 	# footprints and gather requires explored sources, so scout the corridor
 	# first. The expansion salvage's view becoming visible is the explored
 	# proof (views are the presentation projection of the sim fog).
-	# Under the default framing the corridor's cells project onto the
-	# ResearchPanel, which consumes those clicks — recenter the camera on
-	# the corridor through the real minimap path before ordering anything.
-	await _minimap_recenter(Vector2i(40, 28))
 	await _click_view(builder, MOUSE_BUTTON_LEFT)
 	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(
@@ -587,14 +559,8 @@ func _run() -> void:
 			"no scrap delivery ever reached the Depot"):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
-	# later click target, so parking in place is safe. Its view still
-	# projects under the corridor framing here — the restore follows.
+	# later click target, so parking in place is safe.
 	await _stop_unit(scrap_worker)
-	# The corridor interactions are done; restore the city-centered view for
-	# the staging/parking, rally and post-reset legs whose click targets
-	# were authored for the default framing.
-	await _minimap_recenter(Vector2i(
-		int(research_center.global_position.x), int(research_center.global_position.z)))
 
 	# Reject-code pin: the read-only placement preview reports the numeric
 	# Occupied code for a footprint inside the seeded Research Center — the same

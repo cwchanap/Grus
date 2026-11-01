@@ -6,13 +6,13 @@
 
 use bevy::prelude::{Resource, World};
 
-use crate::buildings::{Building, commandable_building_entity};
+use crate::buildings::{Building, BuildingIndex, commandable_completed_building};
 use crate::catalog::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, RESEARCH_BASE_PER_SECOND,
     RESEARCH_TARGET_POINTS, building_spec,
 };
 use crate::commands::{CommandResult, RejectReason};
-use crate::economy::TeamEconomy;
+use crate::economy::try_spend;
 use crate::heat::surface_efficiency;
 use crate::ids::{BuildingId, TeamId};
 use crate::session::{gameplay_active, resolve_result};
@@ -63,11 +63,18 @@ pub fn research_rate(world: &World) -> f64 {
 
 /// Adds `points` to the one accumulator, clamped to the catalogue target;
 /// reaching it resolves Team-1 Victory through the shared session helper.
-/// Called only from Playing-gated paths — `step_research` checks
+/// Only a finite, positive grant moves the total — a NaN delta would
+/// poison every later threshold read forever (the tower unlocks fail
+/// closed while the wave boost fails open, and Victory can never fire),
+/// and a negative one would drag the monotonic total backward. Called
+/// only from Playing-gated paths — `step_research` checks
 /// `gameplay_active`, accepted Analyze commands pass the session gate —
 /// and `resolve_result` itself ignores a settled session, so a later call
 /// can never overwrite the winner.
 pub fn add_research(world: &mut World, points: f64) {
+    if !points.is_finite() || points <= 0.0 {
+        return;
+    }
     let total = (research_points(world) + points).clamp(0.0, f64::from(RESEARCH_TARGET_POINTS));
     world
         .get_resource_or_insert_with(ResearchState::default)
@@ -77,28 +84,50 @@ pub fn add_research(world: &mut World, points: f64) {
     }
 }
 
-/// Advances passive research one fixed tick, gated only by the shared
-/// `gameplay_active` session flag — Start, Paused and a settled Result
-/// freeze progress, and a session-free world (fixture tests, the
-/// benchmark) plays. The seeded Research Center is complete and
-/// unplaceable, and its destruction already settles Result inside combat
-/// earlier in this same canonical tick, so no second living-core check
-/// exists here. Runs after production and before visibility: it consumes
-/// the heat totals `step_heat` computed at the top of this tick, and a
-/// lethal same-tick hit on the core wins the tie for Team 2.
+/// Advances passive research one fixed tick, gated by three things: the
+/// shared `gameplay_active` session flag (Start, Paused and a settled
+/// Result freeze progress, and a session-free world — fixture tests, the
+/// benchmark — plays), a finite positive delta like the wave clock's own
+/// `advance` guard, and a living Team-1 core. In-session the core's
+/// destruction already settles Result inside combat earlier in this same
+/// canonical tick; the living-core check is what stops the session-free
+/// worlds that have no Result to settle — the benchmark's Research
+/// Center falls mid-run and must not keep banking points into the
+/// wave-boost threshold. Runs after production and before visibility: it
+/// consumes the heat totals `step_heat` computed at the top of this
+/// tick, and a lethal same-tick hit on the core wins the tie for Team 2.
 pub fn step_research(world: &mut World, seconds: f32) {
-    if !gameplay_active(world) {
+    if !gameplay_active(world) || !seconds.is_finite() || seconds <= 0.0 {
+        return;
+    }
+    if !living_research_core(world) {
         return;
     }
     add_research(world, research_rate(world) * f64::from(seconds));
 }
 
+/// Whether Team 1's Research Center still lives — its `BuildingIndex`
+/// entry is the alive fact (combat removal drops it before the despawn).
+/// Completion is deliberately not part of the gate: canonical-tick tests
+/// run an incomplete core to zero the heat supply, and accrual has no
+/// reason to stop for it.
+fn living_research_core(world: &World) -> bool {
+    world.get_resource::<BuildingIndex>().is_some_and(|index| {
+        index.iter().any(|(_, entity)| {
+            world.get::<Building>(*entity).is_some_and(|building| {
+                building.team == TeamId(1) && building.kind == BuildingKind::ResearchCenter
+            })
+        })
+    })
+}
+
 /// Applies an accepted `Analyze` on the issuer's Research Center: the
-/// commandable-building validation chain (exists → owned → completed →
-/// kind), then one atomic `try_spend` of `ANALYZE_COST` before the shared
-/// `add_research` banks `ANALYZE_RESEARCH_GAIN`. A rejection anywhere —
-/// validation or spend — deducts nothing and grants nothing; the command
-/// is immediate, never a production-queue job.
+/// Team-1 issuer gate, then the commandable-building validation chain
+/// (exists → owned → completed → kind → under the cap), then one atomic
+/// `try_spend` of `ANALYZE_COST` before the shared `add_research` banks
+/// `ANALYZE_RESEARCH_GAIN`. A rejection anywhere — validation or spend —
+/// deducts nothing and grants nothing; the command is immediate, never a
+/// production-queue job.
 pub(crate) fn apply_analyze(
     world: &mut World,
     issuer: TeamId,
@@ -112,16 +141,7 @@ pub(crate) fn apply_analyze(
 
     // Atomic spend before the grant: a failed `try_spend` leaves every
     // currency field unchanged and no points are banked.
-    let spent = world
-        .get_resource_mut::<TeamEconomy>()
-        .map(|mut economy| {
-            economy
-                .0
-                .get_mut(&issuer)
-                .is_some_and(|state| state.stockpile.try_spend(ANALYZE_COST))
-        })
-        .unwrap_or(false);
-    if !spent {
+    if !try_spend(world, issuer, ANALYZE_COST) {
         result.reject = Some(RejectReason::InsufficientResources);
         return result;
     }
@@ -130,28 +150,32 @@ pub(crate) fn apply_analyze(
     result
 }
 
-/// Analyze validation, mirroring `production::validate_enqueue`: the
+/// Analyze validation: a Team-1-only command like the Team-1-only
+/// placement kinds, so a foreign issuer answers `Locked` before any
+/// building resolution — a Team-2 core can never spend Team-2 Crystals
+/// into Team-1's point total and hand it a Victory. Then the
 /// commandable-building resolution (a hidden enemy is indistinguishable
 /// from absent — fog privacy) → owned → completed → the one
-/// research-capable kind. The Research Center is the only Analyze target.
+/// research-capable kind → under the cap: a banked target leaves nothing
+/// to buy, and session-free worlds have no Result gate to lock the
+/// command first. The Research Center is the only Analyze target.
 fn validate_analyze(
     world: &World,
     issuer: TeamId,
     building: BuildingId,
 ) -> Result<(), RejectReason> {
-    let building_entity = commandable_building_entity(world, issuer, building)?;
+    if issuer != TeamId(1) {
+        return Err(RejectReason::Locked);
+    }
+    let building_entity = commandable_completed_building(world, issuer, building)?;
     let state = world
         .get::<Building>(building_entity)
         .ok_or(RejectReason::BuildingMissing)?;
-    if state.team != issuer {
-        return Err(RejectReason::NotOwned);
-    }
-    // An incomplete core cannot analyze until construction completes.
-    if !state.construction.complete {
-        return Err(RejectReason::Locked);
-    }
     if state.kind != BuildingKind::ResearchCenter {
         return Err(RejectReason::WrongProducer);
+    }
+    if research_points(world) >= f64::from(RESEARCH_TARGET_POINTS) {
+        return Err(RejectReason::Locked);
     }
     Ok(())
 }

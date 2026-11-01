@@ -574,3 +574,149 @@ fn analyze_at_the_target_clamps_resolves_victory_and_locks_the_batch() {
         MatchPhase::Result(MatchResult(TEAM))
     );
 }
+
+/// Analyze is a Team-1-only command like the Team-1-only placement
+/// kinds: a foreign issuer answers `Locked` before any building
+/// resolution — a Team-2 core can never spend Team-2 Crystals into
+/// Team-1's point total and hand it a Victory.
+#[test]
+fn analyze_rejects_non_team_one_issuers() {
+    let (mut world, mut map) = battlefield();
+    world.resource_mut::<TeamEconomy>().insert_team(
+        ENEMY,
+        ResourceStockpile {
+            crystals: 100,
+            ..ResourceStockpile::default()
+        },
+    );
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(50),
+        BuildingKind::ResearchCenter,
+        GridPos::new(10, 10),
+        ENEMY,
+    );
+
+    let own_core = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Analyze {
+            issuer: ENEMY,
+            building: BuildingId(50),
+        },
+    );
+    let our_core = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::Analyze {
+            issuer: ENEMY,
+            building: RESEARCH_CENTER,
+        },
+    );
+
+    assert_eq!(own_core.reject, Some(RejectReason::Locked));
+    assert_eq!(our_core.reject, Some(RejectReason::Locked));
+    assert_eq!(
+        stockpile(&world, ENEMY).crystals,
+        100,
+        "a foreign Analyze spent"
+    );
+    assert_eq!(research_points(&world), 0.0, "a foreign Analyze banked");
+}
+
+/// Only a finite, positive grant moves the accumulator: a NaN delta
+/// would poison the total forever (every threshold read fails closed
+/// while the wave boost fails open) and a negative one would drag the
+/// monotonic total backward.
+#[test]
+fn add_research_ignores_nan_and_non_positive_grants() {
+    let (mut world, _map) = battlefield();
+
+    add_research(&mut world, f64::NAN);
+    add_research(&mut world, -50.0);
+    assert_eq!(
+        research_points(&world),
+        0.0,
+        "junk grants must not bank into the seeded zero"
+    );
+
+    add_research(&mut world, 10.0);
+    add_research(&mut world, f64::NAN);
+    add_research(&mut world, -10.0);
+    assert_eq!(
+        research_points(&world),
+        10.0,
+        "later junk grants must not corrupt a banked total"
+    );
+}
+
+/// A pathological fixed-step delta never reaches the accumulator: zero,
+/// negative and non-finite `seconds` are refused before `add_research`
+/// runs, matching the wave clock's own `advance` guard.
+#[test]
+fn step_research_refuses_non_finite_or_non_positive_deltas() {
+    for seconds in [f32::NAN, f32::INFINITY, 0.0, -0.05] {
+        let (mut world, _map) = battlefield();
+        world.resource_mut::<ResearchState>().points = 10.0;
+
+        step_research(&mut world, seconds);
+
+        assert_eq!(
+            research_points(&world),
+            10.0,
+            "seconds={seconds} must not move the banked total"
+        );
+    }
+}
+
+/// Passive research lives and dies with the core itself: a session-free
+/// world (the benchmark, pure-sim fixtures) has no Result to settle when
+/// the Research Center falls, so the step's living-core gate is the only
+/// thing that stops accrual after destruction.
+#[test]
+fn step_research_freezes_once_the_core_is_gone() {
+    let (mut world, _map) = battlefield();
+    step_research(&mut world, SIM_STEP_SECONDS);
+    assert!(research_points(&world) > 0.0);
+
+    // Despawn the core the way combat removal does: index entry, then
+    // the entity itself.
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    world
+        .resource_mut::<BuildingIndex>()
+        .remove(RESEARCH_CENTER);
+    world.despawn(entity);
+    let banked = research_points(&world);
+
+    step_research(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(
+        research_points(&world),
+        banked,
+        "a dead core must freeze passive accrual"
+    );
+}
+
+/// At the target Analyze has nothing left to buy: session-free worlds
+/// have no Result gate locking the command (in-session the settled
+/// Victory already rejects `SessionLocked`), so the cap itself rejects
+/// `Locked` before the spend — never 10 Crystals for zero points.
+#[test]
+fn analyze_at_the_cap_rejects_instead_of_spending() {
+    let (mut world, mut map) = battlefield();
+    set_crystals(&mut world, TEAM, 50);
+    world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS);
+
+    let result = analyze(&mut world, &mut map, RESEARCH_CENTER);
+
+    assert_eq!(result.reject, Some(RejectReason::Locked));
+    assert_eq!(stockpile(&world, TEAM).crystals, 50, "the cap spent");
+    assert_eq!(
+        research_points(&world),
+        f64::from(RESEARCH_TARGET_POINTS),
+        "the cap banked"
+    );
+}

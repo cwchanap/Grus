@@ -5,7 +5,7 @@ use crate::buildings::ConstructionState;
 use crate::catalog::{MIN_SURFACE_EFFICIENCY, building_spec, unit_spec};
 use crate::combat::{Health, destroy_building, destroy_unit};
 use crate::commands::{PlayerCommand, apply_player_command};
-use crate::economy::ResourceStockpile;
+use crate::economy::{ResourceStockpile, TeamEconomy};
 use crate::heat::HeatState;
 use crate::ids::{IdAllocator, UnitId};
 use crate::movement::SIM_STEP_SECONDS;

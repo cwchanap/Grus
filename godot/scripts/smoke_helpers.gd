@@ -29,6 +29,22 @@ static func no_launched_wave_error(where: String) -> String:
 		return "smoke overran wave prep"
 	return ""
 
+## A press+release pair through push_input: it dispatches the same
+## Window->Viewport GUI routing a real OS click takes, synchronously — the
+## reliable path for HUD controls in headless runs (the buffered
+## parse_input_event path can be unreliable for GUI clicks there).
+static func push_mouse_click(tree: SceneTree, position: Vector2, button: int) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = button
+	press.position = position
+	press.pressed = true
+	tree.root.push_input(press)
+	var release := InputEventMouseButton.new()
+	release.button_index = button
+	release.position = position
+	release.pressed = false
+	tree.root.push_input(release)
+
 ## The research label renders "Research P/T · N% · ETA M:SS" from the live
 ## snapshot's ceil-ed eta_seconds (battlefield_controller._refresh_research_
 ## controls). Parse that countdown back to whole seconds so smokes compare

@@ -128,6 +128,13 @@ pub struct BuildingSpec {
     /// (0 = always available). The point threshold derives through
     /// `research::unlock_points`; there is no per-kind point table.
     pub research_unlock_percent: u32,
+    /// Only a `TeamId(1)` issuer may place this kind: a Team-2 Gate would
+    /// seal its own team while passing Team 1, the combat pass fires only
+    /// Team-1 towers, and the one-player winter fixture has no Team-2
+    /// furnace economy. `false` kinds stay placeable by any team. The flag
+    /// lives in the catalogue so a new tower can never be placeable by
+    /// Team 2 while remaining unfireable.
+    pub team1_only: bool,
 }
 
 pub const CARRY_LIMIT: u32 = 10;
@@ -185,7 +192,10 @@ pub const ANALYZE_RESEARCH_GAIN: f64 = 90.0;
 /// unlocks.
 pub const RESEARCH_WAVE_BOOST_PERCENT: u32 = 75;
 /// Boosted wave budget = floor(base × NUMERATOR / DENOMINATOR), applied to
-/// the integer budget at launch — never to roster counts or health.
+/// the integer budget at launch — never post-multiplied onto roster counts
+/// or per-unit stats. Overflow health still scales with it: threat that
+/// cannot spawn past `MAX_LIVE_ALIENS` folds into the capped spawn's HP,
+/// so a boosted roster spilling past the cap buffs that spawn harder.
 pub const RESEARCH_WAVE_BOOST_NUMERATOR: u64 = 3;
 pub const RESEARCH_WAVE_BOOST_DENOMINATOR: u64 = 2;
 
@@ -332,6 +342,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 15,
             heat_demand: 10,
             research_unlock_percent: 0,
+            team1_only: true,
         },
         BuildingKind::Bunkhouse => BuildingSpec {
             cost: Cost {
@@ -347,6 +358,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 1,
             research_unlock_percent: 0,
+            team1_only: false,
         },
         BuildingKind::Depot => BuildingSpec {
             cost: Cost {
@@ -362,6 +374,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 1,
             research_unlock_percent: 0,
+            team1_only: false,
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
@@ -377,6 +390,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 3,
             research_unlock_percent: 0,
+            team1_only: false,
         },
         BuildingKind::Wall => BuildingSpec {
             cost: Cost {
@@ -392,6 +406,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 0,
             research_unlock_percent: 0,
+            team1_only: false,
         },
         BuildingKind::Gate => BuildingSpec {
             cost: Cost {
@@ -407,6 +422,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 0,
             research_unlock_percent: 0,
+            team1_only: true,
         },
         BuildingKind::GunTurret => BuildingSpec {
             cost: Cost {
@@ -430,6 +446,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 2,
             research_unlock_percent: 0,
+            team1_only: true,
         },
         BuildingKind::CoalFurnace => BuildingSpec {
             cost: Cost {
@@ -445,6 +462,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 12,
             heat_demand: 0,
             research_unlock_percent: 0,
+            team1_only: true,
         },
         // Costs, ranges, counter targets and heat demands are locked
         // (HPA-188); health, build time, damage and cadence are provisional
@@ -471,6 +489,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 3,
             research_unlock_percent: 25,
+            team1_only: true,
         },
         BuildingKind::CrystalLance => BuildingSpec {
             cost: Cost {
@@ -494,6 +513,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 0,
             heat_demand: 4,
             research_unlock_percent: 50,
+            team1_only: true,
         },
     }
 }

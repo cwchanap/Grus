@@ -379,11 +379,10 @@ impl GrusBridgeNode {
     /// Team 1's monotonic banked total, `rate_per_second` is the same
     /// heat-scaled rate `step_research` advances by (so the HUD estimate
     /// can never diverge from progression), and `eta_seconds` is the live
-    /// remaining/rate estimate — `0` exactly at the target regardless of
-    /// the rate's sign and `-1` while work remains and the rate is not
-    /// positive. Read-only in every session phase: a
-    /// frozen or settled match still reports its banked points and the
-    /// would-be rate, so non-Playing screens stay numeric and stable.
+    /// remaining/rate estimate — `0` exactly at the target. Read-only in
+    /// every session phase: a frozen or settled match still reports its
+    /// banked points and the would-be rate, so non-Playing screens stay
+    /// numeric and stable.
     #[func]
     fn research_snapshot(&self) -> VarDictionary {
         with_app(|app| {
@@ -1549,18 +1548,16 @@ fn research_fields(world: &World) -> (f64, f64, f64) {
 }
 
 /// The one ETA rule shared by the snapshot and its tests: completed
-/// progress is checked before the rate — `0` exactly at the target
-/// regardless of the rate's sign — then `remaining / rate` while the
-/// live rate is positive, and `-1` as the unavailable sentinel only
-/// while work remains and the rate is not positive, never an invented
-/// countdown.
+/// progress is checked before the rate — `0` exactly at the target —
+/// then `remaining / rate`. The live rate can never be non-positive:
+/// `surface_efficiency` is floored at the catalogue 25% minimum, so
+/// `research_rate` never drops below 0.5 points/s and no unavailable
+/// sentinel exists.
 fn research_eta(remaining: f64, rate: f64) -> f64 {
     if remaining <= 0.0 {
         0.0
-    } else if rate > 0.0 {
-        remaining / rate
     } else {
-        -1.0
+        remaining / rate
     }
 }
 
@@ -3042,7 +3039,11 @@ mod tests {
         let mut world = World::new();
         seed_skirmish(&mut world, &mut map, &fixture);
 
-        // No ResearchState yet: zero banked points, the catalogue base rate.
+        // Exercise the missing-resource default for real: drop the
+        // `ResearchState` the seed inserted so the read below is the
+        // absent-resource path — zero banked points, the catalogue base
+        // rate.
+        world.remove_resource::<ResearchState>();
         let (points, rate, eta) = research_fields(&world);
         assert_eq!(points, 0.0);
         assert_eq!(rate, RESEARCH_BASE_PER_SECOND);
@@ -3077,7 +3078,7 @@ mod tests {
     /// Every session phase keeps the read-only snapshot numeric and
     /// stable — frozen progress still reports banked points and the
     /// would-be rate — and reaching the target reports an ETA of exactly
-    /// zero, never the unavailable sentinel.
+    /// zero.
     #[test]
     fn research_snapshot_fields_stay_numeric_across_phases_and_zero_at_target() {
         let mut world = World::new();
@@ -3100,22 +3101,19 @@ mod tests {
         add_research(&mut world, 9_000.0);
         let (points, _, eta) = research_fields(&world);
         assert_eq!(points, 9_000.0);
-        assert_eq!(eta, 0.0, "a finished match reports ETA 0, never -1");
+        assert_eq!(eta, 0.0, "a finished match reports ETA 0");
     }
 
     /// The one ETA rule: completed progress is checked before the rate —
-    /// `0` exactly at the target regardless of the rate's sign — then
-    /// `remaining / rate` while the live rate is positive, and `-1` as
-    /// the unavailable sentinel only while work remains and the rate is
-    /// not positive, never an invented countdown.
+    /// `0` exactly at the target — then `remaining / rate`. The catalogue
+    /// 25% efficiency floor keeps the live rate positive, so the floored
+    /// cold rate is the slowest case the HUD can ever show.
     #[test]
-    fn research_eta_reports_zero_at_target_regardless_of_rate() {
+    fn research_eta_reports_zero_at_target_and_divides_by_the_rate() {
         assert_eq!(research_eta(4_500.0, 2.0), 2_250.0);
         assert_eq!(research_eta(0.0, 2.0), 0.0);
         assert_eq!(research_eta(0.0, 0.0), 0.0);
-        assert_eq!(research_eta(0.0, -2.0), 0.0);
-        assert_eq!(research_eta(4_500.0, 0.0), -1.0);
-        assert_eq!(research_eta(4_500.0, -2.0), -1.0);
+        assert_eq!(research_eta(8_900.0, 0.5), 17_800.0);
     }
 
     /// The command path the Analyze button drives: a queued

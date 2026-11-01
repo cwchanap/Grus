@@ -7,10 +7,12 @@ use std::collections::{HashSet, VecDeque};
 
 use bevy::prelude::{Component, Entity, World};
 
-use crate::buildings::{Building, BuildingIndex, commandable_building_entity};
+use crate::buildings::{
+    Building, BuildingIndex, commandable_building_entity, commandable_completed_building,
+};
 use crate::catalog::{BuildingKind, Cost, MAX_POPULATION, UnitKind, building_spec, unit_spec};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, assign_move_toward, spawn_unit};
-use crate::economy::{Carry, GatherProgress, TeamEconomy, WorkerTask};
+use crate::economy::{Carry, GatherProgress, WorkerTask, try_spend};
 use crate::heat::surface_efficiency;
 use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
@@ -137,17 +139,7 @@ pub(crate) fn apply_enqueue_unit(
 
     // Atomic spend before the queue push: a failed `try_spend` leaves every
     // currency field unchanged and nothing enqueued.
-    let cost = job.cost();
-    let spent = world
-        .get_resource_mut::<TeamEconomy>()
-        .map(|mut economy| {
-            economy
-                .0
-                .get_mut(&issuer)
-                .is_some_and(|state| state.stockpile.try_spend(cost))
-        })
-        .unwrap_or(false);
-    if !spent {
+    if !try_spend(world, issuer, job.cost()) {
         result.reject = Some(RejectReason::InsufficientResources);
         return result;
     }
@@ -156,25 +148,19 @@ pub(crate) fn apply_enqueue_unit(
     result
 }
 
-/// Shared enqueue chain: building exists (hidden enemy indistinguishable
-/// from absent, fog privacy) → owned → completed → producer compatibility.
+/// Shared enqueue chain: the commandable-building tail (a hidden enemy
+/// indistinguishable from absent — fog privacy → owned → completed) then
+/// producer compatibility.
 fn validate_enqueue(
     world: &World,
     issuer: TeamId,
     building: BuildingId,
     job: ProductionKind,
 ) -> Result<Entity, RejectReason> {
-    let building_entity = commandable_building_entity(world, issuer, building)?;
+    let building_entity = commandable_completed_building(world, issuer, building)?;
     let state = world
         .get::<Building>(building_entity)
         .ok_or(RejectReason::BuildingMissing)?;
-    if state.team != issuer {
-        return Err(RejectReason::NotOwned);
-    }
-    // An incomplete building's queue is locked until completion.
-    if !state.construction.complete {
-        return Err(RejectReason::Locked);
-    }
     if !produces(state.kind, job) {
         return Err(RejectReason::WrongProducer);
     }
