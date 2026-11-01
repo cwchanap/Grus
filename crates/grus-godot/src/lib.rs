@@ -379,8 +379,9 @@ impl GrusBridgeNode {
     /// Team 1's monotonic banked total, `rate_per_second` is the same
     /// heat-scaled rate `step_research` advances by (so the HUD estimate
     /// can never diverge from progression), and `eta_seconds` is the live
-    /// remaining/rate estimate — `0` exactly at the target and `-1` when
-    /// the rate is not positive. Read-only in every session phase: a
+    /// remaining/rate estimate — `0` exactly at the target regardless of
+    /// the rate's sign and `-1` while work remains and the rate is not
+    /// positive. Read-only in every session phase: a
     /// frozen or settled match still reports its banked points and the
     /// would-be rate, so non-Playing screens stay numeric and stable.
     #[func]
@@ -1547,12 +1548,20 @@ fn research_fields(world: &World) -> (f64, f64, f64) {
     (points, rate, research_eta(remaining, rate))
 }
 
-/// The one ETA rule shared by the snapshot and its tests: `remaining /
-/// rate` while the live rate is positive — 0 exactly at the target,
-/// because the remaining clamps to zero — and `-1` as the unavailable
-/// sentinel when the rate is not positive, never an invented countdown.
+/// The one ETA rule shared by the snapshot and its tests: completed
+/// progress is checked before the rate — `0` exactly at the target
+/// regardless of the rate's sign — then `remaining / rate` while the
+/// live rate is positive, and `-1` as the unavailable sentinel only
+/// while work remains and the rate is not positive, never an invented
+/// countdown.
 fn research_eta(remaining: f64, rate: f64) -> f64 {
-    if rate > 0.0 { remaining / rate } else { -1.0 }
+    if remaining <= 0.0 {
+        0.0
+    } else if rate > 0.0 {
+        remaining / rate
+    } else {
+        -1.0
+    }
 }
 
 /// Engine-free heat triple behind `economy_snapshot`'s heat fields: the
@@ -3094,17 +3103,19 @@ mod tests {
         assert_eq!(eta, 0.0, "a finished match reports ETA 0, never -1");
     }
 
-    /// The one ETA rule: `remaining / rate` while the live rate is
-    /// positive — 0 exactly at the target because the remaining clamps to
-    /// zero — and `-1` as the unavailable sentinel when the rate is not
-    /// positive, never an invented countdown.
+    /// The one ETA rule: completed progress is checked before the rate —
+    /// `0` exactly at the target regardless of the rate's sign — then
+    /// `remaining / rate` while the live rate is positive, and `-1` as
+    /// the unavailable sentinel only while work remains and the rate is
+    /// not positive, never an invented countdown.
     #[test]
-    fn research_eta_reports_unavailable_only_when_rate_is_not_positive() {
+    fn research_eta_reports_zero_at_target_regardless_of_rate() {
         assert_eq!(research_eta(4_500.0, 2.0), 2_250.0);
         assert_eq!(research_eta(0.0, 2.0), 0.0);
+        assert_eq!(research_eta(0.0, 0.0), 0.0);
+        assert_eq!(research_eta(0.0, -2.0), 0.0);
         assert_eq!(research_eta(4_500.0, 0.0), -1.0);
         assert_eq!(research_eta(4_500.0, -2.0), -1.0);
-        assert_eq!(research_eta(0.0, 0.0), -1.0);
     }
 
     /// The command path the Analyze button drives: a queued
