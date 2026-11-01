@@ -236,6 +236,9 @@ func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
 	return true
 
 func _run() -> void:
+	var camera := get_node("Main/Camera3D") as Camera3D
+	var default_camera_transform := camera.global_transform
+	var default_camera_size := camera.size
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
 	window.size = TEST_VIEWPORT_SIZE
@@ -319,7 +322,6 @@ func _run() -> void:
 		_fail("ControlsLabel stayed visible after the match reached Playing")
 		return
 
-	var camera := get_node("Main/Camera3D") as Camera3D
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
 
@@ -341,6 +343,56 @@ func _run() -> void:
 	if center_screen.x < viewport_size.x * 0.25 or center_screen.x > viewport_size.x * 0.75 \
 			or center_screen.y < viewport_size.y * 0.25 or center_screen.y > viewport_size.y * 0.75:
 		_fail("central Research Center projects outside the viewport's central half: %s" % center_screen)
+		return
+
+	var salvage_view: Node3D = null
+	for _frame in range(60):
+		salvage_view = _resource_view(EXPANSION_SALVAGE_ID)
+		if salvage_view != null:
+			break
+		await get_tree().process_frame
+	if salvage_view == null:
+		_fail("scout target view is missing (salvage %s)" % [salvage_view])
+		return
+
+	# HPA-188 research HUD: geometry, catalogue binding, live lock state and
+	# the Analyze button's real input dispatch — all during real Playing.
+	var research_panel := get_node_or_null("Main/HUD/ResearchPanel") as Panel
+	var research_bar := get_node_or_null("Main/HUD/ResearchPanel/ResearchBar") as ProgressBar
+	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
+	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
+	var wave_hud := get_node("Main/HUD/WaveLabel") as Label
+	if research_panel == null or research_bar == null or research_label == null \
+			or analyze_button == null or wave_hud == null:
+		_fail("research HUD nodes are missing under HUD/ResearchPanel")
+		return
+	# The compact panel hugs the left edge below the InputShield band,
+	# inside the 1280x720 viewport, and fully contains its Analyze button —
+	# never over the northwest corridor's or expansion salvage's projected
+	# cells, which must stay clickable under the default framing. The salvage
+	# point derives from its live view so the probe tracks the authored layout.
+	var research_rect := research_panel.get_global_rect()
+	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
+		_fail("research panel escapes the viewport: %s" % research_rect)
+		return
+	if not camera.global_transform.is_equal_approx(default_camera_transform) \
+			or not is_equal_approx(camera.size, default_camera_size):
+		_fail("research panel overlap probes are not using the default camera framing")
+		return
+	var salvage_screen := camera.unproject_position(salvage_view.global_position)
+	if research_rect.has_point(salvage_screen):
+		_fail("research panel covers the expansion salvage at %s: %s" % [
+			salvage_screen, research_rect])
+		return
+	for corridor_cell in [Vector2(38, 24), Vector2(40, 20)]:
+		var corridor_screen := camera.unproject_position(
+			Vector3(corridor_cell.x + 0.5, 0.0, corridor_cell.y + 0.5))
+		if research_rect.has_point(corridor_screen):
+			_fail("research panel covers northwest corridor cell %s at %s: %s" % [
+				corridor_cell, corridor_screen, research_rect])
+			return
+	if not research_rect.encloses(analyze_button.get_global_rect()):
+		_fail("Analyze button escapes the research panel")
 		return
 
 	# Imported art must stay inside the simulation's blocked rectangles.
@@ -674,10 +726,6 @@ func _run() -> void:
 
 	# The expansion target derives from its live view so the choreography
 	# tracks the authored layout instead of a copied coordinate list.
-	var salvage_view := _resource_view(EXPANSION_SALVAGE_ID)
-	if salvage_view == null:
-		_fail("scout target view is missing (salvage %s)" % [salvage_view])
-		return
 	var salvage_cell := Vector2i(int(salvage_view.global_position.x), int(salvage_view.global_position.z))
 	# March beside the expansion ruin (its own cell is blocked), then back
 	# toward the live home base so its explored fog remains out of vision.
@@ -966,42 +1014,6 @@ func _run() -> void:
 			or int(GrusBridge.command_feedback_revision()) != revision_before_escape \
 			or command_status.text != status_before_escape:
 		_fail("Esc did not cancel Gate placement before pausing or dispatching a command")
-		return
-
-	# HPA-188 research HUD: geometry, catalogue binding, live lock state and
-	# the Analyze button's real input dispatch — all during real Playing.
-	var research_panel := get_node_or_null("Main/HUD/ResearchPanel") as Panel
-	var research_bar := get_node_or_null("Main/HUD/ResearchPanel/ResearchBar") as ProgressBar
-	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
-	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
-	var wave_hud := get_node("Main/HUD/WaveLabel") as Label
-	if research_panel == null or research_bar == null or research_label == null \
-			or analyze_button == null or wave_hud == null:
-		_fail("research HUD nodes are missing under HUD/ResearchPanel")
-		return
-	# The compact panel hugs the left edge below the InputShield band,
-	# inside the 1280x720 viewport, and fully contains its Analyze button —
-	# never over the northwest corridor's or expansion salvage's projected
-	# cells, which must stay clickable under the default framing. The salvage
-	# point derives from its live view so the probe tracks the authored layout.
-	var research_rect := research_panel.get_global_rect()
-	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
-		_fail("research panel escapes the viewport: %s" % research_rect)
-		return
-	var salvage_screen := camera.unproject_position(salvage_view.global_position)
-	if research_rect.has_point(salvage_screen):
-		_fail("research panel covers the expansion salvage at %s: %s" % [
-			salvage_screen, research_rect])
-		return
-	for corridor_cell in [Vector2(38, 24), Vector2(40, 20)]:
-		var corridor_screen := camera.unproject_position(
-			Vector3(corridor_cell.x + 0.5, 0.0, corridor_cell.y + 0.5))
-		if research_rect.has_point(corridor_screen):
-			_fail("research panel covers northwest corridor cell %s at %s: %s" % [
-				corridor_cell, corridor_screen, research_rect])
-			return
-	if not research_rect.encloses(analyze_button.get_global_rect()):
-		_fail("Analyze button escapes the research panel")
 		return
 
 	# Static research catalogue: the panel's own target, the serialized
