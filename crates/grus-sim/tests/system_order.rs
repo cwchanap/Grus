@@ -18,11 +18,13 @@ use grus_sim::{
     CombatTarget, ConstructionState, Dropoff, EntryZone, Footprint, GatherProgress, GridMap,
     GridPos, Health, HeatState, MIN_SURFACE_EFFICIENCY, MapFixture, MatchPhase, MatchResult,
     MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue,
-    RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, ResearchState, ResourceId, ResourceKind,
-    SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind, VisibilityMap,
-    WaveState, WorkerTask, apply_player_command, explored_by, population_used, refresh_visibility,
-    seed_skirmish, spawn_unit, step_combat, step_construction, step_production, step_tick,
-    step_waves, visible_to,
+    RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_DENOMINATOR,
+    RESEARCH_WAVE_BOOST_NUMERATOR, RESEARCH_WAVE_BOOST_PERCENT, ResearchState, ResourceId,
+    ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind,
+    VisibilityMap, WaveState, WorkerTask, apply_player_command, explored_by, live_alien_ids,
+    plan_roster, population_used, refresh_visibility, seed_skirmish, spawn_unit, step_combat,
+    step_construction, step_production, step_tick, step_waves, unlock_points, visible_to,
+    wave_budget,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -921,5 +923,63 @@ fn lethal_combat_wins_the_same_tick_tie_over_research() {
     assert!(
         world.resource::<ResearchState>().points < f64::from(RESEARCH_TARGET_POINTS),
         "the settled Result froze the accumulator before this tick's gain"
+    );
+}
+
+/// Waves run before research inside `step_tick`: a launch due this tick
+/// plans its roster against the points banked BEFORE the tick, so the
+/// end-of-tick gain that crosses the 75% mark cannot boost the wave
+/// already committed. The NEXT launch — any later tick — sees the crossed
+/// threshold and spends the boosted budget.
+#[test]
+fn a_wave_launched_before_this_ticks_research_gain_stays_unboosted() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // A fraction under the 75% mark (6,750 points): this tick's warm
+    // +0.1 gain crosses it — but only in the research step, after the
+    // wave step already launched the due wave on the base budget.
+    world.resource_mut::<ResearchState>().points =
+        f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)) - 0.05;
+    world.insert_resource(WaveState {
+        elapsed: 299.95,
+        next_wave: 1,
+    });
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert!(
+        world.resource::<ResearchState>().points
+            >= f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)),
+        "the same tick's research step crossed the 75% mark after the launch"
+    );
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len() as u64,
+        plan_roster(1, wave_budget(1)).total_units(),
+        "the wave due this tick committed before the crossing — base roster"
+    );
+
+    // The next due launch reads the crossed threshold: wave 2 spends
+    // floor(17 × 3 / 2) = 25, the boosted roster.
+    world.insert_resource(WaveState {
+        elapsed: 399.95,
+        next_wave: 2,
+    });
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let boosted_two = plan_roster(
+        2,
+        wave_budget(2) * RESEARCH_WAVE_BOOST_NUMERATOR / RESEARCH_WAVE_BOOST_DENOMINATOR,
+    );
+    assert_eq!(
+        live_alien_ids(&world, TeamId(2)).len() as u64,
+        plan_roster(1, wave_budget(1)).total_units() + boosted_two.total_units(),
+        "the next launch saw the crossed threshold and spent the boost"
     );
 }

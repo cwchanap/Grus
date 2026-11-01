@@ -6,7 +6,8 @@ use bevy::prelude::{Component, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{
-    ATTACK_MOVE_RADIUS, BuildingKind, MAX_LIVE_ALIENS, UnitKind, WAVE_BUDGET_BASE,
+    ATTACK_MOVE_RADIUS, BuildingKind, MAX_LIVE_ALIENS, RESEARCH_WAVE_BOOST_DENOMINATOR,
+    RESEARCH_WAVE_BOOST_NUMERATOR, RESEARCH_WAVE_BOOST_PERCENT, UnitKind, WAVE_BUDGET_BASE,
     WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_CATCH_UP_LIMIT, WAVE_INTERVAL_SECONDS,
     WAVE_PREPARATION_SECONDS, WAVE_SWARMER_RESERVE_DIVISOR, WAVE_THREE_ZONE_START,
     WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS, unit_spec,
@@ -20,6 +21,7 @@ use crate::fixture::{ENTRY_ZONES, EntryZone};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition};
+use crate::research::{research_points, unlock_points};
 use crate::session::gameplay_active;
 use crate::visibility::reveal_for_team;
 
@@ -97,9 +99,12 @@ pub fn wave_budget(wave: u64) -> u64 {
 }
 
 /// Deterministic threat-budget purchases and the resulting spawn counts.
-pub fn plan_roster(wave: u64) -> WaveRoster {
+/// The caller selects the integer budget — `wave_budget(wave)` normally,
+/// or the research-escalated figure at launch — so the algorithm itself
+/// never sees escalation state.
+pub fn plan_roster(wave: u64, budget: u64) -> WaveRoster {
     let wave = wave.max(1);
-    let mut remaining = wave_budget(wave);
+    let mut remaining = budget;
     let mut roster = WaveRoster::default();
 
     let behemoth = unit_spec(UnitKind::Behemoth).alien.unwrap();
@@ -260,8 +265,25 @@ pub fn step_waves(world: &mut World, map: &mut GridMap, seconds: f32) {
     }
 }
 
+/// The budget one launch spends: `wave_budget(wave)`, or floor(base × 3 / 2)
+/// once live research has reached `RESEARCH_WAVE_BOOST_PERCENT` (75% →
+/// 6,750 points). The check reads the accumulator fresh at every launch —
+/// no stored escalation flag — so staying above the threshold never stacks
+/// the multiplier and a wave committed before the crossing keeps its
+/// roster. Widened u128 arithmetic saturates to `u64::MAX` instead of
+/// wrapping on extreme budgets.
+fn effective_wave_budget(world: &World, wave: u64) -> u64 {
+    let base = wave_budget(wave);
+    if research_points(world) < f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)) {
+        return base;
+    }
+    let boosted = u128::from(base) * u128::from(RESEARCH_WAVE_BOOST_NUMERATOR)
+        / u128::from(RESEARCH_WAVE_BOOST_DENOMINATOR);
+    u64::try_from(boosted).unwrap_or(u64::MAX)
+}
+
 fn launch_wave(world: &mut World, map: &mut GridMap, wave: u64) {
-    let roster = plan_roster(wave);
+    let roster = plan_roster(wave, effective_wave_budget(world, wave));
     let planned = roster.ordered_prefix(MAX_LIVE_ALIENS as usize);
     let live = live_alien_ids(world, TeamId(2)).len();
     let room = (MAX_LIVE_ALIENS as usize).saturating_sub(live);
