@@ -85,7 +85,7 @@ These are local development stages, **not additional Linear tickets or PRs**. Th
 - [ ] 1280×720 HUD shows research without overlap or input leakage; rejected Analyze path is exercised by real Godot input; accepted Analyze, unlock thresholds and Victory are covered by focused Rust tests
 - [ ] The merged implementation eventually lives in **this same PR**, not a second one
 
-### Local verification evidence — macOS arm64, 2026-10-31 (not Linux CI)
+### Local verification evidence — macOS arm64, 2026-11-01 (not Linux CI)
 
 All six checkpoints are implemented on this branch. The results below were produced locally on **macOS arm64** with the repository-pinned **Rust 1.95.0** and **Godot 4.7.1**. They are evidence for review, **not** the required Linux x86_64 CI runs — every gate checkbox above remains open pending CI.
 
