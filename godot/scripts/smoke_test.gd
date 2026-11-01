@@ -982,12 +982,18 @@ func _run() -> void:
 	# The compact panel hugs the left edge below the InputShield band,
 	# inside the 1280x720 viewport, and fully contains its Analyze button —
 	# never over the northwest corridor's or expansion salvage's projected
-	# cells, which must stay clickable under the default framing.
+	# cells, which must stay clickable under the default framing. The salvage
+	# point derives from its live view so the probe tracks the authored layout.
 	var research_rect := research_panel.get_global_rect()
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
 		return
-	for corridor_cell in [Vector2(38, 24), Vector2(40, 20), Vector2(43, 18)]:
+	var salvage_screen := camera.unproject_position(salvage_view.global_position)
+	if research_rect.has_point(salvage_screen):
+		_fail("research panel covers the expansion salvage at %s: %s" % [
+			salvage_screen, research_rect])
+		return
+	for corridor_cell in [Vector2(38, 24), Vector2(40, 20)]:
 		var corridor_screen := camera.unproject_position(
 			Vector3(corridor_cell.x + 0.5, 0.0, corridor_cell.y + 0.5))
 		if research_rect.has_point(corridor_screen):
