@@ -4,7 +4,7 @@
 **Design:** [HPA-188 research/Victory contract](../specs/2026-10-31-hpa-188-research-victory-design.md)  
 **Parent:** [Winter Survival](../specs/2026-10-21-winter-survival-design.md)  
 **Base:** main including merged HPA-181 / PR #14  
-**Status:** Planning only; no research gameplay has been implemented, no tests or CI results are claimed. **This draft PR is also the implementation PR.** One ticket, one branch, one PR.
+**Status:** Implemented locally on this branch (all six checkpoints landed, commits `7fa5515`..`5d7dfef`); required Linux x86_64 CI still pending — local evidence below is macOS arm64, not CI. **This draft PR is also the implementation PR.** One ticket, one branch, one PR.
 
 ## Why HPA-188 now
 
@@ -84,6 +84,29 @@ These are local development stages, **not additional Linear tickets or PRs**. Th
 - [ ] Existing 10-second CI benchmark survives and any relevant measured performance regression is explained
 - [ ] 1280×720 HUD shows research without overlap or input leakage; rejected Analyze path is exercised by real Godot input; accepted Analyze, unlock thresholds and Victory are covered by focused Rust tests
 - [ ] The merged implementation eventually lives in **this same PR**, not a second one
+
+### Local verification evidence — macOS arm64, 2026-10-31 (not Linux CI)
+
+All six checkpoints are implemented on this branch. The results below were produced locally on **macOS arm64** with the repository-pinned **Rust 1.95.0** and **Godot 4.7.1**. They are evidence for review, **not** the required Linux x86_64 CI runs — every gate checkbox above remains open pending CI.
+
+Controller-verified on macOS arm64 (Rust 1.95.0, Godot 4.7.1):
+
+- `cargo fmt --all -- --check` — clean
+- `cargo clippy --workspace --all-targets --locked -- -D warnings` — clean
+- `cargo clippy -p grus-godot --all-targets --features e2e --locked -- -D warnings` — clean
+- `cargo test --workspace --locked` — pass (28 bridge, 309 sim, 16 integration tests)
+- `cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1` — 31 passed
+- `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --locked --ignore-filename-regex 'tests\.rs$'` — 96.43% lines (4,268/4,426), ≥90% gate met
+- Godot editor import plus all six headless smokes (bridge `smoke_test`, `reset_test`, `economy_smoke_test`, `combat_lifecycle_smoke_test`, `wave_smoke_test`, `defenses_smoke_test`) — each strict exit 0 with its sentinel; the combat-lifecycle sentinel covers the zero-Crystal Analyze press (typed `InsufficientResources`, reject code 8) and the post-reset zero-research state
+- Headless, non-e2e 200-unit 10 s benchmark (macOS arm64, `--headless` — not rendered, not Linux): exit 0; 796 frames; mean 12.566 ms; p95 37.334 ms; p99 42.909 ms; 79.6 fps; 2 ObjectDB leak warnings at exit
+
+Implementer-reported on macOS arm64 (Apple M1 Pro): rendered **1280×720** bridge and combat-lifecycle smokes passed, plus the throttled combat smoke. Not independently re-verified by the controller.
+
+Explicitly **NOT RUN** locally — no Linux toolchain target and no running Docker daemon on this host; these remain pending required CI and their checkboxes stay open:
+
+- Linux x86_64 smoke export and packaged smoke
+- e2e-feature export and exported-game bevy-e2e
+- Linux CI benchmark run
 
 ## Risks / decisions to verify during implementation
 
