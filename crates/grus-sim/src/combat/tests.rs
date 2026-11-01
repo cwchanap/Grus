@@ -16,7 +16,7 @@ use crate::economy::{
     Carry, Dropoff, GatherProgress, LastRouteReject, ResourceStockpile, TeamEconomy, WorkerTask,
 };
 use crate::fixture::{MapFixture, seed_skirmish};
-use crate::heat::HeatState;
+use crate::heat::{HeatState, step_heat, surface_efficiency};
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::movement::{SIM_STEP_SECONDS, SimPosition, step_movement};
 use crate::production::ProductionQueue;
@@ -110,7 +110,7 @@ fn spawn_building(
     world
         .get_resource_or_insert_with(BuildingIndex::default)
         .insert(id, entity);
-    if kind == BuildingKind::GunTurret {
+    if building_spec(kind).combat.is_some() {
         world.entity_mut(entity).insert(AttackCooldown::default());
     }
     entity
@@ -3229,4 +3229,267 @@ fn cold_turret_cooldown_recovers_at_full_rate_once_warm() {
         Some(&AttackCooldown(0.0)),
         "warming clears the remaining fraction at the full rate"
     );
+}
+
+/// The Flame Tower's short range is measured from the nearest footprint
+/// point like every tower: exactly 3 cells away hits, a hair beyond does
+/// not. Its Swarmer counter adds +10 to the 20 base damage; a non-counter
+/// alien in the same range takes the base.
+#[test]
+fn flame_tower_obeys_short_range_and_swarmer_counter() {
+    for (target_x, expected_health) in [(15.0, 10), (15.01, 40)] {
+        let mut world = World::new();
+        let mut map = open_map();
+        spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(1),
+            TeamId(1),
+            BuildingKind::FlameTower,
+            GridPos::new(10, 10),
+        );
+        let swarmer = spawn_combatant(
+            &mut world,
+            UnitId(2),
+            TeamId(2),
+            Vec2::new(target_x, 10.5),
+            UnitKind::Swarmer,
+        );
+
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(
+            world.get::<Health>(swarmer).unwrap().current,
+            expected_health,
+            "x={target_x}: 20 base + 10 Swarmer counter inside range 3"
+        );
+        if target_x == 15.0 {
+            let tower = world
+                .resource::<BuildingIndex>()
+                .entity(BuildingId(1))
+                .unwrap();
+            assert_eq!(
+                world.get::<AttackCooldown>(tower),
+                Some(&AttackCooldown(1.0)),
+                "the strike installs the catalogue 1.0 s cooldown"
+            );
+        } else {
+            assert!(events(&world).is_empty());
+        }
+    }
+
+    // A Brute — not the counter target — in range takes only base damage.
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::FlameTower,
+        GridPos::new(10, 10),
+    );
+    let brute = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(13.5, 10.5),
+        UnitKind::Brute,
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<Health>(brute).unwrap().current,
+        280,
+        "no counter bonus vs Brute"
+    );
+    assert_eq!(events(&world)[0].damage, 20);
+}
+
+/// The Crystal Lance's 10-cell reach outranges the Gun Turret: a Brute at
+/// the boundary takes counter-boosted damage while a Swarmer inside the
+/// same range takes only the 30 base. Its slower cadence installs the
+/// catalogue 1.5 s cooldown on strike.
+#[test]
+fn crystal_lance_obeys_long_range_and_brute_counter() {
+    for (target_x, expected_health) in [(22.0, 255), (22.01, 300)] {
+        let mut world = World::new();
+        let mut map = open_map();
+        spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(1),
+            TeamId(1),
+            BuildingKind::CrystalLance,
+            GridPos::new(10, 10),
+        );
+        let brute = spawn_combatant(
+            &mut world,
+            UnitId(2),
+            TeamId(2),
+            Vec2::new(target_x, 10.5),
+            UnitKind::Brute,
+        );
+
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert_eq!(
+            world.get::<Health>(brute).unwrap().current,
+            expected_health,
+            "x={target_x}: 30 base + 15 Brute counter inside range 10"
+        );
+        if target_x == 22.0 {
+            let tower = world
+                .resource::<BuildingIndex>()
+                .entity(BuildingId(1))
+                .unwrap();
+            assert_eq!(
+                world.get::<AttackCooldown>(tower),
+                Some(&AttackCooldown(1.5)),
+                "the strike installs the catalogue 1.5 s cooldown"
+            );
+            assert_eq!(events(&world)[0].damage, 45);
+        } else {
+            assert!(events(&world).is_empty());
+        }
+    }
+
+    // A Swarmer — not the counter target — in range takes only base damage.
+    let mut world = World::new();
+    let mut map = open_map();
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(1),
+        TeamId(1),
+        BuildingKind::CrystalLance,
+        GridPos::new(10, 10),
+    );
+    let swarmer = spawn_combatant(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(20.5, 10.5),
+        UnitKind::Swarmer,
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<Health>(swarmer).unwrap().current,
+        10,
+        "no counter bonus vs Swarmer"
+    );
+    assert_eq!(events(&world)[0].damage, 30);
+}
+
+/// Tower kills credit the shared alien Crystal reward through the same
+/// strike path as the Gun Turret: the Flame Tower's Swarmer pays 1 and
+/// the Crystal Lance's Brute pays 5, each recorded once with the
+/// building's attacker identity.
+#[test]
+fn advanced_tower_kills_award_the_victims_crystal_reward() {
+    for (kind, victim, victim_health, reward) in [
+        (BuildingKind::FlameTower, UnitKind::Swarmer, 30, 1),
+        (BuildingKind::CrystalLance, UnitKind::Brute, 45, 5),
+    ] {
+        let mut world = World::new();
+        let mut map = open_map();
+        set_team_one_crystals(&mut world, 0);
+        spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(1),
+            TeamId(1),
+            kind,
+            GridPos::new(10, 10),
+        );
+        let target = spawn_combatant(
+            &mut world,
+            UnitId(2),
+            TeamId(2),
+            Vec2::new(13.5, 10.5),
+            victim,
+        );
+        world.get_mut::<Health>(target).unwrap().current = victim_health;
+
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+
+        assert!(
+            world.get::<Unit>(target).is_none(),
+            "{kind:?} must kill {victim:?}"
+        );
+        assert_eq!(team_one_crystals(&world), reward, "{kind:?} kill credit");
+        assert!(events(&world)[0].killed);
+        assert_eq!(
+            events(&world)[0].attacker,
+            CombatTarget::Building(BuildingId(1))
+        );
+
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        assert_eq!(
+            team_one_crystals(&world),
+            reward,
+            "{kind:?} must award exactly once"
+        );
+    }
+}
+
+/// The advanced towers' cooldown drain follows the fuel-driven surface
+/// efficiency like every completed building attacker: an unfueled furnace
+/// drops efficiency to the floor (0.25×) while a Coal-stocked furnace
+/// restores the full rate — the same heat chain, no second tower path.
+#[test]
+fn fuel_dependent_cold_scales_advanced_tower_cooldown_drain() {
+    for kind in [BuildingKind::FlameTower, BuildingKind::CrystalLance] {
+        let mut world = World::new();
+        let mut map = open_map();
+        let tower = spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(1),
+            TeamId(1),
+            kind,
+            GridPos::new(10, 10),
+        );
+        spawn_building(
+            &mut world,
+            &mut map,
+            BuildingId(2),
+            TeamId(1),
+            BuildingKind::CoalFurnace,
+            GridPos::new(20, 10),
+        );
+        world.get_mut::<AttackCooldown>(tower).unwrap().0 = 1.0;
+
+        // Unfueled: no Team 1 Coal → the furnace supplies nothing and the
+        // tower's own demand alone floors surface efficiency at 0.25.
+        step_heat(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(surface_efficiency(&world), MIN_SURFACE_EFFICIENCY);
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        let expected_cold = (1.0 - SIM_STEP_SECONDS * MIN_SURFACE_EFFICIENCY).max(0.0);
+        assert_eq!(
+            world.get::<AttackCooldown>(tower),
+            Some(&AttackCooldown(expected_cold)),
+            "{kind:?} must drain at the unfueled floor"
+        );
+
+        // Fueled: stocked Coal lights the furnace, supply outstrips the
+        // tower demand and the next tick drains at the full rate.
+        let mut economy = TeamEconomy::default();
+        economy.insert_team(
+            TeamId(1),
+            ResourceStockpile {
+                coal: 10,
+                ..ResourceStockpile::default()
+            },
+        );
+        world.insert_resource(economy);
+        step_heat(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(surface_efficiency(&world), 1.0);
+        step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+        let expected_warm = (expected_cold - SIM_STEP_SECONDS).max(0.0);
+        assert_eq!(
+            world.get::<AttackCooldown>(tower),
+            Some(&AttackCooldown(expected_warm)),
+            "{kind:?} must drain at the fueled full rate"
+        );
+    }
 }

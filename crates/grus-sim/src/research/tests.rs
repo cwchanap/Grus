@@ -39,16 +39,19 @@ fn seed_skirmish_inserts_a_zero_research_state() {
 
 /// A world without `ResearchState` reads neutral zero points, a full-rate
 /// surface source and every zero-percent building gate open — the same
-/// neutral-default pattern as a missing `HeatState`.
+/// neutral-default pattern as a missing `HeatState`. The research-gated
+/// towers read locked at the zero read, exactly like a fresh match.
 #[test]
 fn missing_research_state_reads_zero() {
     let world = World::new();
     assert_eq!(research_points(&world), 0.0);
     assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND);
     for kind in BuildingKind::ALL {
-        assert!(
+        let gated = building_spec(kind).research_unlock_percent > 0;
+        assert_eq!(
             building_unlocked(&world, kind),
-            "{kind:?} must stay unlocked"
+            !gated,
+            "{kind:?} at the neutral zero read"
         );
     }
 }
@@ -191,9 +194,9 @@ fn passive_step_crossing_the_target_resolves_victory() {
 }
 
 /// Thresholds derive from `RESEARCH_TARGET_POINTS × percent / 100` in the
-/// one helper — 25% → 2,250, 50% → 4,500, 75% → 6,750, 100% → 9,000 —
-/// and every current catalogue kind stays at 0% (always unlocked) until
-/// the advanced towers land.
+/// one helper — 25% → 2,250, 50% → 4,500, 75% → 6,750, 100% → 9,000 — and
+/// every catalogue kind is always-available except the advanced towers:
+/// FlameTower at 25%, CrystalLance at 50%.
 #[test]
 fn unlock_thresholds_derive_from_the_catalogue_percent() {
     assert_eq!(unlock_points(0), 0);
@@ -204,12 +207,49 @@ fn unlock_thresholds_derive_from_the_catalogue_percent() {
 
     let (world, _map) = battlefield();
     for kind in BuildingKind::ALL {
-        assert_eq!(building_spec(kind).research_unlock_percent, 0);
-        assert!(
+        let expected = match kind {
+            BuildingKind::FlameTower => 25,
+            BuildingKind::CrystalLance => 50,
+            _ => 0,
+        };
+        assert_eq!(
+            building_spec(kind).research_unlock_percent,
+            expected,
+            "{kind:?} research gate"
+        );
+        assert_eq!(
             building_unlocked(&world, kind),
-            "{kind:?} must stay unlocked"
+            expected == 0,
+            "{kind:?} at zero research"
         );
     }
+}
+
+/// Both tower gates flip on live points alone: strictly below each
+/// derived threshold the kind stays locked; exactly at it the kind is
+/// open. Milestones are monotonic — nothing latches or repeats.
+#[test]
+fn tower_unlocks_flip_at_their_derived_thresholds() {
+    let (mut world, _map) = battlefield();
+
+    // Just below 25% both advanced towers stay locked.
+    world.resource_mut::<ResearchState>().points = f64::from(unlock_points(25)) - 0.5;
+    assert!(!building_unlocked(&world, BuildingKind::FlameTower));
+    assert!(!building_unlocked(&world, BuildingKind::CrystalLance));
+
+    // Exactly at 25% opens the Flame Tower only.
+    world.resource_mut::<ResearchState>().points = f64::from(unlock_points(25));
+    assert!(building_unlocked(&world, BuildingKind::FlameTower));
+    assert!(!building_unlocked(&world, BuildingKind::CrystalLance));
+
+    // Just below 50% the Crystal Lance still stays locked.
+    world.resource_mut::<ResearchState>().points = f64::from(unlock_points(50)) - 0.5;
+    assert!(!building_unlocked(&world, BuildingKind::CrystalLance));
+
+    // Exactly at 50% both towers are open.
+    world.resource_mut::<ResearchState>().points = f64::from(unlock_points(50));
+    assert!(building_unlocked(&world, BuildingKind::FlameTower));
+    assert!(building_unlocked(&world, BuildingKind::CrystalLance));
 }
 
 /// Bridge-style reset: progress banked before the clear can never leak

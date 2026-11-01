@@ -150,6 +150,8 @@ fn buildings_carry_catalogue_health() {
         (BuildingKind::Gate, 600),
         (BuildingKind::GunTurret, 350),
         (BuildingKind::CoalFurnace, 300),
+        (BuildingKind::FlameTower, 350),
+        (BuildingKind::CrystalLance, 350),
     ];
     for (kind, max_health) in expected {
         assert_eq!(
@@ -183,7 +185,9 @@ fn winter_human_roster_stays_separate_from_the_full_catalogue() {
             "Wall",
             "Gate",
             "GunTurret",
-            "CoalFurnace"
+            "CoalFurnace",
+            "FlameTower",
+            "CrystalLance"
         ]
     );
 }
@@ -275,6 +279,22 @@ fn winter_costs_and_producers_are_pinned() {
             ..Cost::default()
         }
     );
+    assert_eq!(
+        building_spec(BuildingKind::FlameTower).cost,
+        Cost {
+            scrap: 120,
+            coal: 60,
+            ..Cost::default()
+        }
+    );
+    assert_eq!(
+        building_spec(BuildingKind::CrystalLance).cost,
+        Cost {
+            scrap: 150,
+            crystals: 40,
+            ..Cost::default()
+        }
+    );
 
     // Producer compatibility: ResearchCenter -> Worker; Barracks -> Guard,
     // Rifleman. Nothing else produces, and the Bunkhouse/Depot produce nothing.
@@ -322,6 +342,8 @@ fn winter_costs_and_producers_are_pinned() {
         (BuildingKind::Gate, 1, 1, 0),
         (BuildingKind::GunTurret, 2, 2, 0),
         (BuildingKind::CoalFurnace, 2, 2, 0),
+        (BuildingKind::FlameTower, 2, 2, 0),
+        (BuildingKind::CrystalLance, 2, 2, 0),
     ];
     for (kind, width, height, population) in footprints {
         let spec = building_spec(kind);
@@ -334,7 +356,7 @@ fn winter_costs_and_producers_are_pinned() {
 }
 
 #[test]
-fn only_gun_turret_has_building_combat_tuning() {
+fn towers_carry_building_combat_tuning() {
     for kind in [
         BuildingKind::ResearchCenter,
         BuildingKind::Bunkhouse,
@@ -358,6 +380,30 @@ fn only_gun_turret_has_building_combat_tuning() {
     assert_eq!(combat.counter_target, UnitKind::Spitter);
     assert_eq!(combat.counter_bonus, 5);
     assert!(combat.ranged);
+
+    // Provisional first-pass tower values (HPA-289 balance pass pending);
+    // costs, ranges, counter matchups and heat demands are locked.
+    let flame = building_spec(BuildingKind::FlameTower);
+    assert_eq!(flame.build_seconds, 25);
+    assert_eq!(flame.max_health, 350);
+    let flame_combat = flame.combat.expect("Flame Tower combat");
+    assert_eq!(flame_combat.damage, 20);
+    assert_eq!(flame_combat.attack_range, 3.0);
+    assert_eq!(flame_combat.cooldown_seconds, 1.0);
+    assert_eq!(flame_combat.counter_target, UnitKind::Swarmer);
+    assert_eq!(flame_combat.counter_bonus, 10);
+    assert!(flame_combat.ranged);
+
+    let lance = building_spec(BuildingKind::CrystalLance);
+    assert_eq!(lance.build_seconds, 30);
+    assert_eq!(lance.max_health, 350);
+    let lance_combat = lance.combat.expect("Crystal Lance combat");
+    assert_eq!(lance_combat.damage, 30);
+    assert_eq!(lance_combat.attack_range, 10.0);
+    assert_eq!(lance_combat.cooldown_seconds, 1.5);
+    assert_eq!(lance_combat.counter_target, UnitKind::Brute);
+    assert_eq!(lance_combat.counter_bonus, 15);
+    assert!(lance_combat.ranged);
 }
 
 #[test]
@@ -389,6 +435,8 @@ fn heat_supply_and_demand_are_catalogued_per_building() {
         (BuildingKind::Gate, 0, 0),
         (BuildingKind::GunTurret, 0, 2),
         (BuildingKind::CoalFurnace, 12, 0),
+        (BuildingKind::FlameTower, 0, 3),
+        (BuildingKind::CrystalLance, 0, 4),
     ];
     for (kind, supply, demand) in expected {
         let spec = building_spec(kind);
@@ -430,12 +478,17 @@ fn research_tuning_is_catalogued_as_named_constants() {
     assert_eq!(RESEARCH_WAVE_BOOST_NUMERATOR, 3);
     assert_eq!(RESEARCH_WAVE_BOOST_DENOMINATOR, 2);
 
-    // Every current kind is always-available; the 25/50 research gates
-    // arrive with the advanced tower kinds.
+    // The advanced towers carry the only research gates; every other kind
+    // stays always-available at 0%.
     for kind in BuildingKind::ALL {
+        let expected = match kind {
+            BuildingKind::FlameTower => 25,
+            BuildingKind::CrystalLance => 50,
+            _ => 0,
+        };
         assert_eq!(
             building_spec(kind).research_unlock_percent,
-            0,
+            expected,
             "{kind:?} research gate"
         );
     }

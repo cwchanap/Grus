@@ -177,6 +177,49 @@ fn completed_buildings_add_demand_but_sites_do_not() {
     assert_eq!(state.efficiency(), 1.0);
 }
 
+/// The advanced towers' catalogue demand joins the totals only on
+/// completion: an unbuilt Flame Tower or Crystal Lance site counts
+/// nothing, exactly like every other construction site.
+#[test]
+fn advanced_towers_count_demand_only_after_completion() {
+    let (mut world, mut map) = battlefield();
+    let flame = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::FlameTower,
+        GridPos::new(68, 46),
+        false,
+    );
+    let lance = spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(3),
+        BuildingKind::CrystalLance,
+        GridPos::new(71, 46),
+        false,
+    );
+
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(heat(&world).demand, 10, "sites count no demand");
+
+    world
+        .get_mut::<Building>(flame)
+        .unwrap()
+        .construction
+        .complete = true;
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(heat(&world).demand, 13, "a completed Flame Tower adds 3");
+
+    world
+        .get_mut::<Building>(lance)
+        .unwrap()
+        .construction
+        .complete = true;
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(heat(&world).demand, 17, "a completed Crystal Lance adds 4");
+}
+
 /// Zero demand reads full efficiency even when supply is zero.
 #[test]
 fn zero_demand_reads_full_efficiency() {

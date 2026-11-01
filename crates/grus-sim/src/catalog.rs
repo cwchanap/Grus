@@ -44,10 +44,12 @@ pub enum BuildingKind {
     Gate,
     GunTurret,
     CoalFurnace,
+    FlameTower,
+    CrystalLance,
 }
 
 impl BuildingKind {
-    pub const ALL: [BuildingKind; 8] = [
+    pub const ALL: [BuildingKind; 10] = [
         BuildingKind::ResearchCenter,
         BuildingKind::Bunkhouse,
         BuildingKind::Depot,
@@ -56,12 +58,15 @@ impl BuildingKind {
         BuildingKind::Gate,
         BuildingKind::GunTurret,
         BuildingKind::CoalFurnace,
+        BuildingKind::FlameTower,
+        BuildingKind::CrystalLance,
     ];
 }
 
 /// One price in the four team currencies. `crystals` is stockpile-and-cost
-/// surface only: `ANALYZE_COST` is the sole baseline charge, and no
-/// gatherable source produces them yet (they drop as combat kill rewards).
+/// surface only: `ANALYZE_COST` and the Crystal Lance are the only charges,
+/// and no gatherable source produces them yet (they drop as combat kill
+/// rewards).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Cost {
     pub food: u32,
@@ -440,6 +445,55 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             heat_supply: 12,
             heat_demand: 0,
             research_unlock_percent: 0,
+        },
+        // Costs, ranges, counter targets and heat demands are locked
+        // (HPA-188); health, build time, damage and cadence are provisional
+        // first-pass values — detailed balancing is deferred to HPA-289.
+        BuildingKind::FlameTower => BuildingSpec {
+            cost: Cost {
+                scrap: 120,
+                coal: 60,
+                ..Cost::default()
+            },
+            build_seconds: 25,
+            width: 2,
+            height: 2,
+            population_capacity: 0,
+            max_health: 350,
+            combat: Some(CombatSpec {
+                damage: 20,
+                attack_range: 3.0,
+                cooldown_seconds: 1.0,
+                counter_target: UnitKind::Swarmer,
+                counter_bonus: 10,
+                ranged: true,
+            }),
+            heat_supply: 0,
+            heat_demand: 3,
+            research_unlock_percent: 25,
+        },
+        BuildingKind::CrystalLance => BuildingSpec {
+            cost: Cost {
+                scrap: 150,
+                crystals: 40,
+                ..Cost::default()
+            },
+            build_seconds: 30,
+            width: 2,
+            height: 2,
+            population_capacity: 0,
+            max_health: 350,
+            combat: Some(CombatSpec {
+                damage: 30,
+                attack_range: 10.0,
+                cooldown_seconds: 1.5,
+                counter_target: UnitKind::Brute,
+                counter_bonus: 15,
+                ranged: true,
+            }),
+            heat_supply: 0,
+            heat_demand: 4,
+            research_unlock_percent: 50,
         },
     }
 }
