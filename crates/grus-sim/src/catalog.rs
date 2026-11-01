@@ -60,8 +60,8 @@ impl BuildingKind {
 }
 
 /// One price in the four team currencies. `crystals` is stockpile-and-cost
-/// surface only: nothing in the winter baseline charges it, and no
-/// gatherable source produces it yet.
+/// surface only: `ANALYZE_COST` is the sole baseline charge, and no
+/// gatherable source produces them yet (they drop as combat kill rewards).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Cost {
     pub food: u32,
@@ -119,6 +119,10 @@ pub struct BuildingSpec {
     /// while fueled; construction sites never count at all.
     pub heat_supply: u32,
     pub heat_demand: u32,
+    /// Share of `RESEARCH_TARGET_POINTS` required before placement unlocks
+    /// (0 = always available). The point threshold derives through
+    /// `research::unlock_points`; there is no per-kind point table.
+    pub research_unlock_percent: u32,
 }
 
 pub const CARRY_LIMIT: u32 = 10;
@@ -152,6 +156,33 @@ pub const VISION_RADIUS_CELLS: i32 = 10;
 pub const FURNACE_COAL_PER_SECOND: f32 = 0.5;
 /// Surface efficiency floor under a severe heat deficit.
 pub const MIN_SURFACE_EFFICIENCY: f32 = 0.25;
+/// Passive research rate of the seeded Research Center at full surface
+/// efficiency; `research_rate` scales it by the live `surface_efficiency`,
+/// so a cold surface slows research exactly like production and turret
+/// cooldowns.
+pub const RESEARCH_BASE_PER_SECOND: f64 = 2.0;
+/// The research point total that resolves Team-1 Victory.
+pub const RESEARCH_TARGET_POINTS: u32 = 9_000;
+/// One Analyze conversion on the Research Center: 10 Crystals from the
+/// shared Team-1 stockpile. A `Cost` const must list every field —
+/// `Default` cannot initialize a const.
+pub const ANALYZE_COST: Cost = Cost {
+    food: 0,
+    scrap: 0,
+    coal: 0,
+    crystals: 10,
+};
+/// Research points one accepted Analyze command converts.
+pub const ANALYZE_RESEARCH_GAIN: f64 = 90.0;
+/// Research percent at which every subsequently launched wave gets the
+/// boosted threat budget; the point threshold derives from
+/// `RESEARCH_TARGET_POINTS` through the same percent helper as building
+/// unlocks.
+pub const RESEARCH_WAVE_BOOST_PERCENT: u32 = 75;
+/// Boosted wave budget = floor(base × NUMERATOR / DENOMINATOR), applied to
+/// the integer budget at launch — never to roster counts or health.
+pub const RESEARCH_WAVE_BOOST_NUMERATOR: u64 = 3;
+pub const RESEARCH_WAVE_BOOST_DENOMINATOR: u64 = 2;
 
 pub fn unit_spec(kind: UnitKind) -> UnitSpec {
     match kind {
@@ -295,6 +326,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 15,
             heat_demand: 10,
+            research_unlock_percent: 0,
         },
         BuildingKind::Bunkhouse => BuildingSpec {
             cost: Cost {
@@ -309,6 +341,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 0,
             heat_demand: 1,
+            research_unlock_percent: 0,
         },
         BuildingKind::Depot => BuildingSpec {
             cost: Cost {
@@ -323,6 +356,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 0,
             heat_demand: 1,
+            research_unlock_percent: 0,
         },
         BuildingKind::Barracks => BuildingSpec {
             cost: Cost {
@@ -337,6 +371,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 0,
             heat_demand: 3,
+            research_unlock_percent: 0,
         },
         BuildingKind::Wall => BuildingSpec {
             cost: Cost {
@@ -351,6 +386,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 0,
             heat_demand: 0,
+            research_unlock_percent: 0,
         },
         BuildingKind::Gate => BuildingSpec {
             cost: Cost {
@@ -365,6 +401,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 0,
             heat_demand: 0,
+            research_unlock_percent: 0,
         },
         BuildingKind::GunTurret => BuildingSpec {
             cost: Cost {
@@ -387,6 +424,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             }),
             heat_supply: 0,
             heat_demand: 2,
+            research_unlock_percent: 0,
         },
         BuildingKind::CoalFurnace => BuildingSpec {
             cost: Cost {
@@ -401,6 +439,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             combat: None,
             heat_supply: 12,
             heat_demand: 0,
+            research_unlock_percent: 0,
         },
     }
 }
