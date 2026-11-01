@@ -63,6 +63,42 @@ mouse_filter = 2
 theme_override_font_sizes/font_size = 14
 text = "Wave"
 
+[node name="ResearchPanel" type="Panel" parent="HUD"]
+offset_left = 18.0
+offset_top = 106.0
+offset_right = 446.0
+offset_bottom = 170.0
+mouse_filter = 2
+
+[node name="ResearchBar" type="ProgressBar" parent="HUD/ResearchPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 6.0
+offset_right = 420.0
+offset_bottom = 28.0
+mouse_filter = 2
+max_value = 9000.0
+show_percentage = false
+
+[node name="AnalyzeButton" type="Button" parent="HUD/ResearchPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 30.0
+offset_right = 138.0
+offset_bottom = 58.0
+disabled = true
+text = "Analyze"
+
+[node name="ResearchLabel" type="Label" parent="HUD/ResearchPanel"]
+layout_mode = 0
+offset_left = 146.0
+offset_top = 32.0
+offset_right = 420.0
+offset_bottom = 58.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 13
+text = "Research"
+
 [node name="InputShield" type="Control" parent="HUD"]
 layout_mode = 3
 offset_left = 8.0
@@ -166,6 +202,18 @@ custom_minimum_size = Vector2(188, 32)
 layout_mode = 2
 text = "Coal Furnace"
 metadata/kind = "CoalFurnace"
+
+[node name="FlameTowerButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Flame Tower"
+metadata/kind = "FlameTower"
+
+[node name="CrystalLanceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
+custom_minimum_size = Vector2(188, 32)
+layout_mode = 2
+text = "Crystal Lance"
+metadata/kind = "CrystalLance"
 
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0

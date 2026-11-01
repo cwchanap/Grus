@@ -9,6 +9,9 @@ const ZOOM_STEP := 6.0
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
 @onready var wave_label: Label = $HUD/WaveLabel
+@onready var research_bar: ProgressBar = $HUD/ResearchPanel/ResearchBar
+@onready var research_label: Label = $HUD/ResearchPanel/ResearchLabel
+@onready var analyze_button: Button = $HUD/ResearchPanel/AnalyzeButton
 @onready var economy_label: Label = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
@@ -40,6 +43,10 @@ var _attack_move_armed := false
 ## Producer building kinds come from the Rust catalogue via
 ## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
+## Static research tuning, cached once from the catalogue's "research"
+## block; the live points/rate/ETA arrive per frame through
+## research_snapshot — never a mirrored mutable copy.
+var _research_target_points := 0
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
@@ -52,6 +59,18 @@ func _ready() -> void:
 	_producer_kinds.sort()
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
+	# The one static research read at init: point target, Analyze price and
+	# reward. Every dynamic value (points/rate/ETA, lock states) refreshes
+	# per frame from research_snapshot in _refresh_hud.
+	var research_catalogue: Dictionary = catalogue.get("research", {})
+	_research_target_points = int(research_catalogue.get("target_points", 0))
+	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
+	var analyze_crystals := int(analyze_cost.get("crystals", 0))
+	var analyze_gain := int(research_catalogue.get("analyze_gain_points", 0))
+	research_bar.max_value = maxf(float(_research_target_points), 1.0)
+	analyze_button.text = "Analyze %d→+%d" % [analyze_crystals, analyze_gain]
+	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
+	analyze_button.pressed.connect(_on_analyze_pressed)
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
@@ -61,6 +80,13 @@ func _ready() -> void:
 			if amount > 0:
 				costs.append("%d %s" % [amount, resource.capitalize()])
 		button.tooltip_text = "Cost: %s\nBuild: %ds" % [", ".join(costs), int(entry.get("seconds", 0))]
+		# The catalogue-derived research threshold rides the button meta; the
+		# per-frame lock refresh in _refresh_research_controls compares it
+		# against the live point total. No per-kind conditions.
+		var unlock_points := int(entry.get("unlock_points", 0))
+		button.set_meta("unlock_points", unlock_points)
+		if unlock_points > 0:
+			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
 		button.pressed.connect(_on_build_pressed.bind(kind))
 	for button in _train_grid.get_children():
 		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
@@ -245,10 +271,48 @@ func _refresh_hud() -> void:
 	# HUD text and incoming pings can never disagree.
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
 		_minimap.set_wave_snapshot(wave)
+	# The one dynamic research read per HUD frame: drives the progress bar,
+	# the ETA text, the Analyze enable and every build-button lock — the
+	# frontend derives percent and availability from these fields only.
+	var research: Dictionary = GrusBridge.research_snapshot()
 	var building: Dictionary = {}
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)
 	_refresh_selection(building)
+	_refresh_research_controls(research, building)
+
+## Per-frame research refresh behind the one dynamic snapshot: the bar and
+## label track live points/rate/ETA, and every catalogue-bound lock state
+## (build buttons, Analyze) re-derives here — never a one-time _ready read.
+func _refresh_research_controls(research: Dictionary, building: Dictionary) -> void:
+	var points := float(research.get("points", 0.0))
+	var target := maxf(float(_research_target_points), 1.0)
+	research_bar.value = clampf(points, 0.0, target)
+	# Floor the percent so a positive sub-total never displays an early
+	# 100%; the target itself still reads 100%.
+	var percent := floori(clampf(points, 0.0, target) / target * 100.0)
+	var eta := float(research.get("eta_seconds", -1.0))
+	var eta_text := "—"
+	if eta >= 0.0:
+		var total := maxi(ceili(eta), 0)
+		eta_text = "%d:%02d" % [total / 60, total % 60]
+	research_label.text = "Research %d/%d · %d%% · ETA %s" % [
+		floori(points), _research_target_points, percent, eta_text,
+	]
+	# Analyze is enabled while Playing with the owned, completed Research
+	# Center selected — affordability is deliberately NOT checked here:
+	# the sim reports InsufficientResources through normal feedback.
+	var analyze_context := _playing() and not building.is_empty() \
+		and str(building.get("kind", "")) == "ResearchCenter" \
+		and int(building.get("team_id", -1)) == 1 \
+		and bool(building.get("complete", false))
+	analyze_button.disabled = not analyze_context
+	# Locked buttons unlock mid-match: the live point total vs each button's
+	# catalogue-derived threshold, every frame. Rust still rejects a stale
+	# click through the authoritative Locked gate.
+	for button in _build_grid.get_children():
+		var required := float(button.get_meta("unlock_points", 0))
+		button.disabled = required > 0.0 and points < required
 
 func _refresh_selection(building: Dictionary) -> void:
 	if not selected_ids.is_empty():
@@ -762,6 +826,22 @@ func _on_train_pressed(kind: String) -> void:
 		command_status.text = "%s training queued" % kind
 	else:
 		command_status.text = "Training rejected"
+
+## One Analyze conversion on the selected Research Center — the same
+## queued-command/feedback path as every other order. The button's enabled
+## state already encodes the session+selection context; the sim stays the
+## final validator for ownership, kind and Crystals.
+func _on_analyze_pressed() -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
+	if selected_building_id <= 0:
+		command_status.text = "Select the Research Center first"
+		return
+	if GrusBridge.analyze(selected_building_id):
+		command_status.text = "Analyze queued"
+	else:
+		command_status.text = "Analyze rejected"
 
 func _on_idle_pressed() -> void:
 	var economy: Dictionary = GrusBridge.economy_snapshot()

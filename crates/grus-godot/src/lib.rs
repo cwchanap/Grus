@@ -8,16 +8,17 @@ use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
 use grus_sim::{
-    BASE_GATHER_RATE, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvent,
-    CombatEventTotal, CombatEvents, CombatTarget, CommandResult, EntryZone, Footprint, GridMap,
-    GridPos, Health, HeatState, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
-    PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
-    ResearchState, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
-    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
-    VisibilityMap, WaveState, WorkerTask, active_phase, apply_player_command, explored_by,
-    extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
-    population_used, produces, refresh_visibility, resolve_target, seed_skirmish, set_paused,
-    start_match, step_tick, surface_efficiency, target_eligible, validate_placement, visible_to,
+    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BASE_GATHER_RATE, Building, BuildingId, BuildingIndex,
+    BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
+    EntryZone, Footprint, GridMap, GridPos, Health, HeatState, IdAllocator, LastRouteReject,
+    MapFixture, MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind,
+    ProductionQueue, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResearchState,
+    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
+    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
+    WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
+    idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
+    research_points, research_rate, resolve_target, seed_skirmish, set_paused, start_match,
+    step_tick, surface_efficiency, target_eligible, unlock_points, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -299,6 +300,25 @@ impl GrusBridgeNode {
         )
     }
 
+    /// Queue one Analyze conversion on the issuer's Research Center. Like
+    /// every other gameplay order it just enters the pending queue: the
+    /// sim's normal accept/reject path reports `InsufficientResources` (or
+    /// any validation failure) through the shared feedback revision/text
+    /// and `last_reject_code`.
+    #[func]
+    fn analyze(&self, building_id: i32) -> bool {
+        let Ok(building) = u32::try_from(building_id) else {
+            return false;
+        };
+        queue_command(
+            PlayerCommand::Analyze {
+                issuer: TeamId(1),
+                building: BuildingId(building),
+            },
+            None,
+        )
+    }
+
     #[func]
     fn reset_fixture(&mut self) -> bool {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -353,6 +373,27 @@ impl GrusBridgeNode {
     #[func]
     fn wave_snapshot(&self) -> VarDictionary {
         with_app(|app| wave_snapshot_dict(app.world())).unwrap_or_default()
+    }
+
+    /// Live research state for the HUD, read once per frame: `points` is
+    /// Team 1's monotonic banked total, `rate_per_second` is the same
+    /// heat-scaled rate `step_research` advances by (so the HUD estimate
+    /// can never diverge from progression), and `eta_seconds` is the live
+    /// remaining/rate estimate — `0` exactly at the target and `-1` when
+    /// the rate is not positive. Read-only in every session phase: a
+    /// frozen or settled match still reports its banked points and the
+    /// would-be rate, so non-Playing screens stay numeric and stable.
+    #[func]
+    fn research_snapshot(&self) -> VarDictionary {
+        with_app(|app| {
+            let (points, rate, eta) = research_fields(app.world());
+            let mut dict = VarDictionary::new();
+            dict.set("points", points);
+            dict.set("rate_per_second", rate);
+            dict.set("eta_seconds", eta);
+            dict
+        })
+        .unwrap_or_default()
     }
 
     /// Explicit Start -> Playing. Gameplay commands and the fixed steps stay
@@ -834,8 +875,12 @@ impl GrusBridgeNode {
     ///   producer}} — train cost (all four currencies, always present),
     ///   train seconds, and the producing building kind name.
     /// - "buildings": {kind -> {food, scrap, coal, crystals, seconds,
-    ///   width, height, population}} — build cost, build seconds,
-    ///   footprint, and population capacity contribution.
+    ///   width, height, population, unlock_points}} — build cost, build
+    ///   seconds, footprint, population capacity contribution, and the
+    ///   catalogue-derived research point threshold (0 = always available).
+    /// - "research": {target_points, analyze_cost, analyze_gain_points} —
+    ///   the static research tuning; the live state rides the separate
+    ///   dynamic `research_snapshot`.
     #[func]
     fn catalogue_snapshot(&self) -> VarDictionary {
         catalogue_snapshot_dict()
@@ -874,11 +919,28 @@ fn catalogue_snapshot_dict() -> VarDictionary {
         entry.set("width", i64::from(spec.width));
         entry.set("height", i64::from(spec.height));
         entry.set("population", i64::from(spec.population_capacity));
+        // The research-unlock threshold derives from the catalogue percent
+        // through the sim's one `unlock_points` helper — no copied point
+        // table lives in the bridge or GDScript.
+        entry.set(
+            "unlock_points",
+            i64::from(unlock_points(spec.research_unlock_percent)),
+        );
         buildings.set(&kind_name(kind), &entry.to_variant());
     }
+    // Static research tuning, read once at UI init: the point target, the
+    // four-currency Analyze price serialized by the one `cost_dict`, and
+    // the per-Analyze point reward. Live points/rate/ETA stay out — those
+    // ride the dynamic `research_snapshot`, so no milestone state or
+    // cost/gain copy exists beside this static block.
+    let mut research = VarDictionary::new();
+    research.set("target_points", i64::from(RESEARCH_TARGET_POINTS));
+    research.set("analyze_cost", &cost_dict(ANALYZE_COST).to_variant());
+    research.set("analyze_gain_points", ANALYZE_RESEARCH_GAIN);
     let mut catalogue = VarDictionary::new();
     catalogue.set("units", &units.to_variant());
     catalogue.set("buildings", &buildings.to_variant());
+    catalogue.set("research", &research.to_variant());
     catalogue
 }
 
@@ -1472,6 +1534,27 @@ fn update_health_bars(
     }
 }
 
+/// Engine-free triple behind `research_snapshot`: Team 1's monotonic
+/// banked points, the same heat-scaled `research_rate` the advancement
+/// step consumes, and the live ETA in simulated seconds. The read is
+/// session-phase-free — a frozen match still reports its banked total and
+/// would-be rate — and a missing `ResearchState` reads as zero points at
+/// the catalogue base rate, the sim's own neutral default.
+fn research_fields(world: &World) -> (f64, f64, f64) {
+    let points = research_points(world);
+    let rate = research_rate(world);
+    let remaining = (f64::from(RESEARCH_TARGET_POINTS) - points).max(0.0);
+    (points, rate, research_eta(remaining, rate))
+}
+
+/// The one ETA rule shared by the snapshot and its tests: `remaining /
+/// rate` while the live rate is positive — 0 exactly at the target,
+/// because the remaining clamps to zero — and `-1` as the unavailable
+/// sentinel when the rate is not positive, never an invented countdown.
+fn research_eta(remaining: f64, rate: f64) -> f64 {
+    if rate > 0.0 { remaining / rate } else { -1.0 }
+}
+
 /// Engine-free heat triple behind `economy_snapshot`'s heat fields: the
 /// live supply/demand totals and the exact fractional efficiency. A world
 /// without `HeatState` reports 0/0 at full efficiency — the sim's own
@@ -1836,7 +1919,7 @@ mod tests {
     use grus_sim::step_heat;
     use grus_sim::{
         AttackCooldown, CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder,
-        WorkerTask, sorted_unit_ids, spawn_unit,
+        RESEARCH_BASE_PER_SECOND, WorkerTask, add_research, sorted_unit_ids, spawn_unit,
     };
 
     use super::*;
@@ -2876,6 +2959,196 @@ mod tests {
         assert_eq!(
             parse_building_kind_str(&name),
             Some(BuildingKind::CoalFurnace)
+        );
+    }
+
+    /// HPA-188: the appended advanced-tower kinds round-trip the same wire
+    /// name contract — `kind_name_str` is the single spelling — while
+    /// near-miss and spaced-out spellings reject at the bridge parser.
+    #[test]
+    fn advanced_tower_catalogue_names_round_trip_the_parser() {
+        for kind in [BuildingKind::FlameTower, BuildingKind::CrystalLance] {
+            let name = kind_name_str(kind);
+            assert_eq!(
+                parse_building_kind_str(&name),
+                Some(kind),
+                "{name} must parse"
+            );
+        }
+        for foreign in [
+            "Flame Turret",
+            "flametower",
+            "FlameTurret",
+            "LaserTower",
+            "CrystalTower",
+            "Crystal Lance",
+            "",
+        ] {
+            assert_eq!(
+                parse_building_kind_str(foreign),
+                None,
+                "foreign name {foreign} must reject"
+            );
+        }
+    }
+
+    /// The per-kind `unlock_points` the catalogue serializes derives only
+    /// from `BuildingSpec::research_unlock_percent` through the shared
+    /// `research::unlock_points` helper — 25% of 9,000 for Flame Tower, 50%
+    /// for Crystal Lance, 0 (always available) for every other kind. No
+    /// bridge-side point table may drift from the sim's milestone rule.
+    #[test]
+    fn catalogue_unlock_points_derive_only_from_research_percents() {
+        assert_eq!(
+            building_spec(BuildingKind::FlameTower).research_unlock_percent,
+            25
+        );
+        assert_eq!(
+            building_spec(BuildingKind::CrystalLance).research_unlock_percent,
+            50
+        );
+        for kind in BuildingKind::ALL {
+            let expected = match kind {
+                BuildingKind::FlameTower => 2_250,
+                BuildingKind::CrystalLance => 4_500,
+                _ => 0,
+            };
+            assert_eq!(
+                unlock_points(building_spec(kind).research_unlock_percent),
+                expected,
+                "{kind:?} unlock_points must match the derived milestone"
+            );
+        }
+    }
+
+    /// The engine-free triple behind `research_snapshot`: a fresh fixture
+    /// reads zero banked points at the full warm rate — ETA 9,000/2 = 4,500
+    /// simulated seconds — and a live heat deficit slows the rate and
+    /// stretches the ETA by the same `surface_efficiency` the advancement
+    /// step consumes, so HUD estimate and progression can never diverge.
+    #[test]
+    fn research_snapshot_fields_track_points_rate_and_live_eta() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        // No ResearchState yet: zero banked points, the catalogue base rate.
+        let (points, rate, eta) = research_fields(&world);
+        assert_eq!(points, 0.0);
+        assert_eq!(rate, RESEARCH_BASE_PER_SECOND);
+        assert_eq!(eta, 4_500.0);
+
+        // Banked progress shortens the ETA by the same live rate the tick
+        // advances.
+        add_research(&mut world, 100.0);
+        let (points, rate, eta) = research_fields(&world);
+        assert_eq!(points, 100.0);
+        assert_eq!(rate, RESEARCH_BASE_PER_SECOND);
+        assert_eq!(eta, (9_000.0 - 100.0) / RESEARCH_BASE_PER_SECOND);
+
+        // A 15/16 heat deficit scales the rate and the ETA identically.
+        world.insert_resource(HeatState {
+            supply: 15,
+            demand: 16,
+            burn_remainder: 0.0,
+        });
+        let (_, rate, eta) = research_fields(&world);
+        let expected_rate = RESEARCH_BASE_PER_SECOND * f64::from(15.0_f32 / 16.0);
+        assert!(
+            (rate - expected_rate).abs() < 1e-9,
+            "cold surface must scale the reported rate, got {rate}"
+        );
+        assert!(
+            (eta - 8_900.0 / expected_rate).abs() < 1e-9,
+            "the ETA must stretch with the same rate, got {eta}"
+        );
+    }
+
+    /// Every session phase keeps the read-only snapshot numeric and
+    /// stable — frozen progress still reports banked points and the
+    /// would-be rate — and reaching the target reports an ETA of exactly
+    /// zero, never the unavailable sentinel.
+    #[test]
+    fn research_snapshot_fields_stay_numeric_across_phases_and_zero_at_target() {
+        let mut world = World::new();
+        for phase in [
+            MatchPhase::Start,
+            MatchPhase::Paused,
+            MatchPhase::Result(MatchResult(TeamId(2))),
+        ] {
+            world.insert_resource(MatchSession { phase });
+            let (points, rate, eta) = research_fields(&world);
+            assert!(
+                points == 0.0 && rate > 0.0 && eta == 4_500.0,
+                "{phase:?} must still read numeric/stable fields, got ({points}, {rate}, {eta})"
+            );
+        }
+
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        add_research(&mut world, 9_000.0);
+        let (points, _, eta) = research_fields(&world);
+        assert_eq!(points, 9_000.0);
+        assert_eq!(eta, 0.0, "a finished match reports ETA 0, never -1");
+    }
+
+    /// The one ETA rule: `remaining / rate` while the live rate is
+    /// positive — 0 exactly at the target because the remaining clamps to
+    /// zero — and `-1` as the unavailable sentinel when the rate is not
+    /// positive, never an invented countdown.
+    #[test]
+    fn research_eta_reports_unavailable_only_when_rate_is_not_positive() {
+        assert_eq!(research_eta(4_500.0, 2.0), 2_250.0);
+        assert_eq!(research_eta(0.0, 2.0), 0.0);
+        assert_eq!(research_eta(4_500.0, 0.0), -1.0);
+        assert_eq!(research_eta(4_500.0, -2.0), -1.0);
+        assert_eq!(research_eta(0.0, 0.0), -1.0);
+    }
+
+    /// The command path the Analyze button drives: a queued
+    /// `PlayerCommand::Analyze` reaches the shared dispatcher on the next
+    /// fixed tick and reports the sim's typed reject — the zero-Crystal
+    /// fixture's `InsufficientResources` — through the normal
+    /// `CommandFeedback` channel, spending nothing and banking no points.
+    #[test]
+    fn analyze_dispatch_reports_the_sim_typed_reject() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        start_match(&mut world);
+        world.insert_resource(PendingCommands::default());
+        world.insert_resource(CommandFeedback::default());
+        world
+            .resource_mut::<PendingCommands>()
+            .0
+            .push(PendingCommand {
+                command: PlayerCommand::Analyze {
+                    issuer: TeamId(1),
+                    building: BuildingId(1),
+                },
+                placement_request_id: None,
+            });
+
+        apply_pending_commands(&mut world);
+
+        let feedback = world.resource::<CommandFeedback>();
+        assert_eq!(feedback.text, "Command rejected (InsufficientResources)");
+        assert_eq!(
+            feedback.last_reject_code,
+            Some(RejectReason::InsufficientResources)
+        );
+        assert_eq!(
+            research_points(&world),
+            0.0,
+            "a rejected Analyze banks no research"
+        );
+        assert_eq!(
+            world.resource::<TeamEconomy>().0[&TeamId(1)]
+                .stockpile
+                .crystals,
+            0,
+            "a rejected Analyze spends nothing"
         );
     }
 }
