@@ -9,7 +9,9 @@ extends Node
 const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 
 ## RejectReason declaration order (crates/grus-sim/src/commands.rs):
-## SessionLocked is the 18th variant (0-based 17); -1 means no rejection.
+## InsufficientResources is the 9th variant (0-based 8) and SessionLocked
+## the 18th (0-based 17); -1 means no rejection.
+const REJECT_INSUFFICIENT_RESOURCES := 8
 const REJECT_SESSION_LOCKED := 17
 const ALIEN_KINDS := ["Swarmer", "Spitter", "Brute", "Behemoth"]
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
@@ -137,6 +139,21 @@ func _key_tap(keycode: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+## Button presses go through push_input: it dispatches the same
+## Window->Viewport GUI routing a real click takes, synchronously, which is
+## the reliable path for HUD controls in headless runs.
+func _push_mouse_click(position: Vector2, button: int) -> void:
+	var press := InputEventMouseButton.new()
+	press.button_index = button
+	press.position = position
+	press.pressed = true
+	get_tree().root.push_input(press)
+	var release := InputEventMouseButton.new()
+	release.button_index = button
+	release.position = position
+	release.pressed = false
+	get_tree().root.push_input(release)
+
 func _select_guards(guards: Array[Node3D], guard_ids: PackedInt32Array) -> bool:
 	var top_left := Vector2(INF, INF)
 	var bottom_right := Vector2(-INF, -INF)
@@ -200,6 +217,174 @@ func _assert_input_gated(where: String) -> bool:
 		return false
 	return true
 
+## HPA-188 fresh-match research boundary, exercised in the zero-Crystal
+## window right after Start -> Playing and under the smoke's 20x clock.
+## Real viewport input selects the live Research Center and presses its
+## enabled Analyze button; the only honest verdict is the typed
+## InsufficientResources reject (code 8) with the stockpile and banked
+## points untouched. The catalogue-bound tower locks, HUD bar and live ETA
+## are checked here; the winning 10-Crystal conversion path is a pure-Rust
+## contract, and no test-only resource injection exists.
+func _research_boundary_leg() -> bool:
+	var camera: Camera3D = _main.camera
+	var analyze_button := _main.get_node("HUD/ResearchPanel/AnalyzeButton") as Button
+	var research_bar := _main.get_node("HUD/ResearchPanel/ResearchBar") as ProgressBar
+	var research_label := _main.get_node("HUD/ResearchPanel/ResearchLabel") as Label
+	if camera == null or analyze_button == null or research_bar == null or research_label == null:
+		_fail("research HUD nodes are missing under HUD/ResearchPanel")
+		return false
+
+	# The static catalogue surface drives everything below: the Analyze
+	# price/gain and each advanced tower's point threshold come from the
+	# Rust catalogue, never a GDScript constant.
+	var research_catalogue: Dictionary = GrusBridge.catalogue_snapshot().get("research", {})
+	var target_points := int(research_catalogue.get("target_points", 0))
+	var analyze_price := int(research_catalogue.get("analyze_cost", {}).get("crystals", 0))
+	var analyze_gain := float(research_catalogue.get("analyze_gain_points", 0.0))
+	if target_points <= 0 or analyze_price <= 0 or analyze_gain <= 0.0:
+		_fail("catalogue research block is incomplete: %s" % [research_catalogue])
+		return false
+	var buildings_catalogue: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {})
+	for tower in ["FlameTower", "CrystalLance"]:
+		var entry: Dictionary = buildings_catalogue.get(tower, {})
+		var unlock := int(entry.get("unlock_points", -1))
+		var tower_button := _button("HUD/CommandPanel/BuildGrid/%sButton" % tower)
+		if tower_button == null or unlock <= 0 or unlock >= target_points:
+			_fail("%s button/catalogue unlock metadata is malformed: %s" % [tower, entry])
+			return false
+		# Fresh points sit below every threshold: the button renders locked
+		# with its catalogue-derived meta and unlock hint text.
+		if not tower_button.disabled \
+				or int(tower_button.get_meta("unlock_points", -1)) != unlock \
+				or not tower_button.tooltip_text.contains("Unlocks at %d research" % unlock):
+			_fail("%s is not presented locked at its catalogue threshold: disabled=%s meta=%s tooltip=%s" % [
+				tower, tower_button.disabled, tower_button.get_meta("unlock_points", "?"), tower_button.tooltip_text])
+			return false
+
+	# The fixture's own stockpile is exactly zero Crystals — below every
+	# catalogue Analyze price — so this leg's press is deterministically
+	# unaffordable. No branch on live stockpile is needed or taken.
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != 0:
+		_fail("fresh Playing stockpile is not exactly zero Crystals: %s" % [GrusBridge.economy_snapshot()])
+		return false
+
+	# Real selection only: march every live Team-1 unit west of the live
+	# Research Center view so no unit can shadow the building pick inside
+	# its 20px radius. The destination derives from the live view — never
+	# a copied fixture coordinate.
+	var research_center := _building_view(1)
+	if research_center == null:
+		_fail("live Research Center view is missing before the Analyze leg")
+		return false
+	var clear_ids := PackedInt32Array()
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if int(node.get_meta("team_id", -1)) == 1:
+			clear_ids.append(int(node.get_meta("unit_id", -1)))
+	if clear_ids.is_empty():
+		_fail("no live Team-1 units to clear from the Research Center pick radius")
+		return false
+	var clear_target := Vector2(
+		research_center.global_position.x - 16.0,
+		research_center.global_position.z)
+	var clear_revision := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(clear_ids, clear_target):
+		_fail("worker clear-out move was not queued")
+		return false
+	if not await _wait_until(
+			func(): return int(GrusBridge.command_feedback_revision()) > clear_revision \
+					and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
+			10.0, "worker clear-out move was not accepted by the sim"):
+		return false
+	var rc_screen: Vector2 = camera.unproject_position(research_center.global_position)
+	if not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).has_point(rc_screen):
+		_fail("Research Center projects outside the viewport: %s" % rc_screen)
+		return false
+	if not await _wait_until(func():
+			for node in get_tree().get_nodes_in_group("unit_views"):
+				var view := node as Node3D
+				if view == null or int(view.get_meta("team_id", -1)) != 1:
+					continue
+				if camera.unproject_position(view.global_position).distance_to(rc_screen) <= 40.0:
+					return false
+			return true,
+			15.0, "workers never cleared the Research Center pick radius"):
+		return false
+
+	# Real input selects the actual building view: a left click on its
+	# projected position must select building 1 and clear unit selection.
+	await _mouse_click(rc_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(_main.selected_building_id) == 1 \
+					and _main.selected_ids.is_empty(),
+			5.0, "left-click on the live Research Center did not select building 1"):
+		return false
+	# Enabled follows the session+selection contract — Playing with the
+	# owned, completed Research Center selected — never affordability.
+	if not await _wait_until(func(): return not analyze_button.disabled,
+			5.0, "Analyze stayed disabled with the owned Research Center selected while Playing"):
+		return false
+
+	var points_before := float(GrusBridge.research_snapshot().get("points", -1.0))
+	var feedback_revision := int(GrusBridge.command_feedback_revision())
+	_push_mouse_click(analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	# Dispatch evidence is the sim's own verdict: the pressed button queues
+	# the Analyze command, whose reject bumps the shared feedback revision
+	# with the typed reason — no Crystal moves and no points bank.
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > feedback_revision,
+			10.0, "the enabled Analyze press produced no sim verdict"):
+		return false
+	if int(GrusBridge.last_reject_code()) != REJECT_INSUFFICIENT_RESOURCES \
+			or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
+		_fail("zero-Crystal Analyze did not surface the typed InsufficientResources reject: code=%d feedback=%s" % [
+			int(GrusBridge.last_reject_code()), GrusBridge.command_feedback()])
+		return false
+	if str(_main.command_status.text) != "Command rejected (InsufficientResources)":
+		_fail("HUD did not surface the Analyze reject text: %s" % [_main.command_status.text])
+		return false
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != 0:
+		_fail("rejected Analyze changed the zero-Crystal stockpile: %s" % [GrusBridge.economy_snapshot()])
+		return false
+	var points_after := float(GrusBridge.research_snapshot().get("points", -1.0))
+	if points_after - points_before >= analyze_gain:
+		_fail("rejected Analyze banked the +%d reward: %f -> %f" % [analyze_gain, points_before, points_after])
+		return false
+
+	# The live surface advances under the 20x clock: banked points and the
+	# HUD bar rise while the ETA estimate shrinks.
+	var snapshot_before: Dictionary = GrusBridge.research_snapshot()
+	var points_wait := float(snapshot_before.get("points", -1.0))
+	var eta_wait := float(snapshot_before.get("eta_seconds", -1.0))
+	var bar_wait := research_bar.value
+	if points_wait < 0.0 or eta_wait < 0.0:
+		_fail("Playing research snapshot is not numeric/positive: %s" % [snapshot_before])
+		return false
+	for _frame in 40:
+		await get_tree().physics_frame
+	var snapshot_after: Dictionary = GrusBridge.research_snapshot()
+	if float(snapshot_after.get("points", -1.0)) <= points_wait \
+			or float(snapshot_after.get("eta_seconds", -1.0)) >= eta_wait \
+			or research_bar.value <= bar_wait:
+		_fail("research surface froze under 20x: %s -> %s (bar %f -> %f)" % [
+			snapshot_before, snapshot_after, bar_wait, research_bar.value])
+		return false
+	if not is_equal_approx(research_bar.max_value, float(target_points)) \
+			or not research_label.text.contains("ETA") \
+			or research_label.text.ends_with("—"):
+		_fail("research HUD does not track the catalogue target/live ETA: max=%f label=%s" % [
+			research_bar.max_value, research_label.text])
+		return false
+
+	# Leave the building deselected for the production legs: a real click
+	# on open ground clears the pick and disables Analyze again.
+	await _mouse_click(Vector2(TEST_VIEWPORT_SIZE) * Vector2(0.5, 0.85), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(_main.selected_building_id) == -1 \
+					and _main.selected_ids.is_empty() and analyze_button.disabled,
+			5.0, "open-ground click did not deselect the Research Center and disable Analyze"):
+		return false
+	return true
+
 func _restart_settled() -> bool:
 	if not _fixture_views_settled():
 		return false
@@ -222,7 +407,7 @@ func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
 	return true
 
 func _success_marker() -> String:
-	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true"
+	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true research_boundary=analyze_reject8_zero_crystal research_progress=20x_advancing restart_research=zero"
 
 func _run() -> void:
 	var window := get_window()
@@ -276,6 +461,13 @@ func _run() -> void:
 	if not await _wait_until(
 			func(): return not _session_panel().visible and _button("HUD/PauseButton").visible,
 			5.0, "Playing phase did not hide the overlay and show Pause"):
+		return
+
+	# HPA-188: the fresh match's exact zero-Crystal stockpile makes this the
+	# only deterministic InsufficientResources window — the enabled Analyze
+	# button, the real Research Center pick and the live research surface
+	# are exercised before the first Crystal can be earned.
+	if not await _research_boundary_leg():
 		return
 
 	# Build and train through the ordinary fixture/production bridge seams,
@@ -503,6 +695,12 @@ func _run() -> void:
 	if int(_fx.call("effect_count")) < 1:
 		_fail("transient effect seed for the restart check did not land")
 		return
+	# Banked research must be non-zero here — the whole Playing journey
+	# accrued it — so the post-restart zero assertions below are never
+	# vacuous.
+	if float(GrusBridge.research_snapshot().get("points", 0.0)) <= 0.0:
+		_fail("research never banked points during the defeat journey: %s" % [GrusBridge.research_snapshot()])
+		return
 	_main.call("_restart_match")
 	if not await _wait_until(_restart_settled, 20.0,
 			"restart never re-settled to the exact fresh 4-unit fixture"):
@@ -537,6 +735,18 @@ func _run() -> void:
 		return
 	if int(_fx.call("effect_count")) != 0:
 		_fail("restart left transient combat effects on stage")
+		return
+
+	# The real restart path wipes banked research with the match: the live
+	# snapshot, the HUD bar and the Analyze enable all return to zero.
+	if float(GrusBridge.research_snapshot().get("points", -1.0)) != 0.0:
+		_fail("restart did not reset research points: %s" % [GrusBridge.research_snapshot()])
+		return
+	var reset_bar := _main.get_node("HUD/ResearchPanel/ResearchBar") as ProgressBar
+	var reset_analyze := _button("HUD/ResearchPanel/AnalyzeButton")
+	if not await _wait_until(func():
+			return reset_bar.value == 0.0 and reset_analyze.disabled,
+			5.0, "restart left stale research HUD progress or an enabled Analyze"):
 		return
 
 	var marker := _success_marker()
