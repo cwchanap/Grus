@@ -3,7 +3,7 @@
 **Issue:** https://linear.app/cwchanap/issue/HPA-188/grus-survival-68-research-timer-and-victory  
 **Parent contract:** [Winter Survival](2026-10-21-winter-survival-design.md), section 7  
 **Dependency:** HPA-181 / [PR #14](https://github.com/cwchanap/Grus/pull/14), merged into main on 2026-10-31  
-**Status:** Design proposal only. This documentation draft PR is the **only PR** for HPA-188; implement and verify in the same branch before marking ready for review.
+**Status:** Implemented locally on this branch (all six checkpoints landed; see the implementation plan for macOS arm64 evidence); required Linux x86_64 CI still pending. This PR is the **only PR** for HPA-188.
 
 ## Goal and boundaries
 
