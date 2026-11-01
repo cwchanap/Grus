@@ -10,6 +10,7 @@ use crate::economy::{
 use crate::heat::HeatState;
 use crate::ids::IdAllocator;
 use crate::movement::{SIM_STEP_SECONDS, step_movement};
+use crate::research::{ResearchState, unlock_points};
 use crate::session::{MatchPhase, MatchSession};
 use crate::visibility::{VisibilityMap, explored_by, refresh_visibility};
 
@@ -727,12 +728,17 @@ fn invalid_placement_never_charges_or_reserves() {
 }
 
 /// A Team-2 Gate would seal its own team while passing Team 1, a Team-2
-/// GunTurret never joins the Team-1-only combat pass, and the one-player
+/// tower never joins the Team-1-only combat pass, and the one-player
 /// winter fixture has no Team-2 furnace economy — none of these kinds is
-/// placeable by a non-Team-1 issuer. Walls stay legal for any team.
+/// placeable by a non-Team-1 issuer. Walls stay legal for any team. The
+/// research gate is maxed out so every rejection here is the team gate
+/// alone.
 #[test]
 fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
     let (mut world, mut map, _worker) = setup_build_test();
+    world.insert_resource(ResearchState {
+        points: f64::from(unlock_points(100)),
+    });
     spawn_unit(
         &mut world,
         UnitId(2),
@@ -746,6 +752,8 @@ fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
         BuildingKind::Gate,
         BuildingKind::GunTurret,
         BuildingKind::CoalFurnace,
+        BuildingKind::FlameTower,
+        BuildingKind::CrystalLance,
     ] {
         let result = apply_player_command(
             &mut world,
@@ -823,37 +831,290 @@ fn accepted_bunkhouse_deducts_fifty_scrap_and_blocks_four_cells() {
     );
 }
 
+/// Every combat building — the Gun Turret and both research towers — gets
+/// its `AttackCooldown` from construction completion, never earlier. The
+/// generalized grant keys on the catalogue combat spec, not the kind.
 #[test]
-fn gun_turret_gets_attack_cooldown_only_when_construction_completes() {
+fn combat_buildings_get_attack_cooldown_only_when_construction_completes() {
+    for (kind, build_seconds) in [
+        (BuildingKind::GunTurret, 25.0),
+        (BuildingKind::FlameTower, 25.0),
+        (BuildingKind::CrystalLance, 30.0),
+    ] {
+        let (mut world, mut map, worker) = setup_build_test();
+        // Enough research to open every gate; the Gun Turret needs none.
+        world.insert_resource(ResearchState {
+            points: f64::from(unlock_points(100)),
+        });
+        world
+            .resource_mut::<TeamEconomy>()
+            .0
+            .get_mut(&TeamId(1))
+            .unwrap()
+            .stockpile
+            .crystals = 40;
+        let result = apply_player_command(
+            &mut world,
+            &mut map,
+            PlayerCommand::PlaceBuilding {
+                issuer: TeamId(1),
+                builder: UnitId(1),
+                kind,
+                anchor: GridPos::new(13, 10),
+            },
+        );
+        assert_eq!(result.reject, None, "{kind:?} placement rejected");
+
+        let entity = world
+            .resource::<BuildingIndex>()
+            .entity(BuildingId(10))
+            .expect("tower site is indexed");
+        assert!(world.get::<AttackCooldown>(entity).is_none());
+        assert!(!world.get::<Building>(entity).unwrap().construction.complete);
+
+        world.entity_mut(worker).insert(WorkerTask::Constructing {
+            building: BuildingId(10),
+        });
+        step_construction(&mut world, &map, build_seconds);
+
+        assert!(
+            world.get::<Building>(entity).unwrap().construction.complete,
+            "{kind:?} never completed"
+        );
+        assert_eq!(
+            world.get::<AttackCooldown>(entity),
+            Some(&AttackCooldown::default()),
+            "{kind:?} cooldown"
+        );
+    }
+}
+
+/// The research gate is shared by preview and applied placement: below
+/// each derived threshold both towers reject `Locked` through
+/// `validate_placement` and `apply_place_building` alike — before any
+/// spend, allocation, or builder retask.
+#[test]
+fn locked_towers_reject_through_preview_and_apply_without_spending() {
     let (mut world, mut map, worker) = setup_build_test();
-    let result = apply_player_command(
+    let task = world.get::<WorkerTask>(worker).unwrap().clone();
+    let stockpile_before = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+
+    // Just under the 25% threshold the Flame Tower stays locked; the same
+    // gate answers the mouse-motion preview and the committed command.
+    world.insert_resource(ResearchState {
+        points: f64::from(unlock_points(25)) - 0.5,
+    });
+    let preview = validate_placement(
+        &world,
+        &map,
+        TeamId(1),
+        UnitId(1),
+        BuildingKind::FlameTower,
+        GridPos::new(13, 10),
+    );
+    assert_eq!(preview.err(), Some(RejectReason::Locked));
+    let applied = apply_player_command(
         &mut world,
         &mut map,
         PlayerCommand::PlaceBuilding {
             issuer: TeamId(1),
             builder: UnitId(1),
-            kind: BuildingKind::GunTurret,
+            kind: BuildingKind::FlameTower,
             anchor: GridPos::new(13, 10),
         },
     );
-    assert_eq!(result.reject, None);
+    assert_eq!(applied.reject, Some(RejectReason::Locked));
 
+    // Exactly at 25% the Flame Tower opens but the Crystal Lance (50%)
+    // stays locked through the same shared gate.
+    world.resource_mut::<ResearchState>().points = f64::from(unlock_points(25));
+    let preview = validate_placement(
+        &world,
+        &map,
+        TeamId(1),
+        UnitId(1),
+        BuildingKind::CrystalLance,
+        GridPos::new(13, 10),
+    );
+    assert_eq!(preview.err(), Some(RejectReason::Locked));
+    let applied = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::CrystalLance,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert_eq!(applied.reject, Some(RejectReason::Locked));
+
+    // Every rejection left the world untouched.
+    assert_eq!(
+        world.get::<WorkerTask>(worker),
+        Some(&task),
+        "a Locked reject must not retask the builder"
+    );
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        stockpile_before,
+        "a Locked reject spent resources"
+    );
+    assert_eq!(
+        world
+            .get_resource::<BuildingIndex>()
+            .map(|index| index.iter().count())
+            .unwrap_or(0),
+        0,
+        "a Locked reject allocated a building"
+    );
+    assert_eq!(world.resource::<IdAllocator>().next_building, 10);
+}
+
+/// At their derived thresholds placement accepts and charges the locked
+/// catalogue costs — 120 Scrap + 60 Coal for the Flame Tower, 150 Scrap +
+/// 40 Crystals for the Crystal Lance — through the same gate the preview
+/// passed.
+#[test]
+fn unlocked_towers_place_and_charge_their_catalogue_costs() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    world.insert_resource(ResearchState {
+        points: f64::from(unlock_points(50)),
+    });
+    world
+        .resource_mut::<TeamEconomy>()
+        .0
+        .get_mut(&TeamId(1))
+        .unwrap()
+        .stockpile
+        .crystals = 40;
+
+    let flame = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::FlameTower,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert_eq!(flame.reject, None, "Flame Tower rejected: {flame:?}");
+    let stockpile = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+    assert_eq!(
+        stockpile,
+        ResourceStockpile {
+            food: 500,
+            scrap: 380,
+            coal: 440,
+            crystals: 40,
+        },
+        "the Flame Tower must charge 120 Scrap + 60 Coal"
+    );
+    let flame_entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(10))
+        .expect("Flame Tower site is indexed");
+    assert_eq!(
+        world.get::<Building>(flame_entity).unwrap().kind,
+        BuildingKind::FlameTower
+    );
+    assert!(world.get::<AttackCooldown>(flame_entity).is_none());
+
+    let second = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(1),
+        Vec2::new(17.5, 10.5),
+        UnitKind::Worker,
+        unit_spec(UnitKind::Worker).speed,
+    );
+    world
+        .entity_mut(second)
+        .insert((Carry::Empty, GatherProgress::default(), WorkerTask::Idle));
+    let lance = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(2),
+            kind: BuildingKind::CrystalLance,
+            anchor: GridPos::new(20, 10),
+        },
+    );
+    assert_eq!(lance.reject, None, "Crystal Lance rejected: {lance:?}");
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile,
+        ResourceStockpile {
+            food: 500,
+            scrap: 230,
+            coal: 440,
+            crystals: 0,
+        },
+        "the Crystal Lance must charge 150 Scrap + 40 Crystals"
+    );
+    let lance_entity = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(11))
+        .expect("Crystal Lance site is indexed");
+    assert_eq!(
+        world.get::<Building>(lance_entity).unwrap().kind,
+        BuildingKind::CrystalLance
+    );
+}
+
+/// Completion grants real attack capability through the shared combat
+/// pass: a Flame Tower placed under the 25% unlock and built through the
+/// construction step finishes with a ready `AttackCooldown` and damages a
+/// Swarmer inside its short range on the next combat tick — counter bonus
+/// included.
+#[test]
+fn completed_flame_tower_gains_cooldown_and_fires_on_swarmers() {
+    let (mut world, mut map, worker) = setup_build_test();
+    world.insert_resource(ResearchState {
+        points: f64::from(unlock_points(25)),
+    });
+    let placed = apply_player_command(
+        &mut world,
+        &mut map,
+        PlayerCommand::PlaceBuilding {
+            issuer: TeamId(1),
+            builder: UnitId(1),
+            kind: BuildingKind::FlameTower,
+            anchor: GridPos::new(13, 10),
+        },
+    );
+    assert_eq!(placed.reject, None, "unlocked tower rejected: {placed:?}");
     let entity = world
         .resource::<BuildingIndex>()
         .entity(BuildingId(10))
-        .expect("turret site is indexed");
-    assert!(world.get::<AttackCooldown>(entity).is_none());
-    assert!(!world.get::<Building>(entity).unwrap().construction.complete);
+        .expect("tower site is indexed");
 
     world.entity_mut(worker).insert(WorkerTask::Constructing {
         building: BuildingId(10),
     });
     step_construction(&mut world, &map, 25.0);
-
     assert!(world.get::<Building>(entity).unwrap().construction.complete);
     assert_eq!(
         world.get::<AttackCooldown>(entity),
         Some(&AttackCooldown::default())
+    );
+
+    // A Swarmer inside the 3-cell range takes counter-boosted damage
+    // through the shared tower pass — no order or route involved.
+    let swarmer = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(15.5, 11.5),
+        UnitKind::Swarmer,
+        unit_spec(UnitKind::Swarmer).speed,
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<Health>(swarmer).unwrap().current,
+        40 - 30,
+        "20 base + 10 Swarmer counter must land"
     );
 }
 

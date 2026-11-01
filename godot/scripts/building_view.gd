@@ -39,7 +39,7 @@ func _style_kind(kind: String) -> void:
 			_add_gate_part("GatePostLeft", Vector3(0.16, 1.2, 0.16), Vector3(-0.34, 0.6, 0.0))
 			_add_gate_part("GatePostRight", Vector3(0.16, 1.2, 0.16), Vector3(0.34, 0.6, 0.0))
 			_add_gate_part("GateLintel", Vector3(0.84, 0.16, 0.16), Vector3(0.0, 1.12, 0.0))
-		"GunTurret":
+		"GunTurret", "FlameTower", "CrystalLance":
 			var turret := CylinderMesh.new()
 			turret.top_radius = 0.36
 			turret.bottom_radius = 0.55

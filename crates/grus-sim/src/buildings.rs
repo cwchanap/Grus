@@ -15,6 +15,7 @@ use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{ProductionQueue, is_producer};
+use crate::research::building_unlocked;
 use crate::session::gameplay_active;
 use crate::visibility::{
     explored_by, move_goal_counts_as_occupancy, unit_counts_as_occupancy, visible_to,
@@ -105,17 +106,25 @@ pub fn validate_placement(
     }
 
     // 2. kind buildable. Research Centers are seeded, never placed. Gate,
-    // GunTurret and CoalFurnace are Team-1-only: a Team-2 Gate would seal
-    // its own team while passing Team 1, the combat pass fires only Team-1
-    // turrets, and the one-player winter fixture has no Team-2 furnace
-    // economy.
+    // GunTurret, CoalFurnace and both advanced towers are Team-1-only: a
+    // Team-2 Gate would seal its own team while passing Team 1, the combat
+    // pass fires only Team-1 towers, and the one-player winter fixture has
+    // no Team-2 furnace economy. Research-gated kinds (FlameTower 25%,
+    // CrystalLance 50%) additionally need the live point total at their
+    // catalogue threshold — preview and applied placement share this one
+    // authoritative rule, before any currency is spent or state allocated.
     let spec = building_spec(kind);
     if kind == BuildingKind::ResearchCenter
         || (issuer != TeamId(1)
             && matches!(
                 kind,
-                BuildingKind::Gate | BuildingKind::GunTurret | BuildingKind::CoalFurnace
+                BuildingKind::Gate
+                    | BuildingKind::GunTurret
+                    | BuildingKind::CoalFurnace
+                    | BuildingKind::FlameTower
+                    | BuildingKind::CrystalLance
             ))
+        || !building_unlocked(world, kind)
     {
         return Err(RejectReason::Locked);
     }
@@ -842,7 +851,7 @@ pub fn step_construction(world: &mut World, map: &GridMap, seconds: f32) {
         if kind == BuildingKind::Depot {
             world.entity_mut(building_entity).insert(Dropoff { team });
         }
-        if kind == BuildingKind::GunTurret {
+        if building_spec(kind).combat.is_some() {
             world
                 .entity_mut(building_entity)
                 .insert(AttackCooldown::default());
