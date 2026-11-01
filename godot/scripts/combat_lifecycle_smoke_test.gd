@@ -139,21 +139,6 @@ func _key_tap(keycode: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-## Button presses go through push_input: it dispatches the same
-## Window->Viewport GUI routing a real click takes, synchronously, which is
-## the reliable path for HUD controls in headless runs.
-func _push_mouse_click(position: Vector2, button: int) -> void:
-	var press := InputEventMouseButton.new()
-	press.button_index = button
-	press.position = position
-	press.pressed = true
-	get_tree().root.push_input(press)
-	var release := InputEventMouseButton.new()
-	release.button_index = button
-	release.position = position
-	release.pressed = false
-	get_tree().root.push_input(release)
-
 func _select_guards(guards: Array[Node3D], guard_ids: PackedInt32Array) -> bool:
 	var top_left := Vector2(INF, INF)
 	var bottom_right := Vector2(-INF, -INF)
@@ -326,7 +311,7 @@ func _research_boundary_leg() -> bool:
 
 	var points_before := float(GrusBridge.research_snapshot().get("points", -1.0))
 	var feedback_revision := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	# Dispatch evidence is the sim's own verdict: the pressed button queues
 	# the Analyze command, whose reject bumps the shared feedback revision
 	# with the typed reason — no Crystal moves and no points bank. The HUD
@@ -586,7 +571,7 @@ func _run() -> void:
 	# dispatch itself; _process later mirrors the real verdict over it. Read
 	# it before any frame await — under fps throttling several physics ticks
 	# (and the verdict) can land before the next render pass.
-	_push_mouse_click(defender_screen, MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), defender_screen, MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack-move queued":
 		_fail("controller ground right-click did not queue the announced-entry attack-move: %s" % [_main.command_status.text])
 		return
@@ -636,7 +621,7 @@ func _run() -> void:
 	# Same synchronous-transient read as the attack-move announcement above:
 	# the verdict mirror in _process may legitimately replace it before any
 	# awaited frame completes under throttled fps.
-	_push_mouse_click(_main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), _main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack command queued":
 		_fail("controller right-click did not queue a direct attack on the visible alien: %s" % [_main.command_status.text])
 		return

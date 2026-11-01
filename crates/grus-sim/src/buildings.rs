@@ -10,7 +10,9 @@ use bevy::prelude::{Component, Entity, Resource, World};
 use crate::catalog::{BuildingKind, UnitKind, building_spec};
 use crate::combat::{AttackCooldown, CombatOrder, Health, with_destination};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, approach_slots, owned_unit_entity};
-use crate::economy::{Dropoff, ResourceIndex, TeamEconomy, WorkerTask, cancel_unit_activity};
+use crate::economy::{
+    Dropoff, ResourceIndex, TeamEconomy, WorkerTask, cancel_unit_activity, try_spend,
+};
 use crate::ids::{BuildingId, IdAllocator, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
@@ -105,25 +107,17 @@ pub fn validate_placement(
         return Err(RejectReason::NotWorker);
     }
 
-    // 2. kind buildable. Research Centers are seeded, never placed. Gate,
-    // GunTurret, CoalFurnace and both advanced towers are Team-1-only: a
-    // Team-2 Gate would seal its own team while passing Team 1, the combat
-    // pass fires only Team-1 towers, and the one-player winter fixture has
-    // no Team-2 furnace economy. Research-gated kinds (FlameTower 25%,
-    // CrystalLance 50%) additionally need the live point total at their
-    // catalogue threshold — preview and applied placement share this one
-    // authoritative rule, before any currency is spent or state allocated.
+    // 2. kind buildable. Research Centers are seeded, never placed. Kinds
+    // the catalogue marks `team1_only` reject a foreign issuer — the flag
+    // is authored per-kind so a new tower can never be placeable by Team 2
+    // while the Team-1-only combat pass would leave it unfireable.
+    // Research-gated kinds (FlameTower 25%, CrystalLance 50%) additionally
+    // need the live point total at their catalogue threshold — preview and
+    // applied placement share this one authoritative rule, before any
+    // currency is spent or state allocated.
     let spec = building_spec(kind);
     if kind == BuildingKind::ResearchCenter
-        || (issuer != TeamId(1)
-            && matches!(
-                kind,
-                BuildingKind::Gate
-                    | BuildingKind::GunTurret
-                    | BuildingKind::CoalFurnace
-                    | BuildingKind::FlameTower
-                    | BuildingKind::CrystalLance
-            ))
+        || (issuer != TeamId(1) && spec.team1_only)
         || !building_unlocked(world, kind)
     {
         return Err(RejectReason::Locked);
@@ -291,15 +285,9 @@ pub(crate) fn apply_place_building(
     // drove apply on a changed world) must leave the builder's task, the
     // map, and every currency field untouched.
     let spec = building_spec(kind);
-    {
-        let mut economy = world
-            .get_resource_mut::<TeamEconomy>()
-            .expect("validated economy");
-        let state = economy.0.get_mut(&issuer).expect("validated team");
-        if !state.stockpile.try_spend(spec.cost) {
-            result.reject = Some(RejectReason::InsufficientResources);
-            return result;
-        }
+    if !try_spend(world, issuer, spec.cost) {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
     }
 
     cancel_unit_activity(world, plan.builder);
@@ -472,6 +460,28 @@ pub(crate) fn commandable_building_entity(
         }
     }
     Ok(entity)
+}
+
+/// The shared owned-and-complete tail every completed-building command
+/// applies after `commandable_building_entity` resolves: a foreign
+/// building is `NotOwned`, an incomplete one `Locked`. Returns the entity
+/// so the caller can finish its kind-specific check.
+pub(crate) fn commandable_completed_building(
+    world: &World,
+    issuer: TeamId,
+    building: BuildingId,
+) -> Result<Entity, RejectReason> {
+    let building_entity = commandable_building_entity(world, issuer, building)?;
+    let state = world
+        .get::<Building>(building_entity)
+        .ok_or(RejectReason::BuildingMissing)?;
+    if state.team != issuer {
+        return Err(RejectReason::NotOwned);
+    }
+    if !state.construction.complete {
+        return Err(RejectReason::Locked);
+    }
+    Ok(building_entity)
 }
 
 /// Resume validation: owned worker → building exists → owned → incomplete.

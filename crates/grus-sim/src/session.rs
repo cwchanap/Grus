@@ -65,9 +65,11 @@ pub fn set_paused(world: &mut World, paused: bool) {
     }
 }
 
-/// Records the winner at the first Research Center destruction; later callers —
-/// including same-step attackers — cannot overwrite a settled result.
-/// Session-free worlds (benchmark) have nothing to resolve into.
+/// Records the first settled winner: a Research Center's destruction
+/// awards its attacker, and reaching the research target awards Team 1.
+/// Later callers — including same-step attackers — cannot overwrite a
+/// settled result. Session-free worlds (benchmark) have nothing to
+/// resolve into.
 pub fn resolve_result(world: &mut World, winner: TeamId) {
     if let Some(mut session) = world.get_resource_mut::<MatchSession>()
         && !matches!(session.phase, MatchPhase::Result(_))

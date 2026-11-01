@@ -36,18 +36,6 @@ func _mouse_click(position: Vector2, button: int, shift_pressed := false) -> voi
 	release.shift_pressed = shift_pressed
 	Input.parse_input_event(release)
 
-func _push_mouse_click(position: Vector2, button: int) -> void:
-	var press := InputEventMouseButton.new()
-	press.button_index = button
-	press.position = position
-	press.pressed = true
-	get_tree().root.push_input(press)
-	var release := InputEventMouseButton.new()
-	release.button_index = button
-	release.position = position
-	release.pressed = false
-	get_tree().root.push_input(release)
-
 func _mouse_drag(start: Vector2, finish: Vector2, button: int) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = button
@@ -178,7 +166,7 @@ func _defense_placement_anchor(
 
 func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
 	var revision := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if int(GrusBridge.command_feedback_revision()) != revision \
@@ -194,7 +182,7 @@ func _place_defense_at(main: Node3D, camera: Camera3D, kind: String, anchor: Vec
 	var revision := int(GrusBridge.command_feedback_revision())
 	var building_count := get_tree().get_nodes_in_group("building_views").size()
 	var screen := camera.unproject_position(Vector3(anchor.x + 0.25, 0.0, anchor.y + 0.25))
-	_push_mouse_click(screen, MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), screen, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(
 			func(): return _accepted_since(revision) \
 				and get_tree().get_nodes_in_group("building_views").size() == building_count + 1 \
@@ -842,14 +830,14 @@ func _run() -> void:
 		_fail("could not find a valid Bunkhouse anchor for the stale-response probe")
 		return
 	var buildings_before_stale := get_tree().get_nodes_in_group("building_views").size()
-	_push_mouse_click(
+	SmokeHelpers.push_mouse_click(get_tree(),
 		camera.unproject_position(Vector3(stale_anchor.x + 0.25, 0.0, stale_anchor.y + 0.25)),
 		MOUSE_BUTTON_LEFT)
 	if str(main.get("_placement_kind")) != "Bunkhouse":
 		_fail("ordinary placement cancelled before its authoritative response")
 		return
 	var wall_button := get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button
-	_push_mouse_click(wall_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), wall_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	var wall_selection_status := command_status.text
 	if str(main.get("_placement_kind")) != "Wall" or not wall_selection_status.begins_with("Placing Wall"):
 		_fail("the newer Wall selection did not replace the pending Bunkhouse placement")
@@ -872,7 +860,7 @@ func _run() -> void:
 		_fail("could not find a second valid Bunkhouse anchor for the one-shot probe")
 		return
 	var buildings_before_one_shot := get_tree().get_nodes_in_group("building_views").size()
-	_push_mouse_click(
+	SmokeHelpers.push_mouse_click(get_tree(),
 		camera.unproject_position(Vector3(one_shot_anchor.x + 0.25, 0.0, one_shot_anchor.y + 0.25)),
 		MOUSE_BUTTON_LEFT)
 	if str(main.get("_placement_kind")) != "Bunkhouse":
@@ -903,7 +891,7 @@ func _run() -> void:
 				return
 			var status_before_right_click := command_status.text
 			var revision_before_right_click := int(GrusBridge.command_feedback_revision())
-			_push_mouse_click(
+			SmokeHelpers.push_mouse_click(get_tree(),
 				camera.unproject_position(Vector3(cancel_anchor.x + 0.25, 0.0, cancel_anchor.y + 0.25)),
 				MOUSE_BUTTON_RIGHT)
 			for _frame in range(5):
@@ -947,7 +935,7 @@ func _run() -> void:
 		_fail("pre-spend GunTurret command was not queued")
 		return
 	var feedback_before_delayed_reject := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(
+	SmokeHelpers.push_mouse_click(get_tree(),
 		camera.unproject_position(Vector3(rejected_anchor.x + 0.25, 0.0, rejected_anchor.y + 0.25)),
 		MOUSE_BUTTON_LEFT)
 	if str(main.get("_placement_kind")) != "GunTurret" \
@@ -991,14 +979,21 @@ func _run() -> void:
 			or analyze_button == null or wave_hud == null:
 		_fail("research HUD nodes are missing under HUD/ResearchPanel")
 		return
-	# The compact panel sits directly beneath the wave HUD, inside the
-	# 1280x720 viewport, and fully contains its Analyze button.
-	var wave_rect := wave_hud.get_global_rect()
+	# The compact panel hugs the left edge below the InputShield band,
+	# inside the 1280x720 viewport, and fully contains its Analyze button —
+	# never over the northwest corridor's or expansion salvage's projected
+	# cells, which must stay clickable under the default framing.
 	var research_rect := research_panel.get_global_rect()
-	if research_rect.position.y < wave_rect.end.y \
-			or not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
-		_fail("research panel is not laid out below the wave HUD inside the viewport: %s vs %s" % [research_rect, wave_rect])
+	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
+		_fail("research panel escapes the viewport: %s" % research_rect)
 		return
+	for corridor_cell in [Vector2(38, 24), Vector2(40, 20), Vector2(43, 18)]:
+		var corridor_screen := camera.unproject_position(
+			Vector3(corridor_cell.x + 0.5, 0.0, corridor_cell.y + 0.5))
+		if research_rect.has_point(corridor_screen):
+			_fail("research panel covers northwest corridor cell %s at %s: %s" % [
+				corridor_cell, corridor_screen, research_rect])
+			return
 	if not research_rect.encloses(analyze_button.get_global_rect()):
 		_fail("Analyze button escapes the research panel")
 		return
@@ -1121,7 +1116,7 @@ func _run() -> void:
 		_fail("live Research Center view is missing before the Analyze leg")
 		return
 	var feedback_before_minimap := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(
+	SmokeHelpers.push_mouse_click(get_tree(),
 		minimap.get_global_rect().position + Vector2(rc_view.global_position.x, rc_view.global_position.z),
 		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -1190,7 +1185,7 @@ func _run() -> void:
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var analyze_price := int(analyze_cost.get("crystals", 0))
 	var analyze_revision := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	# Dispatch evidence is the sim's own verdict: the controller's transient
 	# "Analyze queued" text is overwritten by command_feedback() on the
 	# revision bump. Affordability decides which verdict — either way the
@@ -1216,14 +1211,15 @@ func _run() -> void:
 			_fail("rejected Analyze banked the point reward: before=%f now=%f" % [points_before_click, points_after])
 			return
 	else:
-		# Affordable: the conversion lands — price leaves the ledger and
-		# the banked points jump by the catalogue gain (passive accrual
-		# only ever adds more on top).
+		# Affordable: the conversion lands — exactly the catalogue price
+		# leaves the ledger (the no-launched-wave sentinel below already
+		# pins this leg free of kill rewards) and the banked points jump by
+		# the catalogue gain (passive accrual only ever adds more on top).
 		if not str(GrusBridge.command_feedback()).begins_with("Command accepted"):
 			_fail("affordable Analyze was not accepted: %s" % GrusBridge.command_feedback())
 			return
-		if crystals_after > crystals_before:
-			_fail("accepted Analyze minted Crystals: %d -> %d" % [crystals_before, crystals_after])
+		if crystals_after != crystals_before - analyze_price:
+			_fail("accepted Analyze did not spend exactly the catalogue price: %d -> %d (price %d)" % [crystals_before, crystals_after, analyze_price])
 			return
 		if points_after - points_before_click < float(analyze_gain):
 			_fail("accepted Analyze did not bank the +%d reward: before=%f now=%f" % [analyze_gain, points_before_click, points_after])
@@ -1237,7 +1233,7 @@ func _run() -> void:
 			5.0, "Analyze did not disable after the Research Center was deselected"):
 		return
 	var revision_before_disabled := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	for _frame in 6:
 		await get_tree().process_frame
 	if int(GrusBridge.command_feedback_revision()) != revision_before_disabled:

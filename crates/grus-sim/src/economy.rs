@@ -180,6 +180,22 @@ impl TeamEconomy {
     }
 }
 
+/// The one atomic stockpile spend every priced command shares: a missing
+/// `TeamEconomy` or team entry refuses, and `ResourceStockpile::try_spend`
+/// is itself all-or-nothing, so a rejected spend can never partially
+/// charge.
+pub(crate) fn try_spend(world: &mut World, team: TeamId, cost: Cost) -> bool {
+    world
+        .get_resource_mut::<TeamEconomy>()
+        .map(|mut economy| {
+            economy
+                .0
+                .get_mut(&team)
+                .is_some_and(|state| state.stockpile.try_spend(cost))
+        })
+        .unwrap_or(false)
+}
+
 /// Marker on buildings that accept deposits; carries only team ownership.
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Dropoff {

@@ -729,12 +729,15 @@ fn invalid_placement_never_charges_or_reserves() {
 
 /// A Team-2 Gate would seal its own team while passing Team 1, a Team-2
 /// tower never joins the Team-1-only combat pass, and the one-player
-/// winter fixture has no Team-2 furnace economy — none of these kinds is
-/// placeable by a non-Team-1 issuer. Walls stay legal for any team. The
-/// research gate is maxed out so every rejection here is the team gate
-/// alone.
+/// winter fixture has no Team-2 furnace economy — every kind the
+/// catalogue marks `team1_only` rejects a non-Team-1 issuer, and the
+/// unplaceable Research Center does too. Iterating `BuildingKind::ALL`
+/// against the spec flag keeps this test in step with the catalogue: a
+/// new tower cannot be placeable by Team 2 while remaining unfireable.
+/// The research gate is maxed out so every rejection here is the team
+/// gate alone.
 #[test]
-fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
+fn team_one_only_kinds_reject_non_team_one_issuers() {
     let (mut world, mut map, _worker) = setup_build_test();
     world.insert_resource(ResearchState {
         points: f64::from(unlock_points(100)),
@@ -748,13 +751,7 @@ fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
         unit_spec(UnitKind::Worker).speed,
     );
 
-    for kind in [
-        BuildingKind::Gate,
-        BuildingKind::GunTurret,
-        BuildingKind::CoalFurnace,
-        BuildingKind::FlameTower,
-        BuildingKind::CrystalLance,
-    ] {
+    for kind in BuildingKind::ALL {
         let result = apply_player_command(
             &mut world,
             &mut map,
@@ -765,15 +762,16 @@ fn gate_gun_turret_and_furnace_reject_non_team_one_issuers() {
                 anchor: GridPos::new(32, 30),
             },
         );
-        assert_eq!(result.reject, Some(RejectReason::Locked), "{kind:?}");
+        if kind == BuildingKind::ResearchCenter || building_spec(kind).team1_only {
+            assert_eq!(result.reject, Some(RejectReason::Locked), "{kind:?}");
+        } else {
+            assert_ne!(
+                result.reject,
+                Some(RejectReason::Locked),
+                "{kind:?} hit the team gate despite a placeable spec"
+            );
+        }
     }
-    assert_eq!(
-        world
-            .get_resource::<BuildingIndex>()
-            .map(|index| index.iter().count())
-            .unwrap_or(0),
-        0
-    );
 }
 
 #[test]
