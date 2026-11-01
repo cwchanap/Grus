@@ -411,3 +411,32 @@ fn furnace_burn_rate_and_efficiency_floor_are_named_constants() {
     assert_eq!(FURNACE_COAL_PER_SECOND, 0.5);
     assert_eq!(MIN_SURFACE_EFFICIENCY, 0.25);
 }
+
+#[test]
+fn research_tuning_is_catalogued_as_named_constants() {
+    assert_eq!(RESEARCH_TARGET_POINTS, 9_000);
+    assert_eq!(RESEARCH_BASE_PER_SECOND, 2.0);
+    assert_eq!(
+        ANALYZE_COST,
+        Cost {
+            food: 0,
+            scrap: 0,
+            coal: 0,
+            crystals: 10,
+        }
+    );
+    assert_eq!(ANALYZE_RESEARCH_GAIN, 90.0);
+    assert_eq!(RESEARCH_WAVE_BOOST_PERCENT, 75);
+    assert_eq!(RESEARCH_WAVE_BOOST_NUMERATOR, 3);
+    assert_eq!(RESEARCH_WAVE_BOOST_DENOMINATOR, 2);
+
+    // Every current kind is always-available; the 25/50 research gates
+    // arrive with the advanced tower kinds.
+    for kind in BuildingKind::ALL {
+        assert_eq!(
+            building_spec(kind).research_unlock_percent,
+            0,
+            "{kind:?} research gate"
+        );
+    }
+}

@@ -9,6 +9,7 @@ pub mod ids;
 pub mod map;
 pub mod movement;
 pub mod production;
+pub mod research;
 pub mod session;
 pub mod tick;
 pub mod visibility;
@@ -19,9 +20,11 @@ pub use buildings::{
     validate_placement,
 };
 pub use catalog::{
-    ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE, BuildingKind, BuildingSpec, CARRY_LIMIT,
-    CombatSpec, Cost, FURNACE_COAL_PER_SECOND, MAX_LIVE_ALIENS, MAX_POPULATION,
-    MIN_SURFACE_EFFICIENCY, ResourceKind, UnitKind, UnitSpec, WAVE_BUDGET_BASE,
+    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE,
+    BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec, Cost, FURNACE_COAL_PER_SECOND,
+    MAX_LIVE_ALIENS, MAX_POPULATION, MIN_SURFACE_EFFICIENCY, RESEARCH_BASE_PER_SECOND,
+    RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_DENOMINATOR, RESEARCH_WAVE_BOOST_NUMERATOR,
+    RESEARCH_WAVE_BOOST_PERCENT, ResourceKind, UnitKind, UnitSpec, WAVE_BUDGET_BASE,
     WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
     WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
     resource_amount,
@@ -50,6 +53,10 @@ pub use movement::{MoveOrder, SIM_STEP_SECONDS, SimPosition, Unit, step_movement
 pub use production::{
     ProductionJob, ProductionKind, ProductionQueue, RallyPoint, population_cap, population_used,
     produces, step_production,
+};
+pub use research::{
+    ResearchState, add_research, building_unlocked, research_points, research_rate, step_research,
+    unlock_points,
 };
 pub use session::{
     MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,

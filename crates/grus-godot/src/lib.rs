@@ -12,12 +12,12 @@ use grus_sim::{
     CombatEventTotal, CombatEvents, CombatTarget, CommandResult, EntryZone, Footprint, GridMap,
     GridPos, Health, HeatState, IdAllocator, LastRouteReject, MapFixture, MatchPhase, MatchSession,
     PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, RUINS, RallyPoint, RejectReason,
-    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
-    WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
-    idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
-    resolve_target, seed_skirmish, set_paused, start_match, step_tick, surface_efficiency,
-    target_eligible, validate_placement, visible_to,
+    ResearchState, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition,
+    TeamEconomy, TeamId, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind,
+    VisibilityMap, WaveState, WorkerTask, active_phase, apply_player_command, explored_by,
+    extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
+    population_used, produces, refresh_visibility, resolve_target, seed_skirmish, set_paused,
+    start_match, step_tick, surface_efficiency, target_eligible, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -1590,6 +1590,9 @@ fn clear_gameplay_world(world: &mut World) {
     // Heat dies with the match: a stale supply/demand between clear and
     // reseed would read wrong, while absence reads neutral full efficiency.
     world.remove_resource::<HeatState>();
+    // Research dies with the match too: absence reads zero points until the
+    // reseed inserts a fresh state — a restart can never carry progress.
+    world.remove_resource::<ResearchState>();
     world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();

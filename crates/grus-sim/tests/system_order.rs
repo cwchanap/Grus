@@ -1,9 +1,11 @@
 //! Canonical fixed-step order: `step_tick` runs waves → heat → combat →
-//! movement → economy → construction → production → visibility, and these
-//! tests call that one function. Aliens enter combat in their spawn tick,
-//! heat computed in the tick scales its combat/production consumers, movement
-//! arrival is visible to economy/construction in the same tick, construction
-//! completion feeds production, and rallied production moves next.
+//! movement → economy → construction → production → research → visibility,
+//! and these tests call that one function. Aliens enter combat in their
+//! spawn tick, heat computed in the tick scales its
+//! combat/production/research consumers, movement arrival is visible to
+//! economy/construction in the same tick, construction completion feeds
+//! production, a lethal hit on the core settles Defeat before the same
+//! tick's research gain, and rallied production moves next.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -14,12 +16,13 @@ use grus_sim::catalog::{building_spec, unit_spec};
 use grus_sim::{
     AttackCooldown, Building, BuildingId, BuildingIndex, BuildingKind, Carry, CombatOrder,
     CombatTarget, ConstructionState, Dropoff, EntryZone, Footprint, GatherProgress, GridMap,
-    GridPos, Health, HeatState, MIN_SURFACE_EFFICIENCY, MapFixture, MatchPhase, MatchSession,
-    MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue, ResourceId,
-    ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind,
-    VisibilityMap, WaveState, WorkerTask, apply_player_command, explored_by, population_used,
-    refresh_visibility, seed_skirmish, spawn_unit, step_combat, step_construction, step_production,
-    step_tick, step_waves, visible_to,
+    GridPos, Health, HeatState, MIN_SURFACE_EFFICIENCY, MapFixture, MatchPhase, MatchResult,
+    MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue,
+    RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, ResearchState, ResourceId, ResourceKind,
+    SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind, VisibilityMap,
+    WaveState, WorkerTask, apply_player_command, explored_by, population_used, refresh_visibility,
+    seed_skirmish, spawn_unit, step_combat, step_construction, step_production, step_tick,
+    step_waves, visible_to,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -821,5 +824,102 @@ fn missing_heat_state_gives_production_and_combat_the_full_rate() {
         (queue.progress_seconds - SIM_STEP_SECONDS).abs() < 1e-6,
         "absent HeatState must leave the queue head at full rate, got {}",
         queue.progress_seconds
+    );
+}
+
+/// Research is the third same-tick heat consumer: totals computed at the
+/// top of `step_tick` must scale this tick's research gain. The seeded
+/// Research Center is poked incomplete so supply drops to 0 while the
+/// seeded Barracks holds demand at 3 — the 25% floor. If research ran
+/// before heat it would read the seeded default (full efficiency) and
+/// bank ~0.1 points, not the floored ~0.025.
+#[test]
+fn heat_computed_in_the_tick_scales_research_in_the_same_tick() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    let research_center = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    world
+        .get_mut::<Building>(research_center)
+        .unwrap()
+        .construction
+        .complete = false;
+    seed_completed_building(
+        &mut world,
+        &mut map,
+        BARRACKS,
+        BuildingKind::Barracks,
+        MapFixture::barracks_anchor(TEAM),
+    );
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let expected =
+        RESEARCH_BASE_PER_SECOND * f64::from(MIN_SURFACE_EFFICIENCY) * f64::from(SIM_STEP_SECONDS);
+    assert_eq!(
+        world.resource::<HeatState>().efficiency(),
+        MIN_SURFACE_EFFICIENCY
+    );
+    assert!(
+        (world.resource::<ResearchState>().points - expected).abs() < 1e-9,
+        "research must advance at the recomputed floor efficiency, got {}",
+        world.resource::<ResearchState>().points
+    );
+}
+
+/// Combat-before-research is the same-tick tie contract: a lethal hit on
+/// the Research Center in the tick passive research would reach the
+/// target settles Defeat first, and the Result gate then freezes the
+/// research step before it can add. With research before combat the
+/// winner would read Team 1 instead.
+#[test]
+fn lethal_combat_wins_the_same_tick_tie_over_research() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // Research a fraction under the target — this tick's warm gain would
+    // cross it — and a raider parked in range with a direct attack order,
+    // the core one Guard hit from destruction.
+    world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS) - 0.05;
+    let research_center = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
+    let raider = spawn_unit(
+        &mut world,
+        UnitId(100),
+        TeamId(2),
+        map.cell_center(GridPos::new(61, 49)),
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
+    );
+    world.entity_mut(raider).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(RESEARCH_CENTER),
+        last_target_cell: None,
+    });
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TeamId(2))),
+        "combat resolves the core's destruction before research can finish"
+    );
+    assert!(
+        world.resource::<ResearchState>().points < f64::from(RESEARCH_TARGET_POINTS),
+        "the settled Result froze the accumulator before this tick's gain"
     );
 }
