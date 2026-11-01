@@ -613,6 +613,18 @@ func _run() -> void:
 		_fail("HUD click leaked into world controls")
 		return
 
+	# ResearchPanel sits below InputShield's band; its STOP filter must
+	# likewise keep panel clicks from clearing selection or queuing orders.
+	var research_panel_leak := get_node_or_null("Main/HUD/ResearchPanel") as Panel
+	if research_panel_leak == null:
+		_fail("research HUD panel is missing")
+		return
+	_mouse_click(research_panel_leak.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not _ring(unit_two).visible or int(GrusBridge.command_feedback_revision()) != feedback_before_ui:
+		_fail("research panel click leaked into world controls")
+		return
+
 	# A genuinely blocked destination: the center of a bridge-reported ruin
 	# rectangle (quad 4, west of the city) — real impassable terrain, never
 	# the friendly Research Center, and its projection lands on open HUD.
