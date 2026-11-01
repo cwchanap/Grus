@@ -1101,9 +1101,17 @@ func _run() -> void:
 	# Real input dispatch: recenter the camera on the live Research Center
 	# through the minimap's own click path — the earlier minimap leg left
 	# the view on the southwest corner, where the core projects under the
-	# HUD panels and swallows any world click.
+	# HUD panels and swallows any world click. The click lands on the live
+	# view's world X/Z (the minimap maps 1 px per cell), so a fixture
+	# relocation cannot strand it on a stale coordinate.
+	var rc_view := _building_view(1)
+	if rc_view == null:
+		_fail("live Research Center view is missing before the Analyze leg")
+		return
 	var feedback_before_minimap := int(GrusBridge.command_feedback_revision())
-	_push_mouse_click(minimap.get_global_rect().position + Vector2(64, 48), MOUSE_BUTTON_LEFT)
+	_push_mouse_click(
+		minimap.get_global_rect().position + Vector2(rc_view.global_position.x, rc_view.global_position.z),
+		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if int(GrusBridge.command_feedback_revision()) != feedback_before_minimap:
@@ -1132,10 +1140,6 @@ func _run() -> void:
 		return
 	if not await _wait_until(_accepted_since.bind(clear_revision), 10.0,
 			"worker clear-out move was not accepted by the sim"):
-		return
-	var rc_view := _building_view(1)
-	if rc_view == null:
-		_fail("live Research Center view is missing before the Analyze leg")
 		return
 	var rc_screen := camera.unproject_position(rc_view.global_position)
 	if not Rect2(Vector2.ZERO, viewport_size).has_point(rc_screen):

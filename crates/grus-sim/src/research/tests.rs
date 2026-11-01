@@ -166,6 +166,33 @@ fn add_research_clamps_at_the_target_and_resolves_victory() {
     );
 }
 
+/// The overwrite guard must discriminate a settled *Team-2* Result: a
+/// Team-1 grant that reaches the target still calls `resolve_result`, but
+/// the shared session helper refuses a settled session — the loser can
+/// never rewrite the recorded winner post-mortem. (Reaching the target
+/// here proves the grant exercised the resolve path; the phase assert is
+/// what fails if the guard rewrites.)
+#[test]
+fn add_research_never_overwrites_a_settled_enemy_victory() {
+    let (mut world, _map) = battlefield();
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Result(MatchResult(TeamId(2))),
+    });
+
+    add_research(&mut world, f64::from(RESEARCH_TARGET_POINTS));
+
+    assert_eq!(
+        points(&world),
+        f64::from(RESEARCH_TARGET_POINTS),
+        "the grant itself still banks and clamps"
+    );
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TeamId(2))),
+        "a settled Team-2 Result is never rewritten to Team 1"
+    );
+}
+
 /// A passive step that crosses the target resolves Victory inside the
 /// step — no extra command needed, and the Result gate then freezes
 /// further gains.

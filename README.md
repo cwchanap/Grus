@@ -22,7 +22,7 @@ HPA-448 moved Team 1's 4×4 Research Center to the map midpoint (footprint ancho
 
 The old central lane barriers are gone. The only static blockers are sparse authored **ruins**: one `RUINS: &[(GridPos, GridPos)]` inclusive-rectangle table in `fixture.rs`, applied through `GridMap::set_blocked_rect` and exposed read-only to Godot as `GrusBridge.obstacle_rects()`. `godot/scripts/ruins.gd` fits one imported ruin prop to each rectangle from that payload — ruin coordinates exist in exactly one place. The ruins stay clear of the human base, every authored source and worker cell, the central construction/gather ring, the N/E/S/W access lanes, and benchmark staging regions; fixture tests prove each exclusion.
 
-The active catalogue builds on the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks / Wall / Gate / Gun Turret / Coal Furnace** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
+The active catalogue builds on the HPA-448 winter roster: **Worker / Guard / Rifleman** units and **Research Center / Bunkhouse / Depot / Barracks / Wall / Gate / Gun Turret / Coal Furnace / Flame Tower / Crystal Lance** buildings. The Barracks is the single military producer (Guard and Rifleman); the Research Center is seeded-only and trains Workers. The Flame Tower and Crystal Lance are the HPA-188 research-gated advanced towers (25% and 50% unlocks — see below). The former Age/Age-up, Farm, Cavalry, Archery Range, and Stable systems were removed in HPA-448 checkpoint 1.
 
 ## HPA-290 winter terrain and ruined-city art
 
@@ -82,11 +82,13 @@ Completed Team-1 buildings demand heat; the Research Center supplies **+15** whi
 | Depot | 0 | 1 |
 | Barracks | 0 | 3 |
 | Gun Turret | 0 | 2 |
+| Flame Tower | 0 | 3 |
+| Crystal Lance | 0 | 4 |
 | Wall / Gate | 0 | 0 |
 | Coal Furnace | +12 when fueled | 0 |
 | Any construction site | 0 | 0 |
 
-`efficiency = demand == 0 ? 1.0 : clamp(supply / demand, 0.25, 1.0)` — a deficit floors at **25%**. Cold slows only the surface work completed buildings perform: Research Center/Barracks training, completed Gun Turret firing and passive research all scale with efficiency. **Cold does not slow** worker gathering/carrying, construction speed, unit movement, or unit combat — units have no surface efficiency. A completed Coal Furnace (2×2, 80 Scrap, 20 s, Team 1 only) burns **0.5 Coal per simulated second** from the team stockpile while Playing; when Coal runs out its output and burn stop on the next tick until gathering refuels. Heat is a live flow, not a stockpile — there is no heat currency or storage.
+`efficiency = demand == 0 ? 1.0 : clamp(supply / demand, 0.25, 1.0)` — a deficit floors at **25%**. Cold slows only the surface work completed buildings perform: Research Center/Barracks training, completed combat-tower firing (Gun Turret, Flame Tower, Crystal Lance) and passive research all scale with efficiency. **Cold does not slow** worker gathering/carrying, construction speed, unit movement, or unit combat — units have no surface efficiency. A completed Coal Furnace (2×2, 80 Scrap, 20 s, Team 1 only) burns **0.5 Coal per simulated second** from the team stockpile while Playing; when Coal runs out its output and burn stop on the next tick until gathering refuels. Heat is a live flow, not a stockpile — there is no heat currency or storage.
 
 ## HPA-188 research, advanced towers and Victory
 
