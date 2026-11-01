@@ -1074,13 +1074,28 @@ func _run() -> void:
 			or not research_label.text.contains("ETA") or research_label.text.ends_with("—"):
 		_fail("research label mis-renders live progress: %s (points=%f)" % [research_label.text, live_points])
 		return
-	# The ETA is a live estimate: it must shrink as sim time passes, never
-	# hold a stale countdown.
+	# The ETA is a live estimate: the bridge value must shrink as sim time
+	# passes, and the rendered countdown must agree with the snapshot it was
+	# drawn from — a frozen or wrong label cannot hide behind a healthy
+	# bridge field. At 1x ten physics frames move only ~0.17 sim-seconds,
+	# below the label's whole-second ceil() granularity, so the displayed
+	# value may legitimately hold — it must never tick up or drift beyond
+	# one rendered frame of skew plus the label's rounding (±5 s).
+	var label_eta_before := SmokeHelpers.research_label_eta_seconds(research_label.text)
+	if label_eta_before < 0 or absi(label_eta_before - int(ceilf(live_eta))) > 5:
+		_fail("research label ETA does not render the live snapshot: %s (eta=%f)" % [research_label.text, live_eta])
+		return
 	for _frame in 10:
 		await get_tree().physics_frame
 	var eta_after := float(GrusBridge.research_snapshot().get("eta_seconds", -1.0))
+	var label_eta_after := SmokeHelpers.research_label_eta_seconds(research_label.text)
 	if eta_after < 0.0 or eta_after >= live_eta:
 		_fail("research ETA did not decrease over ten sim ticks: %f -> %f" % [live_eta, eta_after])
+		return
+	if label_eta_after < 0 or label_eta_after > label_eta_before \
+			or absi(label_eta_after - int(ceilf(eta_after))) > 5:
+		_fail("research label ETA drifted from the live snapshot: %f -> %f (label %d -> %d)" % [
+			live_eta, eta_after, label_eta_before, label_eta_after])
 		return
 
 	# Real input dispatch: recenter the camera on the live Research Center

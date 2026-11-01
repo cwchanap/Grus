@@ -29,6 +29,21 @@ static func no_launched_wave_error(where: String) -> String:
 		return "smoke overran wave prep"
 	return ""
 
+## The research label renders "Research P/T · N% · ETA M:SS" from the live
+## snapshot's ceil-ed eta_seconds (battlefield_controller._refresh_research_
+## controls). Parse that countdown back to whole seconds so smokes compare
+## the displayed value — not just the bridge field — against the snapshot
+## and across an advancing interval. Returns -1 for the "—" placeholder or
+## any malformed component.
+static func research_label_eta_seconds(text: String) -> int:
+	var marker := text.rfind("ETA ")
+	if marker < 0:
+		return -1
+	var parts := text.substr(marker + 4).strip_edges().split(":")
+	if parts.size() != 2 or not parts[0].is_valid_int() or not parts[1].is_valid_int():
+		return -1
+	return int(parts[0]) * 60 + int(parts[1])
+
 ## A valid Barracks anchor in the ring slot just west of the Research
 ## Center, probed through the read-only placement preview starting from the
 ## live view's footprint — never a copied fixture coordinate. Returns

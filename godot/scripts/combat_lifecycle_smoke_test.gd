@@ -329,10 +329,16 @@ func _research_boundary_leg() -> bool:
 	_push_mouse_click(analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	# Dispatch evidence is the sim's own verdict: the pressed button queues
 	# the Analyze command, whose reject bumps the shared feedback revision
-	# with the typed reason — no Crystal moves and no points bank.
+	# with the typed reason — no Crystal moves and no points bank. The HUD
+	# text is part of that condition, not a follow-up read: the reject lands
+	# in a godot-bevy fixed tick inside _physics_process, while command_
+	# status mirrors it in _process — under fps throttling or loaded frames
+	# several physics ticks can elapse before one render pass, so waiting on
+	# the revision alone could observe the stale "Analyze queued" transient.
 	if not await _wait_until(func():
-			return int(GrusBridge.command_feedback_revision()) > feedback_revision,
-			10.0, "the enabled Analyze press produced no sim verdict"):
+			return int(GrusBridge.command_feedback_revision()) > feedback_revision \
+					and str(_main.command_status.text) == "Command rejected (InsufficientResources)",
+			10.0, "the enabled Analyze press produced neither the sim verdict nor its HUD reject text"):
 		return false
 	if int(GrusBridge.last_reject_code()) != REJECT_INSUFFICIENT_RESOURCES \
 			or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
@@ -351,28 +357,44 @@ func _research_boundary_leg() -> bool:
 		return false
 
 	# The live surface advances under the 20x clock: banked points and the
-	# HUD bar rise while the ETA estimate shrinks.
+	# HUD bar rise while the ETA estimate shrinks. The displayed countdown
+	# is captured too — a frozen or wrong label could hide behind a healthy
+	# bridge value when only a "contains ETA" shape is checked.
 	var snapshot_before: Dictionary = GrusBridge.research_snapshot()
 	var points_wait := float(snapshot_before.get("points", -1.0))
 	var eta_wait := float(snapshot_before.get("eta_seconds", -1.0))
 	var bar_wait := research_bar.value
-	if points_wait < 0.0 or eta_wait < 0.0:
-		_fail("Playing research snapshot is not numeric/positive: %s" % [snapshot_before])
+	var label_wait := research_label.text
+	var label_eta_wait := SmokeHelpers.research_label_eta_seconds(label_wait)
+	if points_wait < 0.0 or eta_wait < 0.0 or label_eta_wait < 0:
+		_fail("Playing research surface is not numeric/positive: %s (label=%s)" % [snapshot_before, label_wait])
 		return false
 	for _frame in 40:
 		await get_tree().physics_frame
 	var snapshot_after: Dictionary = GrusBridge.research_snapshot()
+	var eta_after := float(snapshot_after.get("eta_seconds", -1.0))
 	if float(snapshot_after.get("points", -1.0)) <= points_wait \
-			or float(snapshot_after.get("eta_seconds", -1.0)) >= eta_wait \
+			or eta_after >= eta_wait \
 			or research_bar.value <= bar_wait:
 		_fail("research surface froze under 20x: %s -> %s (bar %f -> %f)" % [
 			snapshot_before, snapshot_after, bar_wait, research_bar.value])
 		return false
-	if not is_equal_approx(research_bar.max_value, float(target_points)) \
-			or not research_label.text.contains("ETA") \
-			or research_label.text.ends_with("—"):
-		_fail("research HUD does not track the catalogue target/live ETA: max=%f label=%s" % [
-			research_bar.max_value, research_label.text])
+	# The rendered ETA is the same live estimate: over ~13 simulated seconds
+	# it must visibly tick down, and each capture must agree with its own
+	# snapshot's ceil-ed seconds within a rendered frame of skew (the label
+	# mirrors the previous _process frame's read) — ±5 s covers that plus
+	# the controller's ceil() rounding while still catching a frozen label.
+	var label_after := research_label.text
+	var label_eta_after := SmokeHelpers.research_label_eta_seconds(label_after)
+	if label_eta_after < 0 or label_eta_after >= label_eta_wait \
+			or absi(label_eta_wait - int(ceilf(eta_wait))) > 5 \
+			or absi(label_eta_after - int(ceilf(eta_after))) > 5:
+		_fail("research label does not track the live ETA: '%s' -> '%s' (snapshot %.2f -> %.2f)" % [
+			label_wait, label_after, eta_wait, eta_after])
+		return false
+	if not is_equal_approx(research_bar.max_value, float(target_points)):
+		_fail("research bar max is not the catalogue target: %f vs %d" % [
+			research_bar.max_value, target_points])
 		return false
 
 	# Leave the building deselected for the production legs: a real click
@@ -560,7 +582,11 @@ func _run() -> void:
 		_fail("controller A-key did not arm Guard attack-move")
 		return
 	var defender_screen: Vector2 = _main.camera.unproject_position(Vector3(defender_target.x, 0.0, defender_target.y))
-	await _mouse_click(defender_screen, MOUSE_BUTTON_RIGHT)
+	# The "queued" text is a synchronous transient written inside the input
+	# dispatch itself; _process later mirrors the real verdict over it. Read
+	# it before any frame await — under fps throttling several physics ticks
+	# (and the verdict) can land before the next render pass.
+	_push_mouse_click(defender_screen, MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack-move queued":
 		_fail("controller ground right-click did not queue the announced-entry attack-move: %s" % [_main.command_status.text])
 		return
@@ -607,7 +633,10 @@ func _run() -> void:
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var attack_revision := int(GrusBridge.command_feedback_revision())
-	await _mouse_click(_main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
+	# Same synchronous-transient read as the attack-move announcement above:
+	# the verdict mirror in _process may legitimately replace it before any
+	# awaited frame completes under throttled fps.
+	_push_mouse_click(_main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack command queued":
 		_fail("controller right-click did not queue a direct attack on the visible alien: %s" % [_main.command_status.text])
 		return
