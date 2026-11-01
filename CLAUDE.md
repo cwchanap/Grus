@@ -20,7 +20,7 @@ cp target/debug/libgrus_godot.so    godot/bin/libgrus_godot.so      # Linux/CI
 godot --path godot
 ```
 
-**Re-copy the library into `godot/bin/` after every rebuild.** A stale binary fails at startup with a misleading error (e.g. a false duplicate-`UnitId` panic), not silently. On a clean clone the GDExtension is not registered until the editor scans once: `godot --headless --path godot --editor --quit-after 120` (writes `godot/.godot/extension_list.cfg`).
+**Re-copy the library into `godot/bin/` after every rebuild.** A stale binary fails at startup with a misleading error (e.g. a false duplicate-`UnitId` panic), not silently. On a clean clone the GDExtension is not registered until the editor scans once: `godot --headless --path godot --editor --quit-after 120` (writes `godot/.godot/extension_list.cfg`). macOS gotcha: overwriting the staged dylib can invalidate its ad-hoc code signature (`cs_mtime != mtime`) — the kernel SIGKILLs Godot instantly with no output; re-sign after copying with `codesign --force --sign - godot/bin/libgrus_godot.dylib`.
 
 Lint and tests (mirror CI, which uses `--locked` everywhere):
 
@@ -45,10 +45,12 @@ cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 Godot headless smokes (each is a real end-to-end contract, not a stub):
 
 ```bash
-godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg
+godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg + research HUD
 godot --headless --path godot res://scenes/reset_test.tscn           # fixture reset → 4 units / 1 building / 18 resources
 godot --headless --path godot res://scenes/economy_smoke_test.tscn   # full HPA-471 economy loop at 20x sim speed
-godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # HPA-472 combat/session lifecycle at 20x sim speed
+godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # HPA-472 combat/session lifecycle at 20x + HPA-188 research boundary leg
+godot --headless --path godot res://scenes/wave_smoke_test.tscn      # HPA-449 wave presentation; extends the combat lifecycle journey
+godot --headless --path godot res://scenes/defenses_smoke_test.tscn  # HPA-450 wall/gate/turret defense journey
 ```
 
 The `bevy_e2e` out-of-process test needs an exported build: `godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64`, then `GRUS_E2E_BINARY=<path> cargo test -p grus-godot --features e2e --test e2e_boot --locked -- --test-threads=1`. Without `GRUS_E2E_BINARY` it skips loudly instead of running. The e2e selector surface is inert unless `BEVY_E2E=1`.
@@ -83,7 +85,7 @@ apply_pending_commands → advance_sim → drain_route_reject_feedback
 
 Order is a contract, not an accident. `advance_sim` reads `Time<Fixed>` and runs grus-sim's `step_tick` — waves → heat → combat → movement → economy → construction → production → research → visibility — inside one scoped `GridMap` resource borrow: waves launch after commands and before combat/movement so a new alien can acquire a target in the launch tick; heat computed at the top of the tick scales that same tick's completed-turret cooldowns, production progress and research gain; arrival is visible to economy/construction in the same tick; construction completion (population cap, producer queues) feeds production; production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick; and research runs after combat so a lethal hit on the Research Center settles Defeat before the same tick's passive gain could reach the target. The closing visibility refresh is what presentation and the next tick's command validation consume. `crates/grus-sim/tests/system_order.rs` calls `step_tick` itself, so reordering the canonical tick fails those tests.
 
-**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `unit_task_snapshot`, `placement_preview`, `catalogue_snapshot`, `wave_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
+**`godot/`** — presentation and input only. Two autoloads: `BevyAppSingleton` (godot-bevy's app host) and `GrusBridge` (`GrusBridgeNode`, all `#[func]`s). GDScript never touches gameplay state directly; it issues commands (`move_units`, `stop_units`, `gather`, `attack_units`, `attack_move_units`, `place_building`, `resume_construction`, `enqueue_unit`, `set_rally`, `analyze`, `start_match`, `set_paused`, `restart_match`, `reset_fixture`, `reset_benchmark_fixture`, `set_sim_speed`) and reads typed snapshots (`economy_snapshot`, `building_snapshot`, `unit_task_snapshot`, `placement_preview`, `catalogue_snapshot`, `wave_snapshot`, `research_snapshot`, `session_snapshot`, `visibility_snapshot`, `obstacle_rects`, `command_feedback*`, `last_reject_code`). Gameplay data flows one way, Bevy → Godot.
 
 ### Non-obvious invariants
 

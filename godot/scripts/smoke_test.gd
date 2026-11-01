@@ -1037,6 +1037,17 @@ func _run() -> void:
 			or not research.has("rate_per_second") or not research.has("eta_seconds"):
 		_fail("research_snapshot surface is not exactly points/rate_per_second/eta_seconds: %s" % [research])
 		return
+	# Raw Variant types first: a string payload would silently coerce in the
+	# float() reads below, so every live field must arrive numeric and finite
+	# before any conversion touches it.
+	for field in ["points", "rate_per_second", "eta_seconds"]:
+		var raw: Variant = research[field]
+		if typeof(raw) != TYPE_FLOAT and typeof(raw) != TYPE_INT:
+			_fail("research_snapshot %s is not a numeric Variant: %s" % [field, research])
+			return
+		if is_nan(raw) or is_inf(raw):
+			_fail("research_snapshot %s is not finite: %s" % [field, research])
+			return
 	var live_points := float(research.get("points", -1.0))
 	var live_rate := float(research.get("rate_per_second", -1.0))
 	var live_eta := float(research.get("eta_seconds", -2.0))
