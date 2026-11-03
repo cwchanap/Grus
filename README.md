@@ -124,7 +124,7 @@ The Godot boundary is covered inside the existing smokes: the bridge smoke pins 
 | Lab | 3 | 150 | 30 s | +1 research point/s, outside the surface cold multiplier |
 | Deep Mine | 4 | 150 | 35 s | +0.4 Scrap/s |
 
-Minimum levels are not exclusive: any unlocked kind can be repeated in separate slots on that level or deeper, including L5+. There is no arbitrary depth cap. To excavate level `n >= 1`: Scrap is `round-half-up(100 × 1.6^(n−1))`, Coal is half the **rounded Scrap**, rounded up, and duration is `30 + 15 × (n−1)` simulated seconds. Very-deep prices/durations saturate at `u32::MAX` rather than wrapping; Godot displays Rust's computed values.
+Minimum levels are not exclusive: any unlocked kind can be repeated in separate slots on that level or deeper, including L5+. There is no arbitrary depth cap. To excavate level `n >= 1`: Scrap is `round-half-up(100 × 1.6^(n−1))`, Coal is half the **rounded Scrap**, rounded up, and duration is `30 + 15 × (n−1)` simulated seconds. At very deep levels, Scrap and duration saturate at `u32::MAX` rather than wrapping; Coal is ceiling-half of the saturated Scrap. Godot displays Rust's computed values.
 
 | Target level | Scrap | Coal | Dig time |
 | --- | ---: | ---: | ---: |

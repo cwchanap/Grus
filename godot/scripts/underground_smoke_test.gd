@@ -418,6 +418,9 @@ func _run() -> void:
 	# Result-only Restart is not exposed while Playing. Exercise the same
 	# production controller handler (also used by the lifecycle smoke), not
 	# a test-only reset or injected Result, while retaining the prep guard.
+	var wave_error := SmokeHelpers.no_launched_wave_error("underground smoke before Restart")
+	if not _check(wave_error.is_empty(), wave_error):
+		return
 	_main.call("_restart_match")
 	if not await _wait(func(): return str(GrusBridge.session_snapshot().phase) == "Start" \
 			and int(GrusBridge.underground_snapshot().depth) == 0, 3.0, "Restart left stale underground depth"):
