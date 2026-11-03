@@ -40,14 +40,16 @@ The build panel offers Walls, Gates, and Gun Turrets (HPA-188 later added the re
 
 ### Economy architecture
 
-Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-sim/src/catalog.rs`) is the single source of costs, build/train seconds, footprints, unlocks, population values, speeds, and gather rates. Gameplay lives in four modules:
+Bevy remains fully authoritative for gameplay. A typed catalogue (`crates/grus-sim/src/catalog.rs`) is the single source of costs, build/train seconds, footprints, unlocks, population values, speeds, and gather rates. The core economy modules are:
 
 - **commands** — player command application, ownership validation, `RejectReason` codes, unit spawning
 - **economy** — worker tasks, gather/carry/deposit, resource sources, drop-off routing
 - **buildings** — placement validation, construction, completion grants (Dropoff, production queues, turret combat)
-- **production** — FIFO queues, population caps, spawn clearance, rally points
+- **production** — FIFO queues, combined surface/Shelter population caps, spawn clearance, rally points
+- **underground** — one paid dig, four room slots per completed level, independent construction timers and fractional room income
+- **heat / research** — live surface efficiency plus geothermal supply, and heat-scaled surface research plus cold-independent Labs
 
-Systems tick in a fixed order (waves → heat → combat → movement → economy → construction → production → research → visibility) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, heat supply/demand/surface efficiency, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), and the read-only `placement_preview`. Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
+Systems tick in a fixed order (waves → underground → heat → combat → movement → economy → construction → production → research → visibility) so completions land deterministically. Godot drives gameplay only through `GrusBridge` command calls (move/stop/gather/place/resume/enqueue/rally/excavate/build_room) and reads state through typed snapshots: `economy_snapshot` (stockpiles, population, idle workers, heat supply/demand/surface efficiency, last reject code), `building_snapshot` (completion, construction/queue progress, blocked reason, rally), the read-only `placement_preview`, static `catalogue_snapshot().underground` (room costs/effects/minimum levels), and dynamic `underground_snapshot` (depth, Rust-priced next dig, progress and indexed slots). Numeric reject/blocked codes follow `RejectReason` declaration order; presentation flows one way from Bevy into Godot views.
 
 ## HPA-472 combat and match lifecycle
 
@@ -88,11 +90,11 @@ Completed Team-1 buildings demand heat; the Research Center supplies **+15** whi
 | Coal Furnace | +12 when fueled | 0 |
 | Any construction site | 0 | 0 |
 
-`efficiency = demand == 0 ? 1.0 : clamp(supply / demand, 0.25, 1.0)` — a deficit floors at **25%**. Cold slows only the surface work completed buildings perform: Research Center/Barracks training, completed combat-tower firing (Gun Turret, Flame Tower, Crystal Lance) and passive research all scale with efficiency. **Cold does not slow** worker gathering/carrying, construction speed, unit movement, or unit combat — units have no surface efficiency. A completed Coal Furnace (2×2, 80 Scrap, 20 s, Team 1 only) burns **0.5 Coal per simulated second** from the team stockpile while Playing; when Coal runs out its output and burn stop on the next tick until gathering refuels. Heat is a live flow, not a stockpile — there is no heat currency or storage.
+`efficiency = demand == 0 ? 1.0 : clamp(supply / demand, 0.25, 1.0)` — a deficit floors at **25%**. Cold slows only the surface work completed buildings perform: Research Center/Barracks training, completed combat-tower firing (Gun Turret, Flame Tower, Crystal Lance) and the surface portion of passive research all scale with efficiency; underground Labs remain additive and cold-independent. **Cold does not slow** worker gathering/carrying, construction speed, unit movement, or unit combat — units have no surface efficiency. A completed Coal Furnace (2×2, 80 Scrap, 20 s, Team 1 only) burns **0.5 Coal per simulated second** from the team stockpile while Playing; when Coal runs out its output and burn stop on the next tick until gathering refuels. Heat is a live flow, not a stockpile — there is no heat currency or storage.
 
 ## HPA-188 research, advanced towers and Victory
 
-The survival match is winnable: while **Playing**, Team 1 banks monotonic **research points** toward a **9,000-point** target. Passive research accrues at **2 points per simulated second × surface efficiency**, so a cold base slows research exactly like training and turret cooldowns. The research panel under the wave HUD shows points, floor-percent and a live **ETA = remaining ÷ live rate** — an estimate that follows the heat-scaled rate, never a fixed countdown. Research freezes in Start/Paused/Result and resets to zero on restart.
+The survival match is winnable: while **Playing**, Team 1 banks monotonic **research points** toward a **9,000-point** target. Passive research accrues at **2 points per simulated second × surface efficiency + 1 point/s per completed Lab**, so a cold base slows only the surface term (like training and turret cooldowns), never the underground Lab contribution. The research panel under the wave HUD shows points, floor-percent and a live **ETA = remaining ÷ live rate** — an estimate that follows the heat-scaled rate, never a fixed countdown. Research freezes in Start/Paused/Result and resets to zero on restart.
 
 Selecting the owned, completed Research Center enables the **Analyze** button: each press queues an immediate conversion of **10 Crystals into +90 points** through the ordinary command/feedback path — never a production queue. Affordability is not pre-checked in the UI, so an unaffordable press surfaces `Command rejected (InsufficientResources)` (reject code 8) with the stockpile and points untouched.
 
@@ -108,6 +110,33 @@ Milestones derive from the monotonic total — no stored unlock flags:
 Locked build buttons render their catalogue-derived `Unlocks at N research` threshold and disable while the live total is below it; sim placement validation stays authoritative either way. Victory and the alien-destruction Defeat share one rule: the first settled Result wins — a lethal hit on the Research Center in the same tick as the target's reach still defeats.
 
 The Godot boundary is covered inside the existing smokes: the bridge smoke pins the research HUD geometry, the exact `research_snapshot` surface (numeric finite `points`/`rate_per_second`/`eta_seconds`), catalogue-bound tower locks/tooltips and a real-input Analyze leg; the combat lifecycle smoke exercises the fresh **zero-Crystal** Analyze press through real viewport input (typed reject 8, no spend, no +90 jump), live bar/ETA progress at 20×, and the real `_restart_match` path returning research to zero. Full 9,000-point Victory, exact milestone thresholds and the 75% wave escalation are pure-Rust `grus-sim` contracts — a natural run is ~4,500 simulated seconds, far beyond a 45–90 s CI smoke.
+
+## HPA-288 underground levels and rooms
+
+**Tab** toggles the scrollable underground panel, including after a button has keyboard focus. **Esc closes an open panel without pausing**; with it closed, Esc retains placement-cancel/pause/resume behavior. The Research Center need not be selected. Click **Excavate** to pay once up front; only one dig runs at a time. Each completed level provides four slots. Arm a room kind, then click an eligible empty slot to pay for automatic construction. Without an armed kind, empty slots are disabled; arming Lab disables L1/L2 targets with `Requires L3`, while switching to Shelter makes L1 eligible again. Occupied/building slots cannot be clicked again. Kind tooltips show costs, time and effects from the Rust catalogue. Prices below are provisional; HPA-289 owns final tuning.
+
+| Room | Minimum level | Scrap | Build time | Completed effect |
+| --- | ---: | ---: | ---: | --- |
+| Shelter | 1 | 50 | 15 s | +10 shared population capacity (combined cap 100) |
+| Greenhouse | 1 | 75 | 20 s | +0.5 Food/s |
+| Coal Vein | 2 | 90 | 25 s | +0.4 Coal/s |
+| Geothermal Tap | 3 | 120 | 30 s | +15 heat at L3, +5 for each deeper level; no Coal burn |
+| Lab | 3 | 150 | 30 s | +1 research point/s, outside the surface cold multiplier |
+| Deep Mine | 4 | 150 | 35 s | +0.4 Scrap/s |
+
+Minimum levels are not exclusive: any unlocked kind can be repeated in separate slots on that level or deeper, including L5+. There is no arbitrary depth cap. To excavate level `n >= 1`: Scrap is `round-half-up(100 × 1.6^(n−1))`, Coal is half the **rounded Scrap**, rounded up, and duration is `30 + 15 × (n−1)` simulated seconds. Very-deep prices/durations saturate at `u32::MAX` rather than wrapping; Godot displays Rust's computed values.
+
+| Target level | Scrap | Coal | Dig time |
+| --- | ---: | ---: | ---: |
+| L1 | 100 | 50 | 30 s |
+| L2 | 160 | 80 | 45 s |
+| L3 | 256 | 128 | 60 s |
+| L4 | 410 | 205 | 75 s |
+| L5 | 655 | 328 | 90 s |
+
+Rooms require **no workers, pathing, fuel or underground heat demand**, and neither digging, construction nor room output is slowed by surface cold. Construction of independent rooms can overlap each other and a deeper dig. Resource rooms bank fractional income into the ordinary stockpile only after completion (not retroactively on their completion tick); completed Shelter/Tap/Lab benefits are available to later systems in that same tick. Research now accrues at `2 × surface_efficiency + completed Labs` per second and still uses the single existing ETA/Victory path. Start, Pause and Result freeze underground timers/output; the panel remains inspectable with purchases disabled. The living Research Center is required. Purchases are non-cancelable; Restart clears all depth, rooms, paid jobs and fractional remainders.
+
+The ordinary four-worker Rust feasibility test gathers real resources for L1–L3 plus Tap+Lab (786 Scrap / 258 Coal total), completing at **179.65 simulated seconds**, **120.35 s before wave 1**. The standalone Godot smoke uses real selection/Gather and paid Buttons, then additionally funds two surface Barracks to prove Lab +1/s under actual cold (15/16 heat → 2.875 research/s) before a Tap supplies +15 heat (30/16 → 3 research/s). It also checks focused Tab/Esc, pause freeze, 1-based levels/0-based slots, disabled-click no-queue/no-spend and mouse shielding, HUD queue/rejection feedback, and the production controller Restart handler. No stockpile injection or timer skips are used. The measured local headless run (Godot 4.7.1, macOS arm64, debug non-e2e extension) took **14.59 s**, observed at least **740 Scrap / 110 Coal** in worker deposits, and finished with **35 simulated seconds** of preparation remaining. It retasks the Coal worker to Scrap once L3 Coal is funded. Linux CI gates both exit 0 and `GRUS_UNDERGROUND_SMOKE_OK` within 45 seconds; this local run is not hosted-CI or Linux-export evidence.
 
 ### Build and launch
 
@@ -138,6 +167,7 @@ godot --headless --path godot res://scenes/economy_smoke_test.tscn
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn
 godot --headless --path godot res://scenes/wave_smoke_test.tscn
 godot --headless --path godot res://scenes/defenses_smoke_test.tscn
+godot --headless --path godot res://scenes/underground_smoke_test.tscn
 ```
 
 The main Godot smoke exercises real input-derived click/box/additive selection, control groups, move, stop, HUD input shielding, zoom, pan, the 20 Hz cadence and interpolated presentation. It pins battlefield contracts: the boot camera frames the live Research Center, rendered `Ruins` match `GrusBridge.obstacle_rects()`, blocked-ground clicks receive `unreachable` feedback, and a human scout reveals an expansion resource before leaving it explored under fog. Its research section pins the panel geometry, the exact numeric `research_snapshot` surface, the 3×3 build grid's catalogue-bound tower locks and the enabled/disabled Analyze dispatch through real input. Every pre-wave Playing smoke checks the shared wave snapshot before exit or reset. The reset smoke requires exactly 4 unit views / 1 building view / 18 resource views, unique stable ids and the starting 200/300/150/0 stockpile. The economy smoke retains its full real-UI gather/build/train/rally/reject loop at 20×, split into two guarded preparation legs, and its second leg proves the HPA-181 heat boundary with real input: warm 15/13 baseline after the Barracks, a Depot+Gun Turret deficit (15/16 → `surface 94%` and icy tints), a fueled Coal Furnace restoring 27/16 with tint recovery, visibly decreasing Coal, and funding through real gather cycles. The combat lifecycle smoke uses live controller attack-move and visible-alien right-click input, checks fog-gated markers and a Crystal kill reward, freezes combat while Paused, resumes into an alien-caused Defeat, and checks Result input lock and restart freshness; it also drives the HPA-188 research boundary in its fresh zero-Crystal window — the enabled Analyze button pressed through real input returns typed `InsufficientResources` (code 8) with nothing spent or banked — plus live bar/ETA progress at 20× and the restart path resetting research to zero. The dedicated wave smoke adds Start/Pause countdown freeze, HUD warning text, authoritative minimap-anchor pings and their expiry, plus labeled white-box checks of all four role silhouettes, and runs the same shared journey including the research leg. The HPA-450 defense smoke builds a wall ring from the live Research Center footprint through the UI, proves human Gate traversal, observes a fogged alien Gate breach and post-breach structure damage, and verifies a Gun Turret Crystal kill and building-origin tracer.
@@ -151,7 +181,7 @@ Select: left click / drag / Shift
 Command: right click
 Attack-move: A then right click
 Stop: S
-Pause/resume: Esc
+Pause: Esc · Underground: Tab
 Camera: wheel / middle-drag
 Minimap: click to recenter
 ```
@@ -164,7 +194,8 @@ The full reference:
 - Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, attack an enemy unit/building with the selected combatants, set a rally point when a producer is selected, otherwise move
 - `A`: arm attack-move; the next right-click moves to the ground point and engages enemies acquired on the way
 - `S`: stop selected units
-- `Esc`: pause/resume the match (cancels an armed placement first)
+- `Tab`: toggle the underground panel (also when a panel button holds focus)
+- `Esc`: close an open underground panel without pausing; otherwise cancel armed placement first, or pause/resume
 - `Ctrl+1` through `Ctrl+9`: assign a control group
 - `1` through `9`: recall a control group
 - Mouse wheel: zoom
@@ -179,7 +210,7 @@ HUD controls consume their mouse events so UI interaction does not leak into wor
 
 ### Reset modes
 
-- **Fixture reset** (`reset_fixture`, used by `reset_test.tscn` and the Result **Restart** button): despawns gameplay and reseeds the 4-worker / 1-Research-Center / 18-resource survival fixture with starting stockpiles, a fresh wave clock and zeroed research.
+- **Fixture reset** (`reset_fixture`, used by `reset_test.tscn` and the Result **Restart** button): despawns gameplay and reseeds the 4-worker / 1-Research-Center / 18-resource survival fixture with starting stockpiles, a fresh wave clock, zeroed research and empty underground depth/jobs/rooms.
 - **Benchmark reset** (`reset_benchmark_fixture`, used by `benchmark_200.tscn`): reseeds a **session-free** 200-unit survival workload with 50 human defenders and 150 actual Team-2 aliens, created through the shared wave spawn and AttackMove paths. It keeps one Research Center, the authored resource set and fog of war. A missing `MatchSession` reads as Playing, so the benchmark remains active without a lifecycle overlay. It is never used by the runtime match or other smokes.
 
 ### Linux x86_64 export
@@ -208,7 +239,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave/defense smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave/defense/underground smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 
@@ -248,7 +279,8 @@ The benchmark fixture (50 human defenders and 150 aliens, see **Reset modes** ab
 
 During measurement the runner issues no scripted orders: the wave director itself retargets aliens — Research Center first, then the lowest-id team-1 building, then the lowest-id live team-1 unit — so the session-free workload keeps alien intent through the ordinary command paths after the core falls. Workers retain their gather tasks; units are never respawned or healed, and attack cooldowns are unchanged. The liveness gate requires movement or combat in each window only while the battle is contested (both teams live); after one side is extinct, quiet windows are the real end state and pass. The earlier scripted `replay_benchmark_orders` seam was removed — its per-5-second route-planning bursts had been distorting the measured max/p99 frame times.
 
-- **Current HPA-290, local headless 10 seconds (winter-art tree):** Godot 4.7.1, macOS 26.6.2 arm64, debug non-e2e GDExtension, `gl_compatibility`: 10.01 s / 786 frames, mean 12.735 ms (p50 6.999, p95 37.705, p99 45.184, max 54.072; 78.5 fps). Live units start 200 / min 163 / mean 184.1 / end 163; visible-in-tree min 72 / mean 96.4 / end 162; visibility revision 240. Exit 0 with the complete benchmark marker. Re-measures the replay-free HPA-449 workload after the winter art landed — imported props carry one vertex-colored surface each instead of a material slot per color, the ground samples planar instead of triplanar, and the snow texture ships 1024² VRAM-compressed — and the mean, tail and workload trajectory are level with the superseded baseline. A same-session sibling run under unrelated host load read 20.683 ms mean / 183.913 ms max; that spread is host noise, not a regression signal.
+- **HPA-288 local headless 10 seconds (underground tree):** Godot 4.7.1, macOS arm64, debug non-e2e extension, `gl_compatibility`, unchanged `GRUS_BENCHMARK_SECONDS=10` workload: 10.01 s / 544 frames, mean 18.399 ms (p50 7.524, p95 45.887, p99 192.424, max 309.533; 54.4 fps). Live units start 200 / min 163 / mean 182.4 / end 163; visible-in-tree min 72 / mean 95.9 / end 151; visibility revision 240. Exit 0 and full benchmark sentinel, with the existing two-ObjectDB-instance shutdown warning. Slower than the historical HPA-290 sample below, but no same-session pre-feature control was measured, so the difference cannot be attributed to underground. This is not rendered reference-host/Linux-export hardware acceptance.
+- **Historical HPA-290, local headless 10 seconds (winter-art tree):** Godot 4.7.1, macOS 26.6.2 arm64, debug non-e2e GDExtension, `gl_compatibility`: 10.01 s / 786 frames, mean 12.735 ms (p50 6.999, p95 37.705, p99 45.184, max 54.072; 78.5 fps). Live units start 200 / min 163 / mean 184.1 / end 163; visible-in-tree min 72 / mean 96.4 / end 162; visibility revision 240. Exit 0 with the complete benchmark marker. Re-measures the replay-free HPA-449 workload after the winter art landed — imported props carry one vertex-colored surface each instead of a material slot per color, the ground samples planar instead of triplanar, and the snow texture ships 1024² VRAM-compressed — and the mean, tail and workload trajectory are level with the superseded baseline. A same-session sibling run under unrelated host load read 20.683 ms mean / 183.913 ms max; that spread is host noise, not a regression signal.
 - **Historical HPA-449, local headless 10 seconds (replay-free, superseded):** Godot 4.7.1, macOS 26.6.2 arm64, debug non-e2e GDExtension, `gl_compatibility`: 10.01 s / 771 frames, mean 12.980 ms (p50 6.888, p95 38.281, p99 48.150, max 84.717; 77.0 fps). Live units start 200 / min 163 / mean 184.1 / end 163; visible-in-tree min 72 / mean 96.3 / end 162; visibility revision 240. Exit 0 with the complete benchmark marker. With no scripted replay bursts, max frame time dropped from the replay-era 253–289 ms to 84.7 ms.
 
 The two runs below were recorded **with the scripted order replay** (per-5-second route-planning bursts inside the sampled frames) — their max/p99 largely measured the ~196-route bursts, so they are historical, not current baselines.
