@@ -27,6 +27,11 @@ const ZOOM_STEP := 6.0
 @onready var restart_button: Button = $HUD/SessionPanel/RestartButton
 @onready var quit_button: Button = $HUD/SessionPanel/QuitButton
 @onready var pause_button: Button = $HUD/PauseButton
+@onready var _underground_panel: Panel = $HUD/UndergroundPanel
+@onready var _underground_header: Label = $HUD/UndergroundPanel/HeaderLabel
+@onready var _underground_excavate: Button = $HUD/UndergroundPanel/ExcavateButton
+@onready var _underground_kinds: Container = $HUD/UndergroundPanel/KindsBox
+@onready var _underground_levels: Container = $HUD/UndergroundPanel/ScrollContainer/LevelsBox
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -47,6 +52,27 @@ var _producer_kinds: Array[String] = []
 ## block; the live points/rate/ETA arrive per frame through
 ## research_snapshot — never a mirrored mutable copy.
 var _research_target_points := 0
+## Static underground catalogue rows (name/min_level/cost/seconds),
+## cached once from the catalogue's "underground" block; every dynamic
+## value (depth, dig, slots) arrives per frame through underground_snapshot
+## while the panel is visible — never a mirrored mutable copy.
+var _ug_rooms: Array[Dictionary] = []
+var _ug_slots_per_level := 4
+var _ug_structure_key := ""
+## Index into `_ug_rooms` of the armed room kind (-1 = none armed); the
+## only selection state — slots derive eligibility from it every refresh.
+var _ug_armed_index := -1
+var _ug_kind_buttons: Array[Button] = []
+## Cosmetic button labels only — the authoritative kind wire names ride the
+## catalogue entries and bridge commands.
+const UNDERGROUND_DISPLAY_NAMES := {
+	"Shelter": "Shelter",
+	"Greenhouse": "Green",
+	"CoalVein": "Coal",
+	"GeothermalTap": "Tap",
+	"Lab": "Lab",
+	"DeepMine": "Mine",
+}
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
@@ -71,6 +97,36 @@ func _ready() -> void:
 	analyze_button.text = "Analyze %d→+%d" % [analyze_crystals, analyze_gain]
 	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
 	analyze_button.pressed.connect(_on_analyze_pressed)
+	# The static underground catalogue: room rows in wire-name order plus the
+	# slot count — the only room-rule/price source, read once here. All
+	# dynamic underground state arrives through underground_snapshot while
+	# the panel is visible.
+	var underground_catalogue: Dictionary = catalogue.get("underground", {})
+	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
+	for kind in underground_catalogue.get("room_kinds", []):
+		var ug_entry: Dictionary = ug_rooms.get(str(kind), {})
+		if ug_entry.is_empty():
+			continue
+		ug_entry["name"] = str(kind)
+		_ug_rooms.append(ug_entry)
+	_ug_slots_per_level = maxi(int(underground_catalogue.get("slots", 4)), 1)
+	_underground_excavate.pressed.connect(_on_excavate_pressed)
+	# One ordinary toggle Button per room kind, built from the catalogue in
+	# wire-name order: clicking arms the kind (the only selection state);
+	# tooltips carry the full catalogue cost/time/effect.
+	for index in _ug_rooms.size():
+		var ug_entry: Dictionary = _ug_rooms[index]
+		var kind_button := Button.new()
+		kind_button.toggle_mode = true
+		kind_button.add_theme_font_size_override("font_size", 14)
+		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		kind_button.custom_minimum_size = Vector2(52, 30)
+		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		kind_button.text = _underground_display_name(str(ug_entry.get("name", "")))
+		kind_button.tooltip_text = _ug_kind_tooltip(ug_entry)
+		kind_button.toggled.connect(_on_kind_toggled.bind(index))
+		_underground_kinds.add_child(kind_button)
+		_ug_kind_buttons.append(kind_button)
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
@@ -107,6 +163,8 @@ func _process(_delta: float) -> void:
 	_refresh_session()
 	_reconcile_selection()
 	_refresh_hud()
+	if _underground_panel.visible:
+		_refresh_underground_panel()
 
 func _consume_placement_results() -> bool:
 	var unresolved: Array[Dictionary] = []
@@ -344,6 +402,25 @@ func _refresh_selection(building: Dictionary) -> void:
 		selection_label.text = text
 		return
 	selection_label.text = "Nothing selected"
+
+## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
+## and mark the event handled: `ui_focus_next` would otherwise consume Tab
+## once a panel button holds keyboard focus, and the open panel owns Esc
+## ahead of the pause shortcut. Every other key keeps its existing
+## `_unhandled_input` route.
+func _input(event: InputEvent) -> void:
+	if not event is InputEventKey:
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return
+	if key.keycode == KEY_TAB:
+		_toggle_underground_panel()
+		get_viewport().set_input_as_handled()
+		return
+	if key.keycode == KEY_ESCAPE and _underground_panel.visible:
+		_close_underground_panel()
+		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey:
@@ -865,3 +942,220 @@ func _on_idle_pressed() -> void:
 		camera.position.z = view.global_position.z
 		break
 	command_status.text = "Selected idle worker #%d" % worker_id
+
+## Tab toggles the underground panel; the panel itself consumes mouse input
+## (Control STOP filter) so clicks never leak into ground selection,
+## placement or unit commands.
+func _toggle_underground_panel() -> void:
+	if _underground_panel.visible:
+		_close_underground_panel()
+	else:
+		_underground_panel.visible = true
+		command_status.text = "Underground panel — Esc closes"
+
+func _close_underground_panel() -> void:
+	_underground_panel.visible = false
+
+## Dynamic underground refresh, only while the panel is visible: rows are
+## rebuilt only when depth or slot kinds change, live text (dig countdown,
+## build progress, benefit lines, eligibility) refreshes every frame from
+## the read-only snapshot plus the static catalogue. No dig-price or
+## room-effects math lives here — the snapshot carries the Rust-computed
+## numbers.
+func _refresh_underground_panel() -> void:
+	var snap: Dictionary = GrusBridge.underground_snapshot()
+	var structure_key := _underground_structure_key(snap)
+	if structure_key != _ug_structure_key:
+		_ug_structure_key = structure_key
+		_rebuild_underground_rows(snap)
+	_refresh_underground_header(snap)
+	_refresh_underground_kinds(snap)
+	_refresh_underground_slots(snap)
+
+## Depth plus each slot's kind — everything that changes the row structure;
+## percentages and countdowns update in place.
+func _underground_structure_key(snap: Dictionary) -> String:
+	var parts := PackedStringArray(["d%d" % int(snap.get("depth", 0))])
+	for level in snap.get("levels", []):
+		var slot_parts := PackedStringArray()
+		for slot in level.get("slots", []):
+			slot_parts.append(str(slot.get("kind", "")))
+		parts.append(" ".join(slot_parts))
+	return "\n".join(parts)
+
+func _rebuild_underground_rows(snap: Dictionary) -> void:
+	for child in _underground_levels.get_children():
+		_underground_levels.remove_child(child)
+		child.queue_free()
+	for level in snap.get("levels", []):
+		var level_number := int(level.get("level", 0))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 2)
+		var level_label := Label.new()
+		level_label.text = "L%d" % level_number
+		level_label.custom_minimum_size = Vector2(24, 48)
+		level_label.add_theme_font_size_override("font_size", 14)
+		row.add_child(level_label)
+		for slot_index in _ug_slots_per_level:
+			var button := Button.new()
+			button.add_theme_font_size_override("font_size", 13)
+			button.add_theme_color_override("font_disabled_color", Color(0.8, 0.8, 0.8))
+			button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+			button.custom_minimum_size = Vector2(84, 48)
+			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			button.pressed.connect(_on_slot_pressed.bind(level_number, slot_index))
+			row.add_child(button)
+		_underground_levels.add_child(row)
+
+func _refresh_underground_header(snap: Dictionary) -> void:
+	var depth := int(snap.get("depth", 0))
+	var target := int(snap.get("target", 1))
+	var cost_text := _ug_cost_text(snap.get("next_cost", {}))
+	var dig_line := ""
+	if bool(snap.get("excavating", false)):
+		dig_line = "Digging L%d · %d%% · %ds left" % [
+			target, roundi(float(snap.get("progress", 0.0)) * 100.0),
+			maxi(ceili(float(snap.get("remaining", 0.0))), 0)]
+	else:
+		dig_line = "Dig L%d · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
+	var lock_line := ""
+	if _session_phase == "Paused":
+		lock_line = "\nPaused — inspection only"
+	elif not _playing():
+		lock_line = "\n%s — inspection only" % _session_phase
+	_underground_header.text = "Underground — depth %d\n%s%s" % [depth, dig_line, lock_line]
+	if bool(snap.get("excavating", false)):
+		_underground_excavate.disabled = true
+		_underground_excavate.text = "Digging L%d · %d%%" % [
+			target, roundi(float(snap.get("progress", 0.0)) * 100.0)]
+	else:
+		_underground_excavate.disabled = not _playing()
+		# The header line always carries the full price/time; the button keeps
+		# the terse form so deeper (longer) prices can never clip.
+		_underground_excavate.text = "Excavate L%d" % target
+
+## A kind Button becomes selectable once the completed depth reaches its
+## catalogue min_level; the pressed look marks the armed kind.
+func _refresh_underground_kinds(snap: Dictionary) -> void:
+	var depth := int(snap.get("depth", 0))
+	for index in _ug_kind_buttons.size():
+		var min_level := int(_ug_rooms[index].get("min_level", 1))
+		_ug_kind_buttons[index].disabled = depth < min_level
+
+## Formats a cost dictionary carried by a snapshot or catalogue entry;
+## GDScript renders, Rust computes.
+func _ug_cost_text(cost: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var amount := int(cost.get(resource, 0))
+		if amount > 0:
+			parts.append("%d %s" % [amount, resource.capitalize()])
+	return " + ".join(parts)
+
+func _underground_display_name(kind: String) -> String:
+	return str(UNDERGROUND_DISPLAY_NAMES.get(kind, kind))
+
+## The full kind tooltip: catalogue name, cost, build time and effect —
+## straight off the static catalogue row, never retyped here.
+func _ug_kind_tooltip(entry: Dictionary) -> String:
+	return "%s — Requires L%d\nCost: %s · Build: %ds\n%s" % [
+		str(entry.get("name", "")), int(entry.get("min_level", 1)), _ug_cost_text(entry),
+		int(entry.get("seconds", 0)), _ug_effect_text(entry)]
+
+## One effect line per catalogue row (the geothermal row shows its
+## min-level base; the per-depth bonus rides the completed slot's own
+## Rust-computed benefit text).
+func _ug_effect_text(entry: Dictionary) -> String:
+	if int(entry.get("population", 0)) > 0:
+		return "+%d pop" % int(entry.get("population", 0))
+	if float(entry.get("research_per_second", 0.0)) > 0.0:
+		return "+%s research/s" % str(entry.get("research_per_second", 0.0))
+	if float(entry.get("output_rate", 0.0)) > 0.0:
+		return "+%s %s/s" % [String.num(float(entry.get("output_rate", 0.0)), 3), str(entry.get("output_kind", ""))]
+	var heat := int(entry.get("heat_supply_base", 0))
+	if heat > 0:
+		return "+%d heat at L%d (+%d/level deeper)" % [
+			heat, int(entry.get("min_level", 1)), int(entry.get("heat_supply_per_level", 0))]
+	return ""
+
+## Per-frame slot refresh against the live snapshot and the armed kind:
+## empty slots act only with a kind armed, only on rows at or above its
+## min_level, and only while Playing; shallower rows stay disabled and say
+## why. Occupied/constructing slots are never actionable.
+func _refresh_underground_slots(snap: Dictionary) -> void:
+	var levels: Array = snap.get("levels", [])
+	var armed := _ug_armed_index >= 0 and _ug_armed_index < _ug_rooms.size()
+	var armed_entry: Dictionary = _ug_rooms[_ug_armed_index] if armed else {}
+	var armed_min := int(armed_entry.get("min_level", 1)) if armed else 0
+	for row_index in mini(_underground_levels.get_child_count(), levels.size()):
+		var row: Node = _underground_levels.get_child(row_index)
+		var level_number := int(levels[row_index].get("level", 0))
+		var slots: Array = levels[row_index].get("slots", [])
+		for slot_index in mini(_ug_slots_per_level, slots.size()):
+			var button := row.get_child(slot_index + 1) as Button
+			var slot: Dictionary = slots[slot_index]
+			var kind := str(slot.get("kind", ""))
+			if kind == "":
+				if armed and level_number < armed_min:
+					button.text = "Requires\nL%d" % armed_min
+					button.tooltip_text = "%s requires L%d" % [
+						str(armed_entry.get("name", "")), armed_min]
+					button.disabled = true
+				elif armed:
+					button.text = "Empty"
+					button.tooltip_text = _ug_kind_tooltip(armed_entry)
+					button.disabled = not _playing()
+				else:
+					button.text = "Empty"
+					button.tooltip_text = "Arm a room kind above"
+					button.disabled = true
+				continue
+			var display := _underground_display_name(kind)
+			if bool(slot.get("complete", false)):
+				button.text = "%s\n%s" % [display, str(slot.get("benefit", ""))]
+				button.tooltip_text = "%s — complete: %s" % [kind, str(slot.get("benefit", ""))]
+			else:
+				var progress := roundi(float(slot.get("progress", 0.0)) * 100.0)
+				button.text = "%s\n%d%%" % [display, progress]
+				button.tooltip_text = "%s — building, %ds left" % [
+					kind, maxi(ceili(float(slot.get("remaining", 0.0))), 0)]
+			button.disabled = true
+
+## Arming is the panel's only selection state: pressing a kind button arms
+## it (exclusively), pressing the armed one again disarms; slot eligibility
+## recomputes from the catalogue + snapshot on the next refresh.
+func _on_kind_toggled(pressed: bool, index: int) -> void:
+	if pressed:
+		_ug_armed_index = index
+		for other in _ug_kind_buttons.size():
+			_ug_kind_buttons[other].set_pressed_no_signal(other == index)
+		command_status.text = "%s armed — click an eligible slot" % str(_ug_rooms[index].get("name", ""))
+	else:
+		_ug_armed_index = -1
+	_refresh_underground_panel()
+
+## One paid excavation — the same queued-command/feedback path as every
+## other order; the sim owns the single-dig rule and affordability.
+func _on_excavate_pressed() -> void:
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
+	if GrusBridge.excavate():
+		command_status.text = "Excavate queued"
+	else:
+		command_status.text = "Excavate rejected"
+
+## An eligible empty-slot click queues the armed kind at this 1-based level
+## and 0-based slot; disabled buttons never fire, and Rust revalidates
+## everything authoritatively.
+func _on_slot_pressed(level: int, slot: int) -> void:
+	if not _playing() or _ug_armed_index < 0 or _ug_armed_index >= _ug_rooms.size():
+		return
+	var kind := str(_ug_rooms[_ug_armed_index].get("name", ""))
+	if kind == "":
+		return
+	if GrusBridge.build_room(level, slot, kind):
+		command_status.text = "%s queued (L%d slot %d)" % [
+			_underground_display_name(kind), level, slot + 1]
+	else:
+		command_status.text = "Room command rejected"

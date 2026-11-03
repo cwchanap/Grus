@@ -6,7 +6,10 @@ use godot::classes::{Engine, INode, Node, Node3D, SceneTree};
 use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
-use grus_sim::catalog::{ResourceKind, building_spec, unit_spec};
+use grus_sim::catalog::{
+    Cost, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, building_spec, excavation_cost_and_seconds,
+    room_spec, unit_spec,
+};
 use grus_sim::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BASE_GATHER_RATE, Building, BuildingId, BuildingIndex,
     BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
@@ -14,11 +17,12 @@ use grus_sim::{
     MapFixture, MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind,
     ProductionQueue, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResearchState,
     ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
-    WorkerTask, active_phase, apply_player_command, explored_by, extend_with_benchmark_workload,
-    idle_worker_ids, live_alien_ids, population_cap, population_used, produces, refresh_visibility,
-    research_points, research_rate, resolve_target, seed_skirmish, set_paused, start_match,
-    step_tick, surface_efficiency, target_eligible, unlock_points, validate_placement, visible_to,
+    Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap,
+    WaveState, WorkerTask, active_phase, apply_player_command, explored_by,
+    extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
+    population_used, produces, refresh_visibility, research_points, research_rate, resolve_target,
+    seed_skirmish, set_paused, start_match, step_tick, surface_efficiency, target_eligible,
+    unlock_points, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -319,6 +323,28 @@ impl GrusBridgeNode {
         )
     }
 
+    /// Queue one paid excavation — the global underground panel action with
+    /// no building argument: the Research Center is the uniquely seeded core
+    /// and the sim's validation owns its liveness, affordability and the
+    /// single-dig rule; rejections surface through the shared feedback
+    /// revision/text like every other order.
+    #[func]
+    fn excavate(&self) -> bool {
+        queue_command(PlayerCommand::Excavate { issuer: TeamId(1) }, None)
+    }
+
+    /// Queue one room placement in a completed level's slot. The kind name
+    /// parses from the same catalogue wire names `RoomKind::ALL` defines;
+    /// negative level/slot reject at the bridge, every remaining rule
+    /// (bounds, occupancy, min-level, funds) in the sim.
+    #[func]
+    fn build_room(&self, level: i32, slot: i32, kind: GString) -> bool {
+        let Some(command) = parse_build_room_command(level, slot, &kind.to_string()) else {
+            return false;
+        };
+        queue_command(command, None)
+    }
+
     #[func]
     fn reset_fixture(&mut self) -> bool {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -394,6 +420,16 @@ impl GrusBridgeNode {
             dict
         })
         .unwrap_or_default()
+    }
+
+    /// Read-only dynamic underground state for the Tab panel, safe in every
+    /// session phase and before any fixture exists: completed depth, the
+    /// dig's target/progress/remaining plus the Rust-computed next-level
+    /// price/time, and each level's four slots — empty, building with
+    /// progress, or complete with its Rust-computed benefit line.
+    #[func]
+    fn underground_snapshot(&self) -> VarDictionary {
+        with_app(|app| underground_snapshot_dict(app.world())).unwrap_or_default()
     }
 
     /// Explicit Start -> Playing. Gameplay commands and the fixed steps stay
@@ -881,6 +917,11 @@ impl GrusBridgeNode {
     /// - "research": {target_points, analyze_cost, analyze_gain_points} —
     ///   the static research tuning; the live state rides the separate
     ///   dynamic `research_snapshot`.
+    /// - "underground": {slots, room_kinds, rooms} — the slot count per
+    ///   level, the wire-name order for menus, and each room's `min_level`,
+    ///   typed cost, build seconds and benefit fields straight off the
+    ///   catalogue table. The live depth/dig/slot state rides the separate
+    ///   dynamic `underground_snapshot`.
     #[func]
     fn catalogue_snapshot(&self) -> VarDictionary {
         catalogue_snapshot_dict()
@@ -937,11 +978,222 @@ fn catalogue_snapshot_dict() -> VarDictionary {
     research.set("target_points", i64::from(RESEARCH_TARGET_POINTS));
     research.set("analyze_cost", &cost_dict(ANALYZE_COST).to_variant());
     research.set("analyze_gain_points", ANALYZE_RESEARCH_GAIN);
+    // Static underground tuning, read once at panel init: the slot count
+    // per level, the wire-name order for menus, and each room's
+    // min_level/cost/build-time/benefit fields straight off the catalogue
+    // table — the only room-rule/price source.
+    let mut rooms = VarDictionary::new();
+    let mut room_kinds: Array<GString> = Array::new();
+    for kind in RoomKind::ALL {
+        let spec = room_spec(kind);
+        let mut entry = cost_dict(spec.cost);
+        entry.set("min_level", i64::from(spec.min_level));
+        entry.set("seconds", i64::from(spec.build_seconds));
+        entry.set("population", i64::from(spec.population_capacity));
+        match spec.output {
+            Some((resource, rate)) => {
+                entry.set("output_kind", &kind_name(resource));
+                entry.set("output_rate", f64::from(rate));
+            }
+            None => {
+                entry.set("output_kind", &GString::from(""));
+                entry.set("output_rate", 0.0_f64);
+            }
+        }
+        entry.set("research_per_second", spec.research_per_second);
+        entry.set("heat_supply_base", i64::from(spec.heat_supply_base));
+        entry.set(
+            "heat_supply_per_level",
+            i64::from(spec.heat_supply_per_level),
+        );
+        rooms.set(&kind_name(kind), &entry.to_variant());
+        room_kinds.push(&kind_name(kind));
+    }
+    let mut underground = VarDictionary::new();
+    underground.set("slots", i64::from(ROOM_SLOTS_PER_LEVEL as u32));
+    underground.set("rooms", &rooms.to_variant());
+    underground.set("room_kinds", &room_kinds.to_variant());
     let mut catalogue = VarDictionary::new();
     catalogue.set("units", &units.to_variant());
     catalogue.set("buildings", &buildings.to_variant());
     catalogue.set("research", &research.to_variant());
+    catalogue.set("underground", &underground.to_variant());
     catalogue
+}
+
+/// One room slot of the dynamic underground read.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct UndergroundSlotView {
+    /// `None` in an empty slot.
+    kind: Option<RoomKind>,
+    /// A placed room that has not completed its build yet.
+    building: bool,
+    complete: bool,
+    /// 0..1 build progress (`1.0` when complete, `0.0` when empty).
+    progress: f32,
+    /// Build seconds left.
+    remaining: f32,
+    /// The Rust-computed benefit line a completed room renders.
+    benefit: String,
+}
+
+/// One completed level of the dynamic underground read.
+#[derive(Clone, Debug, PartialEq)]
+struct UndergroundLevelView {
+    /// 1-based level number.
+    level: u32,
+    /// Exactly `ROOM_SLOTS_PER_LEVEL` entries.
+    slots: Vec<UndergroundSlotView>,
+}
+
+/// Engine-free dynamic read behind `underground_snapshot` (a `GString`
+/// needs a live engine; this core does not): everything the panel needs in
+/// one pass — depth, the dig's target/progress/remaining, the
+/// Rust-computed next-level price/time and every level's slots — so
+/// GDScript holds no mutable shadow model, dig-price math or room-effects
+/// table.
+#[derive(Clone, Debug, PartialEq)]
+struct UndergroundView {
+    depth: u32,
+    excavating: bool,
+    /// The dig that is running, or the one `excavate` would start next.
+    target: u32,
+    progress: f32,
+    remaining: f32,
+    /// Plain saturated price — a practically unaffordable depth reads as
+    /// its saturated cost, never an "unavailable" state.
+    next_cost: Cost,
+    next_seconds: u32,
+    levels: Vec<UndergroundLevelView>,
+}
+
+/// The one benefit line a completed room renders in the panel — named
+/// straight off the catalogue row, with the geothermal depth bonus (base
+/// at `min_level`, +per-level deeper) folded in here exactly as the heat
+/// system consumes it.
+fn room_benefit_text(kind: RoomKind, level: u32) -> String {
+    let spec = room_spec(kind);
+    if spec.population_capacity > 0 {
+        format!("+{} pop", spec.population_capacity)
+    } else if let Some((resource, rate)) = spec.output {
+        format!("+{rate} {resource:?}/s")
+    } else if spec.research_per_second > 0.0 {
+        format!("+{} rp/s", spec.research_per_second)
+    } else {
+        let supply = spec.heat_supply_base
+            + spec.heat_supply_per_level * level.saturating_sub(spec.min_level);
+        format!("+{supply} heat")
+    }
+}
+
+/// The read itself. `next_cost`/`next_seconds` always describe `target` —
+/// the active dig's level while one runs (its duration is the same
+/// catalogue row the progress fraction divides by), otherwise the next
+/// level `excavate` would open.
+fn underground_view(world: &World) -> UndergroundView {
+    let underground = world.get_resource::<Underground>();
+    let depth = underground.map_or(0, Underground::depth);
+    let target = depth + 1;
+    let (next_cost, next_seconds) = excavation_cost_and_seconds(target);
+    let duration = next_seconds as f32;
+    let (progress, remaining) = match underground.and_then(|state| state.excavation) {
+        Some(dig) if duration > 0.0 => (
+            (dig.elapsed_seconds / duration).clamp(0.0, 1.0),
+            (duration - dig.elapsed_seconds).max(0.0),
+        ),
+        _ => (0.0, duration),
+    };
+    let excavating = underground.is_some_and(|state| state.excavation.is_some());
+
+    let mut levels = Vec::new();
+    if let Some(state) = underground {
+        for (index, level) in state.levels.iter().enumerate() {
+            let level_number = index as u32 + 1;
+            let mut slots = Vec::with_capacity(ROOM_SLOTS_PER_LEVEL);
+            for slot in &level.slots {
+                let view = match slot {
+                    None => UndergroundSlotView::default(),
+                    Some(room) => {
+                        let build = room_spec(room.kind).build_seconds as f32;
+                        let complete = room.complete();
+                        let (progress, remaining) = if complete || build <= 0.0 {
+                            (1.0, 0.0)
+                        } else {
+                            (
+                                (room.progress_seconds / build).clamp(0.0, 1.0),
+                                (build - room.progress_seconds).max(0.0),
+                            )
+                        };
+                        UndergroundSlotView {
+                            kind: Some(room.kind),
+                            building: !complete,
+                            complete,
+                            progress,
+                            remaining,
+                            benefit: if complete {
+                                room_benefit_text(room.kind, level_number)
+                            } else {
+                                String::new()
+                            },
+                        }
+                    }
+                };
+                slots.push(view);
+            }
+            levels.push(UndergroundLevelView {
+                level: level_number,
+                slots,
+            });
+        }
+    }
+
+    UndergroundView {
+        depth,
+        excavating,
+        target,
+        progress,
+        remaining,
+        next_cost,
+        next_seconds,
+        levels,
+    }
+}
+
+/// Godot serialization of the view — one flat field per panel read, the
+/// empty kind string marking an empty slot.
+fn underground_snapshot_dict(world: &World) -> VarDictionary {
+    let view = underground_view(world);
+    let mut dict = VarDictionary::new();
+    dict.set("depth", i64::from(view.depth));
+    dict.set("excavating", view.excavating);
+    dict.set("target", i64::from(view.target));
+    dict.set("progress", f64::from(view.progress));
+    dict.set("remaining", f64::from(view.remaining));
+    dict.set("next_cost", &cost_dict(view.next_cost).to_variant());
+    dict.set("next_seconds", i64::from(view.next_seconds));
+    let mut levels: Array<VarDictionary> = Array::new();
+    for level in &view.levels {
+        let mut level_dict = VarDictionary::new();
+        level_dict.set("level", i64::from(level.level));
+        let mut slots: Array<VarDictionary> = Array::new();
+        for slot in &level.slots {
+            let mut slot_dict = VarDictionary::new();
+            match slot.kind {
+                Some(kind) => slot_dict.set("kind", &kind_name(kind)),
+                None => slot_dict.set("kind", &GString::from("")),
+            }
+            slot_dict.set("building", slot.building);
+            slot_dict.set("complete", slot.complete);
+            slot_dict.set("progress", f64::from(slot.progress));
+            slot_dict.set("remaining", f64::from(slot.remaining));
+            slot_dict.set("benefit", &GString::from(slot.benefit.as_str()));
+            slots.push(&slot_dict);
+        }
+        level_dict.set("slots", &slots.to_variant());
+        levels.push(&level_dict);
+    }
+    dict.set("levels", &levels.to_variant());
+    dict
 }
 
 #[bevy_app]
@@ -1029,6 +1281,24 @@ fn parse_target_kind_str(kind: &str, target_id: i32) -> Option<CombatTarget> {
 
 fn parse_building_kind(name: &GString) -> Option<BuildingKind> {
     parse_building_kind_str(name.to_string().as_str())
+}
+
+fn parse_build_room_command(level: i32, slot: i32, kind: &str) -> Option<PlayerCommand> {
+    Some(PlayerCommand::BuildRoom {
+        issuer: TeamId(1),
+        level: u32::try_from(level).ok()?,
+        slot: u8::try_from(slot).ok()?,
+        kind: parse_room_kind_str(kind)?,
+    })
+}
+
+/// Engine-free `&str` core of the room-kind parser — same wire-name
+/// contract (`kind_name_str`) as the unit and building parsers, so the
+/// accepted spellings can never drift between directions.
+fn parse_room_kind_str(name: &str) -> Option<RoomKind> {
+    RoomKind::ALL
+        .into_iter()
+        .find(|kind| kind_name_str(kind) == name)
 }
 
 fn parse_building_kind_str(name: &str) -> Option<BuildingKind> {
@@ -1682,6 +1952,9 @@ fn clear_gameplay_world(world: &mut World) {
     // Research dies with the match too: absence reads zero points until the
     // reseed inserts a fresh state — a restart can never carry progress.
     world.remove_resource::<ResearchState>();
+    // The underground dies with the match the same way: absence reads depth
+    // zero until the shared seed reseeds the empty default.
+    world.remove_resource::<Underground>();
     world.remove_resource::<MatchSession>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
@@ -1924,8 +2197,9 @@ mod tests {
     use grus_sim::seed_skirmish;
     use grus_sim::step_heat;
     use grus_sim::{
-        AttackCooldown, CombatEvent, CombatTarget, ConstructionState, MatchResult, MoveOrder,
-        RESEARCH_BASE_PER_SECOND, WorkerTask, add_research, sorted_unit_ids, spawn_unit,
+        AttackCooldown, CombatEvent, CombatTarget, ConstructionState, Excavation, MatchResult,
+        MoveOrder, RESEARCH_BASE_PER_SECOND, Room, UndergroundLevel, WorkerTask, add_research,
+        sorted_unit_ids, spawn_unit,
     };
 
     use super::*;
@@ -2648,11 +2922,26 @@ mod tests {
             ranged: false,
             killed: false,
         }]));
+        // Banked underground progress — an opened level, a placed room and
+        // an active dig — must die with the match like heat and research.
+        world.insert_resource(Underground {
+            levels: vec![UndergroundLevel {
+                slots: [Some(Room::new(RoomKind::Shelter)), None, None, None],
+            }],
+            excavation: Some(Excavation {
+                elapsed_seconds: 9.0,
+            }),
+        });
 
         // Restart rides the reset seam; repeated cycles restore the initial
         // resources/entities/indexes exactly once, with no stale state.
         reset_fixture_world(&mut world);
         assert_fixture_restored(&world);
+        assert_eq!(
+            *world.resource::<Underground>(),
+            Underground::default(),
+            "restart reseeds an empty underground"
+        );
         reset_fixture_world(&mut world);
         assert_fixture_restored(&world);
     }
@@ -2734,8 +3023,17 @@ mod tests {
         world.insert_resource(MatchSession {
             phase: MatchPhase::Result(MatchResult(TeamId(1))),
         });
+        // Banked underground progress must not leak into the benchmark
+        // either: the shared clear+reseed path restores the empty default.
+        world.insert_resource(Underground {
+            levels: vec![UndergroundLevel::default()],
+            excavation: Some(Excavation {
+                elapsed_seconds: 1.0,
+            }),
+        });
         reset_benchmark_world(&mut world);
         assert!(world.get_resource::<MatchSession>().is_none());
+        assert_eq!(*world.resource::<Underground>(), Underground::default());
         assert_eq!(
             active_phase(&world),
             MatchPhase::Playing,
@@ -3158,6 +3456,292 @@ mod tests {
                 .crystals,
             0,
             "a rejected Analyze spends nothing"
+        );
+    }
+
+    #[test]
+    fn build_room_parser_preserves_wire_indices_and_rejects_invalid_arguments() {
+        assert_eq!(
+            parse_build_room_command(3, 0, "Lab"),
+            Some(PlayerCommand::BuildRoom {
+                issuer: TeamId(1),
+                level: 3,
+                slot: 0,
+                kind: RoomKind::Lab,
+            })
+        );
+        assert!(parse_build_room_command(i32::MAX, 3, "Shelter").is_some());
+        for (level, slot, kind) in [
+            (-1, 0, "Shelter"),
+            (1, -1, "Shelter"),
+            (1, 256, "Shelter"),
+            (1, i32::MAX, "Shelter"),
+            (1, 0, "shelter"),
+            (1, 0, ""),
+        ] {
+            assert_eq!(parse_build_room_command(level, slot, kind), None);
+        }
+        // Representable but invalid sim indices still reach authoritative
+        // validation and its normal OutOfBounds command feedback.
+        assert!(parse_build_room_command(0, 4, "Shelter").is_some());
+    }
+
+    #[test]
+    fn clear_gameplay_world_removes_underground_before_any_reseed() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        world
+            .resource_mut::<Underground>()
+            .levels
+            .push(UndergroundLevel::default());
+        clear_gameplay_world(&mut world);
+        assert!(world.get_resource::<Underground>().is_none());
+        let view = underground_view(&world);
+        assert_eq!(view.depth, 0);
+        assert!(!view.excavating);
+        assert!(view.levels.is_empty());
+    }
+
+    /// HPA-288 room wire names round-trip exactly like building/unit names —
+    /// `kind_name_str` is the one spelling both directions share — while
+    /// near-miss, foreign and empty spellings reject at the bridge parser
+    /// before anything is queued.
+    #[test]
+    fn room_kind_parser_accepts_exactly_the_catalogue_names() {
+        for (name, kind) in [
+            ("Shelter", RoomKind::Shelter),
+            ("Greenhouse", RoomKind::Greenhouse),
+            ("CoalVein", RoomKind::CoalVein),
+            ("GeothermalTap", RoomKind::GeothermalTap),
+            ("Lab", RoomKind::Lab),
+            ("DeepMine", RoomKind::DeepMine),
+        ] {
+            assert_eq!(parse_room_kind_str(name), Some(kind));
+            assert_eq!(kind_name_str(kind), name);
+        }
+        for foreign in [
+            "Shelter ",
+            "shelter",
+            "Green House",
+            "Geothermal Tap",
+            "Bunkhouse",
+            "DeepMine ",
+            "",
+        ] {
+            assert_eq!(
+                parse_room_kind_str(foreign),
+                None,
+                "foreign name {foreign} must reject"
+            );
+        }
+    }
+
+    /// The one benefit line a completed room renders in the panel: each
+    /// effect named straight off the catalogue row, with the geothermal
+    /// depth bonus (base at `min_level`, +per-level deeper) computed here
+    /// so GDScript holds no room-effects table.
+    #[test]
+    fn room_benefit_text_names_each_catalogue_effect() {
+        assert_eq!(room_benefit_text(RoomKind::Shelter, 1), "+10 pop");
+        assert_eq!(room_benefit_text(RoomKind::Greenhouse, 1), "+0.5 Food/s");
+        assert_eq!(room_benefit_text(RoomKind::CoalVein, 2), "+0.4 Coal/s");
+        assert_eq!(room_benefit_text(RoomKind::DeepMine, 4), "+0.4 Scrap/s");
+        assert_eq!(room_benefit_text(RoomKind::Lab, 3), "+1 rp/s");
+        assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 3), "+15 heat");
+        assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 4), "+20 heat");
+        assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 7), "+35 heat");
+    }
+
+    /// The engine-free read behind `underground_snapshot` before any
+    /// fixture (safe default) and on the fresh fixture: depth 0, no dig,
+    /// and the Rust-computed L1 price/duration the panel renders verbatim.
+    #[test]
+    fn underground_view_reads_the_seeded_fixture_as_depth_zero() {
+        let empty = underground_view(&World::new());
+        assert_eq!(empty.depth, 0);
+        assert_eq!((empty.next_cost.scrap, empty.next_cost.coal), (100, 50));
+        assert_eq!(empty.next_seconds, 30);
+
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        let view = underground_view(&world);
+        assert_eq!(view.depth, 0);
+        assert!(!view.excavating);
+        assert_eq!(view.target, 1);
+        assert_eq!(view.progress, 0.0);
+        assert_eq!(view.remaining, 30.0);
+        assert_eq!(
+            (
+                view.next_cost.scrap,
+                view.next_cost.coal,
+                view.next_cost.food,
+                view.next_cost.crystals
+            ),
+            (100, 50, 0, 0)
+        );
+        assert_eq!(view.next_seconds, 30);
+        assert!(view.levels.is_empty());
+    }
+
+    /// The read mid-journey: an active dig reports target/progress/
+    /// remaining against its own catalogue duration, a building room reports
+    /// progress and a blank benefit, a complete room reports its benefit,
+    /// and an empty slot reports no kind.
+    #[test]
+    fn underground_view_tracks_dig_and_room_progress() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+        let mut building = Room::new(RoomKind::Shelter);
+        building.progress_seconds = 7.5;
+        let mut complete = Room::new(RoomKind::Lab);
+        complete.progress_seconds = 30.0;
+        world.insert_resource(Underground {
+            levels: vec![
+                UndergroundLevel {
+                    slots: [Some(building), None, None, None],
+                },
+                UndergroundLevel::default(),
+                UndergroundLevel {
+                    slots: [None, None, None, Some(complete)],
+                },
+            ],
+            excavation: Some(Excavation {
+                elapsed_seconds: 12.0,
+            }),
+        });
+
+        let view = underground_view(&world);
+        assert_eq!(view.depth, 3);
+        assert!(view.excavating);
+        assert_eq!(view.target, 4);
+        assert!(
+            (view.progress - 12.0 / 75.0).abs() < 1e-6,
+            "L4 digs for 75s, got {}",
+            view.progress
+        );
+        assert!((view.remaining - 63.0).abs() < 1e-6);
+        // next_cost/time describe the dig at `target` — the active one here.
+        assert_eq!((view.next_cost.scrap, view.next_cost.coal), (410, 205));
+        assert_eq!(view.next_seconds, 75);
+        assert_eq!(
+            view.levels.iter().map(|row| row.level).collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        assert!(view.levels.iter().all(|row| row.slots.len() == 4));
+
+        let level = &view.levels[0];
+        assert_eq!(level.level, 1);
+        assert_eq!(level.slots.len(), ROOM_SLOTS_PER_LEVEL);
+        let shelter = &level.slots[0];
+        assert_eq!(shelter.kind, Some(RoomKind::Shelter));
+        assert!(shelter.building && !shelter.complete);
+        assert!((shelter.progress - 0.5).abs() < 1e-6);
+        assert!((shelter.remaining - 7.5).abs() < 1e-6);
+        assert_eq!(shelter.benefit, "");
+        let lab = &view.levels[2].slots[3];
+        assert!(lab.complete && !lab.building);
+        assert_eq!(lab.progress, 1.0);
+        assert_eq!(lab.remaining, 0.0);
+        assert_eq!(lab.benefit, "+1 rp/s");
+        assert_eq!(level.slots[1].kind, None);
+        assert_eq!(level.slots[2].kind, None);
+        assert_eq!(level.slots[3].kind, None);
+
+        let before = world.resource::<Underground>().clone();
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Paused,
+        });
+        assert_eq!(
+            underground_view(&world),
+            view,
+            "paused inspection keeps the same read"
+        );
+        assert_eq!(
+            *world.resource::<Underground>(),
+            before,
+            "snapshots are read-only"
+        );
+    }
+
+    /// A depth no `u32` stockpile could ever pay still reports a plain
+    /// saturated price and duration — never a wrapped-cheap dig and never
+    /// an "unavailable" branch the UI would need.
+    #[test]
+    fn underground_view_reports_a_plain_saturated_price_past_representable_depth() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        // Pin the representable boundary itself, then read past it.
+        let (representable, _) = excavation_cost_and_seconds(38);
+        assert_eq!(representable.scrap, 3_568_119_232);
+        let mut deep = Underground::default();
+        deep.levels.resize_with(38, UndergroundLevel::default);
+        world.insert_resource(deep);
+        let view = underground_view(&world);
+        assert_eq!(view.depth, 38);
+        assert_eq!(view.target, 39);
+        assert_eq!(
+            view.next_cost.scrap,
+            u32::MAX,
+            "the price saturates, never wraps"
+        );
+        assert_eq!(view.next_cost.coal, u32::MAX.div_ceil(2));
+        assert_eq!(view.next_seconds, 30 + 15 * 38);
+        assert!(!view.excavating);
+        assert!((view.remaining - 600.0).abs() < 1e-6);
+    }
+
+    /// The queued-command path the panel buttons drive: an accepted
+    /// Excavate starts the single dig and spends exactly the catalogue L1
+    /// price, and a BuildRoom against a level the dig has not opened yet
+    /// surfaces its typed reject through the shared feedback channel — no
+    /// separate underground error path exists.
+    #[test]
+    fn excavate_and_build_room_dispatch_through_the_shared_queue() {
+        let mut world = World::new();
+        setup_fixture(&mut world);
+        start_match(&mut world);
+        world.insert_resource(PendingCommands::default());
+        world.insert_resource(CommandFeedback::default());
+        world.resource_mut::<PendingCommands>().0.extend([
+            PendingCommand {
+                command: PlayerCommand::Excavate { issuer: TeamId(1) },
+                placement_request_id: None,
+            },
+            PendingCommand {
+                command: PlayerCommand::BuildRoom {
+                    issuer: TeamId(1),
+                    level: 1,
+                    slot: 0,
+                    kind: RoomKind::Shelter,
+                },
+                placement_request_id: None,
+            },
+        ]);
+
+        apply_pending_commands(&mut world);
+
+        // The later BuildRoom reject is the shared latest line — the level
+        // the dig is still opening is simply missing (`OutOfBounds`).
+        let feedback = world.resource::<CommandFeedback>();
+        assert_eq!(feedback.text, "Command rejected (OutOfBounds)");
+        assert_eq!(feedback.last_reject_code, Some(RejectReason::OutOfBounds));
+        assert_eq!(feedback.revision, 1);
+        let underground = world.resource::<Underground>();
+        assert!(underground.excavation.is_some(), "the accepted dig started");
+        assert_eq!(underground.depth(), 0, "the dig has opened no level yet");
+        let stockpile = &world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile;
+        assert_eq!(
+            (stockpile.scrap, stockpile.coal),
+            (200, 100),
+            "exactly the L1 price left the ledger"
         );
     }
 }
