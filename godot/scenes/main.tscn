@@ -1,4 +1,4 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
@@ -12,6 +12,16 @@ size = Vector3(1, 0.4, 1)
 resource_local_to_scene = true
 transparency = 1
 albedo_color = Color(0.3, 0.85, 0.3, 0.4)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_underground_tooltip"]
+content_margin_left = 8.0
+content_margin_top = 6.0
+content_margin_right = 8.0
+content_margin_bottom = 6.0
+bg_color = Color(0.06, 0.06, 0.06, 1)
+
+[sub_resource type="Theme" id="Theme_underground"]
+TooltipPanel/styles/panel = SubResource("StyleBoxFlat_underground_tooltip")
 
 [node name="Main" type="Node3D"]
 script = ExtResource("2_controller")
@@ -247,6 +257,55 @@ offset_right = 990.0
 offset_bottom = 40.0
 text = "Pause"
 
+[node name="UndergroundPanel" type="Panel" parent="HUD"]
+visible = false
+offset_left = 848.0
+offset_top = 298.0
+offset_right = 1268.0
+offset_bottom = 584.0
+mouse_filter = 0
+theme = SubResource("Theme_underground")
+
+[node name="HeaderLabel" type="Label" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 6.0
+offset_right = 412.0
+offset_bottom = 64.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "Underground"
+
+[node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 68.0
+offset_right = 412.0
+offset_bottom = 94.0
+disabled = true
+theme_override_font_sizes/font_size = 14
+text = "Excavate"
+
+[node name="KindsBox" type="HBoxContainer" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 98.0
+offset_right = 412.0
+offset_bottom = 130.0
+theme_override_constants/separation = 2
+
+[node name="ScrollContainer" type="ScrollContainer" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 8.0
+offset_top = 134.0
+offset_right = 412.0
+offset_bottom = 278.0
+horizontal_scroll_mode = 0
+
+[node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="SessionPanel" type="Panel" parent="HUD"]
 offset_left = 440.0
 offset_top = 250.0
@@ -303,7 +362,7 @@ offset_top = 220.0
 offset_right = 392.0
 offset_bottom = 360.0
 theme_override_font_sizes/font_size = 13
-text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause/resume: Esc\nCamera: wheel / middle-drag\nMinimap: click to recenter"
+text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause: Esc · Underground: Tab\nCamera: wheel / middle-drag\nMinimap: click to recenter"
 
 [node name="Minimap" type="Control" parent="HUD"]
 offset_left = 1120.0
