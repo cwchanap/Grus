@@ -127,7 +127,10 @@ pub fn step_underground(world: &mut World, seconds: f32) {
     let underground = &mut *underground;
 
     // Bank output for rooms complete at tick entry, whole units only; the
-    // per-room remainder keeps every fraction for later ticks.
+    // per-room remainder keeps every fraction for later ticks. Per-currency
+    // totals saturate like the stockpile adds below: `whole as u32` already
+    // saturates one room's output, and many rooms' combined units must not
+    // overflow the intermediate total.
     let mut food = 0u32;
     let mut scrap = 0u32;
     let mut coal = 0u32;
@@ -145,9 +148,9 @@ pub fn step_underground(world: &mut World, seconds: f32) {
             if whole >= 1.0 {
                 room.output_remainder -= whole;
                 match kind {
-                    ResourceKind::Food => food += whole as u32,
-                    ResourceKind::Scrap => scrap += whole as u32,
-                    ResourceKind::Coal => coal += whole as u32,
+                    ResourceKind::Food => food = food.saturating_add(whole as u32),
+                    ResourceKind::Scrap => scrap = scrap.saturating_add(whole as u32),
+                    ResourceKind::Coal => coal = coal.saturating_add(whole as u32),
                 }
             }
         }
