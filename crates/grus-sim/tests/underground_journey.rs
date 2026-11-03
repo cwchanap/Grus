@@ -63,7 +63,8 @@ fn safe_sources(fixture: &MapFixture, kind: ResourceKind) -> Vec<ResourceId> {
         .collect()
 }
 
-/// Issues one room build; `false` only for the gather-funded
+/// Issues one room build and, when accepted, asserts its exact catalogue
+/// price was debited; `false` only for the gather-funded
 /// `InsufficientResources` retry — anything else is a bug in the journey.
 fn issue_build_room(
     world: &mut World,
@@ -71,7 +72,9 @@ fn issue_build_room(
     level: u32,
     slot: u8,
     kind: RoomKind,
+    spend: &mut (u32, u32),
 ) -> bool {
+    let before = stockpile(world);
     let result = apply_player_command(
         world,
         map,
@@ -83,10 +86,36 @@ fn issue_build_room(
         },
     );
     match result.reject {
-        None => true,
+        None => {
+            let cost = room_spec(kind).cost;
+            assert_paid(world, before, (cost.scrap, cost.coal), spend, "BuildRoom");
+            true
+        }
         Some(RejectReason::InsufficientResources) => false,
         Some(other) => panic!("unexpected BuildRoom({kind:?}) rejection: {other:?}"),
     }
+}
+
+/// An accepted purchase must debit exactly its catalogue price — a
+/// missing payment would inflate the final balance and fake the paid
+/// funding claim — so each debit is asserted at issue time and summed
+/// into `spend` for the closing ledger.
+fn assert_paid(
+    world: &World,
+    before: (u32, u32, u32),
+    price: (u32, u32),
+    spend: &mut (u32, u32),
+    what: &str,
+) {
+    let after = stockpile(world);
+    assert_eq!(after.0, before.0, "{what} must not touch Food");
+    assert_eq!(
+        (before.1 - price.0, before.2 - price.1),
+        (after.1, after.2),
+        "{what} must debit exactly its catalogue price"
+    );
+    spend.0 += price.0;
+    spend.1 += price.1;
 }
 
 /// Whether the L3 room in `slot` is placed and finished.
@@ -156,17 +185,33 @@ fn gather_funded_l3_tap_and_lab_complete_before_wave_1() {
     let (mut tap_built, mut lab_built) = (false, false);
     let (mut tap_done, mut lab_done) = (None, None);
     let mut completion = None;
+    // The measured funding ledger: `spend` sums the prices asserted
+    // debited at each accepted purchase, `credits` the per-tick deposit
+    // deltas — kept independent so the closing reconciliation cannot be
+    // derived from the final balance alone.
+    let (mut credits, mut spend) = ((0u32, 0u32), (0u32, 0u32));
     let mut t = 0.0_f64;
     for _ in 0..tick_cap {
         let underground = world.resource::<Underground>().clone();
         if underground.depth() < TARGET_DEPTH && underground.excavation.is_none() {
+            let before = stockpile(&world);
             let result = apply_player_command(
                 &mut world,
                 &mut map,
                 PlayerCommand::Excavate { issuer: TEAM },
             );
             match result.reject {
-                None => dig_start.push(t),
+                None => {
+                    let cost = excavation_cost_and_seconds(underground.depth() + 1).0;
+                    assert_paid(
+                        &world,
+                        before,
+                        (cost.scrap, cost.coal),
+                        &mut spend,
+                        "Excavate",
+                    );
+                    dig_start.push(t);
+                }
                 // Gather-funded: a real delivery has not landed yet.
                 Some(RejectReason::InsufficientResources) => {}
                 Some(other) => panic!("unexpected Excavate rejection: {other:?}"),
@@ -180,17 +225,39 @@ fn gather_funded_l3_tap_and_lab_complete_before_wave_1() {
                     TARGET_DEPTH,
                     TAP_SLOT,
                     RoomKind::GeothermalTap,
+                    &mut spend,
                 );
             }
             if !lab_built {
-                lab_built =
-                    issue_build_room(&mut world, &mut map, TARGET_DEPTH, LAB_SLOT, RoomKind::Lab);
+                lab_built = issue_build_room(
+                    &mut world,
+                    &mut map,
+                    TARGET_DEPTH,
+                    LAB_SLOT,
+                    RoomKind::Lab,
+                    &mut spend,
+                );
             }
         }
 
         let depth_before = underground.depth();
+        let prev_tick = stockpile(&world);
         step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
         t += f64::from(SIM_STEP_SECONDS);
+        // Deposit measurement: this journey builds no Coal Furnace and no
+        // other system may spend Scrap/Coal mid-tick, so a canonical tick
+        // can only add — the credited gather is observed, not derived.
+        let now = stockpile(&world);
+        let (d_scrap, d_coal) = (
+            now.1 as i64 - prev_tick.1 as i64,
+            now.2 as i64 - prev_tick.2 as i64,
+        );
+        assert!(
+            d_scrap >= 0 && d_coal >= 0 && now.0 == prev_tick.0,
+            "tick at {t} s must only deposit: Δ({d_scrap} Scrap, {d_coal} Coal)"
+        );
+        credits.0 += d_scrap as u32;
+        credits.1 += d_coal as u32;
         let underground = world.resource::<Underground>().clone();
         if underground.depth() > depth_before {
             dig_done.push(t);
@@ -237,15 +304,42 @@ fn gather_funded_l3_tap_and_lab_complete_before_wave_1() {
     assert!(tap.is_some_and(|room| room.complete()));
     assert!(lab.is_some_and(|room| room.complete()));
 
-    // Funding evidence: exactly three digs and two rooms were paid, so
-    // gathered = final + total spend − seeded treasury, all through real
-    // deposits. Food is never touched.
+    // Funding evidence, measured on both sides — never assumed: every
+    // accepted purchase was asserted at issue time to debit its exact
+    // catalogue price (`spend`), and `credits` is the independent sum of
+    // per-tick deposit deltas. The ledger must close on the seeded,
+    // spent, and final balances, and the credited gathering must cover
+    // the 486 Scrap / 108 Coal shortfall — a missing payment deduction
+    // breaks the spend or reconciliation assert, a phantom balance breaks
+    // the ledger, and thin gathering breaks the shortfall assert.
     assert_eq!(dig_start.len(), 3);
     assert!(tap_built && lab_built);
     let end = stockpile(&world);
-    let gathered_scrap = end.1 + total_scrap - start.1;
-    let gathered_coal = end.2 + total_coal - start.2;
     assert_eq!(end.0, start.0, "no Food may be spent on the journey");
+    assert_eq!(
+        (spend.0, spend.1),
+        (total_scrap, total_coal),
+        "exactly the three digs plus Tap and Lab must be paid for"
+    );
+    assert_eq!(
+        start.1 as i64 + credits.0 as i64 - spend.0 as i64,
+        end.1 as i64,
+        "Scrap ledger must close: {} seeded + {} credited − {} spent ≠ {}",
+        start.1,
+        credits.0,
+        spend.0,
+        end.1
+    );
+    assert_eq!(
+        start.2 as i64 + credits.1 as i64 - spend.1 as i64,
+        end.2 as i64,
+        "Coal ledger must close: {} seeded + {} credited − {} spent ≠ {}",
+        start.2,
+        credits.1,
+        spend.1,
+        end.2
+    );
+    let (gathered_scrap, gathered_coal) = (credits.0, credits.1);
     assert!(
         gathered_scrap >= total_scrap - start.1 && gathered_coal >= total_coal - start.2,
         "gathering must cover the shortfall: +{gathered_scrap} Scrap / +{gathered_coal} Coal"
@@ -301,6 +395,7 @@ fn gather_funded_l3_tap_and_lab_complete_before_wave_1() {
 
     // Timeline for the later Godot smoke (visible with `--nocapture`).
     eprintln!(
-        "underground journey: digs started {dig_start:?} completed {dig_done:?}; tap done {tap_done} lab done {lab_done}; rooms complete {completion} s; margin {margin:.2} s; gathered +{gathered_scrap} Scrap/+{gathered_coal} Coal; final stockpile {end:?}"
+        "underground journey: digs started {dig_start:?} completed {dig_done:?}; tap done {tap_done} lab done {lab_done}; rooms complete {completion} s; margin {margin:.2} s; gathered +{gathered_scrap} Scrap/+{gathered_coal} Coal (deposits measured per tick); paid {} Scrap/{} Coal; final stockpile {end:?}",
+        spend.0, spend.1
     );
 }
