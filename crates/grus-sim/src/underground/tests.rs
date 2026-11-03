@@ -257,6 +257,38 @@ fn every_room_banks_its_own_fractional_remainder() {
     assert_eq!(stockpile(&world).0, 202, "both rooms credit independently");
 }
 
+/// Per-currency totals must saturate, not overflow: with the accepted
+/// finite delta 2^32 s, two completed Greenhouses each bank exactly
+/// 0.5 × 2^32 = 2_147_483_648 Food, and their sum is one past `u32::MAX`.
+/// The stockpile's own `saturating_add` cannot protect an intermediate
+/// total, so the accumulation itself must saturate.
+#[test]
+fn per_currency_totals_saturate_instead_of_overflowing() {
+    let (mut world, _map) = battlefield();
+    world.insert_resource(Underground {
+        levels: one_level([
+            completed_room(RoomKind::Greenhouse),
+            completed_room(RoomKind::Greenhouse),
+            None,
+            None,
+        ]),
+        excavation: None,
+    });
+
+    step_underground(&mut world, 4_294_967_296.0_f32);
+    assert_eq!(stockpile(&world).0, u32::MAX);
+    for slot in 0..2 {
+        assert_eq!(
+            world.resource::<Underground>().levels[0].slots[slot]
+                .as_ref()
+                .unwrap()
+                .output_remainder,
+            0.0,
+            "each room banked its exact whole units"
+        );
+    }
+}
+
 /// Start, Paused and a settled Result freeze every timer and all output;
 /// resuming from Paused continues the very same dig and starts banking.
 #[test]
