@@ -34,6 +34,31 @@ impl UnitKind {
     pub const HUMAN: [UnitKind; 3] = [UnitKind::Worker, UnitKind::Guard, UnitKind::Rifleman];
 }
 
+/// One underground room kind buildable in a completed level's slots.
+/// Availability is a `min_level` floor (see `RoomSpec`), never an
+/// exact-level assignment; repeated kinds are allowed in separate slots.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RoomKind {
+    Shelter,
+    Greenhouse,
+    CoalVein,
+    GeothermalTap,
+    Lab,
+    DeepMine,
+}
+
+impl RoomKind {
+    /// Every room kind, in catalogue order.
+    pub const ALL: [RoomKind; 6] = [
+        RoomKind::Shelter,
+        RoomKind::Greenhouse,
+        RoomKind::CoalVein,
+        RoomKind::GeothermalTap,
+        RoomKind::Lab,
+        RoomKind::DeepMine,
+    ];
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BuildingKind {
     ResearchCenter,
@@ -106,6 +131,28 @@ pub struct CombatSpec {
     pub counter_target: UnitKind,
     pub counter_bonus: u32,
     pub ranged: bool,
+}
+
+/// One underground room's catalogue row. Prices are fixed by kind, never
+/// scaled by depth. This table is the only room-rule/price source; Godot
+/// reads it through the catalogue snapshot rather than replicating it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RoomSpec {
+    /// First completed depth the kind may be built in.
+    pub min_level: u32,
+    pub cost: Cost,
+    pub build_seconds: u32,
+    /// Nonperiodic population grant on completion (Shelter).
+    pub population_capacity: u32,
+    /// Periodic stockpile output once complete, per simulated second.
+    pub output: Option<(ResourceKind, f32)>,
+    /// Research points per second once complete (Lab); unlike the surface
+    /// source this is never scaled by cold.
+    pub research_per_second: f64,
+    /// Geothermal heat supply at `min_level`, plus
+    /// `heat_supply_per_level` for each deeper level (0 elsewhere).
+    pub heat_supply_base: u32,
+    pub heat_supply_per_level: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -516,6 +563,150 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             team1_only: true,
         },
     }
+}
+
+/// The underground room table. Scrap costs and build times are provisional
+/// first-pass choices where the issue specified only 50–150 Scrap;
+/// HPA-289 owns tuning.
+pub fn room_spec(kind: RoomKind) -> RoomSpec {
+    match kind {
+        RoomKind::Shelter => RoomSpec {
+            min_level: 1,
+            cost: Cost {
+                scrap: 50,
+                ..Cost::default()
+            },
+            build_seconds: 15,
+            population_capacity: 10,
+            output: None,
+            research_per_second: 0.0,
+            heat_supply_base: 0,
+            heat_supply_per_level: 0,
+        },
+        RoomKind::Greenhouse => RoomSpec {
+            min_level: 1,
+            cost: Cost {
+                scrap: 75,
+                ..Cost::default()
+            },
+            build_seconds: 20,
+            population_capacity: 0,
+            output: Some((ResourceKind::Food, 0.5)),
+            research_per_second: 0.0,
+            heat_supply_base: 0,
+            heat_supply_per_level: 0,
+        },
+        RoomKind::CoalVein => RoomSpec {
+            min_level: 2,
+            cost: Cost {
+                scrap: 90,
+                ..Cost::default()
+            },
+            build_seconds: 25,
+            population_capacity: 0,
+            output: Some((ResourceKind::Coal, 0.4)),
+            research_per_second: 0.0,
+            heat_supply_base: 0,
+            heat_supply_per_level: 0,
+        },
+        RoomKind::GeothermalTap => RoomSpec {
+            min_level: 3,
+            cost: Cost {
+                scrap: 120,
+                ..Cost::default()
+            },
+            build_seconds: 30,
+            population_capacity: 0,
+            output: None,
+            research_per_second: 0.0,
+            // +15 Heat at L3, +5 per deeper level.
+            heat_supply_base: 15,
+            heat_supply_per_level: 5,
+        },
+        RoomKind::Lab => RoomSpec {
+            min_level: 3,
+            cost: Cost {
+                scrap: 150,
+                ..Cost::default()
+            },
+            build_seconds: 30,
+            population_capacity: 0,
+            output: None,
+            research_per_second: 1.0,
+            heat_supply_base: 0,
+            heat_supply_per_level: 0,
+        },
+        RoomKind::DeepMine => RoomSpec {
+            min_level: 4,
+            cost: Cost {
+                scrap: 150,
+                ..Cost::default()
+            },
+            build_seconds: 35,
+            population_capacity: 0,
+            output: Some((ResourceKind::Scrap, 0.4)),
+            research_per_second: 0.0,
+            heat_supply_base: 0,
+            heat_supply_per_level: 0,
+        },
+    }
+}
+
+/// First-level excavation Scrap price; deeper digs grow ×1.6 per level.
+pub const EXCAVATION_INITIAL_SCRAP: u128 = 100;
+/// The ×1.6 depth multiplier as the exact rational 8/5 — integer
+/// arithmetic keeps round-half-up exact at every representable depth.
+pub const EXCAVATION_DEPTH_NUMERATOR: u128 = 8;
+pub const EXCAVATION_DEPTH_DENOMINATOR: u128 = 5;
+/// Coal charges this fraction of the already-rounded Scrap price
+/// (2 → one half), rounded half up from the integer Scrap value.
+pub const EXCAVATION_COAL_DENOMINATOR: u128 = 2;
+/// Dig duration of level 1; each deeper level adds
+/// `EXCAVATION_SECONDS_PER_LEVEL`.
+pub const EXCAVATION_BASE_SECONDS: u32 = 30;
+pub const EXCAVATION_SECONDS_PER_LEVEL: u32 = 15;
+/// Optional room slots in one excavated level.
+pub const ROOM_SLOTS_PER_LEVEL: usize = 4;
+
+/// The price and dig duration of excavating target `level` (1-based):
+/// round-half-up(`EXCAVATION_INITIAL_SCRAP` × 1.6^(level−1)) Scrap, that
+/// already-rounded price over `EXCAVATION_COAL_DENOMINATOR` in Coal
+/// (round-half-up again), and `EXCAVATION_BASE_SECONDS` + 15 s per level
+/// below the first. `None` marks a target no `u32` stockpile could ever
+/// pay — every step is checked, so an implausibly deep level reads
+/// unaffordable instead of wrapping into a cheap or free dig.
+pub fn excavation_cost_and_seconds(level: u32) -> Option<(Cost, u32)> {
+    if level == 0 {
+        return None;
+    }
+    let depth = level - 1;
+    let numerator =
+        EXCAVATION_INITIAL_SCRAP.checked_mul(EXCAVATION_DEPTH_NUMERATOR.checked_pow(depth)?)?;
+    let denominator = EXCAVATION_DEPTH_DENOMINATOR.checked_pow(depth)?;
+    let scrap = u32::try_from(round_half_up(numerator, denominator)?).ok()?;
+    let coal = u32::try_from(round_half_up(
+        u128::from(scrap),
+        EXCAVATION_COAL_DENOMINATOR,
+    )?)
+    .ok()?;
+    let seconds = u64::from(EXCAVATION_BASE_SECONDS)
+        .checked_add(u64::from(EXCAVATION_SECONDS_PER_LEVEL).checked_mul(u64::from(depth))?)?;
+    Some((
+        Cost {
+            scrap,
+            coal,
+            ..Cost::default()
+        },
+        u32::try_from(seconds).ok()?,
+    ))
+}
+
+/// round-half-up(numerator/denominator) in exact integer math; `None`
+/// when the sum ahead of the division would overflow `u128`.
+fn round_half_up(numerator: u128, denominator: u128) -> Option<u128> {
+    numerator
+        .checked_add(denominator / 2)
+        .map(|sum| sum / denominator)
 }
 
 /// Finite resource node amount for a standalone source: ration cache 600
