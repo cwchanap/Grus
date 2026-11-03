@@ -10,7 +10,9 @@ use bevy::prelude::{Component, Entity, World};
 use crate::buildings::{
     Building, BuildingIndex, commandable_building_entity, commandable_completed_building,
 };
-use crate::catalog::{BuildingKind, Cost, MAX_POPULATION, UnitKind, building_spec, unit_spec};
+use crate::catalog::{
+    BuildingKind, Cost, MAX_POPULATION, UnitKind, building_spec, room_spec, unit_spec,
+};
 use crate::commands::{CommandResult, RejectReason, UnitIndex, assign_move_toward, spawn_unit};
 use crate::economy::{Carry, GatherProgress, WorkerTask, try_spend};
 use crate::heat::surface_efficiency;
@@ -18,6 +20,7 @@ use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::session::gameplay_active;
+use crate::underground::Underground;
 
 /// What one production job trains: a catalogue unit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,9 +99,11 @@ pub fn population_used(world: &World, team: TeamId) -> u32 {
         .unwrap_or(0)
 }
 
-/// Completed Research Center/Bunkhouse capacity for the team, clamped to 100.
+/// Completed Research Center/Bunkhouse capacity for the team, plus each
+/// completed Team-1 Shelter underground (+10 by catalogue), clamped to 100.
+/// Incomplete rooms and other teams never count.
 pub fn population_cap(world: &World, team: TeamId) -> u32 {
-    let capacity = world
+    let surface = world
         .get_resource::<BuildingIndex>()
         .map(|index| {
             index
@@ -116,7 +121,25 @@ pub fn population_cap(world: &World, team: TeamId) -> u32 {
                 .sum()
         })
         .unwrap_or(0);
-    capacity.min(MAX_POPULATION)
+    // The underground is Team-1-only state (commands gate on Team 1), so
+    // only Team 1's cap can read Shelter capacity.
+    let shelters = if team == TeamId(1) {
+        world
+            .get_resource::<Underground>()
+            .map(|underground| {
+                underground
+                    .levels
+                    .iter()
+                    .flat_map(|level| level.slots.iter().flatten())
+                    .filter(|room| room.complete())
+                    .map(|room| room_spec(room.kind).population_capacity)
+                    .fold(0, u32::saturating_add)
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    surface.saturating_add(shelters).min(MAX_POPULATION)
 }
 
 /// Applies an accepted `EnqueueUnit`: ownership → completion → producer

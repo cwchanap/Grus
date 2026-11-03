@@ -9,13 +9,14 @@ use bevy::prelude::{Resource, World};
 use crate::buildings::{Building, BuildingIndex, commandable_completed_building};
 use crate::catalog::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, RESEARCH_BASE_PER_SECOND,
-    RESEARCH_TARGET_POINTS, building_spec,
+    RESEARCH_TARGET_POINTS, building_spec, room_spec,
 };
 use crate::commands::{CommandResult, RejectReason};
 use crate::economy::try_spend;
 use crate::heat::surface_efficiency;
 use crate::ids::{BuildingId, TeamId};
 use crate::session::{gameplay_active, resolve_result};
+use crate::underground::Underground;
 
 /// Team 1's accumulated research points, capped at
 /// `RESEARCH_TARGET_POINTS`; reaching the target resolves Victory. Seeded
@@ -54,11 +55,33 @@ pub fn building_unlocked(world: &World, kind: BuildingKind) -> bool {
 /// Live research rate in points per simulated second: the surface source
 /// is `RESEARCH_BASE_PER_SECOND` scaled by the same `surface_efficiency`
 /// every heat consumer reads, so a cold surface slows research like
-/// production and turret cooldowns. The underground source is zero until
-/// HPA-288 adds it as an additive term here. Advancement and any display
-/// ETA share this one source function so they can never diverge.
+/// production and turret cooldowns — plus the additive underground source,
+/// each completed Lab's whole catalogue rate, deliberately OUTSIDE the
+/// cold multiplier: underground production is never slowed by surface
+/// cold. Advancement and any display ETA share this one source function so
+/// they can never diverge.
 pub fn research_rate(world: &World) -> f64 {
     RESEARCH_BASE_PER_SECOND * f64::from(surface_efficiency(world))
+        + underground_points_per_second(world)
+}
+
+/// The summed `research_per_second` of every completed room — Labs by
+/// catalogue value, zero for every other kind and every room still under
+/// construction. Never banked separately in `step_underground`: passive
+/// accrual reads it through the one `research_rate` source.
+fn underground_points_per_second(world: &World) -> f64 {
+    world
+        .get_resource::<Underground>()
+        .map(|underground| {
+            underground
+                .levels
+                .iter()
+                .flat_map(|level| level.slots.iter().flatten())
+                .filter(|room| room.complete())
+                .map(|room| room_spec(room.kind).research_per_second)
+                .sum()
+        })
+        .unwrap_or(0.0)
 }
 
 /// Adds `points` to the one accumulator, clamped to the catalogue target;

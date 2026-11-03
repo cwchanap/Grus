@@ -8,21 +8,25 @@ use bevy::prelude::World;
 use crate::map::GridMap;
 use crate::{
     refresh_visibility, step_combat, step_construction, step_economy, step_heat, step_movement,
-    step_production, step_research, step_waves,
+    step_production, step_research, step_underground, step_waves,
 };
 
 /// Advances the simulation one fixed tick in the authoritative order:
-/// **waves → heat → combat → movement → economy → construction →
-/// production → research → visibility**. Heat totals computed here scale
-/// this same tick's turret cooldowns, production progress and research
-/// gain; this tick's movement arrivals are visible to economy and
-/// construction; a construction completed here (population capacity,
-/// producer queues) is visible to production; research runs after combat
-/// so a lethal hit on the Research Center settles Defeat before the same
-/// tick's passive gain could finish; the closing visibility refresh is
-/// what presentation and the next tick's command validation consume.
+/// **waves → underground → heat → combat → movement → economy →
+/// construction → production → research → visibility**. A room completing
+/// in the underground step contributes to this same tick's heat supply
+/// (a Geothermal Tap) and research rate (a Lab), so the consumers below
+/// see the current totals; heat computed here scales this same tick's
+/// turret cooldowns, production progress and research gain; this tick's
+/// movement arrivals are visible to economy and construction; a
+/// construction completed here (population capacity, producer queues) is
+/// visible to production; research runs after combat so a lethal hit on
+/// the Research Center settles Defeat before the same tick's passive gain
+/// could finish; the closing visibility refresh is what presentation and
+/// the next tick's command validation consume.
 pub fn step_tick(world: &mut World, map: &mut GridMap, seconds: f32) {
     step_waves(world, map, seconds);
+    step_underground(world, seconds);
     step_heat(world, seconds);
     step_combat(world, map, seconds);
     step_movement(world, map, seconds);

@@ -11,6 +11,7 @@ use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask};
 use crate::ids::IdAllocator;
 use crate::map::Footprint;
 use crate::movement::{SimPosition, Unit};
+use crate::underground::Underground;
 
 /// Team-1's Research Center anchors the authored central city: its 4×4
 /// footprint center must sit on the map midpoint (64, 48), within half a
@@ -779,4 +780,18 @@ fn survival_seed_creates_one_real_human_core_four_workers_and_economy() {
         ),
         (5, 2, 19)
     );
+}
+
+/// `seed_skirmish` installs a fresh empty `Underground` beside the wave,
+/// heat and research state — boot, restart, fixture reset and the benchmark
+/// all share this one seed path, so every reseed starts at depth zero.
+#[test]
+fn survival_seed_installs_a_fresh_empty_underground() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+
+    seed_skirmish(&mut world, &mut map, &fixture);
+
+    assert_eq!(world.resource::<Underground>(), &Underground::default());
 }

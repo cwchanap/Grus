@@ -1,11 +1,13 @@
-//! Canonical fixed-step order: `step_tick` runs waves → heat → combat →
-//! movement → economy → construction → production → research → visibility,
-//! and these tests call that one function. Aliens enter combat in their
-//! spawn tick, heat computed in the tick scales its
-//! combat/production/research consumers, movement arrival is visible to
-//! economy/construction in the same tick, construction completion feeds
-//! production, a lethal hit on the core settles Defeat before the same
-//! tick's research gain, and rallied production moves next.
+//! Canonical fixed-step order: `step_tick` runs waves → underground →
+//! heat → combat → movement → economy → construction → production →
+//! research → visibility, and these tests call that one function. Aliens
+//! enter combat in their spawn tick, a room completing in the underground
+//! step reaches this same tick's heat supply and research rate, heat
+//! computed in the tick scales its combat/production/research consumers,
+//! movement arrival is visible to economy/construction in the same tick,
+//! construction completion feeds production, a lethal hit on the core
+//! settles Defeat before the same tick's research gain — Lab-boosted or
+//! not — and rallied production moves next.
 
 use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
@@ -20,9 +22,10 @@ use grus_sim::{
     MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue,
     RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_DENOMINATOR,
     RESEARCH_WAVE_BOOST_NUMERATOR, RESEARCH_WAVE_BOOST_PERCENT, ResearchState, ResourceId,
-    ResourceKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, UnitId, UnitIndex, UnitKind,
-    VisibilityMap, WaveState, WorkerTask, apply_player_command, explored_by, live_alien_ids,
-    plan_roster, population_used, refresh_visibility, seed_skirmish, spawn_unit, step_combat,
+    ResourceKind, Room, RoomKind, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Underground,
+    UndergroundLevel, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState, WorkerTask,
+    apply_player_command, explored_by, live_alien_ids, plan_roster, population_used,
+    refresh_visibility, research_rate, room_spec, seed_skirmish, spawn_unit, step_combat,
     step_construction, step_production, step_tick, step_waves, unlock_points, visible_to,
     wave_budget,
 };
@@ -436,6 +439,187 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
 }
 
 // ---- Canonical step_tick ordering ---------------------------------------
+
+/// Three dug levels with a room of `kind` one fixed tick from completing
+/// in L3's first slot: the completing tick under test must expose it to
+/// this same tick's heat and research through the canonical order.
+fn l3_with_room_completing_next_tick(kind: RoomKind) -> Underground {
+    let mut room = Room::new(kind);
+    room.elapsed_seconds = room_spec(kind).build_seconds as f32 - SIM_STEP_SECONDS;
+    Underground {
+        levels: vec![
+            UndergroundLevel::default(),
+            UndergroundLevel::default(),
+            UndergroundLevel {
+                slots: [Some(room), None, None, None],
+            },
+        ],
+        excavation: None,
+    }
+}
+
+/// A Geothermal Tap completing in the underground step reaches this same
+/// tick's heat snapshot, and heat's consumers scale on it: with the surface
+/// at a 15/17 deficit (seeded core supply 15 against core 10 + Barracks 3 +
+/// two turrets 2 each), the completing tick's Tap adds +15 and restores
+/// full efficiency, so the same tick's turret cooldowns and queue head run
+/// at the full rate. If underground ran after heat — or heat after its
+/// consumers — the tap's supply would arrive one tick late and every assert
+/// fails.
+#[test]
+fn a_completing_tap_feeds_heat_and_its_consumers_in_the_same_tick() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    let barracks = seed_completed_building(
+        &mut world,
+        &mut map,
+        BARRACKS,
+        BuildingKind::Barracks,
+        MapFixture::barracks_anchor(TEAM),
+    );
+    let turret_one = seed_completed_building(
+        &mut world,
+        &mut map,
+        BuildingId(3),
+        BuildingKind::GunTurret,
+        MapFixture::depot_anchor(TEAM),
+    );
+    let turret_two = seed_completed_building(
+        &mut world,
+        &mut map,
+        BuildingId(4),
+        BuildingKind::GunTurret,
+        GridPos::new(10, 60),
+    );
+    world.entity_mut(barracks).insert(ProductionQueue {
+        jobs: VecDeque::from([ProductionJob {
+            kind: ProductionKind::Unit(UnitKind::Worker),
+        }]),
+        ..ProductionQueue::default()
+    });
+    world.insert_resource(l3_with_room_completing_next_tick(RoomKind::GeothermalTap));
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    // The underground step completed the tap before heat ran: its +15 is
+    // inside this tick's recomputed snapshot.
+    let heat = world.resource::<HeatState>();
+    assert_eq!(
+        (heat.supply, heat.demand),
+        (30, 17),
+        "the completing tap's +15 must be inside this tick's heat snapshot"
+    );
+    assert_eq!(heat.efficiency(), 1.0);
+    // …and this tick's combat and production consumers ran on it.
+    let expected_cooldown = (1.0 - SIM_STEP_SECONDS).max(0.0);
+    assert_eq!(
+        world.get::<AttackCooldown>(turret_one),
+        Some(&AttackCooldown(expected_cooldown)),
+        "the turret cooldown must drain at the tap-restored full efficiency"
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(turret_two),
+        Some(&AttackCooldown(expected_cooldown))
+    );
+    let queue = world.get::<ProductionQueue>(barracks).unwrap();
+    assert!(
+        (queue.progress_seconds - SIM_STEP_SECONDS).abs() < 1e-6,
+        "the queue head must advance at the tap-restored full efficiency, got {}",
+        queue.progress_seconds
+    );
+}
+
+/// A Lab completing in the underground step reaches this same tick's
+/// research gain: the completing tick banks the warm surface term plus the
+/// Lab's whole +1 point/s (0.15), not the surface-only 0.1. If underground
+/// ran after research, the Lab's rate would arrive one tick late.
+#[test]
+fn a_completing_lab_feeds_research_in_the_same_tick() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+    world.insert_resource(l3_with_room_completing_next_tick(RoomKind::Lab));
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    let expected = (RESEARCH_BASE_PER_SECOND + 1.0) * f64::from(SIM_STEP_SECONDS);
+    assert!(
+        (world.resource::<ResearchState>().points - expected).abs() < 1e-9,
+        "the completing tick must bank the Lab-boosted gain {expected}, got {}",
+        world.resource::<ResearchState>().points
+    );
+    assert_eq!(
+        research_rate(&world),
+        RESEARCH_BASE_PER_SECOND + 1.0,
+        "the completed Lab stays in the one authoritative rate source"
+    );
+}
+
+/// The combat-before-research tie contract with the underground in play: a
+/// Lab completing this very tick would push the Lab-boosted passive gain
+/// across the target, but combat runs first and the lethal hit on the core
+/// settles Defeat before the research step can bank anything — the Result
+/// gate freezes the accumulator with the Lab already complete.
+#[test]
+fn lethal_combat_wins_the_same_tick_tie_over_lab_boosted_research() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Playing,
+    });
+
+    // A fraction under the target that this tick's Lab-boosted gain
+    // (+0.15) would cross — and a raider parked in range with a direct
+    // attack order, the core one Guard hit from destruction.
+    world.resource_mut::<ResearchState>().points = f64::from(RESEARCH_TARGET_POINTS) - 0.02;
+    world.insert_resource(l3_with_room_completing_next_tick(RoomKind::Lab));
+    let research_center = world
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .unwrap();
+    world.get_mut::<Health>(research_center).unwrap().current = 10;
+    let raider_cell = free_perimeter_cell(
+        &world,
+        &map,
+        *world.get::<Footprint>(research_center).unwrap(),
+    );
+    let raider = spawn_unit(
+        &mut world,
+        UnitId(100),
+        TeamId(2),
+        map.cell_center(raider_cell),
+        UnitKind::Guard,
+        unit_spec(UnitKind::Guard).speed,
+    );
+    world.entity_mut(raider).insert(CombatOrder::Attack {
+        target: CombatTarget::Building(RESEARCH_CENTER),
+        last_target_cell: None,
+    });
+
+    step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+
+    assert_eq!(
+        world.resource::<MatchSession>().phase,
+        MatchPhase::Result(MatchResult(TeamId(2))),
+        "combat resolves the core's destruction before Lab-boosted research can finish"
+    );
+    assert_eq!(
+        world.resource::<ResearchState>().points,
+        f64::from(RESEARCH_TARGET_POINTS) - 0.02,
+        "the settled Result froze the accumulator before the Lab-boosted gain"
+    );
+}
 
 /// Directly seeds a completed Team-1 building, blocking its footprint and
 /// registering the index — the same constructor the heat and combat unit
