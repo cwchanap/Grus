@@ -557,3 +557,58 @@ fn a_completed_tap_lifts_a_surface_heat_deficit() {
     assert_eq!((heat(&world).supply, heat(&world).demand), (15, 1));
     assert_eq!(heat(&world).efficiency(), 1.0);
 }
+
+/// A completed Tap coexists with surface furnaces: with Coal all three
+/// supply (core 15 + two furnaces 24 + tap 15 = 54), and the pooled burn
+/// debits at the furnaces' 1 Coal/s alone — a Tap that joined the burn
+/// would pool 1.5 Coal/s and debit by tick 14. On an empty stockpile the
+/// furnaces stop but the Tap keeps its 15: tap supply is never gated on
+/// furnace fuel, and no furnace fraction survives the empty tick.
+#[test]
+fn a_tap_supplies_beside_furnaces_without_joining_their_fuel_gate_or_burn() {
+    let (mut world, mut map) = battlefield();
+    seed_two_furnaces(&mut world, &mut map);
+    let mut tap = Room::new(RoomKind::GeothermalTap);
+    tap.elapsed_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
+    world.insert_resource(Underground {
+        levels: vec![
+            UndergroundLevel::default(),
+            UndergroundLevel::default(),
+            UndergroundLevel {
+                slots: [Some(tap), None, None, None],
+            },
+        ],
+        excavation: None,
+    });
+
+    // Fueled: the tap's 15 sits beside the furnaces' 24 and the core's 15.
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!((heat(&world).supply, heat(&world).demand), (54, 10));
+    assert_eq!(team_coal(&world), 150);
+
+    // Only the furnaces pool a burn: 1 Coal/s debits exactly once per 20
+    // ticks. A tap-burning bug pools 1.5 Coal/s and debits by tick 14.
+    for tick in 2..=19 {
+        step_heat(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(
+            team_coal(&world),
+            150,
+            "tick {tick} must not debit early — only the furnaces burn"
+        );
+    }
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(team_coal(&world), 149, "exactly one whole Coal debited");
+    assert!(heat(&world).burn_remainder.abs() < 1e-4);
+
+    // Coal-empty: the furnaces stop but the tap's supply survives the fuel
+    // gate, and the cleared remainder proves the furnace burn ended clean.
+    set_team_coal(&mut world, 0);
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(
+        (heat(&world).supply, heat(&world).demand),
+        (30, 10),
+        "a coal-empty tick keeps the tap's supply"
+    );
+    assert_eq!(heat(&world).burn_remainder, 0.0);
+    assert_eq!(team_coal(&world), 0);
+}

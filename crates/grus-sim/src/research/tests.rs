@@ -727,7 +727,8 @@ fn analyze_at_the_cap_rejects_instead_of_spending() {
 /// cold-scaled surface product — the one seam HPA-188 left. A Lab still
 /// building adds zero; +1 and +2 Labs add exactly their whole rate at full
 /// heat, and under the 25% cold floor the surface term floors while the Lab
-/// term stays whole (0.5 + 2.0, not the inside-the-product 0.625).
+/// term stays whole (0.5 + 1.0 = 1.5 and 0.5 + 2.0 = 2.5, not the
+/// inside-the-product 0.625/0.75).
 #[test]
 fn completed_labs_add_research_outside_the_cold_multiplier() {
     let (mut world, _map) = battlefield();
@@ -758,15 +759,24 @@ fn completed_labs_add_research_outside_the_cold_multiplier() {
     world.resource_mut::<Underground>().levels[0].slots[1] = completed_lab();
     assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND + 2.0);
 
-    // The 25% floor cold: the surface term floors to 0.5 while both Labs
-    // keep their full 2.0 — the Lab term is outside the product.
+    // The 25% floor cold: the surface term floors to 0.5 while the Lab
+    // term stays whole outside the product — one Lab totals 1.5, two Labs
+    // 2.5 (not the inside-the-product 0.625/0.75).
     world.insert_resource(HeatState {
         supply: 0,
         demand: 10,
         burn_remainder: 0.0,
     });
+    world.resource_mut::<Underground>().levels[0].slots[1] = None;
     assert_eq!(
         research_rate(&world),
-        RESEARCH_BASE_PER_SECOND * f64::from(MIN_SURFACE_EFFICIENCY) + 2.0
+        RESEARCH_BASE_PER_SECOND * f64::from(MIN_SURFACE_EFFICIENCY) + 1.0,
+        "one Lab keeps its whole rate at the cold floor"
+    );
+    world.resource_mut::<Underground>().levels[0].slots[1] = completed_lab();
+    assert_eq!(
+        research_rate(&world),
+        RESEARCH_BASE_PER_SECOND * f64::from(MIN_SURFACE_EFFICIENCY) + 2.0,
+        "two Labs keep their whole rates at the cold floor"
     );
 }
