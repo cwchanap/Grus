@@ -73,13 +73,12 @@ pub enum PlayerCommand {
         issuer: TeamId,
         building: BuildingId,
     },
-    /// Start the single paid dig one level below the completed depth at
-    /// the issuer's Research Center. The Tab panel passes the
-    /// authoritative core ID; selecting the core in the world is not
-    /// required.
+    /// Start the single paid dig one level below the completed depth —
+    /// the global underground panel action, no building selection: the
+    /// Research Center is the uniquely seeded core and its liveness is
+    /// checked inside the command.
     Excavate {
         issuer: TeamId,
-        building: BuildingId,
     },
     /// Place one room of `kind` in a completed level's `slot` — the
     /// global underground panel action, no building selection needed.
@@ -116,10 +115,6 @@ pub enum RejectReason {
     Unexplored,
     /// Another dig is already running — only one excavation may be active.
     ExcavationInProgress,
-    /// The addressed underground level is not a completed, dug-out level.
-    UndergroundLevelMissing,
-    /// The addressed room slot already holds a room (built or building).
-    RoomSlotOccupied,
 }
 
 /// Typed result of one player command. Batch unit commands report per-unit
@@ -252,7 +247,7 @@ pub fn apply_player_command(
             target,
         } => apply_attack(world, issuer, units, target),
         PlayerCommand::Analyze { issuer, building } => apply_analyze(world, issuer, building),
-        PlayerCommand::Excavate { issuer, building } => apply_excavate(world, issuer, building),
+        PlayerCommand::Excavate { issuer } => apply_excavate(world, issuer),
         PlayerCommand::BuildRoom {
             issuer,
             level,

@@ -653,14 +653,12 @@ pub fn room_spec(kind: RoomKind) -> RoomSpec {
 }
 
 /// First-level excavation Scrap price; deeper digs grow ×1.6 per level.
-pub const EXCAVATION_INITIAL_SCRAP: u128 = 100;
-/// The ×1.6 depth multiplier as the exact rational 8/5 — integer
-/// arithmetic keeps round-half-up exact at every representable depth.
-pub const EXCAVATION_DEPTH_NUMERATOR: u128 = 8;
-pub const EXCAVATION_DEPTH_DENOMINATOR: u128 = 5;
+pub const EXCAVATION_INITIAL_SCRAP: f64 = 100.0;
+/// The ×1.6 depth multiplier per level below the first.
+pub const EXCAVATION_DEPTH_MULTIPLIER: f64 = 1.6;
 /// Coal charges this fraction of the already-rounded Scrap price
-/// (2 → one half), rounded half up from the integer Scrap value.
-pub const EXCAVATION_COAL_DENOMINATOR: u128 = 2;
+/// (2 → one half, rounded up).
+pub const EXCAVATION_COAL_DENOMINATOR: u32 = 2;
 /// Dig duration of level 1; each deeper level adds
 /// `EXCAVATION_SECONDS_PER_LEVEL`.
 pub const EXCAVATION_BASE_SECONDS: u32 = 30;
@@ -669,44 +667,29 @@ pub const EXCAVATION_SECONDS_PER_LEVEL: u32 = 15;
 pub const ROOM_SLOTS_PER_LEVEL: usize = 4;
 
 /// The price and dig duration of excavating target `level` (1-based):
-/// round-half-up(`EXCAVATION_INITIAL_SCRAP` × 1.6^(level−1)) Scrap, that
-/// already-rounded price over `EXCAVATION_COAL_DENOMINATOR` in Coal
-/// (round-half-up again), and `EXCAVATION_BASE_SECONDS` + 15 s per level
-/// below the first. `None` marks a target no `u32` stockpile could ever
-/// pay — every step is checked, so an implausibly deep level reads
-/// unaffordable instead of wrapping into a cheap or free dig.
-pub fn excavation_cost_and_seconds(level: u32) -> Option<(Cost, u32)> {
-    if level == 0 {
-        return None;
-    }
-    let depth = level - 1;
-    let numerator =
-        EXCAVATION_INITIAL_SCRAP.checked_mul(EXCAVATION_DEPTH_NUMERATOR.checked_pow(depth)?)?;
-    let denominator = EXCAVATION_DEPTH_DENOMINATOR.checked_pow(depth)?;
-    let scrap = u32::try_from(round_half_up(numerator, denominator)?).ok()?;
-    let coal = u32::try_from(round_half_up(
-        u128::from(scrap),
-        EXCAVATION_COAL_DENOMINATOR,
-    )?)
-    .ok()?;
-    let seconds = u64::from(EXCAVATION_BASE_SECONDS)
-        .checked_add(u64::from(EXCAVATION_SECONDS_PER_LEVEL).checked_mul(u64::from(depth))?)?;
-    Some((
+/// round-half-up(`EXCAVATION_INITIAL_SCRAP` × 1.6^(level−1)) Scrap, half
+/// that already-rounded price in Coal, and a duration growing 15 s per
+/// level below the first. Plain, never `Option`: for positive values
+/// `f64::round` is the required half-up rounding and `as u32` saturates
+/// (even at infinity), Coal uses `div_ceil` and the duration saturating
+/// arithmetic — an implausibly deep level reads as a practically
+/// unaffordable saturated price instead of wrapping cheap or panicking.
+/// `saturating_sub` keeps the exponent defined for the invalid level 0.
+pub fn excavation_cost_and_seconds(level: u32) -> (Cost, u32) {
+    let depth = level.saturating_sub(1);
+    let scrap = (EXCAVATION_INITIAL_SCRAP * EXCAVATION_DEPTH_MULTIPLIER.powf(f64::from(depth)))
+        .round() as u32;
+    let coal = scrap.div_ceil(EXCAVATION_COAL_DENOMINATOR);
+    let seconds =
+        EXCAVATION_BASE_SECONDS.saturating_add(EXCAVATION_SECONDS_PER_LEVEL.saturating_mul(depth));
+    (
         Cost {
             scrap,
             coal,
             ..Cost::default()
         },
-        u32::try_from(seconds).ok()?,
-    ))
-}
-
-/// round-half-up(numerator/denominator) in exact integer math; `None`
-/// when the sum ahead of the division would overflow `u128`.
-fn round_half_up(numerator: u128, denominator: u128) -> Option<u128> {
-    numerator
-        .checked_add(denominator / 2)
-        .map(|sum| sum / denominator)
+        seconds,
+    )
 }
 
 /// Finite resource node amount for a standalone source: ration cache 600

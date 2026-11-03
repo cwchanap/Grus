@@ -465,7 +465,7 @@ fn completed_taps_add_depth_scaled_supply_without_demand_or_coal_burn() {
 
     // A tap still building in L3's first slot adds nothing.
     let mut building = Room::new(RoomKind::GeothermalTap);
-    building.elapsed_seconds =
+    building.progress_seconds =
         room_spec(RoomKind::GeothermalTap).build_seconds as f32 - SIM_STEP_SECONDS;
     world.insert_resource(Underground {
         levels: vec![
@@ -488,7 +488,7 @@ fn completed_taps_add_depth_scaled_supply_without_demand_or_coal_burn() {
     // 20 and 25 — the catalogue base plus the per-level depth bonus.
     let tap = |elapsed: f32| {
         let mut room = Room::new(RoomKind::GeothermalTap);
-        room.elapsed_seconds = elapsed;
+        room.progress_seconds = elapsed;
         Some(room)
     };
     let build = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
@@ -541,7 +541,7 @@ fn a_completed_tap_lifts_a_surface_heat_deficit() {
     assert_eq!(heat(&world).efficiency(), MIN_SURFACE_EFFICIENCY);
 
     let mut tap = Room::new(RoomKind::GeothermalTap);
-    tap.elapsed_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
+    tap.progress_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
     world.insert_resource(Underground {
         levels: vec![
             UndergroundLevel::default(),
@@ -569,7 +569,7 @@ fn a_tap_supplies_beside_furnaces_without_joining_their_fuel_gate_or_burn() {
     let (mut world, mut map) = battlefield();
     seed_two_furnaces(&mut world, &mut map);
     let mut tap = Room::new(RoomKind::GeothermalTap);
-    tap.elapsed_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
+    tap.progress_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
     world.insert_resource(Underground {
         levels: vec![
             UndergroundLevel::default(),
