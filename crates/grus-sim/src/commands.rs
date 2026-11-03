@@ -4,7 +4,7 @@ use bevy::math::Vec2;
 use bevy::prelude::{Entity, Resource, World};
 
 use crate::buildings::{apply_place_building, apply_resume_construction};
-use crate::catalog::{BuildingKind, UnitKind, unit_spec};
+use crate::catalog::{BuildingKind, RoomKind, UnitKind, unit_spec};
 use crate::combat::{
     AttackCooldown, CombatOrder, CombatTarget, Health, resolve_target, target_eligible,
 };
@@ -15,6 +15,7 @@ use crate::movement::{MoveOrder, SimPosition, Unit};
 use crate::production::{apply_enqueue_unit, apply_set_rally};
 use crate::research::apply_analyze;
 use crate::session::gameplay_active;
+use crate::underground::{apply_build_room, apply_excavate};
 use crate::visibility::{VisibilityMap, move_goal_counts_as_occupancy, unit_counts_as_occupancy};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -72,6 +73,22 @@ pub enum PlayerCommand {
         issuer: TeamId,
         building: BuildingId,
     },
+    /// Start the single paid dig one level below the completed depth at
+    /// the issuer's Research Center. The Tab panel passes the
+    /// authoritative core ID; selecting the core in the world is not
+    /// required.
+    Excavate {
+        issuer: TeamId,
+        building: BuildingId,
+    },
+    /// Place one room of `kind` in a completed level's `slot` — the
+    /// global underground panel action, no building selection needed.
+    BuildRoom {
+        issuer: TeamId,
+        level: u32,
+        slot: u8,
+        kind: RoomKind,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +114,12 @@ pub enum RejectReason {
     /// Appended last: numeric reject codes are a wire contract asserted by
     /// GDScript smokes, so prior variants must never be reordered.
     Unexplored,
+    /// Another dig is already running — only one excavation may be active.
+    ExcavationInProgress,
+    /// The addressed underground level is not a completed, dug-out level.
+    UndergroundLevelMissing,
+    /// The addressed room slot already holds a room (built or building).
+    RoomSlotOccupied,
 }
 
 /// Typed result of one player command. Batch unit commands report per-unit
@@ -229,6 +252,13 @@ pub fn apply_player_command(
             target,
         } => apply_attack(world, issuer, units, target),
         PlayerCommand::Analyze { issuer, building } => apply_analyze(world, issuer, building),
+        PlayerCommand::Excavate { issuer, building } => apply_excavate(world, issuer, building),
+        PlayerCommand::BuildRoom {
+            issuer,
+            level,
+            slot,
+            kind,
+        } => apply_build_room(world, issuer, level, slot, kind),
     }
 }
 

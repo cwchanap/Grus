@@ -1,18 +1,20 @@
 //! The underground beneath the Research Center: excavation and room state
 //! plus the one fixed step that advances it. No ECS entities, no second
-//! map, no scheduler — commands (HPA-288 checkpoint 2) start paid jobs;
-//! this module only advances timers and banks completed rooms' stockpile
-//! output into the shared Team-1 economy.
+//! map, no scheduler — the paid jobs start here through the two player
+//! commands (`apply_excavate`, `apply_build_room`); this module only
+//! advances timers and banks completed rooms' stockpile output into the
+//! shared Team-1 economy.
 
 use bevy::prelude::{Resource, World};
 
-use crate::buildings::{Building, BuildingIndex};
+use crate::buildings::{Building, BuildingIndex, commandable_completed_building};
 use crate::catalog::{
     BuildingKind, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, excavation_cost_and_seconds,
     room_spec,
 };
-use crate::economy::TeamEconomy;
-use crate::ids::TeamId;
+use crate::commands::{CommandResult, RejectReason};
+use crate::economy::{TeamEconomy, try_spend};
+use crate::ids::{BuildingId, TeamId};
 use crate::session::gameplay_active;
 
 /// Slack over the whole-unit credit threshold so accumulated float error
@@ -98,6 +100,145 @@ fn living_completed_core(world: &World) -> bool {
             })
         })
     })
+}
+
+/// Applies an accepted `Excavate` on the issuer's Research Center: the
+/// Team-1 issuer gate, then the commandable-building validation chain
+/// (exists → owned → completed → kind), then the single-dig rule. Pricing
+/// and the start happen only after every check passes: one atomic
+/// `try_spend` of the target level's checked price, then the timer starts
+/// without exposing a level — `step_underground` appends the level when
+/// the dig completes. A rejection anywhere deducts nothing and starts
+/// nothing.
+pub(crate) fn apply_excavate(
+    world: &mut World,
+    issuer: TeamId,
+    building: BuildingId,
+) -> CommandResult {
+    let mut result = CommandResult::default();
+    if let Err(reason) = validate_excavate(world, issuer, building) {
+        result.reject = Some(reason);
+        return result;
+    }
+
+    let target = world
+        .get_resource::<Underground>()
+        .map_or(1, Underground::excavation_target);
+    // A target whose price no `u32` stockpile could ever represent reads
+    // unaffordable — never a wrapped cheap or free dig.
+    let Some((cost, _)) = excavation_cost_and_seconds(target) else {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
+    };
+    if !try_spend(world, issuer, cost) {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
+    }
+
+    world
+        .get_resource_or_insert_with(Underground::default)
+        .excavation = Some(Excavation::default());
+    result
+}
+
+/// Excavate validation: a Team-1-only command like Analyze, so a foreign
+/// issuer answers `Locked` before any building resolution; then the
+/// commandable-building resolution (a hidden enemy is indistinguishable
+/// from absent — fog privacy) → owned → completed → the one Research
+/// Center kind; then the single-dig rule. Pricing is deliberately not
+/// here: it is derived state, checked in `apply_excavate` after these
+/// facts hold.
+fn validate_excavate(
+    world: &World,
+    issuer: TeamId,
+    building: BuildingId,
+) -> Result<(), RejectReason> {
+    if issuer != TeamId(1) {
+        return Err(RejectReason::Locked);
+    }
+    let building_entity = commandable_completed_building(world, issuer, building)?;
+    let state = world
+        .get::<Building>(building_entity)
+        .ok_or(RejectReason::BuildingMissing)?;
+    if state.kind != BuildingKind::ResearchCenter {
+        return Err(RejectReason::WrongProducer);
+    }
+    if world
+        .get_resource::<Underground>()
+        .is_some_and(|underground| underground.excavation.is_some())
+    {
+        return Err(RejectReason::ExcavationInProgress);
+    }
+    Ok(())
+}
+
+/// Applies an accepted `BuildRoom`: the Team-1 issuer gate and the tiny
+/// living-core lookup (no building selection), then every prerequisite —
+/// a completed level, a valid slot, an empty slot, the kind's `min_level`
+/// — before one atomic `try_spend` of the kind's fixed Scrap price writes
+/// a fresh zero-progress room. A rejection anywhere deducts nothing and
+/// writes no room.
+pub(crate) fn apply_build_room(
+    world: &mut World,
+    issuer: TeamId,
+    level: u32,
+    slot: u8,
+    kind: RoomKind,
+) -> CommandResult {
+    let mut result = CommandResult::default();
+    if let Err(reason) = validate_build_room(world, issuer, level, slot, kind) {
+        result.reject = Some(reason);
+        return result;
+    }
+
+    if !try_spend(world, issuer, room_spec(kind).cost) {
+        result.reject = Some(RejectReason::InsufficientResources);
+        return result;
+    }
+
+    let mut underground = world.get_resource_or_insert_with(Underground::default);
+    // Validation guaranteed `level` is an existing 1-based level index.
+    underground.levels[(level - 1) as usize].slots[slot as usize] = Some(Room::new(kind));
+    result
+}
+
+/// BuildRoom validation, in reject order: Team 1 only (`Locked`), a
+/// living completed Team-1 core (`BuildingMissing` — the level under a
+/// dead core belongs to nobody), a completed dug-out level
+/// (`UndergroundLevelMissing` — level 0 and the level an active dig is
+/// still opening are both missing), a slot inside the four-slot level
+/// (`OutOfBounds`), an empty slot (`RoomSlotOccupied` — a room under
+/// construction already owns its slot) and the kind's `min_level`
+/// (`Locked`).
+fn validate_build_room(
+    world: &World,
+    issuer: TeamId,
+    level: u32,
+    slot: u8,
+    kind: RoomKind,
+) -> Result<(), RejectReason> {
+    if issuer != TeamId(1) {
+        return Err(RejectReason::Locked);
+    }
+    if !living_completed_core(world) {
+        return Err(RejectReason::BuildingMissing);
+    }
+    let Some(underground) = world.get_resource::<Underground>() else {
+        return Err(RejectReason::UndergroundLevelMissing);
+    };
+    if level == 0 || level > underground.depth() {
+        return Err(RejectReason::UndergroundLevelMissing);
+    }
+    if slot as usize >= ROOM_SLOTS_PER_LEVEL {
+        return Err(RejectReason::OutOfBounds);
+    }
+    if underground.levels[(level - 1) as usize].slots[slot as usize].is_some() {
+        return Err(RejectReason::RoomSlotOccupied);
+    }
+    if level < room_spec(kind).min_level {
+        return Err(RejectReason::Locked);
+    }
+    Ok(())
 }
 
 /// Advances the underground one fixed tick, gated by three things: the
