@@ -1068,9 +1068,9 @@ struct UndergroundView {
 }
 
 /// The one benefit line a completed room renders in the panel — named
-/// straight off the catalogue row, with the geothermal depth bonus (base
-/// at `min_level`, +per-level deeper) folded in here exactly as the heat
-/// system consumes it.
+/// straight off the catalogue row, geothermal depth bonus included
+/// through the same shared `RoomSpec::heat_supply_at` the heat system
+/// consumes.
 fn room_benefit_text(kind: RoomKind, level: u32) -> String {
     let spec = room_spec(kind);
     if spec.population_capacity > 0 {
@@ -1080,9 +1080,7 @@ fn room_benefit_text(kind: RoomKind, level: u32) -> String {
     } else if spec.research_per_second > 0.0 {
         format!("+{} rp/s", spec.research_per_second)
     } else {
-        let supply = spec.heat_supply_base
-            + spec.heat_supply_per_level * level.saturating_sub(spec.min_level);
-        format!("+{supply} heat")
+        format!("+{} heat", spec.heat_supply_at(level))
     }
 }
 
@@ -3550,6 +3548,13 @@ mod tests {
         assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 3), "+15 heat");
         assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 4), "+20 heat");
         assert_eq!(room_benefit_text(RoomKind::GeothermalTap, 7), "+35 heat");
+        // The shared saturating helper, not a bridge-local copy: an absurd
+        // depth renders its saturated supply instead of panicking or
+        // wrapping.
+        assert_eq!(
+            room_benefit_text(RoomKind::GeothermalTap, u32::MAX),
+            "+4294967295 heat"
+        );
     }
 
     /// The engine-free read behind `underground_snapshot` before any

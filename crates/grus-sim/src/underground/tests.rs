@@ -77,12 +77,16 @@ fn room_completion_derives_from_build_progress() {
     }
 }
 
-/// Stepping a world with no underground state is a harmless no-op.
+/// Stepping a world with no underground state is a harmless no-op: the
+/// seeded default is removed first so the step truly faces an absent
+/// resource, and it neither inserts one nor touches the stockpile.
 #[test]
 fn a_world_without_underground_state_steps_as_a_no_op() {
     let (mut world, _map) = battlefield();
+    world.remove_resource::<Underground>();
     let before = stockpile(&world);
     step_underground(&mut world, SIM_STEP_SECONDS);
+    assert!(world.get_resource::<Underground>().is_none());
     assert_eq!(stockpile(&world), before);
 }
 
@@ -880,6 +884,35 @@ fn l3_room_kinds_stay_locked_below_level_three() {
     assert_eq!(stockpile(&world).1, 350, "the L3 Lab paid 150 Scrap");
 }
 
+/// At L5 every previously unlocked kind stays placeable on the deepest
+/// completed level through the real command path: Shelter (min L1) and
+/// Deep Mine (min L4) both validate, spend exactly their fixed Scrap
+/// prices and land at the addressed slots — `min_level` is a floor, not
+/// an exact-level assignment.
+#[test]
+fn l5_accepts_previously_unlocked_kinds_through_the_command() {
+    let (mut world, mut map) = battlefield();
+    set_scrap_and_coal(&mut world, 300, 150);
+    world.insert_resource(Underground {
+        levels: vec![UndergroundLevel::default(); 5],
+        excavation: None,
+    });
+
+    let shelter = build_room(&mut world, &mut map, TEAM, 5, 0, RoomKind::Shelter);
+    let mine = build_room(&mut world, &mut map, TEAM, 5, 3, RoomKind::DeepMine);
+
+    assert_eq!(shelter.reject, None);
+    assert_eq!(mine.reject, None);
+    assert_eq!(
+        stockpile(&world),
+        (200, 100, 150),
+        "the Shelter paid 50 and the Deep Mine 150 Scrap"
+    );
+    let level = &world.resource::<Underground>().levels[4];
+    assert_eq!(level.slots[0].unwrap().kind, RoomKind::Shelter);
+    assert_eq!(level.slots[3].unwrap().kind, RoomKind::DeepMine);
+}
+
 /// BuildRoom needs no selection and no free dig: separate slots
 /// build in parallel in one tick, and rooms build in already dug levels
 /// while a deeper dig runs.
@@ -964,8 +997,9 @@ fn build_room_needs_a_living_core_and_a_team1_issuer() {
 
 /// The bridge's `clear_gameplay_world`: gameplay entities and the
 /// seed-owned state die before every reseed — restart, fixture reset and
-/// the benchmark all share it. The underground resource deliberately
-/// survives the clear itself; only the shared reseed overwrites it.
+/// the benchmark all share it. The underground resource is removed
+/// explicitly, exactly like the real bridge clear: absence reads as depth
+/// zero until the shared reseed inserts the fresh default.
 fn bridge_style_clear(world: &mut World) {
     let stale: Vec<Entity> = world
         .query_filtered::<Entity, Or<(With<Unit>, With<Building>, With<ResourceSource>)>>()
@@ -982,13 +1016,14 @@ fn bridge_style_clear(world: &mut World) {
     world.remove_resource::<WaveState>();
     world.remove_resource::<HeatState>();
     world.remove_resource::<ResearchState>();
+    world.remove_resource::<Underground>();
 }
 
 /// The bridge's reset paths (restart, fixture reset, benchmark) all reseed
-/// through `seed_skirmish`, and that seed overwrites the underground
-/// resource with a fresh default: a populated world — completed levels
-/// plus an active dig — returns to depth zero even though the clear itself
-/// never names the underground.
+/// through `seed_skirmish`, and the clear removes the underground before
+/// that reseed inserts a fresh default: a populated world — completed
+/// levels plus an active dig — reads depth zero right after the clear,
+/// and the reseed keeps it at the seeded default.
 #[test]
 fn bridge_style_reseed_returns_a_populated_underground_to_default() {
     let (mut world, _map) = battlefield();
@@ -1000,10 +1035,9 @@ fn bridge_style_reseed_returns_a_populated_underground_to_default() {
     });
 
     bridge_style_clear(&mut world);
-    assert_eq!(
-        world.resource::<Underground>().depth(),
-        1,
-        "the clear itself leaves the underground alone"
+    assert!(
+        world.get_resource::<Underground>().is_none(),
+        "the clear itself removes the underground"
     );
 
     let fixture = MapFixture::battlefield();

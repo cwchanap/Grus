@@ -80,13 +80,7 @@ fn geothermal_tap_supply(world: &World) -> u32 {
                         .map(move |room| (level_number, room))
                 })
                 .filter(|&(_, room)| room.kind == RoomKind::GeothermalTap && room.complete())
-                .map(|(level, room)| {
-                    let spec = room_spec(room.kind);
-                    spec.heat_supply_base.saturating_add(
-                        spec.heat_supply_per_level
-                            .saturating_mul(level.saturating_sub(spec.min_level)),
-                    )
-                })
+                .map(|(level, room)| room_spec(room.kind).heat_supply_at(level))
                 .fold(0, u32::saturating_add)
         })
         .unwrap_or(0)

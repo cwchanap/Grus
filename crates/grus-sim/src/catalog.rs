@@ -155,6 +155,19 @@ pub struct RoomSpec {
     pub heat_supply_per_level: u32,
 }
 
+impl RoomSpec {
+    /// Geothermal heat supply of a completed room at `level`: the base at
+    /// `min_level` plus the per-level bonus for each deeper level, all
+    /// saturating. The one formula both the heat system and the panel's
+    /// benefit line consume — no copy of it lives anywhere else.
+    pub fn heat_supply_at(&self, level: u32) -> u32 {
+        self.heat_supply_base.saturating_add(
+            self.heat_supply_per_level
+                .saturating_mul(level.saturating_sub(self.min_level)),
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BuildingSpec {
     pub cost: Cost,

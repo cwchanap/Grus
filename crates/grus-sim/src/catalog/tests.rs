@@ -639,6 +639,32 @@ fn room_availability_is_minimum_level_peaking_at_deep_mine() {
 }
 
 #[test]
+fn geothermal_supply_scales_from_the_minimum_level_and_saturates() {
+    // The one depth-scaled room effect, computed by the catalogue helper
+    // both the heat system and the panel benefit line share: base at the
+    // kind's min_level, +5 per deeper level, the depth bonus saturating
+    // to zero below min_level, and the total saturating instead of
+    // wrapping or panicking at an absurd depth.
+    let tap = room_spec(RoomKind::GeothermalTap);
+    // A shallower (validation-unreachable) level saturates the depth bonus
+    // to zero, leaving the bare base — the same semantics heat always had.
+    assert_eq!(tap.heat_supply_at(2), 15, "bonus saturates below min_level");
+    assert_eq!(tap.heat_supply_at(3), 15, "base at min_level");
+    assert_eq!(tap.heat_supply_at(4), 20);
+    assert_eq!(tap.heat_supply_at(5), 25);
+    assert_eq!(tap.heat_supply_at(u32::MAX), u32::MAX);
+    for kind in RoomKind::ALL {
+        if kind != RoomKind::GeothermalTap {
+            assert_eq!(
+                room_spec(kind).heat_supply_at(u32::MAX),
+                0,
+                "{kind:?} never supplies heat at any depth"
+            );
+        }
+    }
+}
+
+#[test]
 fn excavation_tuning_is_catalogued_as_named_constants() {
     assert_eq!(EXCAVATION_INITIAL_SCRAP, 100.0);
     assert_eq!(EXCAVATION_DEPTH_MULTIPLIER, 1.6);

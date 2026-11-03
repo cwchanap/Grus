@@ -726,8 +726,9 @@ func _on_quit_pressed() -> void:
 	get_tree().quit(0)
 
 ## Restart clears every transient Godot-side fact while the bridge reseeds:
-## selection, control groups, placement, attack-move arming, and live combat
-## effects. No dead stable ids survive the reset.
+## selection, control groups, placement, attack-move arming, the armed
+## underground room kind, and live combat effects. No dead stable ids
+## survive the reset.
 func _restart_match() -> void:
 	GrusBridge.restart_match()
 	selected_ids.clear()
@@ -735,6 +736,9 @@ func _restart_match() -> void:
 	_control_groups.clear()
 	_idle_cursor = 0
 	_attack_move_armed = false
+	_ug_armed_index = -1
+	for kind_button in _ug_kind_buttons:
+		kind_button.set_pressed_no_signal(false)
 	_pending_placement_requests.clear()
 	_cancel_placement()
 	_fx.clear_all()

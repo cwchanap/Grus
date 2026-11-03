@@ -1,6 +1,6 @@
 # HPA-288 — Underground levels and rooms: implementation plan
 
-Status: **Revised after GitHub design review; implementation not started** · 2026-11-02  
+Status: **Revised after GitHub design review; implemented on this branch — required CI evidence pending** · 2026-11-02  
 Issue: [HPA-288](https://linear.app/cwchanap/issue/HPA-288/grus-survival-78-underground-levels-and-rooms)  
 Design: [HPA-288 underground spec](../specs/2026-11-01-hpa-288-underground-design.md)  
 Parent: [Winter Survival §8](../specs/2026-10-21-winter-survival-design.md)  
