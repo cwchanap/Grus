@@ -1,6 +1,6 @@
 # HPA-288 — Underground levels and rooms: design specification
 
-Status: **Planning draft; revised after GitHub design review** · 2026-11-02  
+Status: **Revised after GitHub design review; implemented on this branch — required CI evidence pending** · 2026-11-02  
 Issue: [HPA-288](https://linear.app/cwchanap/issue/HPA-288/grus-survival-78-underground-levels-and-rooms)  
 Parent contract: [Winter Survival design, §8](2026-10-21-winter-survival-design.md)  
 Dependency: HPA-188 / merged [Grus PR #15](https://github.com/cwchanap/Grus/pull/15)

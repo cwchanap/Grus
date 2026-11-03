@@ -430,6 +430,14 @@ func _run() -> void:
 			and GrusBridge.underground_snapshot().levels.is_empty() and _levels.get_child_count() == 0 \
 			and _stock() == {"food": 200, "scrap": 300, "coal": 150, "crystals": 0}, "Restart did not clear jobs/rows/treasury"):
 		return
+	# Restart must also clear the transient armed room kind, not just the
+	# sim state: the GeothermalTap armed earlier in the journey must not
+	# stay armed or pressed into the fresh Start-phase match.
+	var armed_cleared := int(_main._ug_armed_index) == -1
+	for kind_button in _main._ug_kind_buttons:
+		armed_cleared = armed_cleared and not kind_button.button_pressed
+	if not _check(armed_cleared, "Restart left a room kind armed or pressed"):
+		return
 	GrusBridge.set_sim_speed(1.0)
 	print("GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=%d gathered_coal=%d paid_scrap=%d paid_coal=%d cold_rate=%.4f heat_delta=15 margin_s=%.2f elapsed_ms=%d" % [
 		gathered_scrap, gathered_coal, _spent_scrap, _spent_coal, cold_rate, margin, Time.get_ticks_msec() - _started_ms])
