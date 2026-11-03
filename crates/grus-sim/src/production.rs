@@ -238,8 +238,9 @@ fn push_job(world: &mut World, building_entity: Entity, job: ProductionJob) {
 /// Completeness tolerance for queue-head progress: float accumulation drifts
 /// a few thousandths of a second over a 45s job, so a tick that reaches the
 /// nominal duration snaps the head to exactly 100% and completes it in that
-/// same tick. Far below one 50ms simulation step.
-const PROGRESS_EPSILON: f32 = 0.01;
+/// same tick. Far below one 50ms simulation step. The underground dig and
+/// room build timers share this one rule.
+pub(crate) const PROGRESS_EPSILON: f32 = 0.01;
 
 /// Advances production one fixed tick. Every queue head advances at
 /// `seconds × surface_efficiency(world)` — cold slows every completed

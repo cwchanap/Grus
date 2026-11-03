@@ -1256,7 +1256,7 @@ fn population_cap_counts_completed_team1_shelters_and_clamps() {
 
     let complete_shelter = || {
         let mut room = Room::new(RoomKind::Shelter);
-        room.elapsed_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
+        room.progress_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
         Some(room)
     };
 
@@ -1278,7 +1278,7 @@ fn population_cap_counts_completed_team1_shelters_and_clamps() {
     world.resource_mut::<Underground>().levels[0].slots[0] = complete_shelter();
     assert_eq!(population_cap(&world, TEAM), 20);
     let mut second = complete_shelter().unwrap();
-    second.elapsed_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
+    second.progress_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
     world.resource_mut::<Underground>().levels[0].slots[1] = Some(second);
     assert_eq!(population_cap(&world, TEAM), 30, "two completed Shelters");
 

@@ -164,6 +164,17 @@ impl ResourceStockpile {
         self.crystals -= cost.crystals;
         true
     }
+    /// Saturating single-kind credit — the one `ResourceKind`→currency
+    /// match, shared by worker deposits and underground room output so
+    /// neither can grow a second divergent copy. A huge credit pins the
+    /// field at `u32::MAX` instead of overflowing.
+    pub fn add(&mut self, kind: ResourceKind, amount: u32) {
+        match kind {
+            ResourceKind::Food => self.food = self.food.saturating_add(amount),
+            ResourceKind::Scrap => self.scrap = self.scrap.saturating_add(amount),
+            ResourceKind::Coal => self.coal = self.coal.saturating_add(amount),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -875,11 +886,7 @@ fn deposit_carry(world: &mut World, worker: Entity) {
     if let Some(mut economy) = world.get_resource_mut::<TeamEconomy>()
         && let Some(state) = economy.0.get_mut(&team)
     {
-        match kind {
-            ResourceKind::Food => state.stockpile.food += amount,
-            ResourceKind::Scrap => state.stockpile.scrap += amount,
-            ResourceKind::Coal => state.stockpile.coal += amount,
-        }
+        state.stockpile.add(kind, amount);
     }
     world.entity_mut(worker).insert(Carry::Empty);
 }

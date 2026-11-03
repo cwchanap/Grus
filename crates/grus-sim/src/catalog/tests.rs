@@ -640,9 +640,8 @@ fn room_availability_is_minimum_level_peaking_at_deep_mine() {
 
 #[test]
 fn excavation_tuning_is_catalogued_as_named_constants() {
-    assert_eq!(EXCAVATION_INITIAL_SCRAP, 100);
-    assert_eq!(EXCAVATION_DEPTH_NUMERATOR, 8);
-    assert_eq!(EXCAVATION_DEPTH_DENOMINATOR, 5);
+    assert_eq!(EXCAVATION_INITIAL_SCRAP, 100.0);
+    assert_eq!(EXCAVATION_DEPTH_MULTIPLIER, 1.6);
     assert_eq!(EXCAVATION_COAL_DENOMINATOR, 2);
     assert_eq!(EXCAVATION_BASE_SECONDS, 30);
     assert_eq!(EXCAVATION_SECONDS_PER_LEVEL, 15);
@@ -661,7 +660,7 @@ fn excavation_prices_and_durations_match_the_design_table() {
         (5, 655, 328, 90),
     ];
     for (level, scrap, coal, seconds) in expected {
-        let (cost, dig_seconds) = excavation_cost_and_seconds(level).expect("affordable level");
+        let (cost, dig_seconds) = excavation_cost_and_seconds(level);
         assert_eq!(
             cost,
             Cost {
@@ -676,20 +675,25 @@ fn excavation_prices_and_durations_match_the_design_table() {
 }
 
 #[test]
-fn impossible_excavation_depths_are_unaffordable_never_wrapped() {
-    // Level 0 is not a diggable target.
-    assert_eq!(excavation_cost_and_seconds(0), None);
-    // Level 38 (100 × 1.6^37 ≈ 3.57e9 Scrap) is the last price a u32
-    // stockpile could ever pay; level 39's ≈ 5.71e9 does not fit and must
-    // read unaffordable, never wrap into a cheap dig.
-    assert!(excavation_cost_and_seconds(38).is_some());
+fn very_deep_excavation_prices_saturate_instead_of_overflowing() {
+    // Level 38 (100 × 1.6^37 ≈ 3.57e9 Scrap) is the last price below
+    // u32::MAX; from level 39 (≈ 5.71e9) on, the saturating `f64 as u32`
+    // conversion pins Scrap at u32::MAX and Coal at half of it — never a
+    // wrapped cheap or free dig — and the duration saturates the same way.
+    let (last_affordable, _) = excavation_cost_and_seconds(38);
+    assert_eq!(last_affordable.scrap, 3_568_119_232);
     for level in [39, 40, 1000, u32::MAX] {
-        assert_eq!(excavation_cost_and_seconds(level), None, "level {level}");
+        let (cost, _) = excavation_cost_and_seconds(level);
+        assert_eq!(cost.scrap, u32::MAX, "level {level} wrapped cheaper");
+        assert_eq!(cost.coal, u32::MAX.div_ceil(2), "level {level}");
     }
+    // The duration stays the plain linear formula until it too saturates.
+    assert_eq!(excavation_cost_and_seconds(39).1, 600);
+    assert_eq!(excavation_cost_and_seconds(u32::MAX).1, u32::MAX);
     // No representable depth wraps cheaper than its predecessor.
     let mut previous_scrap = 0;
     for level in 1..=38 {
-        let (cost, _) = excavation_cost_and_seconds(level).expect("affordable depth");
+        let (cost, _) = excavation_cost_and_seconds(level);
         assert!(cost.scrap > previous_scrap, "level {level} wrapped cheaper");
         previous_scrap = cost.scrap;
     }

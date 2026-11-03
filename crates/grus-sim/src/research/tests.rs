@@ -736,7 +736,7 @@ fn completed_labs_add_research_outside_the_cold_multiplier() {
 
     let completed_lab = || {
         let mut room = Room::new(RoomKind::Lab);
-        room.elapsed_seconds = room_spec(RoomKind::Lab).build_seconds as f32;
+        room.progress_seconds = room_spec(RoomKind::Lab).build_seconds as f32;
         Some(room)
     };
 

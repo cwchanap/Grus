@@ -41,10 +41,12 @@ fn stockpile(world: &World) -> (u32, u32, u32) {
     )
 }
 
-/// A room placed with its full build time already elapsed, i.e. complete.
+/**
+ * A room placed with its full build time already elapsed, i.e. complete.
+ */
 fn completed_room(kind: RoomKind) -> Option<Room> {
     let mut room = Room::new(kind);
-    room.elapsed_seconds = room_spec(kind).build_seconds as f32;
+    room.progress_seconds = room_spec(kind).build_seconds as f32;
     Some(room)
 }
 
@@ -63,14 +65,14 @@ fn default_underground_is_empty_and_derives_its_target_from_depth() {
     assert_eq!(underground.excavation_target(), 1);
 }
 
-/// Completion is derived from elapsed time against the catalogue build
+/// Completion is derived from build progress against the catalogue build
 /// duration — never a stored flag, so nothing can complete twice.
 #[test]
-fn room_completion_derives_from_elapsed_build_time() {
+fn room_completion_derives_from_build_progress() {
     for kind in RoomKind::ALL {
         let mut room = Room::new(kind);
         assert!(!room.complete(), "{kind:?} starts incomplete");
-        room.elapsed_seconds = room_spec(kind).build_seconds as f32;
+        room.progress_seconds = room_spec(kind).build_seconds as f32;
         assert!(room.complete(), "{kind:?} completes at the catalogue time");
     }
 }
@@ -165,6 +167,50 @@ fn dig_and_room_timers_advance_concurrently() {
             .iter()
             .all(|slot| slot.is_none())
     );
+}
+
+/// Both timers snap to required using production's `PROGRESS_EPSILON`
+/// rule: at the exact 0.05 s fixed step a 45 s dig is 900 ticks and a
+/// 15 s room build is 300 — f32 accumulation drifts a hair under the
+/// required time, the tolerance snaps it to exactly the catalogue
+/// value on the boundary tick, and never a tick early.
+#[test]
+fn dig_and_room_timers_snap_to_required_at_the_fixed_tick() {
+    let (mut world, _map) = battlefield();
+    world.insert_resource(Underground {
+        levels: one_level([Some(Room::new(RoomKind::Shelter)), None, None, None]),
+        excavation: Some(Excavation::default()),
+    });
+
+    for tick in 1..=299u32 {
+        step_underground(&mut world, SIM_STEP_SECONDS);
+        let underground = world.resource::<Underground>();
+        assert!(
+            !underground.levels[0].slots[0].as_ref().unwrap().complete(),
+            "Shelter complete before tick {tick}"
+        );
+    }
+    step_underground(&mut world, SIM_STEP_SECONDS); // tick 300: 15 s exactly
+    assert_eq!(
+        world.resource::<Underground>().levels[0].slots[0]
+            .as_ref()
+            .unwrap()
+            .progress_seconds,
+        room_spec(RoomKind::Shelter).build_seconds as f32,
+        "the snap rule lands exactly on the required time"
+    );
+
+    for tick in 301..=899u32 {
+        step_underground(&mut world, SIM_STEP_SECONDS);
+        assert_eq!(
+            world.resource::<Underground>().depth(),
+            1,
+            "the 45 s dig completed before tick {tick}"
+        );
+    }
+    step_underground(&mut world, SIM_STEP_SECONDS); // tick 900: 45 s exactly
+    assert_eq!(world.resource::<Underground>().depth(), 2);
+    assert!(world.resource::<Underground>().excavation.is_none());
 }
 
 /// An unfinished room yields nothing, the tick that completes it yields
@@ -291,7 +337,7 @@ fn per_currency_totals_saturate_instead_of_overflowing() {
             world.resource::<Underground>().levels[0].slots[slot]
                 .as_ref()
                 .unwrap()
-                .output_remainder,
+                .production_remainder,
             0.0,
             "each room banked its exact whole units"
         );
@@ -327,7 +373,7 @@ fn start_paused_and_result_freeze_progress_and_pause_resumes() {
             underground.levels[0].slots[0]
                 .as_ref()
                 .unwrap()
-                .output_remainder,
+                .production_remainder,
             0.0,
             "{phase:?} froze the output accumulator"
         );
@@ -378,7 +424,7 @@ fn nonpositive_or_nonfinite_seconds_advance_nothing() {
             underground.levels[0].slots[0]
                 .as_ref()
                 .unwrap()
-                .output_remainder,
+                .production_remainder,
             0.0,
             "output frozen for seconds {seconds}"
         );
@@ -387,11 +433,12 @@ fn nonpositive_or_nonfinite_seconds_advance_nothing() {
 }
 
 /// Session-free worlds read as Playing (the benchmark convention), but
-/// progress still requires a living completed Team-1 core: with no core
-/// index at all or an incomplete core every timer stalls; the identical
-/// world with a completed core plays.
+/// progress still requires a living Team-1 core — the same
+/// completion-agnostic fact research accrual checks: with no core index
+/// at all every timer stalls; the identical world with a core — even one
+/// still under construction — plays.
 #[test]
-fn session_free_worlds_stall_without_a_living_completed_core() {
+fn session_free_worlds_stall_without_a_living_core() {
     #[derive(Copy, Clone, Debug)]
     enum Core {
         None,
@@ -433,42 +480,36 @@ fn session_free_worlds_stall_without_a_living_completed_core() {
         }
     }
 
-    for core in [Core::None, Core::Incomplete] {
+    let mut world = minimal_world(Core::None);
+    world.insert_resource(stalled_underground());
+    step_underground(&mut world, 30.0);
+    let underground = world.resource::<Underground>();
+    assert_eq!(underground.depth(), 1, "a missing core stalls the dig");
+    assert_eq!(
+        underground.excavation.as_ref().unwrap().elapsed_seconds,
+        29.5
+    );
+    assert_eq!(stockpile(&world).0, 0, "a missing core stalls the output");
+
+    // The same minimal world with any living core plays — completion is
+    // not part of the gate — so the dig completes (29.5 + 16 ≥ 45 s for
+    // level 2) and the Greenhouse banks 0.5 × 16 = 8 Food.
+    for core in [Core::Incomplete, Core::Complete] {
         let mut world = minimal_world(core);
         world.insert_resource(stalled_underground());
-        step_underground(&mut world, 30.0);
-        let underground = world.resource::<Underground>();
-        assert_eq!(underground.depth(), 1, "{core:?} core stalls the dig");
-        assert_eq!(
-            underground.excavation.as_ref().unwrap().elapsed_seconds,
-            29.5
-        );
-        assert_eq!(stockpile(&world).0, 0, "{core:?} core stalls the output");
+        step_underground(&mut world, 16.0);
+        assert_eq!(world.resource::<Underground>().depth(), 2, "{core:?} plays");
+        assert_eq!(stockpile(&world).0, 8, "{core:?} plays");
     }
-
-    // The same minimal world with a living completed core plays: the dig
-    // completes (29.5 + 16 ≥ 45 s for level 2) and the Greenhouse banks
-    // 0.5 × 16 = 8 Food.
-    let mut world = minimal_world(Core::Complete);
-    world.insert_resource(stalled_underground());
-    step_underground(&mut world, 16.0);
-    assert_eq!(world.resource::<Underground>().depth(), 2);
-    assert_eq!(stockpile(&world).0, 8);
 }
 
 const TEAM: TeamId = TeamId(1);
 const ENEMY: TeamId = TeamId(2);
-/// `seed_skirmish` allocates `BuildingId(1)` to Team 1's completed
-/// Research Center.
+/// `seed_skirmish` allocates `BuildingId(1)` to Team 1's Research Center.
 const RESEARCH_CENTER: BuildingId = BuildingId(1);
 
-fn excavate(
-    world: &mut World,
-    map: &mut GridMap,
-    issuer: TeamId,
-    building: BuildingId,
-) -> CommandResult {
-    apply_player_command(world, map, PlayerCommand::Excavate { issuer, building })
+fn excavate(world: &mut World, map: &mut GridMap, issuer: TeamId) -> CommandResult {
+    apply_player_command(world, map, PlayerCommand::Excavate { issuer })
 }
 
 fn build_room(
@@ -498,30 +539,19 @@ fn set_scrap_and_coal(world: &mut World, scrap: u32, coal: u32) {
     state.stockpile.coal = coal;
 }
 
-/// A building registered in `BuildingIndex` without the placement path —
-/// the command chain reads the entity, not its footprint cells.
-fn register_building(
-    world: &mut World,
-    id: BuildingId,
-    kind: BuildingKind,
-    team: TeamId,
-    complete: bool,
-) {
+/// Despawns Team 1's seeded Research Center — both its entity and index
+/// entry — the way combat removal does, leaving the world without a
+/// living core.
+fn despawn_research_center(world: &mut World) {
     let entity = world
-        .spawn((Building {
-            id,
-            team,
-            kind,
-            construction: ConstructionState {
-                progress_seconds: 0.0,
-                complete,
-                active_builder: None,
-            },
-        },))
-        .id();
+        .resource::<BuildingIndex>()
+        .entity(RESEARCH_CENTER)
+        .expect("seeded research center");
+    world.despawn(entity);
     world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(id, entity);
+        .get_resource_mut::<BuildingIndex>()
+        .unwrap()
+        .remove(RESEARCH_CENTER);
 }
 
 /// An accepted Excavate pays the L1 price (100 Scrap, 50 Coal) exactly
@@ -533,7 +563,7 @@ fn excavate_pays_once_and_starts_the_timer_without_exposing_a_level() {
     let (mut world, mut map) = battlefield();
     set_scrap_and_coal(&mut world, 300, 150);
 
-    let result = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
+    let result = excavate(&mut world, &mut map, TEAM);
 
     assert_eq!(result.reject, None);
     assert_eq!(stockpile(&world), (200, 200, 100));
@@ -555,8 +585,8 @@ fn a_second_excavate_in_the_same_tick_rejects_without_double_spending() {
     let (mut world, mut map) = battlefield();
     set_scrap_and_coal(&mut world, 300, 150);
 
-    let first = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
-    let second = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
+    let first = excavate(&mut world, &mut map, TEAM);
+    let second = excavate(&mut world, &mut map, TEAM);
 
     assert_eq!(first.reject, None);
     assert_eq!(second.reject, Some(RejectReason::ExcavationInProgress));
@@ -569,38 +599,23 @@ fn a_second_excavate_in_the_same_tick_rejects_without_double_spending() {
     );
 }
 
-/// Wrong team, wrong core, missing core and an unfinished core all reject
-/// through the existing chain before any spend — no dig, no state.
+/// A foreign issuer and a world without a living Team-1 core both answer
+/// `Locked` — the global command gates on the issuer and the shared
+/// living-core fact, with no building ID in the command — and neither
+/// spends nor starts a dig.
 #[test]
-fn excavate_rejects_wrong_team_and_core_targets_without_state_change() {
+fn excavate_rejects_foreign_issuers_and_a_missing_core_without_state_change() {
     let (mut world, mut map) = battlefield();
     set_scrap_and_coal(&mut world, 300, 150);
-    register_building(&mut world, BuildingId(50), BuildingKind::Depot, TEAM, true);
-    register_building(
-        &mut world,
-        BuildingId(51),
-        BuildingKind::ResearchCenter,
-        ENEMY,
-        true,
-    );
-    register_building(
-        &mut world,
-        BuildingId(52),
-        BuildingKind::ResearchCenter,
-        TEAM,
-        false,
-    );
     let before = stockpile(&world);
 
-    let foreign = excavate(&mut world, &mut map, ENEMY, BuildingId(51));
-    let wrong_kind = excavate(&mut world, &mut map, TEAM, BuildingId(50));
-    let missing = excavate(&mut world, &mut map, TEAM, BuildingId(999));
-    let unfinished = excavate(&mut world, &mut map, TEAM, BuildingId(52));
-
+    let foreign = excavate(&mut world, &mut map, ENEMY);
     assert_eq!(foreign.reject, Some(RejectReason::Locked));
-    assert_eq!(wrong_kind.reject, Some(RejectReason::WrongProducer));
-    assert_eq!(missing.reject, Some(RejectReason::BuildingMissing));
-    assert_eq!(unfinished.reject, Some(RejectReason::Locked));
+
+    despawn_research_center(&mut world);
+    let no_core = excavate(&mut world, &mut map, TEAM);
+    assert_eq!(no_core.reject, Some(RejectReason::Locked));
+
     assert_eq!(stockpile(&world), before, "a rejected Excavate spent");
     assert_eq!(
         world.resource::<Underground>(),
@@ -616,33 +631,43 @@ fn excavate_rejects_when_the_stockpile_cannot_pay_the_whole_price() {
     let (mut world, mut map) = battlefield();
     set_scrap_and_coal(&mut world, 300, 49); // L1 needs 100 Scrap + 50 Coal
 
-    let result = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
+    let result = excavate(&mut world, &mut map, TEAM);
 
     assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
     assert_eq!(stockpile(&world), (200, 300, 49), "a partial price leaked");
     assert_eq!(world.resource::<Underground>(), &Underground::default());
 }
 
-/// Level 39's price overflows `u32` stockpiles: even a maximal stockpile
-/// reads the dig unaffordable — never a wrapped cheap or free dig.
+/// A saturated deep dig charges its full saturated price (u32::MAX Scrap,
+/// u32::MAX over 2 rounded up in Coal) or nothing: one Coal short of the
+/// price rejects atomically, and the funded dig charges exactly the
+/// saturated price once — never a wrapped cheap or free level.
 #[test]
-fn excavate_at_an_unrepresentable_depth_reads_unaffordable() {
+fn excavate_at_a_saturated_depth_charges_it_all_or_nothing() {
     let (mut world, mut map) = battlefield();
-    set_scrap_and_coal(&mut world, u32::MAX, u32::MAX);
     world.insert_resource(Underground {
         levels: (0..38).map(|_| UndergroundLevel::default()).collect(),
         excavation: None,
     });
 
-    let result = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
+    // Target 39's price saturates: u32::MAX Scrap and u32::MAX.div_ceil(2)
+    // Coal. One Coal short: all-or-nothing refuses the whole price.
+    set_scrap_and_coal(&mut world, u32::MAX, u32::MAX.div_ceil(2) - 1);
+    let rejected = excavate(&mut world, &mut map, TEAM);
+    assert_eq!(rejected.reject, Some(RejectReason::InsufficientResources));
+    assert_eq!(stockpile(&world), (200, u32::MAX, u32::MAX.div_ceil(2) - 1));
+    assert_eq!(world.resource::<Underground>().excavation, None);
 
-    assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
-    assert_eq!(stockpile(&world), (200, u32::MAX, u32::MAX));
+    // Funded: the dig starts and charges exactly the saturated price.
+    set_scrap_and_coal(&mut world, u32::MAX, u32::MAX);
+    let accepted = excavate(&mut world, &mut map, TEAM);
+    assert_eq!(accepted.reject, None);
     assert_eq!(
-        world.resource::<Underground>().excavation,
-        None,
-        "an unaffordable depth started a dig"
+        stockpile(&world),
+        (200, 0, u32::MAX - u32::MAX.div_ceil(2)),
+        "the saturated price charged exactly once"
     );
+    assert!(world.resource::<Underground>().excavation.is_some());
 }
 
 /// Start, Paused and a settled Result lock both underground commands like
@@ -664,7 +689,7 @@ fn underground_commands_share_the_session_gate() {
         let before = stockpile(&world);
         world.insert_resource(MatchSession { phase });
 
-        let dig = excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER);
+        let dig = excavate(&mut world, &mut map, TEAM);
         let room = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
 
         assert_eq!(
@@ -702,8 +727,8 @@ fn build_room_pays_once_and_occupies_its_slot() {
         world.resource::<Underground>().levels[0].slots[0],
         Some(Room {
             kind: RoomKind::Shelter,
-            elapsed_seconds: 0.0,
-            output_remainder: 0.0
+            progress_seconds: 0.0,
+            production_remainder: 0.0
         })
     );
 }
@@ -726,7 +751,7 @@ fn build_room_rejects_insufficient_scrap_without_spend() {
 }
 
 /// Two rooms in one slot in the same tick: the first pays and occupies,
-/// the second hits `RoomSlotOccupied` before any spend — even a different
+/// the second hits `Occupied` before any spend — even a different
 /// kind cannot double-buy the slot.
 #[test]
 fn a_second_room_in_the_same_slot_rejects_without_double_spending() {
@@ -741,7 +766,7 @@ fn a_second_room_in_the_same_slot_rejects_without_double_spending() {
     let second = build_room(&mut world, &mut map, TEAM, 1, 2, RoomKind::Greenhouse);
 
     assert_eq!(first.reject, None);
-    assert_eq!(second.reject, Some(RejectReason::RoomSlotOccupied));
+    assert_eq!(second.reject, Some(RejectReason::Occupied));
     assert_eq!(stockpile(&world), (200, 250, 150), "the second room spent");
     assert_eq!(
         world.resource::<Underground>().levels[0].slots[2]
@@ -773,7 +798,7 @@ fn slots_zero_through_three_accept_and_slot_four_is_out_of_bounds() {
 }
 
 /// A level with all four slots filled cannot accept a fifth room: every
-/// slot answers `RoomSlotOccupied` without spending.
+/// slot answers `Occupied` without spending.
 #[test]
 fn a_full_level_cannot_accept_a_fifth_room() {
     let (mut world, mut map) = battlefield();
@@ -791,17 +816,13 @@ fn a_full_level_cannot_accept_a_fifth_room() {
 
     for slot in 0u8..4 {
         let result = build_room(&mut world, &mut map, TEAM, 1, slot, RoomKind::Lab);
-        assert_eq!(
-            result.reject,
-            Some(RejectReason::RoomSlotOccupied),
-            "slot {slot}"
-        );
+        assert_eq!(result.reject, Some(RejectReason::Occupied), "slot {slot}");
     }
     assert_eq!(stockpile(&world), before);
 }
 
 /// Level 0, a level past the completed depth and the level an active dig
-/// is still opening are all `UndergroundLevelMissing` — including the
+/// is still opening are all `OutOfBounds` — including the
 /// seeded empty underground, whose depth is zero.
 #[test]
 fn build_room_rejects_missing_and_still_undug_levels() {
@@ -809,7 +830,7 @@ fn build_room_rejects_missing_and_still_undug_levels() {
     set_scrap_and_coal(&mut world, 300, 150);
 
     let no_state = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
-    assert_eq!(no_state.reject, Some(RejectReason::UndergroundLevelMissing));
+    assert_eq!(no_state.reject, Some(RejectReason::OutOfBounds));
     assert_eq!(
         world.resource::<Underground>(),
         &Underground::default(),
@@ -826,8 +847,8 @@ fn build_room_rejects_missing_and_still_undug_levels() {
     let zero = build_room(&mut world, &mut map, TEAM, 0, 0, RoomKind::Shelter);
     let undug = build_room(&mut world, &mut map, TEAM, 2, 0, RoomKind::CoalVein);
 
-    assert_eq!(zero.reject, Some(RejectReason::UndergroundLevelMissing));
-    assert_eq!(undug.reject, Some(RejectReason::UndergroundLevelMissing));
+    assert_eq!(zero.reject, Some(RejectReason::OutOfBounds));
+    assert_eq!(undug.reject, Some(RejectReason::OutOfBounds));
     assert_eq!(stockpile(&world), before);
     assert_eq!(world.resource::<Underground>().levels[0].slots[0], None);
 }
@@ -859,7 +880,7 @@ fn l3_room_kinds_stay_locked_below_level_three() {
     assert_eq!(stockpile(&world).1, 350, "the L3 Lab paid 150 Scrap");
 }
 
-/// Room construction needs no selection and no free dig: separate slots
+/// BuildRoom needs no selection and no free dig: separate slots
 /// build in parallel in one tick, and rooms build in already dug levels
 /// while a deeper dig runs.
 #[test]
@@ -890,35 +911,55 @@ fn rooms_build_in_parallel_and_during_a_deeper_dig() {
     );
 }
 
-/// BuildRoom needs a living completed Team-1 core (the tiny lookup, no
-/// building selection): an incomplete core answers `BuildingMissing`, a
-/// foreign issuer `Locked`, and neither spends nor writes a room.
+/// BuildRoom gates on the shared living-core fact (the same one research
+/// accrual uses — alive, not necessarily completed) and the Team-1
+/// issuer: a despawned core answers `Locked`, a foreign issuer `Locked`,
+/// and neither spends nor writes a room; an incomplete-but-living core
+/// still accepts.
 #[test]
-fn build_room_requires_a_living_completed_core() {
+fn build_room_needs_a_living_core_and_a_team1_issuer() {
     let (mut world, mut map) = battlefield();
     set_scrap_and_coal(&mut world, 300, 150);
     world.insert_resource(Underground {
         levels: one_level([None, None, None, None]),
         excavation: None,
     });
-    let entity = world
-        .resource::<BuildingIndex>()
-        .entity(RESEARCH_CENTER)
-        .unwrap();
-    world
-        .get_mut::<Building>(entity)
-        .unwrap()
-        .construction
-        .complete = false;
     let before = stockpile(&world);
 
-    let unfinished_core = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
-    let foreign = build_room(&mut world, &mut map, ENEMY, 1, 0, RoomKind::Shelter);
-
-    assert_eq!(unfinished_core.reject, Some(RejectReason::BuildingMissing));
-    assert_eq!(foreign.reject, Some(RejectReason::Locked));
+    despawn_research_center(&mut world);
+    let no_core = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
+    assert_eq!(no_core.reject, Some(RejectReason::Locked));
     assert_eq!(stockpile(&world), before);
     assert_eq!(world.resource::<Underground>().levels[0].slots[0], None);
+
+    // The core back again, still under construction: alive is the only
+    // fact the gate checks, so the room is accepted and paid once.
+    let entity = world
+        .spawn(Building {
+            id: RESEARCH_CENTER,
+            team: TEAM,
+            kind: BuildingKind::ResearchCenter,
+            construction: ConstructionState {
+                progress_seconds: 0.0,
+                complete: false,
+                active_builder: None,
+            },
+        })
+        .id();
+    world
+        .get_resource_mut::<BuildingIndex>()
+        .unwrap()
+        .insert(RESEARCH_CENTER, entity);
+    let foreign = build_room(&mut world, &mut map, ENEMY, 1, 0, RoomKind::Shelter);
+    let incomplete = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
+    assert_eq!(foreign.reject, Some(RejectReason::Locked));
+    assert_eq!(incomplete.reject, None);
+    assert_eq!(
+        stockpile(&world),
+        (200, 250, 150),
+        "the Shelter paid 50 Scrap"
+    );
+    assert!(world.resource::<Underground>().levels[0].slots[0].is_some());
 }
 
 /// The bridge's `clear_gameplay_world`: gameplay entities and the
@@ -984,10 +1025,7 @@ fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
     set_scrap_and_coal(&mut world, 900, 500);
 
     // Level 1: 100 Scrap / 50 Coal, a 30 s dig through the canonical tick.
-    assert_eq!(
-        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
-        None
-    );
+    assert_eq!(excavate(&mut world, &mut map, TEAM).reject, None);
     assert_eq!(stockpile(&world), (200, 800, 450));
     for _ in 0..700 {
         step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -998,10 +1036,7 @@ fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
     assert_eq!(world.resource::<Underground>().depth(), 1);
 
     // Level 2: 160 / 80, a 45 s dig.
-    assert_eq!(
-        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
-        None
-    );
+    assert_eq!(excavate(&mut world, &mut map, TEAM).reject, None);
     assert_eq!(stockpile(&world), (200, 640, 370));
     for _ in 0..1000 {
         step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
@@ -1012,10 +1047,7 @@ fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
     assert_eq!(world.resource::<Underground>().depth(), 2);
 
     // Level 3: 256 / 128, a 60 s dig.
-    assert_eq!(
-        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
-        None
-    );
+    assert_eq!(excavate(&mut world, &mut map, TEAM).reject, None);
     assert_eq!(stockpile(&world), (200, 384, 242));
     for _ in 0..1300 {
         step_tick(&mut world, &mut map, SIM_STEP_SECONDS);

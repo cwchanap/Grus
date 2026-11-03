@@ -445,7 +445,7 @@ fn incomplete_site_grants_no_vision_and_completion_grants_it() {
 /// this same tick's heat and research through the canonical order.
 fn l3_with_room_completing_next_tick(kind: RoomKind) -> Underground {
     let mut room = Room::new(kind);
-    room.elapsed_seconds = room_spec(kind).build_seconds as f32 - SIM_STEP_SECONDS;
+    room.progress_seconds = room_spec(kind).build_seconds as f32 - SIM_STEP_SECONDS;
     Underground {
         levels: vec![
             UndergroundLevel::default(),
