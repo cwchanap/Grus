@@ -12,6 +12,7 @@ pub mod production;
 pub mod research;
 pub mod session;
 pub mod tick;
+pub mod underground;
 pub mod visibility;
 pub mod waves;
 
@@ -21,13 +22,15 @@ pub use buildings::{
 };
 pub use catalog::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE,
-    BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec, Cost, FURNACE_COAL_PER_SECOND,
+    BuildingKind, BuildingSpec, CARRY_LIMIT, CombatSpec, Cost, EXCAVATION_BASE_SECONDS,
+    EXCAVATION_COAL_DENOMINATOR, EXCAVATION_DEPTH_DENOMINATOR, EXCAVATION_DEPTH_NUMERATOR,
+    EXCAVATION_INITIAL_SCRAP, EXCAVATION_SECONDS_PER_LEVEL, FURNACE_COAL_PER_SECOND,
     MAX_LIVE_ALIENS, MAX_POPULATION, MIN_SURFACE_EFFICIENCY, RESEARCH_BASE_PER_SECOND,
     RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_DENOMINATOR, RESEARCH_WAVE_BOOST_NUMERATOR,
-    RESEARCH_WAVE_BOOST_PERCENT, ResourceKind, UnitKind, UnitSpec, WAVE_BUDGET_BASE,
-    WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS, WAVE_INTERVAL_SECONDS,
-    WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START, WAVE_WARNING_SECONDS,
-    resource_amount,
+    RESEARCH_WAVE_BOOST_PERCENT, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, RoomSpec, UnitKind,
+    UnitSpec, WAVE_BUDGET_BASE, WAVE_BUDGET_PER_WAVE, WAVE_BUDGET_QUADRATIC_TENTHS,
+    WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS, WAVE_THREE_ZONE_START, WAVE_TWO_ZONE_START,
+    WAVE_WARNING_SECONDS, excavation_cost_and_seconds, resource_amount, room_spec,
 };
 pub use combat::{
     AttackCooldown, CombatEvent, CombatEventTotal, CombatEvents, CombatOrder, CombatTarget, Health,
@@ -63,6 +66,7 @@ pub use session::{
     set_paused, start_match,
 };
 pub use tick::step_tick;
+pub use underground::{Excavation, Room, Underground, UndergroundLevel, step_underground};
 pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };

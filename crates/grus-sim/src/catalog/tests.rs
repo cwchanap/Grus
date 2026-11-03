@@ -493,3 +493,204 @@ fn research_tuning_is_catalogued_as_named_constants() {
         );
     }
 }
+
+#[test]
+fn underground_room_catalogue_is_pinned() {
+    // Provisional first-pass prices/timers where the issue specified only
+    // 50-150 Scrap; HPA-289 owns tuning. Heat is the geothermal base at the
+    // minimum level plus the per-deeper-level bonus.
+    let expected = [
+        (
+            RoomKind::Shelter,
+            RoomSpec {
+                min_level: 1,
+                cost: Cost {
+                    scrap: 50,
+                    ..Cost::default()
+                },
+                build_seconds: 15,
+                population_capacity: 10,
+                output: None,
+                research_per_second: 0.0,
+                heat_supply_base: 0,
+                heat_supply_per_level: 0,
+            },
+        ),
+        (
+            RoomKind::Greenhouse,
+            RoomSpec {
+                min_level: 1,
+                cost: Cost {
+                    scrap: 75,
+                    ..Cost::default()
+                },
+                build_seconds: 20,
+                population_capacity: 0,
+                output: Some((ResourceKind::Food, 0.5)),
+                research_per_second: 0.0,
+                heat_supply_base: 0,
+                heat_supply_per_level: 0,
+            },
+        ),
+        (
+            RoomKind::CoalVein,
+            RoomSpec {
+                min_level: 2,
+                cost: Cost {
+                    scrap: 90,
+                    ..Cost::default()
+                },
+                build_seconds: 25,
+                population_capacity: 0,
+                output: Some((ResourceKind::Coal, 0.4)),
+                research_per_second: 0.0,
+                heat_supply_base: 0,
+                heat_supply_per_level: 0,
+            },
+        ),
+        (
+            RoomKind::GeothermalTap,
+            RoomSpec {
+                min_level: 3,
+                cost: Cost {
+                    scrap: 120,
+                    ..Cost::default()
+                },
+                build_seconds: 30,
+                population_capacity: 0,
+                output: None,
+                research_per_second: 0.0,
+                heat_supply_base: 15,
+                heat_supply_per_level: 5,
+            },
+        ),
+        (
+            RoomKind::Lab,
+            RoomSpec {
+                min_level: 3,
+                cost: Cost {
+                    scrap: 150,
+                    ..Cost::default()
+                },
+                build_seconds: 30,
+                population_capacity: 0,
+                output: None,
+                research_per_second: 1.0,
+                heat_supply_base: 0,
+                heat_supply_per_level: 0,
+            },
+        ),
+        (
+            RoomKind::DeepMine,
+            RoomSpec {
+                min_level: 4,
+                cost: Cost {
+                    scrap: 150,
+                    ..Cost::default()
+                },
+                build_seconds: 35,
+                population_capacity: 0,
+                output: Some((ResourceKind::Scrap, 0.4)),
+                research_per_second: 0.0,
+                heat_supply_base: 0,
+                heat_supply_per_level: 0,
+            },
+        ),
+    ];
+    for (kind, spec) in expected {
+        assert_eq!(room_spec(kind), spec, "{kind:?}");
+    }
+    let names: Vec<String> = RoomKind::ALL.iter().map(|k| format!("{k:?}")).collect();
+    assert_eq!(
+        names,
+        [
+            "Shelter",
+            "Greenhouse",
+            "CoalVein",
+            "GeothermalTap",
+            "Lab",
+            "DeepMine"
+        ]
+    );
+    assert_eq!(expected.len(), RoomKind::ALL.len());
+}
+
+#[test]
+fn room_availability_is_minimum_level_peaking_at_deep_mine() {
+    // Availability is a minimum-level floor, not an exact-level
+    // assignment: the deepest unlock is Deep Mine at level 4, so from L5
+    // on no new kind appears and every earlier kind stays buildable.
+    assert_eq!(
+        RoomKind::ALL
+            .iter()
+            .map(|kind| room_spec(*kind).min_level)
+            .max(),
+        Some(4)
+    );
+    let buildable_at = |level: u32| {
+        RoomKind::ALL
+            .into_iter()
+            .filter(|kind| room_spec(*kind).min_level <= level)
+            .count()
+    };
+    assert_eq!(buildable_at(4), RoomKind::ALL.len());
+    assert_eq!(buildable_at(5), RoomKind::ALL.len());
+    assert_eq!(buildable_at(u32::MAX), RoomKind::ALL.len());
+}
+
+#[test]
+fn excavation_tuning_is_catalogued_as_named_constants() {
+    assert_eq!(EXCAVATION_INITIAL_SCRAP, 100);
+    assert_eq!(EXCAVATION_DEPTH_NUMERATOR, 8);
+    assert_eq!(EXCAVATION_DEPTH_DENOMINATOR, 5);
+    assert_eq!(EXCAVATION_COAL_DENOMINATOR, 2);
+    assert_eq!(EXCAVATION_BASE_SECONDS, 30);
+    assert_eq!(EXCAVATION_SECONDS_PER_LEVEL, 15);
+    assert_eq!(ROOM_SLOTS_PER_LEVEL, 4);
+}
+
+#[test]
+fn excavation_prices_and_durations_match_the_design_table() {
+    // Round-half-up(100 × 1.6^(n−1)) Scrap, half that rounded price in
+    // Coal, 30 s + 15 s per level below the first.
+    let expected = [
+        (1, 100, 50, 30),
+        (2, 160, 80, 45),
+        (3, 256, 128, 60),
+        (4, 410, 205, 75),
+        (5, 655, 328, 90),
+    ];
+    for (level, scrap, coal, seconds) in expected {
+        let (cost, dig_seconds) = excavation_cost_and_seconds(level).expect("affordable level");
+        assert_eq!(
+            cost,
+            Cost {
+                scrap,
+                coal,
+                ..Cost::default()
+            },
+            "level {level}"
+        );
+        assert_eq!(dig_seconds, seconds, "level {level}");
+    }
+}
+
+#[test]
+fn impossible_excavation_depths_are_unaffordable_never_wrapped() {
+    // Level 0 is not a diggable target.
+    assert_eq!(excavation_cost_and_seconds(0), None);
+    // Level 38 (100 × 1.6^37 ≈ 3.57e9 Scrap) is the last price a u32
+    // stockpile could ever pay; level 39's ≈ 5.71e9 does not fit and must
+    // read unaffordable, never wrap into a cheap dig.
+    assert!(excavation_cost_and_seconds(38).is_some());
+    for level in [39, 40, 1000, u32::MAX] {
+        assert_eq!(excavation_cost_and_seconds(level), None, "level {level}");
+    }
+    // No representable depth wraps cheaper than its predecessor.
+    let mut previous_scrap = 0;
+    for level in 1..=38 {
+        let (cost, _) = excavation_cost_and_seconds(level).expect("affordable depth");
+        assert!(cost.scrap > previous_scrap, "level {level} wrapped cheaper");
+        previous_scrap = cost.scrap;
+    }
+}
