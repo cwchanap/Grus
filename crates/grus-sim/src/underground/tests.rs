@@ -1,15 +1,23 @@
-use bevy::prelude::World;
+use bevy::prelude::{Entity, Or, With, World};
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{BuildingKind, ROOM_SLOTS_PER_LEVEL, RoomKind, room_spec};
-use crate::commands::{CommandResult, PlayerCommand, RejectReason, apply_player_command};
-use crate::economy::{ResourceStockpile, TeamEconomy};
+use crate::catalog::{
+    BuildingKind, RESEARCH_BASE_PER_SECOND, ROOM_SLOTS_PER_LEVEL, RoomKind, room_spec,
+};
+use crate::commands::{
+    CommandResult, PlayerCommand, RejectReason, UnitIndex, apply_player_command,
+};
+use crate::economy::{ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy};
 use crate::fixture::{MapFixture, seed_skirmish};
-use crate::ids::{BuildingId, TeamId};
+use crate::heat::HeatState;
+use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::GridMap;
-use crate::movement::SIM_STEP_SECONDS;
+use crate::movement::{SIM_STEP_SECONDS, Unit};
+use crate::research::{ResearchState, research_rate};
 use crate::session::{MatchPhase, MatchResult, MatchSession, set_paused};
+use crate::tick::step_tick;
+use crate::waves::WaveState;
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -594,9 +602,10 @@ fn excavate_rejects_wrong_team_and_core_targets_without_state_change() {
     assert_eq!(missing.reject, Some(RejectReason::BuildingMissing));
     assert_eq!(unfinished.reject, Some(RejectReason::Locked));
     assert_eq!(stockpile(&world), before, "a rejected Excavate spent");
-    assert!(
-        world.get_resource::<Underground>().is_none(),
-        "a rejected Excavate created underground state"
+    assert_eq!(
+        world.resource::<Underground>(),
+        &Underground::default(),
+        "a rejected Excavate changed underground state"
     );
 }
 
@@ -611,7 +620,7 @@ fn excavate_rejects_when_the_stockpile_cannot_pay_the_whole_price() {
 
     assert_eq!(result.reject, Some(RejectReason::InsufficientResources));
     assert_eq!(stockpile(&world), (200, 300, 49), "a partial price leaked");
-    assert!(world.get_resource::<Underground>().is_none());
+    assert_eq!(world.resource::<Underground>(), &Underground::default());
 }
 
 /// Level 39's price overflows `u32` stockpiles: even a maximal stockpile
@@ -792,8 +801,8 @@ fn a_full_level_cannot_accept_a_fifth_room() {
 }
 
 /// Level 0, a level past the completed depth and the level an active dig
-/// is still opening are all `UndergroundLevelMissing` — including a world
-/// with no underground state at all.
+/// is still opening are all `UndergroundLevelMissing` — including the
+/// seeded empty underground, whose depth is zero.
 #[test]
 fn build_room_rejects_missing_and_still_undug_levels() {
     let (mut world, mut map) = battlefield();
@@ -801,9 +810,10 @@ fn build_room_rejects_missing_and_still_undug_levels() {
 
     let no_state = build_room(&mut world, &mut map, TEAM, 1, 0, RoomKind::Shelter);
     assert_eq!(no_state.reject, Some(RejectReason::UndergroundLevelMissing));
-    assert!(
-        world.get_resource::<Underground>().is_none(),
-        "a rejected BuildRoom created underground state"
+    assert_eq!(
+        world.resource::<Underground>(),
+        &Underground::default(),
+        "a rejected BuildRoom changed underground state"
     );
 
     world.insert_resource(Underground {
@@ -909,4 +919,156 @@ fn build_room_requires_a_living_completed_core() {
     assert_eq!(foreign.reject, Some(RejectReason::Locked));
     assert_eq!(stockpile(&world), before);
     assert_eq!(world.resource::<Underground>().levels[0].slots[0], None);
+}
+
+/// The bridge's `clear_gameplay_world`: gameplay entities and the
+/// seed-owned state die before every reseed — restart, fixture reset and
+/// the benchmark all share it. The underground resource deliberately
+/// survives the clear itself; only the shared reseed overwrites it.
+fn bridge_style_clear(world: &mut World) {
+    let stale: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<Unit>, With<Building>, With<ResourceSource>)>>()
+        .iter(world)
+        .collect();
+    for entity in stale {
+        world.despawn(entity);
+    }
+    world.remove_resource::<UnitIndex>();
+    world.remove_resource::<BuildingIndex>();
+    world.remove_resource::<ResourceIndex>();
+    world.remove_resource::<TeamEconomy>();
+    world.remove_resource::<IdAllocator>();
+    world.remove_resource::<WaveState>();
+    world.remove_resource::<HeatState>();
+    world.remove_resource::<ResearchState>();
+}
+
+/// The bridge's reset paths (restart, fixture reset, benchmark) all reseed
+/// through `seed_skirmish`, and that seed overwrites the underground
+/// resource with a fresh default: a populated world — completed levels
+/// plus an active dig — returns to depth zero even though the clear itself
+/// never names the underground.
+#[test]
+fn bridge_style_reseed_returns_a_populated_underground_to_default() {
+    let (mut world, _map) = battlefield();
+    world.insert_resource(Underground {
+        levels: one_level([completed_room(RoomKind::Shelter), None, None, None]),
+        excavation: Some(Excavation {
+            elapsed_seconds: 12.0,
+        }),
+    });
+
+    bridge_style_clear(&mut world);
+    assert_eq!(
+        world.resource::<Underground>().depth(),
+        1,
+        "the clear itself leaves the underground alone"
+    );
+
+    let fixture = MapFixture::battlefield();
+    let mut fresh_map = fixture.map.clone();
+    seed_skirmish(&mut world, &mut fresh_map, &fixture);
+    assert_eq!(world.resource::<Underground>(), &Underground::default());
+}
+
+/// The checkpoint-3 proof journey: three paid digs reach L3 through the
+/// canonical tick, a paid Geothermal Tap and Lab complete there, and the
+/// authoritative heat snapshot and research rate carry their combined
+/// effects (+15 supply, +1 point/s); the bridge-style clear + reseed then
+/// returns everything to the seeded default.
+#[test]
+fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
+    let (mut world, mut map) = battlefield();
+    // Fund the three digs (100/50 + 160/80 + 256/128 Scrap/Coal) and the
+    // L3 rooms (Tap 120, Lab 150 Scrap); Food is never charged.
+    set_scrap_and_coal(&mut world, 900, 500);
+
+    // Level 1: 100 Scrap / 50 Coal, a 30 s dig through the canonical tick.
+    assert_eq!(
+        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
+        None
+    );
+    assert_eq!(stockpile(&world), (200, 800, 450));
+    for _ in 0..700 {
+        step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world.resource::<Underground>().depth() == 1 {
+            break;
+        }
+    }
+    assert_eq!(world.resource::<Underground>().depth(), 1);
+
+    // Level 2: 160 / 80, a 45 s dig.
+    assert_eq!(
+        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
+        None
+    );
+    assert_eq!(stockpile(&world), (200, 640, 370));
+    for _ in 0..1000 {
+        step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world.resource::<Underground>().depth() == 2 {
+            break;
+        }
+    }
+    assert_eq!(world.resource::<Underground>().depth(), 2);
+
+    // Level 3: 256 / 128, a 60 s dig.
+    assert_eq!(
+        excavate(&mut world, &mut map, TEAM, RESEARCH_CENTER).reject,
+        None
+    );
+    assert_eq!(stockpile(&world), (200, 384, 242));
+    for _ in 0..1300 {
+        step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world.resource::<Underground>().depth() == 3 {
+            break;
+        }
+    }
+    assert_eq!(world.resource::<Underground>().depth(), 3);
+
+    // Paid rooms on L3, building concurrently through their 30 s: the Tap
+    // (120 Scrap) and the Lab (150 Scrap).
+    assert_eq!(
+        build_room(&mut world, &mut map, TEAM, 3, 0, RoomKind::GeothermalTap).reject,
+        None
+    );
+    assert_eq!(
+        build_room(&mut world, &mut map, TEAM, 3, 1, RoomKind::Lab).reject,
+        None
+    );
+    assert_eq!(stockpile(&world), (200, 114, 242));
+    for _ in 0..700 {
+        step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world.resource::<Underground>().levels[2].slots[1]
+            .as_ref()
+            .is_some_and(Room::complete)
+        {
+            break;
+        }
+    }
+    assert!(
+        world.resource::<Underground>().levels[2]
+            .slots
+            .iter()
+            .flatten()
+            .all(Room::complete),
+        "both L3 rooms completed"
+    );
+
+    // Authoritative snapshots carry the completed rooms' effects: the
+    // seeded core's 15 supply plus the L3 Tap's +15 against the core's 10
+    // demand, and the base surface rate plus the Lab's additive +1 point/s.
+    let heat = world.resource::<HeatState>();
+    assert_eq!((heat.supply, heat.demand), (30, 10));
+    assert_eq!(heat.efficiency(), 1.0);
+    assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND + 1.0);
+
+    // The bridge-style restart: clear, then the shared seed path — the
+    // underground returns to its default and heat/research with it.
+    bridge_style_clear(&mut world);
+    let fixture = MapFixture::battlefield();
+    let mut fresh_map = fixture.map.clone();
+    seed_skirmish(&mut world, &mut fresh_map, &fixture);
+    assert_eq!(world.resource::<Underground>(), &Underground::default());
+    assert_eq!(*world.resource::<HeatState>(), HeatState::default());
+    assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND);
 }

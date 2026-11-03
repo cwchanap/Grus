@@ -7,11 +7,13 @@ use bevy::prelude::{Entity, Resource, World};
 
 use crate::buildings::{Building, BuildingIndex};
 use crate::catalog::{
-    BuildingKind, FURNACE_COAL_PER_SECOND, MIN_SURFACE_EFFICIENCY, building_spec,
+    BuildingKind, FURNACE_COAL_PER_SECOND, MIN_SURFACE_EFFICIENCY, RoomKind, building_spec,
+    room_spec,
 };
 use crate::economy::TeamEconomy;
 use crate::ids::{BuildingId, TeamId};
 use crate::session::gameplay_active;
+use crate::underground::Underground;
 
 /// Slack under the whole-unit burn threshold, so an accumulated 0.5 Coal/s
 /// pool debits once it reaches a whole unit despite float error.
@@ -57,15 +59,49 @@ fn team_coal(world: &World) -> u32 {
         .unwrap_or(0)
 }
 
+/// Completed Geothermal Tap supply: the catalogue base at the kind's
+/// minimum level plus the per-level bonus for each deeper level — L3 = 15,
+/// L4 = 20, L5 = 25. Supply only: taps are underground heat, never surface
+/// demand and never a Coal burn, so they cannot enter the furnace path.
+fn geothermal_tap_supply(world: &World) -> u32 {
+    world
+        .get_resource::<Underground>()
+        .map(|underground| {
+            underground
+                .levels
+                .iter()
+                .enumerate()
+                .flat_map(|(index, level)| {
+                    let level_number = index as u32 + 1;
+                    level
+                        .slots
+                        .iter()
+                        .flatten()
+                        .map(move |room| (level_number, room))
+                })
+                .filter(|&(_, room)| room.kind == RoomKind::GeothermalTap && room.complete())
+                .map(|(level, room)| {
+                    let spec = room_spec(room.kind);
+                    spec.heat_supply_base.saturating_add(
+                        spec.heat_supply_per_level
+                            .saturating_mul(level.saturating_sub(spec.min_level)),
+                    )
+                })
+                .fold(0, u32::saturating_add)
+        })
+        .unwrap_or(0)
+}
+
 /// Recomputes heat supply/demand from completed Team-1 buildings in every
-/// session phase — Start, Paused and Result included. A furnace
-/// contributes its catalogue supply only while Team 1 holds Coal at the
-/// start of the tick, so a tick whose final consumption empties the
-/// stockpile still supplies, and the next coal-empty tick does not. Only
-/// while Playing does the burn rate accumulate into the one pooled
-/// remainder and debit whole units from the shared stockpile, capped by
-/// what is left; the remainder clears the moment the stockpile empties so
-/// no fractional debt survives to a refuel.
+/// session phase — Start, Paused and Result included. Completed Geothermal
+/// Taps join the supply side with their depth-scaled catalogue value,
+/// without demand or a Coal burn of their own. A furnace contributes its
+/// catalogue supply only while Team 1 holds Coal at the start of the tick,
+/// so a tick whose final consumption empties the stockpile still supplies,
+/// and the next coal-empty tick does not. Only while Playing does the burn
+/// rate accumulate into the one pooled remainder and debit whole units from
+/// the shared stockpile, capped by what is left; the remainder clears the
+/// moment the stockpile empties so no fractional debt survives to a refuel.
 pub fn step_heat(world: &mut World, seconds: f32) {
     let mut supply: u32 = 0;
     let mut demand: u32 = 0;
@@ -95,6 +131,7 @@ pub fn step_heat(world: &mut World, seconds: f32) {
     if fueled {
         supply += furnaces * building_spec(BuildingKind::CoalFurnace).heat_supply;
     }
+    supply = supply.saturating_add(geothermal_tap_supply(world));
 
     // A purchase (not a burn) that empties the stockpile between ticks skips
     // the debit branch below, so drop the stale fraction right here — no

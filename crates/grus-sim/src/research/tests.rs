@@ -3,7 +3,8 @@ use bevy::prelude::{Entity, Or, With, World};
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
 use crate::catalog::{
-    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, MIN_SURFACE_EFFICIENCY, building_spec,
+    ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BuildingKind, MIN_SURFACE_EFFICIENCY, RoomKind,
+    building_spec, room_spec,
 };
 use crate::commands::{
     CommandResult, PlayerCommand, RejectReason, UnitIndex, apply_player_command,
@@ -15,6 +16,7 @@ use crate::ids::{BuildingId, IdAllocator, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{SIM_STEP_SECONDS, Unit};
 use crate::session::{MatchPhase, MatchResult, MatchSession};
+use crate::underground::{Room, Underground, UndergroundLevel};
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -718,5 +720,53 @@ fn analyze_at_the_cap_rejects_instead_of_spending() {
         research_points(&world),
         f64::from(RESEARCH_TARGET_POINTS),
         "the cap banked"
+    );
+}
+
+/// Completed Labs add their catalogue rate as an additive term OUTSIDE the
+/// cold-scaled surface product — the one seam HPA-188 left. A Lab still
+/// building adds zero; +1 and +2 Labs add exactly their whole rate at full
+/// heat, and under the 25% cold floor the surface term floors while the Lab
+/// term stays whole (0.5 + 2.0, not the inside-the-product 0.625).
+#[test]
+fn completed_labs_add_research_outside_the_cold_multiplier() {
+    let (mut world, _map) = battlefield();
+    assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND);
+
+    let completed_lab = || {
+        let mut room = Room::new(RoomKind::Lab);
+        room.elapsed_seconds = room_spec(RoomKind::Lab).build_seconds as f32;
+        Some(room)
+    };
+
+    // A Lab still building adds zero.
+    world.insert_resource(Underground {
+        levels: vec![UndergroundLevel {
+            slots: [Some(Room::new(RoomKind::Lab)), None, None, None],
+        }],
+        excavation: None,
+    });
+    assert_eq!(
+        research_rate(&world),
+        RESEARCH_BASE_PER_SECOND,
+        "an incomplete Lab adds nothing"
+    );
+
+    // One completed Lab: +1 at full heat; a second in another slot: +2.
+    world.resource_mut::<Underground>().levels[0].slots[0] = completed_lab();
+    assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND + 1.0);
+    world.resource_mut::<Underground>().levels[0].slots[1] = completed_lab();
+    assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND + 2.0);
+
+    // The 25% floor cold: the surface term floors to 0.5 while both Labs
+    // keep their full 2.0 — the Lab term is outside the product.
+    world.insert_resource(HeatState {
+        supply: 0,
+        demand: 10,
+        burn_remainder: 0.0,
+    });
+    assert_eq!(
+        research_rate(&world),
+        RESEARCH_BASE_PER_SECOND * f64::from(MIN_SURFACE_EFFICIENCY) + 2.0
     );
 }

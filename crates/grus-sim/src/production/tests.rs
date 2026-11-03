@@ -2,13 +2,16 @@ use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::ConstructionState;
-use crate::catalog::{MIN_SURFACE_EFFICIENCY, building_spec, unit_spec};
+use crate::catalog::{
+    MAX_POPULATION, MIN_SURFACE_EFFICIENCY, RoomKind, building_spec, room_spec, unit_spec,
+};
 use crate::combat::{Health, destroy_building, destroy_unit};
 use crate::commands::{PlayerCommand, apply_player_command};
 use crate::economy::{ResourceStockpile, TeamEconomy};
 use crate::heat::HeatState;
 use crate::ids::{IdAllocator, UnitId};
 use crate::movement::SIM_STEP_SECONDS;
+use crate::underground::{Room, Underground, UndergroundLevel};
 
 const TEAM: TeamId = TeamId(1);
 const ENEMY: TeamId = TeamId(2);
@@ -1231,5 +1234,91 @@ fn missing_heat_state_keeps_the_queue_head_at_full_rate() {
         "warm queue head advanced {}, expected {}",
         queue.progress_seconds,
         SIM_STEP_SECONDS
+    );
+}
+
+/// A completed Shelter in Team 1's underground adds its catalogue capacity
+/// to the surface total; an under-construction Shelter never counts, the
+/// combined cap clamps once at `MAX_POPULATION`, and no other team reads
+/// the Team-1-only underground.
+#[test]
+fn population_cap_counts_completed_team1_shelters_and_clamps() {
+    let (mut world, mut map) = open_world();
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(100),
+        BuildingKind::ResearchCenter,
+        GridPos::new(8, 8),
+        TEAM,
+    );
+    assert_eq!(population_cap(&world, TEAM), 10);
+
+    let complete_shelter = || {
+        let mut room = Room::new(RoomKind::Shelter);
+        room.elapsed_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
+        Some(room)
+    };
+
+    // Under construction: the slot holds a fresh Shelter, but completion is
+    // derived from elapsed time, so it adds nothing yet.
+    world.insert_resource(Underground {
+        levels: vec![UndergroundLevel {
+            slots: [Some(Room::new(RoomKind::Shelter)), None, None, None],
+        }],
+        excavation: None,
+    });
+    assert_eq!(
+        population_cap(&world, TEAM),
+        10,
+        "an under-construction Shelter must not count"
+    );
+
+    // Completing it, then a second Shelter in another slot: +10 each.
+    world.resource_mut::<Underground>().levels[0].slots[0] = complete_shelter();
+    assert_eq!(population_cap(&world, TEAM), 20);
+    let mut second = complete_shelter().unwrap();
+    second.elapsed_seconds = room_spec(RoomKind::Shelter).build_seconds as f32;
+    world.resource_mut::<Underground>().levels[0].slots[1] = Some(second);
+    assert_eq!(population_cap(&world, TEAM), 30, "two completed Shelters");
+
+    // Ten completed Shelters across three levels (2 + 4 + 4) saturate the
+    // clamp: 10 surface + 100 underground > MAX_POPULATION.
+    world.resource_mut::<Underground>().levels = vec![
+        UndergroundLevel {
+            slots: [complete_shelter(), complete_shelter(), None, None],
+        },
+        UndergroundLevel {
+            slots: [
+                complete_shelter(),
+                complete_shelter(),
+                complete_shelter(),
+                complete_shelter(),
+            ],
+        },
+        UndergroundLevel {
+            slots: [
+                complete_shelter(),
+                complete_shelter(),
+                complete_shelter(),
+                complete_shelter(),
+            ],
+        },
+    ];
+    assert_eq!(population_cap(&world, TEAM), MAX_POPULATION);
+
+    // The underground is Team-1-only state: an enemy cap never reads it.
+    complete_building(
+        &mut world,
+        &mut map,
+        BuildingId(200),
+        BuildingKind::ResearchCenter,
+        GridPos::new(40, 40),
+        ENEMY,
+    );
+    assert_eq!(
+        population_cap(&world, ENEMY),
+        10,
+        "a foreign team never counts Team-1 Shelters"
     );
 }

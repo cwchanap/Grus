@@ -2,7 +2,7 @@ use bevy::prelude::{Entity, Or, With, World};
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
-use crate::catalog::{BuildingKind, MIN_SURFACE_EFFICIENCY, building_spec};
+use crate::catalog::{BuildingKind, MIN_SURFACE_EFFICIENCY, RoomKind, building_spec, room_spec};
 use crate::combat::{Health, destroy_building};
 use crate::economy::TeamEconomy;
 use crate::fixture::{MapFixture, seed_skirmish};
@@ -10,6 +10,7 @@ use crate::ids::{BuildingId, TeamId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::{SIM_STEP_SECONDS, Unit};
 use crate::session::{MatchPhase, MatchResult, MatchSession};
+use crate::underground::{Room, Underground, UndergroundLevel};
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -447,4 +448,112 @@ fn destruction_updates_totals_and_reset_clears_the_remainder() {
         (state.supply, state.demand, state.burn_remainder),
         (0, 0, 0.0)
     );
+}
+
+/// A Geothermal Tap one tick from done adds nothing; completing it and
+/// deeper taps add depth-scaled supply (L3=15, L4=20, L5=25) — never any
+/// demand, and never a Coal burn: taps are underground heat, not
+/// furnaces, so the stockpile and the pooled burn stay untouched.
+#[test]
+fn completed_taps_add_depth_scaled_supply_without_demand_or_coal_burn() {
+    let (mut world, _map) = battlefield();
+
+    // Baseline: the seeded core alone supplies 15 against its own 10 demand.
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!((heat(&world).supply, heat(&world).demand), (15, 10));
+    assert_eq!(team_coal(&world), 150);
+
+    // A tap still building in L3's first slot adds nothing.
+    let mut building = Room::new(RoomKind::GeothermalTap);
+    building.elapsed_seconds =
+        room_spec(RoomKind::GeothermalTap).build_seconds as f32 - SIM_STEP_SECONDS;
+    world.insert_resource(Underground {
+        levels: vec![
+            UndergroundLevel::default(),
+            UndergroundLevel::default(),
+            UndergroundLevel {
+                slots: [Some(building), None, None, None],
+            },
+        ],
+        excavation: None,
+    });
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(
+        (heat(&world).supply, heat(&world).demand),
+        (15, 10),
+        "an unfinished tap adds nothing"
+    );
+
+    // Completing the L3 tap adds 15; taps one level deeper in L4 and L5 add
+    // 20 and 25 — the catalogue base plus the per-level depth bonus.
+    let tap = |elapsed: f32| {
+        let mut room = Room::new(RoomKind::GeothermalTap);
+        room.elapsed_seconds = elapsed;
+        Some(room)
+    };
+    let build = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
+    let mut underground = world.resource_mut::<Underground>();
+    underground.levels[2].slots[0] = tap(build);
+    underground.levels.push(UndergroundLevel {
+        slots: [tap(build), None, None, None],
+    });
+    underground.levels.push(UndergroundLevel {
+        slots: [tap(build), None, None, None],
+    });
+
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(
+        (heat(&world).supply, heat(&world).demand),
+        (75, 10),
+        "L3+L4+L5 taps add 15+20+25 supply, zero demand"
+    );
+    assert_eq!(team_coal(&world), 150, "taps never burn Coal");
+    assert_eq!(heat(&world).burn_remainder, 0.0);
+}
+
+/// A completed tap lifts a surface heat deficit: an incomplete Research
+/// Center plus one Bunkhouse floors efficiency at the 25% minimum, and the
+/// L3 tap's +15 supply restores full efficiency without adding any demand
+/// of its own.
+#[test]
+fn a_completed_tap_lifts_a_surface_heat_deficit() {
+    let (mut world, mut map) = battlefield();
+    let core = world
+        .resource::<BuildingIndex>()
+        .entity(BuildingId(1))
+        .unwrap();
+    world
+        .get_mut::<Building>(core)
+        .unwrap()
+        .construction
+        .complete = false;
+    spawn_building(
+        &mut world,
+        &mut map,
+        BuildingId(2),
+        BuildingKind::Bunkhouse,
+        GridPos::new(68, 46),
+        true,
+    );
+
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!((heat(&world).supply, heat(&world).demand), (0, 1));
+    assert_eq!(heat(&world).efficiency(), MIN_SURFACE_EFFICIENCY);
+
+    let mut tap = Room::new(RoomKind::GeothermalTap);
+    tap.elapsed_seconds = room_spec(RoomKind::GeothermalTap).build_seconds as f32;
+    world.insert_resource(Underground {
+        levels: vec![
+            UndergroundLevel::default(),
+            UndergroundLevel::default(),
+            UndergroundLevel {
+                slots: [Some(tap), None, None, None],
+            },
+        ],
+        excavation: None,
+    });
+
+    step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!((heat(&world).supply, heat(&world).demand), (15, 1));
+    assert_eq!(heat(&world).efficiency(), 1.0);
 }

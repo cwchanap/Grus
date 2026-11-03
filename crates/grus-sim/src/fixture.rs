@@ -17,6 +17,7 @@ use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
 use crate::movement::SIM_STEP_SECONDS;
 use crate::research::ResearchState;
+use crate::underground::Underground;
 use crate::waves::{WaveState, step_waves, wave_deadline};
 
 /// Authored human starting layout: Research Center anchor, four worker
@@ -222,6 +223,7 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     world.insert_resource(WaveState::default());
     world.insert_resource(HeatState::default());
     world.insert_resource(ResearchState::default());
+    world.insert_resource(Underground::default());
 
     let mut unit_counter: u32 = 0;
     let research_center_health = building_spec(BuildingKind::ResearchCenter).max_health;
