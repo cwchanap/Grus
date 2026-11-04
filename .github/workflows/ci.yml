@@ -271,7 +271,7 @@ jobs:
             echo "::error::export smoke contract held but godot exited $rc"
             exit 1
           fi
-      - name: Benchmark 200 moving units at 1080p
+      - name: Benchmark the walled-city 200-unit workload at 1080p
         # Runs before the e2e re-stage below so the benchmark exercises the
         # same strict-exit non-e2e .so as the smokes.
         env:
