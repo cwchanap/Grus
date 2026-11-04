@@ -240,7 +240,7 @@ impl WaveState {
     }
 }
 
-pub(crate) fn wave_deadline(wave: u64) -> f64 {
+pub fn wave_deadline(wave: u64) -> f64 {
     f64::from(WAVE_PREPARATION_SECONDS)
         + wave.saturating_sub(1) as f64 * f64::from(WAVE_INTERVAL_SECONDS)
 }

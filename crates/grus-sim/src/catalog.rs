@@ -205,8 +205,8 @@ pub const WAVE_INTERVAL_SECONDS: u32 = 100;
 pub const WAVE_WARNING_SECONDS: u32 = 30;
 pub const MAX_LIVE_ALIENS: u32 = 150;
 pub const WAVE_BUDGET_BASE: u64 = 8;
-pub const WAVE_BUDGET_PER_WAVE: u64 = 4;
-pub const WAVE_BUDGET_QUADRATIC_TENTHS: u64 = 4;
+pub const WAVE_BUDGET_PER_WAVE: u64 = 2;
+pub const WAVE_BUDGET_QUADRATIC_TENTHS: u64 = 2;
 pub const WAVE_TWO_ZONE_START: u64 = 10;
 pub const WAVE_THREE_ZONE_START: u64 = 20;
 /// Fraction of the post-Behemoth wave pool reserved for Swarmers before
@@ -461,7 +461,7 @@ pub fn building_spec(kind: BuildingKind) -> BuildingSpec {
             width: 1,
             height: 1,
             population_capacity: 0,
-            max_health: 400,
+            max_health: 2400,
             combat: None,
             heat_supply: 0,
             heat_demand: 0,

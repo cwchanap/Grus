@@ -71,5 +71,6 @@ pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
 pub use waves::{
-    WaveRoster, WaveState, live_alien_ids, plan_roster, step_waves, wave_budget, zones_for,
+    WaveRoster, WaveState, live_alien_ids, plan_roster, step_waves, wave_budget, wave_deadline,
+    zones_for,
 };
