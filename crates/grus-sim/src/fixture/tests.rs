@@ -250,10 +250,8 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
         "benchmark workers must receive safe sources in stable unit-ID order"
     );
 
-    // The fortress census — exact building-kind counts, asserted once in
-    // Rust: the single core, a closed wall/gate ring, the 24/10/6 combat
-    // tower mix, and nine fueled furnaces. The Godot runner checks only the
-    // total building-view count, never this composition.
+    // The human Research Center now stands inside a completed fortress;
+    // all 18 sources survive.
     let buildings_of_kind = |world: &World, kind: BuildingKind| {
         world
             .resource::<BuildingIndex>()
@@ -305,8 +303,6 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
         .collect();
     assert_eq!(unit_ids.len(), 200, "unit IDs must be unique");
 
-    // Every authored building blocks its full catalogue footprint; combat
-    // towers carry AttackCooldown, and gates pass Team 1 but seal Team 2.
     for (_, entity) in world.resource::<BuildingIndex>().iter() {
         let building = world.get::<Building>(*entity).expect("indexed building");
         let spec = building_spec(building.kind);
@@ -337,8 +333,6 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
         }
     }
 
-    // Nine furnaces burn FURNACE_COAL_PER_SECOND each; the benchmark-only
-    // stockpile keeps them fueled well past the 60-second sample.
     let coal = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.coal;
     assert!(coal >= 400, "benchmark-only coal must fuel the fortress");
     assert!(
@@ -346,7 +340,6 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
         "coal {coal} cannot fuel nine furnaces for the full 60-second sample"
     );
 
-    // First-tick full surface efficiency at catalogue supply/demand.
     crate::heat::step_heat(&mut world, SIM_STEP_SECONDS);
     let heat = *world.resource::<HeatState>();
     assert_eq!(
@@ -411,11 +404,6 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
     assert_eq!(world.resource::<WaveState>().next_wave, 101);
 }
 
-/// Pinned from the first measured deterministic run of the fortified
-/// workload: 130 of the 150 live aliens remained at t=60, with the first
-/// perimeter breach at second 18 and tower fire in seconds 5-60. A floor
-/// of 100 keeps the sample meaningfully contested — far above a bare
-/// nonzero check — while leaving slack for catalogue tuning.
 const BENCHMARK_LIVE_ALIEN_FLOOR: usize = 100;
 
 #[test]
@@ -502,8 +490,6 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
         }
     }
 
-    // The final window still shows tower fire: the sample must end with
-    // the fortress actively shooting, not overrun or idle.
     assert!(
         tower_shot_seconds.contains(&60),
         "no tower fired during the final simulated second (fired: {tower_shot_seconds:?})"

@@ -348,15 +348,9 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
 const BENCHMARK_REINFORCEMENTS: usize = 46;
 const BENCHMARK_WAVE: u64 = 100;
 
-/// The benchmark fortress: the inclusive wall-rectangle bounds around the
-/// central Research Center, chosen so the six safe sources, the four
-/// worker cells, and the authored Barracks/Depot anchors all sit inside
-/// the defended interior.
 const BENCHMARK_WALL_MIN: GridPos = GridPos::new(52, 37);
 const BENCHMARK_WALL_MAX: GridPos = GridPos::new(77, 60);
 
-/// One gate centered on each wall face: Team-1-passable cells that are
-/// also the horde's weakest breach points.
 const BENCHMARK_GATES: [GridPos; 4] = [
     GridPos::new(64, 37),
     GridPos::new(64, 60),
@@ -364,8 +358,8 @@ const BENCHMARK_GATES: [GridPos; 4] = [
     GridPos::new(77, 48),
 ];
 
-/// The four gate-lane rally cells — each defender squad's accepted
-/// defensive destination just inside its gate.
+/// Human defenders rally inside the fortress while the shared wave
+/// director sends aliens toward the central Research Center.
 const BENCHMARK_RALLY_CELLS: [GridPos; 4] = [
     GridPos::new(64, 38),
     GridPos::new(64, 59),
@@ -373,13 +367,8 @@ const BENCHMARK_RALLY_CELLS: [GridPos; 4] = [
     GridPos::new(76, 48),
 ];
 
-/// Benchmark-only fuel: nine furnaces each burn FURNACE_COAL_PER_SECOND,
-/// so 400 Coal outlasts the 60-second sample. Never touches the
-/// normal-match starting stockpile.
 const BENCHMARK_COAL: u32 = 400;
 
-/// 24 Gun Turrets lining the interior wall edge on every face — their
-/// 8-cell range clears the parapet.
 const BENCHMARK_GUN_ANCHORS: [GridPos; 24] = [
     GridPos::new(53, 38),
     GridPos::new(57, 38),
@@ -407,8 +396,6 @@ const BENCHMARK_GUN_ANCHORS: [GridPos; 24] = [
     GridPos::new(75, 56),
 ];
 
-/// 10 Flame Towers hugging the wall edge — range 3 reaches aliens pressing
-/// the outer face.
 const BENCHMARK_FLAME_ANCHORS: [GridPos; 10] = [
     GridPos::new(55, 38),
     GridPos::new(59, 38),
@@ -422,7 +409,6 @@ const BENCHMARK_FLAME_ANCHORS: [GridPos; 10] = [
     GridPos::new(75, 53),
 ];
 
-/// 6 Crystal Lances one row deeper — range 10 still clears the wall.
 const BENCHMARK_LANCE_ANCHORS: [GridPos; 6] = [
     GridPos::new(55, 41),
     GridPos::new(62, 41),
@@ -432,8 +418,6 @@ const BENCHMARK_LANCE_ANCHORS: [GridPos; 6] = [
     GridPos::new(73, 45),
 ];
 
-/// Nine Coal Furnaces clustered in the defended south pocket, off the
-/// west/north/east assault corridors that converge on the core.
 const BENCHMARK_FURNACE_ANCHORS: [GridPos; 9] = [
     GridPos::new(55, 54),
     GridPos::new(57, 55),
@@ -446,16 +430,12 @@ const BENCHMARK_FURNACE_ANCHORS: [GridPos; 9] = [
     GridPos::new(73, 55),
 ];
 
-/// Extends the seeded survival fixture to the fortified 200-unit stress
-/// workload: a completed wall/gate ring with the 24/10/6 combat tower mix
-/// and nine fueled furnaces — all authored through the shared
-/// `spawn_completed_building` constructor — plus 46 defenders garrisoned
-/// inside with accepted defensive orders, and 150 live aliens from
-/// `step_waves` itself. The benchmark remains session-free, as the absent
-/// MatchSession means Playing.
+/// Extends the seeded survival fixture to 50 human defenders and 150 live
+/// aliens inside a completed benchmark fortress. Human reinforcements use
+/// the shared unit constructor and ordinary AttackMove dispatcher; aliens
+/// come from `step_waves` itself. The benchmark remains session-free, as
+/// the absent MatchSession means Playing.
 pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
-    // The closed wall/gate ring first, then the interior buildings — every
-    // cell must still be free terrain when its footprint claims it.
     for y in BENCHMARK_WALL_MIN.y..=BENCHMARK_WALL_MAX.y {
         for x in BENCHMARK_WALL_MIN.x..=BENCHMARK_WALL_MAX.x {
             if x != BENCHMARK_WALL_MIN.x
@@ -498,8 +478,6 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         .stockpile
         .coal = BENCHMARK_COAL;
 
-    // Gathers before the reinforcements stage, so defender bodies never
-    // reserve a source approach slot the workers need.
     let workers = sorted_unit_ids(world, TeamId(1), |unit| unit.kind == UnitKind::Worker);
     for (worker, source) in workers
         .into_iter()
@@ -539,8 +517,6 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         }
     }
 
-    // Four defensive squads, one per gate lane — the garrison holds the
-    // wall instead of marching north.
     let defenders = sorted_unit_ids(world, TeamId(1), |unit| unit.kind != UnitKind::Worker);
     let squad_size = defenders.len().div_ceil(BENCHMARK_RALLY_CELLS.len());
     for (squad, rally) in defenders.chunks(squad_size).zip(BENCHMARK_RALLY_CELLS) {
@@ -575,8 +551,7 @@ fn accept(world: &mut World, map: &mut GridMap, command: PlayerCommand) {
 }
 
 /// Reinforcements stage inside the fortress on deterministic row-major
-/// cells: the interior scan returns only free cells, clear of authored
-/// workers, towers, furnaces, and resources.
+/// cells, clear of the human start and authored deposits.
 fn benchmark_staging_cells(map: &GridMap) -> Vec<GridPos> {
     let start = MapFixture::team_starts()[0];
     let mut cells = Vec::with_capacity(BENCHMARK_REINFORCEMENTS);
