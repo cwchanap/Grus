@@ -1,6 +1,6 @@
 use super::*;
 use crate::catalog::unit_spec;
-use crate::combat::{destroy_building, step_combat};
+use crate::combat::{CombatEvents, CombatTarget, destroy_building, step_combat};
 use crate::commands::{
     PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, spawn_unit,
 };
@@ -3009,5 +3009,238 @@ fn cold_surface_efficiency_does_not_slow_construction() {
     assert!(
         (end - start - expected).abs() < 1e-3,
         "cold construction advanced {start} → {end}, expected unscaled {expected}"
+    );
+}
+
+/// `spawn_completed_building` authors a ready Gun Turret — the shared
+/// constructor fixtures use so a completed tower is never inert: the same
+/// grant the construction path issues gives it a fresh `AttackCooldown`,
+/// and the shared combat pass strikes a Swarmer in range on the next tick.
+/// A tower authored without its cooldown can never fire and fails here.
+#[test]
+fn authored_gun_turret_is_combat_ready_and_fires() {
+    let (mut world, mut map, _worker) = setup_build_test();
+
+    let id = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(13, 10),
+    );
+    assert_eq!(id, BuildingId(10));
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(id)
+        .expect("authored turret is indexed");
+    let building = world.get::<Building>(entity).unwrap();
+    assert_eq!(building.id, id);
+    assert_eq!(building.team, TeamId(1));
+    assert_eq!(building.kind, BuildingKind::GunTurret);
+    assert!(building.construction.complete);
+    assert_eq!(building.construction.active_builder, None);
+    let spec = building_spec(BuildingKind::GunTurret);
+    assert_eq!(
+        world.get::<Footprint>(entity),
+        Some(&Footprint::new(
+            GridPos::new(13, 10),
+            spec.width,
+            spec.height
+        ))
+    );
+    assert_eq!(
+        world.get::<Health>(entity),
+        Some(&Health {
+            current: spec.max_health,
+            max: spec.max_health,
+        })
+    );
+    assert_eq!(
+        world.get::<AttackCooldown>(entity),
+        Some(&AttackCooldown::default()),
+        "a completed tower without its cooldown can never fire"
+    );
+
+    // A Swarmer inside the 8-cell range takes real damage through the
+    // shared tower pass — no order or route involved.
+    let swarmer = spawn_unit(
+        &mut world,
+        UnitId(2),
+        TeamId(2),
+        Vec2::new(17.5, 11.5),
+        UnitKind::Swarmer,
+        unit_spec(UnitKind::Swarmer).speed,
+    );
+    step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
+    assert_eq!(
+        world.get::<Health>(swarmer).unwrap().current,
+        40 - 10,
+        "10 base damage must land; the Swarmer is not the counter target"
+    );
+    assert!(
+        world
+            .resource::<CombatEvents>()
+            .0
+            .iter()
+            .any(|event| event.attacker == CombatTarget::Building(id)),
+        "the authored turret must record a real strike"
+    );
+}
+
+/// A directly authored completed Research Center behaves like the seeded
+/// core: the shared grant gives it `Dropoff` and the producer queue.
+#[test]
+fn authored_research_center_grants_dropoff_and_queue() {
+    let (mut world, mut map, _worker) = setup_build_test();
+
+    let id = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::ResearchCenter,
+        GridPos::new(30, 30),
+    );
+    let entity = world
+        .resource::<BuildingIndex>()
+        .entity(id)
+        .expect("authored core is indexed");
+    assert!(world.get::<Building>(entity).unwrap().construction.complete);
+    assert_eq!(
+        world.get::<Dropoff>(entity),
+        Some(&Dropoff { team: TeamId(1) }),
+        "an authored core must accept deposits like the seeded one"
+    );
+    assert!(
+        world.get::<ProductionQueue>(entity).is_some(),
+        "the Research Center is a producer and owns its queue"
+    );
+    assert!(world.get::<AttackCooldown>(entity).is_none());
+}
+
+/// A directly authored Gate reserves its cell like any building but
+/// passes only Team 1: the constructor must choose `set_gate`, never
+/// `set_blocked`.
+#[test]
+fn authored_gate_reserves_its_cell_and_passes_only_team_one() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    let revision = map.revision();
+    let anchor = GridPos::new(13, 10);
+
+    let id = spawn_completed_building(&mut world, &mut map, TeamId(1), BuildingKind::Gate, anchor);
+    assert!(
+        !map.is_walkable(anchor),
+        "the Gate cell still reserves ground"
+    );
+    assert!(
+        map.is_traversable_for(TeamId(1), anchor),
+        "Team 1 must pass its own Gate"
+    );
+    assert!(
+        !map.is_traversable_for(TeamId(2), anchor),
+        "Team 2 must never pass a human Gate"
+    );
+    assert_eq!(map.revision(), revision + 1);
+
+    let entity = world.resource::<BuildingIndex>().entity(id).unwrap();
+    assert!(world.get::<Building>(entity).unwrap().construction.complete);
+    assert!(world.get::<Dropoff>(entity).is_none());
+    assert!(world.get::<AttackCooldown>(entity).is_none());
+    assert!(world.get::<ProductionQueue>(entity).is_none());
+}
+
+/// Each call allocates a fresh `BuildingId` and blocks the whole catalogue
+/// footprint through ordinary `set_blocked`; grants stay keyed by kind —
+/// Depot gains `Dropoff`, the Barracks its empty queue, the Wall nothing.
+#[test]
+fn authored_buildings_block_footprints_hold_unique_ids_and_grant_by_kind() {
+    let (mut world, mut map, _worker) = setup_build_test();
+
+    let wall = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Wall,
+        GridPos::new(13, 10),
+    );
+    let depot = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Depot,
+        GridPos::new(20, 10),
+    );
+    let barracks = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Barracks,
+        GridPos::new(30, 10),
+    );
+    assert_eq!(wall, BuildingId(10));
+    assert_eq!(depot, BuildingId(11));
+    assert_eq!(barracks, BuildingId(12));
+
+    assert!(!map.is_walkable(GridPos::new(13, 10)));
+    for cell in Footprint::new(GridPos::new(20, 10), 2, 2).cells() {
+        assert!(
+            !map.is_walkable(cell),
+            "Depot cell {cell:?} stayed walkable"
+        );
+    }
+    for cell in Footprint::new(GridPos::new(30, 10), 3, 3).cells() {
+        assert!(
+            !map.is_walkable(cell),
+            "Barracks cell {cell:?} stayed walkable"
+        );
+    }
+
+    let index = world.resource::<BuildingIndex>();
+    let depot_entity = index.entity(depot).expect("Depot is indexed");
+    assert_eq!(
+        world.get::<Dropoff>(depot_entity),
+        Some(&Dropoff { team: TeamId(1) }),
+        "the Depot grant is the same one construction issues"
+    );
+    assert!(world.get::<ProductionQueue>(depot_entity).is_none());
+    let barracks_entity = index.entity(barracks).expect("Barracks is indexed");
+    let queue = world
+        .get::<ProductionQueue>(barracks_entity)
+        .expect("a completed producer owns its queue");
+    assert!(queue.jobs.is_empty());
+    assert!(world.get::<Dropoff>(barracks_entity).is_none());
+    let wall_entity = index.entity(wall).expect("Wall is indexed");
+    assert!(world.get::<Dropoff>(wall_entity).is_none());
+    assert!(world.get::<AttackCooldown>(wall_entity).is_none());
+    assert!(world.get::<ProductionQueue>(wall_entity).is_none());
+}
+
+/// The authoring seam asserts rather than rejects: an occupied footprint
+/// cell is a fixture bug, and a failed check leaves nothing behind.
+#[test]
+#[should_panic(expected = "legal and unoccupied")]
+fn authored_building_panics_on_an_occupied_cell() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    map.set_blocked(GridPos::new(14, 11), true);
+    spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Bunkhouse,
+        GridPos::new(13, 10),
+    );
+}
+
+/// Out-of-bounds footprint cells fail the same legal-and-unoccupied check
+/// — `is_walkable` is false outside the grid.
+#[test]
+#[should_panic(expected = "legal and unoccupied")]
+fn authored_building_panics_on_an_out_of_bounds_cell() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Bunkhouse,
+        GridPos::new(63, 63),
     );
 }
