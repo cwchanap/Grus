@@ -23,11 +23,11 @@ Keep those working contracts and extend them. In particular, retain the 200-unit
 
 ## 1. Shared completed-building constructor (avoids inert towers)
 
-A completed building authored with only `Building`, `ConstructionState`, `Footprint` and `Health` does **not** necessarily behave as a completed in-game building: `step_construction` grants `Dropoff` for Depots, `AttackCooldown` for combat buildings, and `ProductionQueue` for producers. `combat.rs` skips towers without `AttackCooldown`.
+A completed building authored with only `Building`, `ConstructionState`, `Footprint` and `Health` does **not** necessarily behave as a completed in-game building: `step_construction` currently grants `Dropoff` for Depots, `AttackCooldown` for combat buildings, and `ProductionQueue` for producers. Separately, `seed_skirmish` explicitly adds `Dropoff` to the completed starting Research Center. `combat.rs` skips towers without `AttackCooldown`.
 
-- Extract those completion-only component insertions into `grant_completion(world, entity, kind, team)` in `buildings.rs` and call it from the existing `step_construction` path (unchanged gameplay).
+- Extract those completion-only component insertions into `grant_completion(world, entity, kind, team)` in `buildings.rs` and call it from the existing `step_construction` path. **Grant `Dropoff` for both `Depot` and `ResearchCenter`** to make any authored completed Research Center behave like the existing seeded core, while preserving normal Depot construction behavior. `AttackCooldown` remains combat-only and `ProductionQueue` producer-only. Keep `seed_skirmish`'s current starting-core setup unless implementation shows a reason to deduplicate it.
 - Add one `pub fn spawn_completed_building(world, map, team, kind, anchor) -> BuildingId` in `buildings.rs`, **for authored fixtures/tests**, not as a gameplay command. Allocate using `IdAllocator`, read `building_spec` for dimensions/HP, assert all cells legal and unoccupied, use `set_gate` for Gate and `set_blocked` for other buildings, register `BuildingIndex` and invoke the same grant helper. No generic spawn framework.
-- Use the shared helper from **both** the benchmark fixture and the integration balance guard. Converting the older unit-test fixture copies is not part of HPA-289. Assert authored combat buildings have `AttackCooldown` **and actually fire**.
+- Use the shared helper from **both** the benchmark fixture and the integration balance guard. Converting the older unit-test fixture copies is not part of HPA-289. Assert authored combat buildings have `AttackCooldown` **and actually fire**; also assert a directly authored `ResearchCenter` has a working `Dropoff` without changing normal seed behavior.
 
 ## 2. Existing 200-unit benchmark, now with a fortified city
 
@@ -38,7 +38,7 @@ Extend only the benchmark fixture (not `seed_skirmish` or normal match economy):
 - Add **40 completed combat towers** in a fixed variety mix: **24 Gun Turrets, 10 Flame Towers, 6 Crystal Lances**; a closed Wall/Gate perimeter around the central Research Center; and **nine Coal Furnaces**. Give this benchmark-only economy at least **400 Coal**, which fuels nine Furnaces for more than 60 *simulated* seconds with catalogue burn rates. Place all authored coordinates/fuel in `fixture.rs`; never change normal-match starting resources to support a stress fixture.
 - Place the fortress from the real `MapFixture` map after checking the central Research Center, four Workers, all 18 resources, `RUINS`, alien zones and walkable approach lanes. No blocked/overlapping footprints or inaccessible Workers. Stage 23 Guards and 23 Riflemen defensively rather than marching them north; keep four real accepted Gather orders. No periodic replay orders and no timed obstacle toggles.
 - **Do not insert benchmark-only research points.** `building_unlocked` controls player placement, not whether a directly authored completed Flame Tower/Crystal Lance fires.
-- Assert the **exact tower mix and Wall/Gate/Furnace count once in Rust**. Godot checks only the authoritative expected *total* building-view count and the Research Center identity, and prints the per-kind counts; CI checks the summary sentinel, not another set of per-kind literals.
+- Assert the **exact tower mix and Wall/Gate/Furnace count once in Rust**. Godot checks only the authoritative expected *total* building-view count and the Research Center identity, and prints the per-kind counts; CI checks the summary sentinel, not another set of per-kind literals. The Godot runner must **never validate individual tower-kind totals**: that composition is intentionally asserted once in Rust.
 
 Extend the **existing** `fixture/tests.rs::benchmark_workload_keeps_real_activity_for_the_sixty_second_sample` 1,200-tick test; no new duplicated 150-alien replan test:
 
@@ -67,13 +67,13 @@ Add **one** `crates/grus-sim/tests/survival_balance.rs` integration journey usin
 - Exactly **two 2×2 Gun Turrets** inside at **(anchor.x−3, anchor.y+1)** and **(anchor.x+5, anchor.y+1)** (currently (59,47) and (67,47)). Leave the four starting Workers idle.
 - **No Furnaces or test-only Coal.** Research Center supplies 15 heat, demands 10, and two turrets demand 2 each: full efficiency without refueling (Walls/Gate demand zero). Author this fixed setup once and prove it is legal. If baseline gameplay contradicts the intended wave-10-to-40 envelope, document a single explicit pre-tuning reference-fixture correction before freezing it; never weaken the guard silently to make a catalogue change pass.
 
-The wave timetable is `300 + 100×(wave−1)` simulated seconds. At the **wave-11 deadline**, the Research Center must still live and the session remain Playing (survived all wave-10 time); a real Defeat must occur **before wave 40 launches**. Fail on unexpected Victory or stalled progress. Stop immediately on Defeat; don't jump simulation time with giant deltas.
+The wave timetable is defined centrally by `waves::wave_deadline`, currently `300 + 100×(wave−1)` simulated seconds. At implementation time, change the existing `pub(crate) fn wave_deadline` in `waves.rs` to **`pub fn` and re-export it from `crates/grus-sim/src/lib.rs`** so the external `tests/survival_balance.rs` integration test can call `wave_deadline(11)` and `wave_deadline(40)` instead of copying deadline arithmetic. At the **wave-11 deadline**, the Research Center must still live and the session remain Playing (survived all wave-10 time); a real Defeat must occur **before wave 40 launches**. Fail on unexpected Victory or stalled progress. Stop immediately on Defeat; don't jump simulation time with giant deltas.
 
 This journey can run up to **84,000 fixed ticks** (wave-40 deadline = 4,200 simulated seconds). Do **not** run it in instrumented debug coverage: annotate `#[ignore]` and add a dedicated CI step:
 
-`cargo test -p grus-sim --release --locked --test survival_balance -- --ignored`
+`cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture`
 
-Keep real fog in the release journey, log actual failure wave and measured test runtime, and leave the normal 90% coverage job for the fast tests. Also add a near-zero-cost pure catalogue test:
+Keep real fog in the release journey; print the actual failure wave, simulated seconds and measured wall-clock runtime so the CI log preserves the baseline. Use **one** Cargo-to-libtest `--` separator, then pass both `--ignored` and `--nocapture` as test-runner flags (a second separator is not needed). Leave the normal 90% coverage job for the fast tests. Also add a near-zero-cost pure catalogue test:
 
 `f64::from(RESEARCH_TARGET_POINTS) / RESEARCH_BASE_PER_SECOND > wave_deadline(40)`
 
