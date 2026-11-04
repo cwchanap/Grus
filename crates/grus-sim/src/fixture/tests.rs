@@ -416,18 +416,6 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
     crate::visibility::refresh_visibility(&mut world, &map);
     extend_with_benchmark_workload(&mut world, &mut map);
 
-    let perimeter_buildings = |world: &World| {
-        world
-            .resource::<BuildingIndex>()
-            .iter()
-            .filter(|(_, entity)| {
-                world.get::<Building>(**entity).is_some_and(|building| {
-                    matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
-                })
-            })
-            .count()
-    };
-    let initial_perimeter = perimeter_buildings(&world);
     let initial_revision = map.revision();
 
     crate::heat::step_heat(&mut world, SIM_STEP_SECONDS);
@@ -437,7 +425,7 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
         "the fueled fortress must open the sample at full surface efficiency"
     );
 
-    let mut breach: Option<(usize, u64)> = None;
+    let mut breach: Option<(usize, u64, u64)> = None;
     let mut tower_shot_seconds: HashSet<usize> = HashSet::new();
     for second in 1..=60 {
         let positions: std::collections::HashMap<_, _> = world
@@ -449,6 +437,25 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .get_resource::<crate::combat::CombatEventTotal>()
             .map_or(0, |total| total.0);
         for _ in 0..20 {
+            let revision_before = map.revision();
+            let perimeter_before: Vec<(BuildingId, Vec<GridPos>)> = world
+                .resource::<BuildingIndex>()
+                .iter()
+                .filter(|(_, entity)| {
+                    world.get::<Building>(**entity).is_some_and(|building| {
+                        matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
+                    })
+                })
+                .map(|(id, entity)| {
+                    (
+                        *id,
+                        world
+                            .get::<Footprint>(*entity)
+                            .expect("perimeter footprint")
+                            .cells(),
+                    )
+                })
+                .collect();
             crate::tick::step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
             if let Some(events) = world.get_resource::<crate::combat::CombatEvents>()
                 && events
@@ -457,6 +464,36 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
                     .any(|event| matches!(event.attacker, CombatTarget::Building(_)))
             {
                 tower_shot_seconds.insert(second);
+            }
+            let perimeter_after: HashSet<BuildingId> = world
+                .resource::<BuildingIndex>()
+                .iter()
+                .filter(|(_, entity)| {
+                    world.get::<Building>(**entity).is_some_and(|building| {
+                        matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
+                    })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            for (id, cells) in perimeter_before {
+                if perimeter_after.contains(&id) {
+                    continue;
+                }
+                assert!(
+                    map.revision() > revision_before,
+                    "perimeter building {id:?} vanished at second {second} \
+                     without advancing the map revision"
+                );
+                for cell in cells {
+                    assert!(
+                        map.in_bounds(cell) && map.is_walkable(cell),
+                        "perimeter building {id:?} destroyed at second \
+                         {second} left {cell:?} blocked"
+                    );
+                }
+                if breach.is_none() {
+                    breach = Some((second, revision_before, map.revision()));
+                }
             }
         }
         let moving = world.resource::<UnitIndex>().iter().any(|(id, entity)| {
@@ -485,9 +522,6 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             world.resource::<UnitIndex>().iter().count(),
             world.resource::<BuildingIndex>().iter().count(),
         );
-        if breach.is_none() && perimeter_buildings(&world) < initial_perimeter {
-            breach = Some((second, map.revision()));
-        }
     }
 
     assert!(
@@ -499,12 +533,12 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
         1.0,
         "the fortress must still run at full surface efficiency after the sample"
     );
-    let (breach_second, breach_revision) =
+    let (breach_second, pre_breach_revision, breach_revision) =
         breach.expect("the horde never breached the perimeter inside the sample");
     assert!(
-        breach_revision > initial_revision,
+        breach_revision > initial_revision && breach_revision > pre_breach_revision,
         "the second-{breach_second} breach must advance the map revision \
-         ({initial_revision} -> {breach_revision})"
+         ({initial_revision} -> {pre_breach_revision} -> {breach_revision})"
     );
     let live_aliens = world
         .resource::<UnitIndex>()
