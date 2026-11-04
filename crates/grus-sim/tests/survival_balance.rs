@@ -72,12 +72,14 @@ fn survival_checkpoint_met(phase: MatchPhase, next_wave: u64, core_alive: bool) 
 }
 
 const WAVE_CLOCK_TOLERANCE_SECONDS: f64 = 1.0;
+const WAVE_LAUNCH_EPSILON_SECONDS: f64 = 0.0001;
 
 fn wave_schedule_on_track(wave: WaveState, simulated_seconds: f64) -> bool {
     let clock_advancing = (wave.elapsed - simulated_seconds).abs() <= WAVE_CLOCK_TOLERANCE_SECONDS;
     let no_skipped_launch = wave.next_wave <= 1
         || wave_deadline(wave.next_wave - 1) <= wave.elapsed + WAVE_CLOCK_TOLERANCE_SECONDS;
-    let launch_not_overdue = wave.elapsed <= wave_deadline(wave.next_wave);
+    let launch_not_overdue = wave.elapsed <= wave_deadline(wave.next_wave)
+        && simulated_seconds <= wave_deadline(wave.next_wave) + WAVE_LAUNCH_EPSILON_SECONDS;
     clock_advancing && no_skipped_launch && launch_not_overdue
 }
 
@@ -277,6 +279,20 @@ fn wave_schedule_check_flags_stalled_or_skipped_launches() {
             next_wave: 12
         },
         1_500.0
+    ));
+    assert!(wave_schedule_on_track(
+        WaveState {
+            elapsed: 1_399.950_020_861,
+            next_wave: 12
+        },
+        1_399.960_020_862
+    ));
+    assert!(!wave_schedule_on_track(
+        WaveState {
+            elapsed: 1_399.950_020_861,
+            next_wave: 12
+        },
+        1_400.050_020_862
     ));
 }
 
