@@ -16,20 +16,21 @@ The current repository **already has** the real 50-human/150-alien director work
 
 **Touch:** `crates/grus-sim/src/buildings.rs` and targeted `buildings/tests.rs`. The approved design is in [the revised specification](../specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md).
 
-- [ ] Extract `step_construction` completion inserts to one small `grant_completion(world, entity, kind, team)`: Depot `Dropoff`, combat-building `AttackCooldown`, producer `ProductionQueue`. Reuse it in ordinary construction **without changing behavior**.
+- [ ] Extract `step_construction` completion inserts to one small `grant_completion(world, entity, kind, team)`: **both `Depot` and `ResearchCenter` get `Dropoff`**, combat buildings get `AttackCooldown`, and producers get `ProductionQueue`. The default fixture already seeds the Research Center with `Dropoff`; the shared helper must preserve that behavior for any directly authored completed core. Reuse it in ordinary Depot construction without changing player-facing behavior.
 - [ ] Add `pub fn spawn_completed_building(world, map, team, kind, anchor) -> BuildingId` to `buildings.rs` for authored fixtures/tests: allocate ID, catalogue footprint + full HP, assert legal/unoccupied cells, choose `set_gate` vs `set_blocked`, insert `Building` and `BuildingIndex`, then call the **same grant function**. Do not expose it as a player command, bypass regular game placement, or refactor old hand-authored tests for aesthetics.
-- [ ] Cover Gate team-specific passability, ordinary blocked footprints, unique IDs, grants and genuinely actionable tower cooldowns. A created tower lacking `AttackCooldown` must fail tests.
+- [ ] Cover Gate team-specific passability, ordinary blocked footprints, unique IDs, grants and genuinely actionable tower cooldowns. A created tower lacking `AttackCooldown` must fail tests; a directly authored completed Research Center must have `Dropoff`.
 
 **Proof:** the existing construction completion tests still pass and a directly spawned completed Gun Turret has a ready cooldown and can fire. **This helper must land before the balance journey or fortress** to avoid duplicating an inert constructor.
 
 ## Checkpoint 2 — Build the fixed-defense balance guard first
 
-**Touch:** add `crates/grus-sim/tests/survival_balance.rs`, `crates/grus-sim/src/catalog/tests.rs`, and one new explicit release test step in `.github/workflows/ci.yml`.
+**Touch:** add `crates/grus-sim/tests/survival_balance.rs`, update `crates/grus-sim/src/catalog/tests.rs`, change `crates/grus-sim/src/waves.rs` + `src/lib.rs` for the shared deadline API, and add one explicit release test step in `.github/workflows/ci.yml`.
 
+- [ ] **Expose the existing single-source wave deadline**: change `waves.rs::wave_deadline(wave)` from `pub(crate)` to `pub`, and add `wave_deadline` to the `pub use waves::{ ... }` list in `crates/grus-sim/src/lib.rs`. The integration test lives outside the crate, so it cannot use `pub(crate)`; use this helper for `wave_deadline(11)` and `wave_deadline(40)` rather than hand-rolling the timer formula.
 - [ ] Seed an ordinary `MapFixture` / `seed_skirmish` and explicit `MatchSession::Start` → `start_match`. Use the shared completed-building helper to author exactly the **fixed two-Gun-Turret, Wall/Gate reference defense** described in spec §4 (relative coordinates to `team_starts()[0].research_center_anchor`). Use the real `VisibilityMap`. Leave four Workers idle, with **no Furnaces, extra Coal, Labs or player input after setup**.
 - [ ] Assert no footprint overlaps the core/Workers/safe resources or static terrain. Full surface efficiency must follow directly from 15 core heat supply versus 10 core + 4 turret demand; do not add a fuel economy to the fixed-defense guard.
 - [ ] Run the real `step_tick` at `SIM_STEP_SECONDS` (20 Hz), check the Research Center and Playing session at the **wave-11 deadline** (wave 10 survived), then stop on natural Defeat **before wave 40 launches**. Fail on premature Defeat, unexpected Victory, missing wave progress or a stalemate; log real failure wave and simulation time. Do not advance with giant deltas.
-- [ ] Mark only this long integration journey `#[ignore]` so normal `cargo llvm-cov` does not burn minutes in instrumented debug. Add a **separate CI step** after fast coverage in `unit-tests` running exactly: `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored`. Keep actual fog; observe and report the wall-clock cost. There can be at most 84,000 fixed ticks until wave 40; do not silently skip the step.
+- [ ] Mark only this long integration journey `#[ignore]` so normal `cargo llvm-cov` does not burn minutes in instrumented debug. Add a **separate CI step** after fast coverage in `unit-tests` running exactly: `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture`. Keep actual fog; print the failure wave/simulated time and measure wall-clock runtime, with `--nocapture` preserving stdout for successful tests. Only **one `--`** separates Cargo args from libtest flags (`--ignored --nocapture`). There can be at most 84,000 fixed ticks until wave 40; do not silently skip the step.
 - [ ] Add a cheap catalog regression in `catalog/tests.rs`: `f64::from(RESEARCH_TARGET_POINTS) / RESEARCH_BASE_PER_SECOND > wave_deadline(40)`. It guards the 4,500 s unattended Victory versus 4,200 s wave-40 deadline **before** the long integration test. No second long test is needed.
 - [ ] Record the **pre-tune Defeat wave** as baseline. If the fixed reference layout itself is unsuitable, document **one** explicit baseline fixture correction before adjusting catalogue balance; afterward do not weaken the guard to chase a green run.
 
@@ -51,7 +52,7 @@ The current repository **already has** the real 50-human/150-alien director work
 
 **Touch:** `godot/scripts/benchmark_200.gd` and the existing benchmark step in `.github/workflows/ci.yml`. Retain `godot/scenes/benchmark_200.tscn` unless its wiring actually needs adjustment.
 
-- [ ] Replace `building_views.size() == 1` with the **total** expected fortress building-view census, while still pinning the sole Research Center's identity. Keep exact 200 unit IDs and 50/150 team counts, 1920×1080 viewport and existing fog/liveness readiness.
+- [ ] Replace `building_views.size() == 1` with the **total** expected fortress building-view census, while still pinning the sole Research Center's identity. **Do not assert individual tower-kind totals in GDScript**; Rust fixture tests own the exact 24/10/6 mix. Keep exact 200 unit IDs and 50/150 team counts, 1920×1080 viewport and existing fog/liveness readiness.
 - [ ] Print observed per-kind counts and heat/fuel alongside the existing `GRUS_BENCHMARK_200 start_units=200` end marker; **do not** hardcode the 24/10/6 mix again in Godot. Keep existing frame-time p50/p95/p99/max, time-weighted live/visible stats and no periodic orders.
 - [ ] Rename the CI benchmark display step to reflect the walled-city workload. Retain `GRUS_BENCHMARK_SECONDS=10`, exit code **and** marker check, software GL and log artifacts. **CI checks presence of the marker, not a second copy of tower counts**; no FPS floor.
 - [ ] Re-run the real runner where supported and keep exact stdout/host information. Recheck packaged `GRUS_MAIN_SCENE=res://scenes/benchmark_200.tscn` instructions. Explain that 60 **wall-clock** rendered seconds do not necessarily equal 60 **simulated** seconds on a slow renderer.
@@ -77,7 +78,7 @@ The current repository **already has** the real 50-human/150-alien director work
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `cargo test --workspace --locked` (normal fast tests; long guard ignored)
 - [ ] `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\.rs$'`
-- [ ] `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored`
+- [ ] `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture`
 - [ ] `cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1`
 - [ ] 60 simulated seconds / fortress, actual tower-hit and replan/heat/alien-floor assertions
 - [ ] All existing Godot smokes, Linux export/packaged E2E; exit 0 and `GRUS_BENCHMARK_200` marker at 10 wall-clock seconds
@@ -87,4 +88,4 @@ The current repository **already has** the real 50-human/150-alien director work
 
 ## Design review resolution
 
-[GitHub review, 2026-11-03](https://github.com/cwchanap/Grus/pull/17#issuecomment-6620846291): all nine suggestions accepted: shared completion grants, release-only long guard before fortress, existing wall/replan tests reused, stronger deterministic fortress-shape assertions, fuel-free two-turret guard, no synthetic research override, up-front research arithmetic/passive-win guard, explicit merge bar, and tower mix asserted in Rust only. Implementation has **not** been performed by these documentation changes.
+[GitHub review, 2026-11-03](https://github.com/cwchanap/Grus/pull/17#issuecomment-6620846291): all nine suggestions accepted: shared completion grants, release-only long guard before fortress, existing wall/replan tests reused, stronger deterministic fortress-shape assertions, fuel-free two-turret guard, no synthetic research override, up-front research arithmetic/passive-win guard, explicit merge bar, and tower mix asserted in Rust only. Revision-2 review ([2026-11-03 follow-up](https://github.com/cwchanap/Grus/pull/17#pullrequestreview-5763813378)): clarified the already-correct **total-only** Godot census rule; added `--nocapture` using the correct single Cargo/libtest separator; explicitly planned `wave_deadline` visibility + re-export; and extended the completed-building grant for `ResearchCenter` `Dropoff`. Implementation has **not** been performed by these documentation changes.
