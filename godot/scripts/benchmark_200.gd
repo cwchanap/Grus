@@ -1,6 +1,6 @@
 extends Node
 
-## HPA-474 mixed-workload benchmark. After a benchmark reset it waits for the
+## HPA-289 fortified-city survival benchmark. After a benchmark reset it waits for the
 ## full 200-unit load, waits for the fog revision to advance so the sim is provably
 ## ticking, then records one frame-time sample per rendered frame plus
 ## live and visible-in-tree unit counts sampled once per liveness window for a
@@ -14,8 +14,9 @@ extends Node
 const BENCHMARK_SIZE := Vector2i(1920, 1080)
 const DEFAULT_SAMPLE_SECONDS := 10.0
 const WARMUP_SECONDS := 2.0
-const VIEW_WAIT_FRAMES := 180
+const VIEW_WAIT_FRAMES := 600
 const VISIBILITY_WAIT_FRAMES := 600
+const EXPECTED_BUILDING_VIEWS := 146
 const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
@@ -174,8 +175,9 @@ func _run() -> void:
 	_progress("benchmark_reset")
 
 	# Start shape: exactly 50 human defenders plus 150 real Team-2 aliens
-	# (200 unique unit views); exactly the one authored Research Center and
-	# at least the authored 18 resource sources. The workload
+	# (200 unique unit views); the authored fortress census of building
+	# views with the one Research Center inside; at least the authored 18
+	# resource sources. The workload
 	# itself was already accepted during the benchmark reset — there is no
 	# separate start call.
 	var units: Array[Node] = []
@@ -196,7 +198,7 @@ func _run() -> void:
 				team_counts[team] += 1
 		if units.size() == 200 and unique_ids.size() == 200 \
 				and team_counts[1] == 50 and team_counts[2] == 150 \
-				and get_tree().get_nodes_in_group("building_views").size() == 1 \
+				and get_tree().get_nodes_in_group("building_views").size() == EXPECTED_BUILDING_VIEWS \
 				and get_tree().get_nodes_in_group("resource_views").size() >= 18:
 			break
 	if units.size() != 200 or unique_ids.size() != 200:
@@ -206,10 +208,13 @@ func _run() -> void:
 		_fail("benchmark fixture must show 50 human defenders and 150 actual aliens, found %s" % [team_counts])
 		return
 	var buildings := get_tree().get_nodes_in_group("building_views")
-	if buildings.size() != 1 or int(buildings[0].get_meta("building_id", -1)) != 1 \
-			or int(buildings[0].get_meta("team_id", -1)) != 1 \
-			or str(buildings[0].get_meta("building_kind", "")) != "ResearchCenter":
-		_fail("benchmark fixture must show the single human Research Center, found %d building views" % buildings.size())
+	if buildings.size() != EXPECTED_BUILDING_VIEWS:
+		_fail("benchmark fixture must show the %d-building fortress, found %d building views" % [EXPECTED_BUILDING_VIEWS, buildings.size()])
+		return
+	var research_centers := buildings.filter(func(view: Node) -> bool: return str(view.get_meta("building_kind", "")) == "ResearchCenter")
+	if research_centers.size() != 1 or int(research_centers[0].get_meta("building_id", -1)) != 1 \
+			or int(research_centers[0].get_meta("team_id", -1)) != 1:
+		_fail("benchmark fixture must show exactly the one human Research Center, found %d" % research_centers.size())
 		return
 	if get_tree().get_nodes_in_group("resource_views").size() < 18:
 		_fail("benchmark fixture must show at least 18 resource views, found %d" % get_tree().get_nodes_in_group("resource_views").size())
@@ -318,7 +323,19 @@ func _run() -> void:
 	var adapter := RenderingServer.get_video_adapter_name()
 	var vendor := RenderingServer.get_video_adapter_vendor()
 
-	print("GRUS_BENCHMARK_200 start_units=200 human_units=50 alien_units=150 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_in_tree_units=%d mean_visible_in_tree_units=%.1f end_visible_in_tree_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d renderer=%s adapter=%s vendor=%s display=%s" % [
+	var end_buildings := get_tree().get_nodes_in_group("building_views")
+	var building_kinds: Dictionary = {}
+	for view in end_buildings:
+		var kind := str(view.get_meta("building_kind", "?"))
+		building_kinds[kind] = int(building_kinds.get(kind, 0)) + 1
+	var kind_names := building_kinds.keys()
+	kind_names.sort()
+	var kind_census := PackedStringArray()
+	for kind_name in kind_names:
+		kind_census.append("%s:%d" % [kind_name, building_kinds[kind_name]])
+	var economy: Dictionary = GrusBridge.economy_snapshot()
+
+	print("GRUS_BENCHMARK_200 start_units=200 human_units=50 alien_units=150 min_live_units=%d mean_live_units=%.1f end_units=%d min_visible_in_tree_units=%d mean_visible_in_tree_units=%.1f end_visible_in_tree_units=%d duration_s=%.2f frames=%d mean_ms=%.3f p50_ms=%.3f p95_ms=%.3f p99_ms=%.3f max_ms=%.3f mean_fps=%.1f visibility_revision=%d end_buildings=%d building_kinds=%s heat_supply=%d heat_demand=%d surface_efficiency=%.3f coal=%d renderer=%s adapter=%s vendor=%s display=%s" % [
 		min_live_units,
 		mean_live_units,
 		_live_unit_count(),
@@ -334,6 +351,12 @@ func _run() -> void:
 		sorted_samples[-1],
 		mean_fps,
 		GrusBridge.visibility_revision(),
+		end_buildings.size(),
+		",".join(kind_census),
+		int(economy.get("heat_supply", 0)),
+		int(economy.get("heat_demand", 0)),
+		float(economy.get("surface_efficiency", 0.0)),
+		int(economy.get("coal", 0)),
 		renderer,
 		adapter,
 		vendor,
