@@ -4,8 +4,8 @@ use bevy::prelude::Entity;
 use std::collections::HashSet;
 
 use crate::buildings::Building;
-use crate::catalog::resource_amount;
-use crate::combat::CombatOrder;
+use crate::catalog::{FURNACE_COAL_PER_SECOND, resource_amount};
+use crate::combat::{AttackCooldown, CombatOrder, CombatTarget};
 use crate::commands::{UnitIndex, approach_slots};
 use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask};
 use crate::ids::IdAllocator;
@@ -75,9 +75,9 @@ fn ruins_avoid_every_authored_occupant_and_staging_region() {
         .chain(starts.iter().flat_map(|start| start.workers))
         .chain(fixture.resources.iter().map(|spawn| spawn.cell))
         .collect();
-    // The row-major west staging scan (x 26..=53, y 20..=75).
-    for y in 20..=75 {
-        for x in 26..=53 {
+    // The fortress-interior staging scan (one cell inside the wall ring).
+    for y in (BENCHMARK_WALL_MIN.y + 1)..BENCHMARK_WALL_MAX.y {
+        for x in (BENCHMARK_WALL_MIN.x + 1)..BENCHMARK_WALL_MAX.x {
             off_limits.insert(GridPos::new(x, y));
         }
     }
@@ -250,17 +250,122 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
         "benchmark workers must receive safe sources in stable unit-ID order"
     );
 
-    // Only the human Research Center remains; all 18 sources survive.
-    let research_centers = world
+    // The fortress census — exact building-kind counts, asserted once in
+    // Rust: the single core, a closed wall/gate ring, the 24/10/6 combat
+    // tower mix, and nine fueled furnaces. The Godot runner checks only the
+    // total building-view count, never this composition.
+    let buildings_of_kind = |world: &World, kind: BuildingKind| {
+        world
+            .resource::<BuildingIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Building>(**entity)
+                    .is_some_and(|building| building.kind == kind)
+            })
+            .count()
+    };
+    let ring_width = (BENCHMARK_WALL_MAX.x - BENCHMARK_WALL_MIN.x + 1) as usize;
+    let ring_height = (BENCHMARK_WALL_MAX.y - BENCHMARK_WALL_MIN.y + 1) as usize;
+    let wall_cells = 2 * (ring_width + ring_height) - 4 - BENCHMARK_GATES.len();
+    assert_eq!(buildings_of_kind(&world, BuildingKind::ResearchCenter), 1);
+    assert_eq!(buildings_of_kind(&world, BuildingKind::Wall), wall_cells);
+    assert_eq!(
+        buildings_of_kind(&world, BuildingKind::Gate),
+        BENCHMARK_GATES.len()
+    );
+    assert_eq!(
+        buildings_of_kind(&world, BuildingKind::GunTurret),
+        BENCHMARK_GUN_ANCHORS.len()
+    );
+    assert_eq!(
+        buildings_of_kind(&world, BuildingKind::FlameTower),
+        BENCHMARK_FLAME_ANCHORS.len()
+    );
+    assert_eq!(
+        buildings_of_kind(&world, BuildingKind::CrystalLance),
+        BENCHMARK_LANCE_ANCHORS.len()
+    );
+    assert_eq!(
+        buildings_of_kind(&world, BuildingKind::CoalFurnace),
+        BENCHMARK_FURNACE_ANCHORS.len()
+    );
+    assert_eq!(world.resource::<BuildingIndex>().iter().count(), 146);
+    assert_eq!(world.resource::<IdAllocator>().next_building, 147);
+    let building_ids: HashSet<BuildingId> = world
         .resource::<BuildingIndex>()
         .iter()
-        .filter(|(_, entity)| {
-            world.get::<Building>(**entity).is_some_and(|building| {
-                building.kind == BuildingKind::ResearchCenter && building.construction.complete
-            })
-        })
-        .count();
-    assert_eq!(research_centers, 1);
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(building_ids.len(), 146, "building IDs must be unique");
+    let unit_ids: HashSet<UnitId> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(unit_ids.len(), 200, "unit IDs must be unique");
+
+    // Every authored building blocks its full catalogue footprint; combat
+    // towers carry AttackCooldown, and gates pass Team 1 but seal Team 2.
+    for (_, entity) in world.resource::<BuildingIndex>().iter() {
+        let building = world.get::<Building>(*entity).expect("indexed building");
+        let spec = building_spec(building.kind);
+        let footprint = world.get::<Footprint>(*entity).expect("building footprint");
+        assert_eq!(
+            (footprint.width, footprint.height),
+            (spec.width, spec.height),
+            "{:?} footprint differs from its catalogue spec",
+            building.kind
+        );
+        if spec.combat.is_some() {
+            assert!(
+                world.get::<AttackCooldown>(*entity).is_some(),
+                "{:?} lacks its completion-granted AttackCooldown",
+                building.kind
+            );
+        }
+        for cell in footprint.cells() {
+            assert!(
+                map.in_bounds(cell) && !map.is_walkable(cell),
+                "{:?} cell {cell:?} is not blocked",
+                building.kind
+            );
+            if building.kind == BuildingKind::Gate {
+                assert!(map.is_traversable_for(TeamId(1), cell));
+                assert!(!map.is_traversable_for(TeamId(2), cell));
+            }
+        }
+    }
+
+    // Nine furnaces burn FURNACE_COAL_PER_SECOND each; the benchmark-only
+    // stockpile keeps them fueled well past the 60-second sample.
+    let coal = world.resource::<TeamEconomy>().0[&TeamId(1)].stockpile.coal;
+    assert!(coal >= 400, "benchmark-only coal must fuel the fortress");
+    assert!(
+        coal as f32 > BENCHMARK_FURNACE_ANCHORS.len() as f32 * FURNACE_COAL_PER_SECOND * 60.0,
+        "coal {coal} cannot fuel nine furnaces for the full 60-second sample"
+    );
+
+    // First-tick full surface efficiency at catalogue supply/demand.
+    crate::heat::step_heat(&mut world, SIM_STEP_SECONDS);
+    let heat = *world.resource::<HeatState>();
+    assert_eq!(
+        heat.supply,
+        building_spec(BuildingKind::ResearchCenter).heat_supply
+            + BENCHMARK_FURNACE_ANCHORS.len() as u32
+                * building_spec(BuildingKind::CoalFurnace).heat_supply
+    );
+    assert_eq!(
+        heat.demand,
+        building_spec(BuildingKind::ResearchCenter).heat_demand
+            + BENCHMARK_GUN_ANCHORS.len() as u32
+                * building_spec(BuildingKind::GunTurret).heat_demand
+            + BENCHMARK_FLAME_ANCHORS.len() as u32
+                * building_spec(BuildingKind::FlameTower).heat_demand
+            + BENCHMARK_LANCE_ANCHORS.len() as u32
+                * building_spec(BuildingKind::CrystalLance).heat_demand
+    );
+    assert_eq!(crate::heat::surface_efficiency(&world), 1.0);
 
     // The authored standalone resources are untouched.
     assert_eq!(world.resource::<ResourceIndex>().iter().count(), 18);
@@ -306,6 +411,13 @@ fn benchmark_workload_uses_the_shared_director_for_150_aliens_and_50_defenders()
     assert_eq!(world.resource::<WaveState>().next_wave, 101);
 }
 
+/// Pinned from the first measured deterministic run of the fortified
+/// workload: 130 of the 150 live aliens remained at t=60, with the first
+/// perimeter breach at second 18 and tower fire in seconds 5-60. A floor
+/// of 100 keeps the sample meaningfully contested — far above a bare
+/// nonzero check — while leaving slack for catalogue tuning.
+const BENCHMARK_LIVE_ALIEN_FLOOR: usize = 100;
+
 #[test]
 fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
     let fixture = MapFixture::battlefield();
@@ -316,6 +428,29 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
     crate::visibility::refresh_visibility(&mut world, &map);
     extend_with_benchmark_workload(&mut world, &mut map);
 
+    let perimeter_buildings = |world: &World| {
+        world
+            .resource::<BuildingIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world.get::<Building>(**entity).is_some_and(|building| {
+                    matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
+                })
+            })
+            .count()
+    };
+    let initial_perimeter = perimeter_buildings(&world);
+    let initial_revision = map.revision();
+
+    crate::heat::step_heat(&mut world, SIM_STEP_SECONDS);
+    assert_eq!(
+        crate::heat::surface_efficiency(&world),
+        1.0,
+        "the fueled fortress must open the sample at full surface efficiency"
+    );
+
+    let mut breach: Option<(usize, u64)> = None;
+    let mut tower_shot_seconds: HashSet<usize> = HashSet::new();
     for second in 1..=60 {
         let positions: std::collections::HashMap<_, _> = world
             .resource::<UnitIndex>()
@@ -327,6 +462,14 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .map_or(0, |total| total.0);
         for _ in 0..20 {
             crate::tick::step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
+            if let Some(events) = world.get_resource::<crate::combat::CombatEvents>()
+                && events
+                    .0
+                    .iter()
+                    .any(|event| matches!(event.attacker, CombatTarget::Building(_)))
+            {
+                tower_shot_seconds.insert(second);
+            }
         }
         let moving = world.resource::<UnitIndex>().iter().any(|(id, entity)| {
             positions.get(id).is_some_and(|before| {
@@ -354,7 +497,41 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             world.resource::<UnitIndex>().iter().count(),
             world.resource::<BuildingIndex>().iter().count(),
         );
+        if breach.is_none() && perimeter_buildings(&world) < initial_perimeter {
+            breach = Some((second, map.revision()));
+        }
     }
+
+    // The final window still shows tower fire: the sample must end with
+    // the fortress actively shooting, not overrun or idle.
+    assert!(
+        tower_shot_seconds.contains(&60),
+        "no tower fired during the final simulated second (fired: {tower_shot_seconds:?})"
+    );
+    assert_eq!(
+        crate::heat::surface_efficiency(&world),
+        1.0,
+        "the fortress must still run at full surface efficiency after the sample"
+    );
+    let (breach_second, breach_revision) =
+        breach.expect("the horde never breached the perimeter inside the sample");
+    assert!(
+        breach_revision > initial_revision,
+        "the second-{breach_second} breach must advance the map revision \
+         ({initial_revision} -> {breach_revision})"
+    );
+    let live_aliens = world
+        .resource::<UnitIndex>()
+        .iter()
+        .filter(|(_, entity)| world.get::<Unit>(**entity).unwrap().team == TeamId(2))
+        .count();
+    assert!(
+        live_aliens >= BENCHMARK_LIVE_ALIEN_FLOOR,
+        "only {live_aliens} live aliens at t=60 — below the measured floor \
+         {BENCHMARK_LIVE_ALIEN_FLOOR} (breach at second {breach_second}, \
+         revision {initial_revision} -> {breach_revision}, \
+         tower seconds {tower_shot_seconds:?})"
+    );
 }
 
 /// The human reinforcements stage on unique cells clear of authored workers.
