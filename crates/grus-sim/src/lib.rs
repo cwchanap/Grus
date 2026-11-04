@@ -17,8 +17,8 @@ pub mod visibility;
 pub mod waves;
 
 pub use buildings::{
-    Building, BuildingIndex, ConstructionState, PlacementPlan, step_construction,
-    validate_placement,
+    Building, BuildingIndex, ConstructionState, PlacementPlan, spawn_completed_building,
+    step_construction, validate_placement,
 };
 pub use catalog::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, ATTACK_MOVE_RADIUS, AlienSpec, BASE_GATHER_RATE,

@@ -858,20 +858,7 @@ pub fn step_construction(world: &mut World, map: &GridMap, seconds: f32) {
             building.construction.active_builder = None;
         }
         world.entity_mut(builder_entity).insert(WorkerTask::Idle);
-        if kind == BuildingKind::Depot {
-            world.entity_mut(building_entity).insert(Dropoff { team });
-        }
-        if building_spec(kind).combat.is_some() {
-            world
-                .entity_mut(building_entity)
-                .insert(AttackCooldown::default());
-        }
-        if is_producer(kind) {
-            // Completed producers own their FIFO production queue from birth.
-            world
-                .entity_mut(building_entity)
-                .insert(ProductionQueue::default());
-        }
+        grant_completion(world, building_entity, kind, team);
         resume_nearest_unassigned_site(world, map, team, builder_entity, builder);
     }
 }
@@ -924,6 +911,84 @@ fn resume_nearest_unassigned_site(
 /// nudges of up to `MAX_SEPARATION_STEP`.
 pub(crate) fn worker_at_slot(position: &SimPosition, slot: GridPos) -> bool {
     position.current.x.floor() as i32 == slot.x && position.current.y.floor() as i32 == slot.y
+}
+
+/// The completion-only grants every finished building receives through one
+/// path — `step_construction` and authored spawning share it so a completed
+/// building is never inert. `Dropoff` marks the deposit kinds (Depot and
+/// the Research Center, so a directly authored core accepts deposits like
+/// the seeded one), combat kinds gain a ready `AttackCooldown`, and
+/// producers own their FIFO queue from birth.
+fn grant_completion(world: &mut World, entity: Entity, kind: BuildingKind, team: TeamId) {
+    if matches!(kind, BuildingKind::Depot | BuildingKind::ResearchCenter) {
+        world.entity_mut(entity).insert(Dropoff { team });
+    }
+    if building_spec(kind).combat.is_some() {
+        world.entity_mut(entity).insert(AttackCooldown::default());
+    }
+    if is_producer(kind) {
+        // Completed producers own their FIFO production queue from birth.
+        world.entity_mut(entity).insert(ProductionQueue::default());
+    }
+}
+
+/// Authors one completed building at `anchor` for fixtures and tests —
+/// never a player command: it skips placement validation, builder
+/// assignment, cost, and the construction phase entirely. Every footprint
+/// cell must be legal and unoccupied (asserted — a bad anchor is an
+/// authoring bug, not a reject), the cells block through `set_gate` for a
+/// Gate and `set_blocked` otherwise, the building registers in
+/// `BuildingIndex` under a freshly allocated id, and the same completion
+/// grants `step_construction` issues land on it.
+pub fn spawn_completed_building(
+    world: &mut World,
+    map: &mut GridMap,
+    team: TeamId,
+    kind: BuildingKind,
+    anchor: GridPos,
+) -> BuildingId {
+    let spec = building_spec(kind);
+    let footprint = Footprint::new(anchor, spec.width, spec.height);
+    for cell in footprint.cells() {
+        assert!(
+            map.is_walkable(cell),
+            "authored {kind:?} footprint cells must be legal and unoccupied: {cell:?}"
+        );
+    }
+
+    let id = world.resource_mut::<IdAllocator>().allocate_building();
+    for cell in footprint.cells() {
+        if kind == BuildingKind::Gate {
+            map.set_gate(cell);
+        } else {
+            map.set_blocked(cell, true);
+        }
+    }
+
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind,
+                construction: ConstructionState {
+                    progress_seconds: 0.0,
+                    complete: true,
+                    active_builder: None,
+                },
+            },
+            footprint,
+            Health {
+                current: spec.max_health,
+                max: spec.max_health,
+            },
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    grant_completion(world, entity, kind, team);
+    id
 }
 
 #[cfg(test)]
