@@ -6,6 +6,12 @@ extends Node
 ## before the Tap warms the base; workers fund every purchase by gathering.
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 const VIEWPORT_SIZE := Vector2i(1280, 720)
+## The fixture's seeded treasury — fixture data, not catalogue tuning.
+const SEED_TREASURY := {"food": 200, "scrap": 300, "coal": 150, "crystals": 0}
+## The tail checks after the margin assert need a few more simulated
+## seconds even on a slow runner: a rejected purchase, the real-button
+## restart and their settles.
+const MARGIN_FLOOR_S := 10.0
 
 var _main: Node3D
 var _panel: Panel
@@ -20,6 +26,9 @@ var _failed := false
 var _track_deposits := false
 var _last_stock: Dictionary
 var _deposits := {"scrap": 0, "coal": 0}
+## The live `next_cost` dict each paid dig charged — recorded so expected
+## totals derive from snapshot prices, never a copied price table.
+var _dig_costs: Array[Dictionary] = []
 
 ## Only count observed positive bank movements, never infer gathering from
 ## assumed prices. A deposit sharing a purchase frame may be hidden by the
@@ -141,6 +150,7 @@ func _dig(level: int) -> bool:
 		return false
 	if not await _purchase(_excavate, "Excavate queued", cost):
 		return false
+	_dig_costs.append(cost)
 	return await _wait(func(): return int(GrusBridge.underground_snapshot().depth) == level,
 		8.0, "L%d dig did not complete" % level)
 
@@ -167,10 +177,12 @@ func _run() -> void:
 		return
 	if not await _wait(_fixture_ready, 5.0, "fixture views never settled"):
 		return
-	if not _check(_stock() == {"food": 200, "scrap": 300, "coal": 150, "crystals": 0}, "wrong seed treasury"):
+	if not _check(_stock() == SEED_TREASURY, "wrong seed treasury"):
 		return
 	var base_rate := float(GrusBridge.research_snapshot().rate_per_second)
-	if not _check(is_equal_approx(base_rate, 2.0), "wrong full-heat surface research baseline"):
+	var catalogue_base := float(_catalogue.research.base_per_second)
+	if not _check(is_equal_approx(base_rate, catalogue_base),
+			"wrong full-heat surface research baseline"):
 		return
 	await _click(_main.get_node("HUD/SessionPanel/StartButton"))
 	if not _check(str(GrusBridge.session_snapshot().phase) == "Playing", "Start UI failed"):
@@ -181,10 +193,13 @@ func _run() -> void:
 	if not _check(_panel.visible, "Tab did not open panel"):
 		return
 	var l1_before := _stock()
-	if not await _purchase(_excavate, "Excavate queued", GrusBridge.underground_snapshot().next_cost):
+	var l1_cost: Dictionary = GrusBridge.underground_snapshot().next_cost
+	if not await _purchase(_excavate, "Excavate queued", l1_cost):
 		return
-	if not _check(_stock().scrap == l1_before.scrap - 100 and _stock().coal == l1_before.coal - 50,
-			"L1 must charge exactly 100 Scrap/50 Coal once"):
+	_dig_costs.append(l1_cost)
+	if not _check(_stock().scrap == int(l1_before.scrap) - int(l1_cost.scrap) \
+			and _stock().coal == int(l1_before.coal) - int(l1_cost.coal),
+			"L1 must charge its snapshot price exactly once"):
 		return
 	if not _check(get_viewport().gui_get_focus_owner() == _excavate, "real Excavate click did not focus button"):
 		return
@@ -264,8 +279,14 @@ func _run() -> void:
 	if not await _dig(2):
 		return
 	# Once the final dig's Coal is banked, move that worker to Scrap:
-	# surplus Coal cannot fund the two cold-proof Barracks.
-	if not await _wait(func(): return int(_stock().coal) >= 128 and int(_deposits.coal) >= 108, 5.0, "Coal gatherer did not fund L3"):
+	# surplus Coal cannot fund the two cold-proof Barracks. The deposit
+	# bound is the L3 price minus what the seeded treasury still covers
+	# after everything spent so far — both read live, never re-typed.
+	var l3_cost: Dictionary = GrusBridge.underground_snapshot().next_cost
+	var coal_deposits_needed: int = int(l3_cost.coal) - (int(SEED_TREASURY.coal) - _spent_coal)
+	if not await _wait(func(): return int(_stock().coal) >= int(l3_cost.coal) \
+			and int(_deposits.coal) >= coal_deposits_needed, 5.0,
+			"Coal gatherer did not fund L3"):
 		return
 	await _key(KEY_TAB)
 	await _click_view(workers[0], MOUSE_BUTTON_LEFT)
@@ -286,16 +307,23 @@ func _run() -> void:
 		if not _check(int(row.level) == index + 1 and row.slots.size() == 4, "bad 1-based level/four-slot snapshot"):
 			return
 		for slot in 4:
-			if not _check(str(row.slots[slot].kind) == "" and not bool(row.slots[slot].building), "bad 0-based empty slot"):
+			if not _check(str(row.slots[slot].kind) == "" and not bool(row.slots[slot].complete), "bad 0-based empty slot"):
 				return
 
 	# Fund Lab+Tap and two ordinary Barracks. Retire gatherers before exact
 	# debit/no-spend checks so no real deposit can disguise a broken charge.
+	# The deposit bound is the whole journey's Scrap price minus the seeded
+	# treasury — every term live (catalogue prices plus the recorded dig
+	# debits), never a re-typed total.
 	var room_costs: Dictionary = _catalogue.underground.rooms
 	var barracks_cost: Dictionary = _catalogue.buildings.Barracks
+	var lab_rate := float(room_costs.Lab.research_per_second)
+	var tap_heat := int(room_costs.GeothermalTap.heat_supply_base)
 	var remaining_scrap := int(room_costs.Lab.scrap) + int(room_costs.GeothermalTap.scrap) + 2 * int(barracks_cost.scrap)
+	var scrap_deposits_needed: int = _spent_scrap + remaining_scrap - int(SEED_TREASURY.scrap)
 	if not await _wait(func(): return int(_stock().scrap) >= remaining_scrap \
-			and int(_deposits.scrap) >= 726, 10.0, "Gather did not fund rooms and cold proof"):
+			and int(_deposits.scrap) >= scrap_deposits_needed, 10.0,
+			"Gather did not fund rooms and cold proof"):
 		return
 	await _key(KEY_TAB)
 	for worker in workers:
@@ -305,7 +333,8 @@ func _run() -> void:
 	_track_deposits = false
 	var gathered_scrap := int(_deposits.scrap)
 	var gathered_coal := int(_deposits.coal)
-	if not _check(gathered_scrap >= 726 and gathered_coal >= 108, "real deposits did not cover total shortfall"):
+	if not _check(gathered_scrap >= scrap_deposits_needed and gathered_coal >= coal_deposits_needed,
+			"real deposits did not cover total shortfall"):
 		return
 
 	# Parallel real surface construction creates a 15/16 cold base. No
@@ -337,13 +366,18 @@ func _run() -> void:
 	var disabled_before := _stock()
 	var disabled_revision: int = GrusBridge.command_feedback_revision()
 	var selected_before: Array = _main.selected_ids.duplicate()
+	# All eight disabled clicks dispatch synchronously back to back — a
+	# disabled Button ignores them, so no settle is needed between pushes.
+	# Fewer render-frame waits keeps the sim-time cost of this sweep flat
+	# even on a slow runner, where each awaited frame burns 20x sim time.
 	for level in [1, 2]:
 		for slot in 4:
 			var button := _slot(level, slot)
 			if not _check(button.disabled and button.text.contains("L3") and button.tooltip_text.contains("requires L3"),
 					"Lab armed did not disable/explain shallow target"):
 				return
-			await _click(button)
+			SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await _settle()
 	if not _check(_stock() == disabled_before and GrusBridge.command_feedback_revision() == disabled_revision \
 			and _main.selected_ids == selected_before, "disabled slot click queued, spent or leaked to battlefield"):
 		return
@@ -356,7 +390,8 @@ func _run() -> void:
 	var before_lab := _stock()
 	if not await _purchase(_slot(3, 0), "Lab queued (L3 slot 1)", room_costs.Lab):
 		return
-	if not _check(_stock().scrap == before_lab.scrap - 150 and _stock().coal == before_lab.coal \
+	if not _check(_stock().scrap == before_lab.scrap - int(room_costs.Lab.scrap) \
+			and _stock().coal == before_lab.coal \
 			and str(_slot_state(3, 0).kind) == "Lab" and not bool(_slot_state(3, 0).complete),
 			"Lab did not charge once at L3/slot0 and start construction"):
 		return
@@ -378,34 +413,45 @@ func _run() -> void:
 	var cold: Dictionary = GrusBridge.economy_snapshot()
 	var cold_rate := float(GrusBridge.research_snapshot().rate_per_second)
 	if not _check(int(cold.heat_supply) == 15 and float(cold.surface_efficiency) < 1.0 \
-			and absf(cold_rate - (base_rate * float(cold.surface_efficiency) + 1.0)) < 0.0001,
-			"Lab +1/s was cold-scaled instead of additive"):
+			and absf(cold_rate - (base_rate * float(cold.surface_efficiency) + lab_rate)) < 0.0001,
+			"Lab research was cold-scaled instead of additive"):
 		return
 
 	await _click(_kind("GeothermalTap"))
 	var before_tap := _stock()
 	if not await _purchase(_slot(3, 1), "Tap queued (L3 slot 2)", room_costs.GeothermalTap):
 		return
-	if not _check(_stock().scrap == before_tap.scrap - 120 and _stock().coal == before_tap.coal \
+	if not _check(_stock().scrap == before_tap.scrap - int(room_costs.GeothermalTap.scrap) \
+			and _stock().coal == before_tap.coal \
 			and str(_slot_state(3, 1).kind) == "GeothermalTap" and not bool(_slot_state(3, 1).complete),
 			"Tap did not charge exactly once at L3/slot1"):
 		return
 	if not await _wait(func(): return bool(_slot_state(3, 1).complete), 6.0, "Tap did not complete"):
 		return
 	var warm: Dictionary = GrusBridge.economy_snapshot()
-	if not _check(int(warm.heat_supply) == int(cold.heat_supply) + 15 and int(warm.heat_demand) == 16 \
+	if not _check(int(warm.heat_supply) == int(cold.heat_supply) + tap_heat and int(warm.heat_demand) == 16 \
 			and is_equal_approx(float(warm.surface_efficiency), 1.0) \
-			and is_equal_approx(float(GrusBridge.research_snapshot().rate_per_second), base_rate + 1.0),
-			"L3 Tap did not add 15 supply and warm Lab rate did not retain +1/s"):
+			and is_equal_approx(float(GrusBridge.research_snapshot().rate_per_second), base_rate + lab_rate),
+			"L3 Tap did not add its catalogue supply or warm Lab rate lost its additive share"):
 		return
 	var final_stock := _stock()
-	if not _check(_spent_scrap == 1026 and _spent_coal == 258 \
-			and int(final_stock.food) == 200 and int(final_stock.crystals) == 0,
+	# Expected totals rebuild from the recorded dig debits plus catalogue
+	# room/barracks prices — retuning changes both sides together.
+	var expected_scrap := int(room_costs.Lab.scrap) + int(room_costs.GeothermalTap.scrap) \
+			+ 2 * int(barracks_cost.scrap)
+	var expected_coal := 0
+	for dig_cost in _dig_costs:
+		expected_scrap += int(dig_cost.scrap)
+		expected_coal += int(dig_cost.coal)
+	if not _check(_spent_scrap == expected_scrap and _spent_coal == expected_coal \
+			and int(final_stock.food) == int(SEED_TREASURY.food) \
+			and int(final_stock.crystals) == int(SEED_TREASURY.crystals),
 			"wrong purchases or unrelated currency mutation"):
 		return
 	var margin := float(GrusBridge.wave_snapshot().seconds_remaining)
-	if not _check(SmokeHelpers.no_launched_wave_error("underground journey").is_empty() and margin > 0.0,
-			"underground journey overran preparation"):
+	if not _check(SmokeHelpers.no_launched_wave_error("underground journey").is_empty() \
+			and margin >= MARGIN_FLOOR_S,
+			"underground journey left under %ds prep margin for its own tail" % int(MARGIN_FLOOR_S)):
 		return
 
 	# An unaffordable deeper dig takes the real rejection/feedback route.
@@ -415,30 +461,33 @@ func _run() -> void:
 			and int(GrusBridge.economy_snapshot().last_reject_code) == 8,
 			"rejected deeper dig spent, started or lost typed InsufficientResources (8)"):
 		return
-	# Result-only Restart is not exposed while Playing. Exercise the same
-	# production controller handler (also used by the lifecycle smoke), not
-	# a test-only reset or injected Result, while retaining the prep guard.
+	# Result-only Restart is not exposed while Playing, so emit the real
+	# button's `pressed` signal: it still travels the production
+	# signal → _on_restart_pressed → _restart_match path (the lifecycle
+	# smoke covers its Result-only visibility), not a test-only reset.
 	var wave_error := SmokeHelpers.no_launched_wave_error("underground smoke before Restart")
 	if not _check(wave_error.is_empty(), wave_error):
 		return
-	_main.call("_restart_match")
+	var restart_button: Button = _main.get_node("HUD/SessionPanel/RestartButton")
+	restart_button.pressed.emit()
 	if not await _wait(func(): return str(GrusBridge.session_snapshot().phase) == "Start" \
 			and int(GrusBridge.underground_snapshot().depth) == 0, 3.0, "Restart left stale underground depth"):
 		return
 	await _settle()
 	if not _check(not bool(GrusBridge.underground_snapshot().excavating) \
 			and GrusBridge.underground_snapshot().levels.is_empty() and _levels.get_child_count() == 0 \
-			and _stock() == {"food": 200, "scrap": 300, "coal": 150, "crystals": 0}, "Restart did not clear jobs/rows/treasury"):
+			and _stock() == SEED_TREASURY, "Restart did not clear jobs/rows/treasury"):
 		return
 	# Restart must also clear the transient armed room kind, not just the
 	# sim state: the GeothermalTap armed earlier in the journey must not
-	# stay armed or pressed into the fresh Start-phase match.
-	var armed_cleared := int(_main._ug_armed_index) == -1
-	for kind_button in _main._ug_kind_buttons:
-		armed_cleared = armed_cleared and not kind_button.button_pressed
+	# stay pressed into the fresh Start-phase match. Kind buttons are
+	# toggles, so their public pressed state is the armed surface.
+	var armed_cleared := true
+	for room_kind in _catalogue.underground.room_kinds:
+		armed_cleared = armed_cleared and not _kind(room_kind).button_pressed
 	if not _check(armed_cleared, "Restart left a room kind armed or pressed"):
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=%d gathered_coal=%d paid_scrap=%d paid_coal=%d cold_rate=%.4f heat_delta=15 margin_s=%.2f elapsed_ms=%d" % [
-		gathered_scrap, gathered_coal, _spent_scrap, _spent_coal, cold_rate, margin, Time.get_ticks_msec() - _started_ms])
+	print("GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=%d gathered_coal=%d paid_scrap=%d paid_coal=%d cold_rate=%.4f heat_delta=%d margin_s=%.2f elapsed_ms=%d" % [
+		gathered_scrap, gathered_coal, _spent_scrap, _spent_coal, cold_rate, tap_heat, margin, Time.get_ticks_msec() - _started_ms])
 	get_tree().quit(0)

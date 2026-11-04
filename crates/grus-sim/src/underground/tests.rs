@@ -1,23 +1,20 @@
-use bevy::prelude::{Entity, Or, With, World};
+use bevy::prelude::World;
 
 use super::*;
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
 use crate::catalog::{
     BuildingKind, RESEARCH_BASE_PER_SECOND, ROOM_SLOTS_PER_LEVEL, RoomKind, room_spec,
 };
-use crate::commands::{
-    CommandResult, PlayerCommand, RejectReason, UnitIndex, apply_player_command,
-};
-use crate::economy::{ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy};
-use crate::fixture::{MapFixture, seed_skirmish};
+use crate::commands::{CommandResult, PlayerCommand, RejectReason, apply_player_command};
+use crate::economy::{ResourceStockpile, TeamEconomy};
+use crate::fixture::{MapFixture, clear_match_world, seed_skirmish};
 use crate::heat::HeatState;
-use crate::ids::{BuildingId, IdAllocator, TeamId};
+use crate::ids::{BuildingId, TeamId};
 use crate::map::GridMap;
-use crate::movement::{SIM_STEP_SECONDS, Unit};
-use crate::research::{ResearchState, research_rate};
+use crate::movement::SIM_STEP_SECONDS;
+use crate::research::research_rate;
 use crate::session::{MatchPhase, MatchResult, MatchSession, set_paused};
 use crate::tick::step_tick;
-use crate::waves::WaveState;
 
 fn battlefield() -> (World, GridMap) {
     let fixture = MapFixture::battlefield();
@@ -316,13 +313,13 @@ fn every_room_banks_its_own_fractional_remainder() {
     assert_eq!(stockpile(&world).0, 202, "both rooms credit independently");
 }
 
-/// Per-currency totals must saturate, not overflow: with the accepted
-/// finite delta 2^32 s, two completed Greenhouses each bank exactly
-/// 0.5 × 2^32 = 2_147_483_648 Food, and their sum is one past `u32::MAX`.
-/// The stockpile's own `saturating_add` cannot protect an intermediate
-/// total, so the accumulation itself must saturate.
+/// Stockpile credit must saturate, not overflow: with the accepted finite
+/// delta 2^32 s, two completed Greenhouses each bank exactly
+/// 0.5 × 2^32 = 2_147_483_648 Food — creditable by each room's own
+/// `as u32` floor — and the shared stockpile's `saturating_add` clamps
+/// their sum (one past `u32::MAX`) rather than wrapping to a small number.
 #[test]
-fn per_currency_totals_saturate_instead_of_overflowing() {
+fn stockpile_credit_saturates_instead_of_overflowing() {
     let (mut world, _map) = battlefield();
     world.insert_resource(Underground {
         levels: one_level([
@@ -995,37 +992,14 @@ fn build_room_needs_a_living_core_and_a_team1_issuer() {
     assert!(world.resource::<Underground>().levels[0].slots[0].is_some());
 }
 
-/// The bridge's `clear_gameplay_world`: gameplay entities and the
-/// seed-owned state die before every reseed — restart, fixture reset and
-/// the benchmark all share it. The underground resource is removed
-/// explicitly, exactly like the real bridge clear: absence reads as depth
-/// zero until the shared reseed inserts the fresh default.
-fn bridge_style_clear(world: &mut World) {
-    let stale: Vec<Entity> = world
-        .query_filtered::<Entity, Or<(With<Unit>, With<Building>, With<ResourceSource>)>>()
-        .iter(world)
-        .collect();
-    for entity in stale {
-        world.despawn(entity);
-    }
-    world.remove_resource::<UnitIndex>();
-    world.remove_resource::<BuildingIndex>();
-    world.remove_resource::<ResourceIndex>();
-    world.remove_resource::<TeamEconomy>();
-    world.remove_resource::<IdAllocator>();
-    world.remove_resource::<WaveState>();
-    world.remove_resource::<HeatState>();
-    world.remove_resource::<ResearchState>();
-    world.remove_resource::<Underground>();
-}
-
-/// The bridge's reset paths (restart, fixture reset, benchmark) all reseed
-/// through `seed_skirmish`, and the clear removes the underground before
-/// that reseed inserts a fresh default: a populated world — completed
-/// levels plus an active dig — reads depth zero right after the clear,
-/// and the reseed keeps it at the seeded default.
+/// Every reset path (restart, fixture reset, benchmark) reseeds through
+/// `seed_skirmish` after the one shared `clear_match_world` — the same
+/// function the bridge calls, not a copied list. The clear removes the
+/// underground before the reseed inserts a fresh default: a populated
+/// world — completed levels plus an active dig — reads depth zero right
+/// after the clear, and the reseed keeps it at the seeded default.
 #[test]
-fn bridge_style_reseed_returns_a_populated_underground_to_default() {
+fn match_clear_then_reseed_returns_a_populated_underground_to_default() {
     let (mut world, _map) = battlefield();
     world.insert_resource(Underground {
         levels: one_level([completed_room(RoomKind::Shelter), None, None, None]),
@@ -1034,7 +1008,7 @@ fn bridge_style_reseed_returns_a_populated_underground_to_default() {
         }),
     });
 
-    bridge_style_clear(&mut world);
+    clear_match_world(&mut world);
     assert!(
         world.get_resource::<Underground>().is_none(),
         "the clear itself removes the underground"
@@ -1049,7 +1023,7 @@ fn bridge_style_reseed_returns_a_populated_underground_to_default() {
 /// The checkpoint-3 proof journey: three paid digs reach L3 through the
 /// canonical tick, a paid Geothermal Tap and Lab complete there, and the
 /// authoritative heat snapshot and research rate carry their combined
-/// effects (+15 supply, +1 point/s); the bridge-style clear + reseed then
+/// effects (+15 supply, +1 point/s); the shared match clear + reseed then
 /// returns everything to the seeded default.
 #[test]
 fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
@@ -1128,9 +1102,9 @@ fn paid_journey_to_l3_tap_and_lab_through_the_canonical_tick() {
     assert_eq!(heat.efficiency(), 1.0);
     assert_eq!(research_rate(&world), RESEARCH_BASE_PER_SECOND + 1.0);
 
-    // The bridge-style restart: clear, then the shared seed path — the
-    // underground returns to its default and heat/research with it.
-    bridge_style_clear(&mut world);
+    // The shared restart path: the one match clear, then the shared seed
+    // — the underground returns to its default and heat/research with it.
+    clear_match_world(&mut world);
     let fixture = MapFixture::battlefield();
     let mut fresh_map = fixture.map.clone();
     seed_skirmish(&mut world, &mut fresh_map, &fixture);

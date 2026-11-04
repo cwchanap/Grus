@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bevy::prelude::*;
 use godot::builtin::{GString, PackedInt32Array, VarDictionary, Vector2};
@@ -7,18 +7,18 @@ use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{
-    Cost, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, building_spec, excavation_cost_and_seconds,
-    room_spec, unit_spec,
+    Cost, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, RoomSpec, building_spec,
+    excavation_cost_and_seconds, room_spec, unit_spec,
 };
 use grus_sim::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BASE_GATHER_RATE, Building, BuildingId, BuildingIndex,
     BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
-    EntryZone, Footprint, GridMap, GridPos, Health, HeatState, IdAllocator, LastRouteReject,
-    MapFixture, MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind,
-    ProductionQueue, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResearchState,
-    ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId,
-    Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap,
-    WaveState, WorkerTask, active_phase, apply_player_command, explored_by,
+    EntryZone, Footprint, GridMap, GridPos, Health, HeatState, LastRouteReject, MapFixture,
+    MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue,
+    RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResourceId,
+    ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Underground, Unit,
+    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
+    WorkerTask, active_phase, apply_player_command, clear_match_world, explored_by,
     extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
     population_used, produces, refresh_visibility, research_points, research_rate, resolve_target,
     seed_skirmish, set_paused, start_match, step_tick, surface_efficiency, target_eligible,
@@ -43,6 +43,13 @@ struct PlacementCommandResult {
     accepted: bool,
     feedback: String,
 }
+
+/// Monotonic count of applied fixed ticks: the cheap polling handle the
+/// underground panel diffs against so it rebuilds its snapshot once per
+/// tick instead of once per rendered frame. Bridge-owned — the sim takes
+/// only a `seconds` delta and tracks no tick counter of its own.
+#[derive(Default, Resource)]
+struct SimTick(u64);
 
 #[derive(Resource)]
 struct CommandFeedback {
@@ -554,6 +561,21 @@ impl GrusBridgeNode {
         .unwrap_or(0)
     }
 
+    /// Monotonic applied-tick counter for cheap per-frame polling: a
+    /// dynamic snapshot's contents can only change inside the fixed tick,
+    /// so a consumer that diffs this rebuilds at most once per tick
+    /// instead of once per rendered frame.
+    #[func]
+    fn sim_tick(&self) -> i64 {
+        with_app(|app| {
+            app.world()
+                .get_resource::<SimTick>()
+                .map(|tick| tick.0 as i64)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+    }
+
     #[func]
     fn command_feedback_revision(&self) -> i64 {
         with_app(|app| {
@@ -976,6 +998,7 @@ fn catalogue_snapshot_dict() -> VarDictionary {
     // cost/gain copy exists beside this static block.
     let mut research = VarDictionary::new();
     research.set("target_points", i64::from(RESEARCH_TARGET_POINTS));
+    research.set("base_per_second", RESEARCH_BASE_PER_SECOND);
     research.set("analyze_cost", &cost_dict(ANALYZE_COST).to_variant());
     research.set("analyze_gain_points", ANALYZE_RESEARCH_GAIN);
     // Static underground tuning, read once at panel init: the slot count
@@ -1006,6 +1029,10 @@ fn catalogue_snapshot_dict() -> VarDictionary {
             "heat_supply_per_level",
             i64::from(spec.heat_supply_per_level),
         );
+        // The rendered effect line, computed in Rust like every other
+        // catalogue field: GDScript tooltips render it verbatim and never
+        // rebuild the priority/order logic a second time.
+        entry.set("effect", &GString::from(room_effect_text(&spec).as_str()));
         rooms.set(&kind_name(kind), &entry.to_variant());
         room_kinds.push(&kind_name(kind));
     }
@@ -1026,8 +1053,6 @@ fn catalogue_snapshot_dict() -> VarDictionary {
 struct UndergroundSlotView {
     /// `None` in an empty slot.
     kind: Option<RoomKind>,
-    /// A placed room that has not completed its build yet.
-    building: bool,
     complete: bool,
     /// 0..1 build progress (`1.0` when complete, `0.0` when empty).
     progress: f32,
@@ -1067,20 +1092,63 @@ struct UndergroundView {
     levels: Vec<UndergroundLevelView>,
 }
 
+/// The single display effect a room advertises, in the one catalogue
+/// priority order — population, stockpile output, research, then heat.
+/// The kind tooltip (`room_effect_text`) and the completed slot's benefit
+/// line (`room_benefit_text`) both pick through this, so they can never
+/// disagree about which effect a multi-effect room leads with.
+enum RoomEffect {
+    Population(u32),
+    Output(ResourceKind, f32),
+    Research(f64),
+    Heat,
+}
+
+fn room_effect(spec: &RoomSpec) -> Option<RoomEffect> {
+    if spec.population_capacity > 0 {
+        Some(RoomEffect::Population(spec.population_capacity))
+    } else if let Some((resource, rate)) = spec.output {
+        Some(RoomEffect::Output(resource, rate))
+    } else if spec.research_per_second > 0.0 {
+        Some(RoomEffect::Research(spec.research_per_second))
+    } else if spec.heat_supply_base > 0 || spec.heat_supply_per_level > 0 {
+        Some(RoomEffect::Heat)
+    } else {
+        None
+    }
+}
+
 /// The one benefit line a completed room renders in the panel — named
 /// straight off the catalogue row, geothermal depth bonus included
 /// through the same shared `RoomSpec::heat_supply_at` the heat system
 /// consumes.
 fn room_benefit_text(kind: RoomKind, level: u32) -> String {
     let spec = room_spec(kind);
-    if spec.population_capacity > 0 {
-        format!("+{} pop", spec.population_capacity)
-    } else if let Some((resource, rate)) = spec.output {
-        format!("+{rate} {resource:?}/s")
-    } else if spec.research_per_second > 0.0 {
-        format!("+{} rp/s", spec.research_per_second)
-    } else {
-        format!("+{} heat", spec.heat_supply_at(level))
+    match room_effect(&spec) {
+        Some(RoomEffect::Population(pop)) => format!("+{pop} pop"),
+        Some(RoomEffect::Output(resource, rate)) => format!("+{rate} {resource:?}/s"),
+        Some(RoomEffect::Research(rate)) => format!("+{rate} rp/s"),
+        Some(RoomEffect::Heat) => format!("+{} heat", spec.heat_supply_at(level)),
+        None => String::new(),
+    }
+}
+
+/// The explanatory effect line the static catalogue row carries for kind
+/// tooltips: same `room_effect` pick as the benefit line, but the
+/// geothermal row explains its min-level base and per-level bonus instead
+/// of quoting a fixed depth value.
+fn room_effect_text(spec: &RoomSpec) -> String {
+    match room_effect(spec) {
+        Some(RoomEffect::Population(pop)) => format!("+{pop} pop"),
+        Some(RoomEffect::Output(resource, rate)) => format!("+{rate} {resource:?}/s"),
+        Some(RoomEffect::Research(rate)) => format!("+{rate} research/s"),
+        Some(RoomEffect::Heat) => format!(
+            "+{} heat at L{} (+{}/level deeper)",
+            spec.heat_supply_at(spec.min_level),
+            spec.min_level,
+            spec.heat_supply_per_level
+        ),
+        None => String::new(),
     }
 }
 
@@ -1124,7 +1192,6 @@ fn underground_view(world: &World) -> UndergroundView {
                         };
                         UndergroundSlotView {
                             kind: Some(room.kind),
-                            building: !complete,
                             complete,
                             progress,
                             remaining,
@@ -1180,7 +1247,6 @@ fn underground_snapshot_dict(world: &World) -> VarDictionary {
                 Some(kind) => slot_dict.set("kind", &kind_name(kind)),
                 None => slot_dict.set("kind", &GString::from("")),
             }
-            slot_dict.set("building", slot.building);
             slot_dict.set("complete", slot.complete);
             slot_dict.set("progress", f64::from(slot.progress));
             slot_dict.set("remaining", f64::from(slot.remaining));
@@ -1200,6 +1266,7 @@ fn build_app(app: &mut App) {
         .add_plugins(GodotTransformSyncPlugin::default())
         .add_plugins(GodotPackedScenePlugin)
         .insert_resource(Time::<Fixed>::from_seconds(f64::from(SIM_STEP_SECONDS)))
+        .init_resource::<SimTick>()
         .init_resource::<PendingCommands>()
         .init_resource::<PlacementCommandResults>()
         .init_resource::<CommandFeedback>()
@@ -1912,48 +1979,14 @@ fn reset_benchmark_world(world: &mut World) {
     });
 }
 
+/// One reset path shared by restart, fixture reset and the benchmark: the
+/// sim-owned clear lives in grus-sim (`clear_match_world`, the seed's
+/// inverse), so sim tests exercise the identical reset the bridge runs —
+/// never a copied list that can drift. What remains here is only what the
+/// bridge itself owns: queued commands and their placement tickets,
+/// command feedback and the route-reject channel.
 fn clear_gameplay_world(world: &mut World) {
-    let mut entities = HashSet::new();
-    {
-        let mut query = world.query_filtered::<Entity, With<Unit>>();
-        entities.extend(query.iter(world));
-    }
-    {
-        let mut query = world.query_filtered::<Entity, With<Building>>();
-        entities.extend(query.iter(world));
-    }
-    {
-        let mut query = world.query_filtered::<Entity, With<ResourceSource>>();
-        entities.extend(query.iter(world));
-    }
-    for entity in entities {
-        let _ = world.despawn(entity);
-    }
-
-    world.remove_resource::<UnitIndex>();
-    world.remove_resource::<BuildingIndex>();
-    world.remove_resource::<ResourceIndex>();
-    world.remove_resource::<TeamEconomy>();
-    world.remove_resource::<IdAllocator>();
-    // Visibility dies with the match: every seed path re-inserts a fresh
-    // fogged map through `seed_match_world`.
-    world.remove_resource::<VisibilityMap>();
-    // Combat/session transients die with the match: the benchmark restarts
-    // session-free (missing session = Playing), the normal reset re-inserts
-    // Start.
-    world.remove_resource::<CombatEvents>();
-    world.remove_resource::<CombatEventTotal>();
-    world.remove_resource::<WaveState>();
-    // Heat dies with the match: a stale supply/demand between clear and
-    // reseed would read wrong, while absence reads neutral full efficiency.
-    world.remove_resource::<HeatState>();
-    // Research dies with the match too: absence reads zero points until the
-    // reseed inserts a fresh state — a restart can never carry progress.
-    world.remove_resource::<ResearchState>();
-    // The underground dies with the match the same way: absence reads depth
-    // zero until the shared seed reseeds the empty default.
-    world.remove_resource::<Underground>();
-    world.remove_resource::<MatchSession>();
+    clear_match_world(world);
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
     }
@@ -2082,6 +2115,7 @@ fn format_command_result(result: &CommandResult) -> String {
 /// borrow. Command application runs before it and the route-reject drain
 /// after it; everything between them is `step_tick`'s contract.
 fn advance_sim(world: &mut World) {
+    world.resource_mut::<SimTick>().0 += 1;
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
     world.resource_scope(|world, mut map: Mut<GridMap>| {
         step_tick(world, &mut map, seconds);
@@ -2195,9 +2229,9 @@ mod tests {
     use grus_sim::seed_skirmish;
     use grus_sim::step_heat;
     use grus_sim::{
-        AttackCooldown, CombatEvent, CombatTarget, ConstructionState, Excavation, MatchResult,
-        MoveOrder, RESEARCH_BASE_PER_SECOND, Room, UndergroundLevel, WorkerTask, add_research,
-        sorted_unit_ids, spawn_unit,
+        AttackCooldown, CombatEvent, CombatTarget, ConstructionState, Excavation, IdAllocator,
+        MatchResult, MoveOrder, RESEARCH_BASE_PER_SECOND, ResearchState, ResourceIndex, Room,
+        UndergroundLevel, WorkerTask, add_research, sorted_unit_ids, spawn_unit,
     };
 
     use super::*;
@@ -3644,12 +3678,12 @@ mod tests {
         assert_eq!(level.slots.len(), ROOM_SLOTS_PER_LEVEL);
         let shelter = &level.slots[0];
         assert_eq!(shelter.kind, Some(RoomKind::Shelter));
-        assert!(shelter.building && !shelter.complete);
+        assert!(!shelter.complete);
         assert!((shelter.progress - 0.5).abs() < 1e-6);
         assert!((shelter.remaining - 7.5).abs() < 1e-6);
         assert_eq!(shelter.benefit, "");
         let lab = &view.levels[2].slots[3];
-        assert!(lab.complete && !lab.building);
+        assert!(lab.complete);
         assert_eq!(lab.progress, 1.0);
         assert_eq!(lab.remaining, 0.0);
         assert_eq!(lab.benefit, "+1 rp/s");

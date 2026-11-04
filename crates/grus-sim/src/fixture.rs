@@ -1,23 +1,26 @@
-use bevy::prelude::World;
+use bevy::prelude::{Entity, Or, With, World};
 
 use crate::buildings::{Building, BuildingIndex, ConstructionState};
 use crate::catalog::{
     BuildingKind, ResourceKind, UnitKind, building_spec, resource_amount, unit_spec,
 };
-use crate::combat::Health;
+use crate::combat::{CombatEventTotal, CombatEvents, Health};
 use crate::commands::{
-    PlayerCommand, UnitCommand, UnitCommandKind, apply_player_command, sorted_unit_ids, spawn_unit,
+    PlayerCommand, UnitCommand, UnitCommandKind, UnitIndex, apply_player_command, sorted_unit_ids,
+    spawn_unit,
 };
 use crate::economy::{
-    Carry, Dropoff, GatherProgress, ResourceStockpile, TeamEconomy, WorkerTask,
-    spawn_resource_source,
+    Carry, Dropoff, GatherProgress, ResourceIndex, ResourceSource, ResourceStockpile, TeamEconomy,
+    WorkerTask, spawn_resource_source,
 };
 use crate::heat::HeatState;
 use crate::ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
 use crate::map::{Footprint, GridMap, GridPos};
-use crate::movement::SIM_STEP_SECONDS;
+use crate::movement::{SIM_STEP_SECONDS, Unit};
 use crate::research::ResearchState;
+use crate::session::MatchSession;
 use crate::underground::Underground;
+use crate::visibility::VisibilityMap;
 use crate::waves::{WaveState, step_waves, wave_deadline};
 
 /// Authored human starting layout: Research Center anchor, four worker
@@ -288,6 +291,49 @@ pub fn seed_skirmish(world: &mut World, map: &mut GridMap, fixture: &MapFixture)
     }
 
     world.insert_resource(IdAllocator::new(unit_counter + 1, 2, 19));
+}
+
+/// The seed's inverse and every reset path's one shared clear: all
+/// gameplay entities (units, buildings, resource sources) despawn and all
+/// match-scoped resources die — indices, economy, id allocation, fog,
+/// combat/session transients, waves, heat, research, the underground and
+/// the session itself. Absent state reads as neutral defaults until a
+/// reseed inserts fresh ones: no `Underground` reads as depth zero, no
+/// `HeatState` as full efficiency, no `MatchSession` as Playing (the
+/// benchmark contract). Bridge-owned transients (command queue, feedback)
+/// are not the sim's to clear.
+pub fn clear_match_world(world: &mut World) {
+    let stale: Vec<Entity> = world
+        .query_filtered::<Entity, Or<(With<Unit>, With<Building>, With<ResourceSource>)>>()
+        .iter(world)
+        .collect();
+    for entity in stale {
+        let _ = world.despawn(entity);
+    }
+    world.remove_resource::<UnitIndex>();
+    world.remove_resource::<BuildingIndex>();
+    world.remove_resource::<ResourceIndex>();
+    world.remove_resource::<TeamEconomy>();
+    world.remove_resource::<IdAllocator>();
+    // Visibility dies with the match: every seed path re-inserts a fresh
+    // fogged map.
+    world.remove_resource::<VisibilityMap>();
+    // Combat/session transients die with the match: the benchmark restarts
+    // session-free (missing session = Playing), the normal reset re-inserts
+    // Start.
+    world.remove_resource::<CombatEvents>();
+    world.remove_resource::<CombatEventTotal>();
+    world.remove_resource::<WaveState>();
+    // Heat dies with the match: a stale supply/demand between clear and
+    // reseed would read wrong, while absence reads neutral full efficiency.
+    world.remove_resource::<HeatState>();
+    // Research dies with the match too: absence reads zero points until the
+    // reseed inserts a fresh state — a restart can never carry progress.
+    world.remove_resource::<ResearchState>();
+    // The underground dies with the match the same way: absence reads depth
+    // zero until the shared seed reseeds the empty default.
+    world.remove_resource::<Underground>();
+    world.remove_resource::<MatchSession>();
 }
 
 fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {

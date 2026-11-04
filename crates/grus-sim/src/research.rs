@@ -74,11 +74,8 @@ fn underground_points_per_second(world: &World) -> f64 {
         .get_resource::<Underground>()
         .map(|underground| {
             underground
-                .levels
-                .iter()
-                .flat_map(|level| level.slots.iter().flatten())
-                .filter(|room| room.complete())
-                .map(|room| room_spec(room.kind).research_per_second)
+                .completed_rooms()
+                .map(|(_, room)| room_spec(room.kind).research_per_second)
                 .sum()
         })
         .unwrap_or(0.0)
