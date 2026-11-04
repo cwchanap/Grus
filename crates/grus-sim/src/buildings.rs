@@ -913,12 +913,6 @@ pub(crate) fn worker_at_slot(position: &SimPosition, slot: GridPos) -> bool {
     position.current.x.floor() as i32 == slot.x && position.current.y.floor() as i32 == slot.y
 }
 
-/// The completion-only grants every finished building receives through one
-/// path — `step_construction` and authored spawning share it so a completed
-/// building is never inert. `Dropoff` marks the deposit kinds (Depot and
-/// the Research Center, so a directly authored core accepts deposits like
-/// the seeded one), combat kinds gain a ready `AttackCooldown`, and
-/// producers own their FIFO queue from birth.
 fn grant_completion(world: &mut World, entity: Entity, kind: BuildingKind, team: TeamId) {
     if matches!(kind, BuildingKind::Depot | BuildingKind::ResearchCenter) {
         world.entity_mut(entity).insert(Dropoff { team });
@@ -932,14 +926,6 @@ fn grant_completion(world: &mut World, entity: Entity, kind: BuildingKind, team:
     }
 }
 
-/// Authors one completed building at `anchor` for fixtures and tests —
-/// never a player command: it skips placement validation, builder
-/// assignment, cost, and the construction phase entirely. Every footprint
-/// cell must be legal and unoccupied (asserted — a bad anchor is an
-/// authoring bug, not a reject), the cells block through `set_gate` for a
-/// Gate and `set_blocked` otherwise, the building registers in
-/// `BuildingIndex` under a freshly allocated id, and the same completion
-/// grants `step_construction` issues land on it.
 pub fn spawn_completed_building(
     world: &mut World,
     map: &mut GridMap,
