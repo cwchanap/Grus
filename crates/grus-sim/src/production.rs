@@ -128,11 +128,8 @@ pub fn population_cap(world: &World, team: TeamId) -> u32 {
             .get_resource::<Underground>()
             .map(|underground| {
                 underground
-                    .levels
-                    .iter()
-                    .flat_map(|level| level.slots.iter().flatten())
-                    .filter(|room| room.complete())
-                    .map(|room| room_spec(room.kind).population_capacity)
+                    .completed_rooms()
+                    .map(|(_, room)| room_spec(room.kind).population_capacity)
                     .fold(0, u32::saturating_add)
             })
             .unwrap_or(0)

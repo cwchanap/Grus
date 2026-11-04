@@ -46,7 +46,7 @@ pub use economy::{
     step_economy,
 };
 pub use fixture::{
-    ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart,
+    ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart, clear_match_world,
     extend_with_benchmark_workload, seed_skirmish,
 };
 pub use heat::{HeatState, step_heat, surface_efficiency};

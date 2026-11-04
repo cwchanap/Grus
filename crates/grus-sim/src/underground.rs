@@ -83,6 +83,20 @@ impl Underground {
     pub fn excavation_target(&self) -> u32 {
         self.depth() + 1
     }
+
+    /// Every completed room across all levels as `(1-based level, room)` —
+    /// the one walk heat, population cap and research share, since an
+    /// incomplete room contributes nothing to any of them.
+    pub fn completed_rooms(&self) -> impl Iterator<Item = (u32, &Room)> {
+        self.levels.iter().enumerate().flat_map(|(index, level)| {
+            let level_number = index as u32 + 1;
+            level
+                .slots
+                .iter()
+                .flatten()
+                .filter_map(move |room| room.complete().then_some((level_number, room)))
+        })
+    }
 }
 
 /// Applies an accepted `Excavate` — the global panel action with no

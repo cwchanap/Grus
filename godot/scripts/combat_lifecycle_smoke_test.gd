@@ -715,7 +715,11 @@ func _run() -> void:
 	if float(GrusBridge.research_snapshot().get("points", 0.0)) <= 0.0:
 		_fail("research never banked points during the defeat journey: %s" % [GrusBridge.research_snapshot()])
 		return
-	_main.call("_restart_match")
+	# The Result-phase Restart button is actually visible here, so a real
+	# click exercises the full production path — hit test, pressed signal
+	# and handler — rather than a private handler call.
+	SmokeHelpers.push_mouse_click(get_tree(),
+		_button("HUD/SessionPanel/RestartButton").get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(_restart_settled, 20.0,
 			"restart never re-settled to the exact fresh 4-unit fixture"):
 		return

@@ -68,18 +68,8 @@ fn geothermal_tap_supply(world: &World) -> u32 {
         .get_resource::<Underground>()
         .map(|underground| {
             underground
-                .levels
-                .iter()
-                .enumerate()
-                .flat_map(|(index, level)| {
-                    let level_number = index as u32 + 1;
-                    level
-                        .slots
-                        .iter()
-                        .flatten()
-                        .map(move |room| (level_number, room))
-                })
-                .filter(|&(_, room)| room.kind == RoomKind::GeothermalTap && room.complete())
+                .completed_rooms()
+                .filter(|(_, room)| room.kind == RoomKind::GeothermalTap)
                 .map(|(level, room)| room_spec(room.kind).heat_supply_at(level))
                 .fold(0, u32::saturating_add)
         })

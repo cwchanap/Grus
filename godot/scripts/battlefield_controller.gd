@@ -58,7 +58,11 @@ var _research_target_points := 0
 ## while the panel is visible — never a mirrored mutable copy.
 var _ug_rooms: Array[Dictionary] = []
 var _ug_slots_per_level := 4
-var _ug_structure_key := ""
+## Tick/phase markers behind the per-tick refresh gate: the snapshot can
+## only change inside a fixed tick, and the lock line only on a phase
+## change, so anything fresher is a wasted rebuild.
+var _ug_last_tick := -1
+var _ug_last_phase := ""
 ## Index into `_ug_rooms` of the armed room kind (-1 = none armed); the
 ## only selection state — slots derive eligibility from it every refresh.
 var _ug_armed_index := -1
@@ -163,7 +167,8 @@ func _process(_delta: float) -> void:
 	_refresh_session()
 	_reconcile_selection()
 	_refresh_hud()
-	if _underground_panel.visible:
+	if _underground_panel.visible \
+			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
 
 func _consume_placement_results() -> bool:
@@ -406,17 +411,20 @@ func _refresh_selection(building: Dictionary) -> void:
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
 ## and mark the event handled: `ui_focus_next` would otherwise consume Tab
 ## once a panel button holds keyboard focus, and the open panel owns Esc
-## ahead of the pause shortcut. Every other key keeps its existing
-## `_unhandled_input` route.
+## ahead of the pause shortcut. Every Tab event — press, echo and release
+## — is handled, since holding Tab repeats echo events that would
+## otherwise walk GUI focus onto the panel's buttons. Every other key
+## keeps its existing `_unhandled_input` route.
 func _input(event: InputEvent) -> void:
 	if not event is InputEventKey:
 		return
 	var key := event as InputEventKey
-	if not key.pressed or key.echo:
-		return
 	if key.keycode == KEY_TAB:
-		_toggle_underground_panel()
+		if key.pressed and not key.echo:
+			_toggle_underground_panel()
 		get_viewport().set_input_as_handled()
+		return
+	if not key.pressed or key.echo:
 		return
 	if key.keycode == KEY_ESCAPE and _underground_panel.visible:
 		_close_underground_panel()
@@ -955,61 +963,66 @@ func _toggle_underground_panel() -> void:
 		_close_underground_panel()
 	else:
 		_underground_panel.visible = true
-		command_status.text = "Underground panel — Esc closes"
+		# One immediate refresh so the first shown frame is current; the
+		# status line keeps the last command feedback — panel state never
+		# clobbers it (the Esc hint lives on the panel's own header).
+		_refresh_underground_panel()
 
 func _close_underground_panel() -> void:
 	_underground_panel.visible = false
 
-## Dynamic underground refresh, only while the panel is visible: rows are
-## rebuilt only when depth or slot kinds change, live text (dig countdown,
-## build progress, benefit lines, eligibility) refreshes every frame from
-## the read-only snapshot plus the static catalogue. No dig-price or
+## Dynamic underground refresh, only while the panel is visible and gated
+## by the applied-tick counter plus session phase: the snapshot can only
+## change inside a fixed tick, so a mid-tick frame never rebuilds one.
+## Level rows mirror the snapshot's level count — appended when a dig
+## completes, rebuilt only on the depth-shrinking reseed — so a live press
+## is never freed out from under a click. Live text (dig countdown, build
+## progress, benefit lines, eligibility) refreshes per refresh from the
+## read-only snapshot plus the static catalogue. No dig-price or
 ## room-effects math lives here — the snapshot carries the Rust-computed
 ## numbers.
 func _refresh_underground_panel() -> void:
+	_ug_last_tick = int(GrusBridge.sim_tick())
+	_ug_last_phase = _session_phase
 	var snap: Dictionary = GrusBridge.underground_snapshot()
-	var structure_key := _underground_structure_key(snap)
-	if structure_key != _ug_structure_key:
-		_ug_structure_key = structure_key
-		_rebuild_underground_rows(snap)
+	_sync_underground_rows(snap)
 	_refresh_underground_header(snap)
 	_refresh_underground_kinds(snap)
 	_refresh_underground_slots(snap)
 
-## Depth plus each slot's kind — everything that changes the row structure;
-## percentages and countdowns update in place.
-func _underground_structure_key(snap: Dictionary) -> String:
-	var parts := PackedStringArray(["d%d" % int(snap.get("depth", 0))])
-	for level in snap.get("levels", []):
-		var slot_parts := PackedStringArray()
-		for slot in level.get("slots", []):
-			slot_parts.append(str(slot.get("kind", "")))
-		parts.append(" ".join(slot_parts))
-	return "\n".join(parts)
+## Keep one row per snapshot level. Growth only ever appends (a level row
+## appears exactly when a dig completes), so existing slot buttons — and
+## any press in flight on them — are never freed mid-click. Depth shrinks
+## only through a match reseed, the one case that still rebuilds.
+func _sync_underground_rows(snap: Dictionary) -> void:
+	var levels: Array = snap.get("levels", [])
+	var rows := _underground_levels.get_child_count()
+	if levels.size() < rows:
+		for child in _underground_levels.get_children():
+			_underground_levels.remove_child(child)
+			child.queue_free()
+		rows = 0
+	for index in range(rows, levels.size()):
+		_add_underground_row(int(levels[index].get("level", index + 1)))
 
-func _rebuild_underground_rows(snap: Dictionary) -> void:
-	for child in _underground_levels.get_children():
-		_underground_levels.remove_child(child)
-		child.queue_free()
-	for level in snap.get("levels", []):
-		var level_number := int(level.get("level", 0))
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 2)
-		var level_label := Label.new()
-		level_label.text = "L%d" % level_number
-		level_label.custom_minimum_size = Vector2(24, 48)
-		level_label.add_theme_font_size_override("font_size", 14)
-		row.add_child(level_label)
-		for slot_index in _ug_slots_per_level:
-			var button := Button.new()
-			button.add_theme_font_size_override("font_size", 13)
-			button.add_theme_color_override("font_disabled_color", Color(0.8, 0.8, 0.8))
-			button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-			button.custom_minimum_size = Vector2(84, 48)
-			button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			button.pressed.connect(_on_slot_pressed.bind(level_number, slot_index))
-			row.add_child(button)
-		_underground_levels.add_child(row)
+func _add_underground_row(level_number: int) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 2)
+	var level_label := Label.new()
+	level_label.text = "L%d" % level_number
+	level_label.custom_minimum_size = Vector2(24, 48)
+	level_label.add_theme_font_size_override("font_size", 14)
+	row.add_child(level_label)
+	for slot_index in _ug_slots_per_level:
+		var button := Button.new()
+		button.add_theme_font_size_override("font_size", 13)
+		button.add_theme_color_override("font_disabled_color", Color(0.8, 0.8, 0.8))
+		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		button.custom_minimum_size = Vector2(84, 48)
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		button.pressed.connect(_on_slot_pressed.bind(level_number, slot_index))
+		row.add_child(button)
+	_underground_levels.add_child(row)
 
 func _refresh_underground_header(snap: Dictionary) -> void:
 	var depth := int(snap.get("depth", 0))
@@ -1027,7 +1040,8 @@ func _refresh_underground_header(snap: Dictionary) -> void:
 		lock_line = "\nPaused — inspection only"
 	elif not _playing():
 		lock_line = "\n%s — inspection only" % _session_phase
-	_underground_header.text = "Underground — depth %d\n%s%s" % [depth, dig_line, lock_line]
+	_underground_header.text = "Underground — depth %d · Esc closes\n%s%s" % [
+		depth, dig_line, lock_line]
 	if bool(snap.get("excavating", false)):
 		_underground_excavate.disabled = true
 		_underground_excavate.text = "Digging L%d · %d%%" % [
@@ -1059,30 +1073,15 @@ func _ug_cost_text(cost: Dictionary) -> String:
 func _underground_display_name(kind: String) -> String:
 	return str(UNDERGROUND_DISPLAY_NAMES.get(kind, kind))
 
-## The full kind tooltip: catalogue name, cost, build time and effect —
-## straight off the static catalogue row, never retyped here.
+## The full kind tooltip: catalogue name, cost, build time and the
+## Rust-computed effect line — straight off the static catalogue row,
+## never retyped here.
 func _ug_kind_tooltip(entry: Dictionary) -> String:
 	return "%s — Requires L%d\nCost: %s · Build: %ds\n%s" % [
 		str(entry.get("name", "")), int(entry.get("min_level", 1)), _ug_cost_text(entry),
-		int(entry.get("seconds", 0)), _ug_effect_text(entry)]
+		int(entry.get("seconds", 0)), str(entry.get("effect", ""))]
 
-## One effect line per catalogue row (the geothermal row shows its
-## min-level base; the per-depth bonus rides the completed slot's own
-## Rust-computed benefit text).
-func _ug_effect_text(entry: Dictionary) -> String:
-	if int(entry.get("population", 0)) > 0:
-		return "+%d pop" % int(entry.get("population", 0))
-	if float(entry.get("research_per_second", 0.0)) > 0.0:
-		return "+%s research/s" % str(entry.get("research_per_second", 0.0))
-	if float(entry.get("output_rate", 0.0)) > 0.0:
-		return "+%s %s/s" % [String.num(float(entry.get("output_rate", 0.0)), 3), str(entry.get("output_kind", ""))]
-	var heat := int(entry.get("heat_supply_base", 0))
-	if heat > 0:
-		return "+%d heat at L%d (+%d/level deeper)" % [
-			heat, int(entry.get("min_level", 1)), int(entry.get("heat_supply_per_level", 0))]
-	return ""
-
-## Per-frame slot refresh against the live snapshot and the armed kind:
+## Per-refresh slot update against the live snapshot and the armed kind:
 ## empty slots act only with a kind armed, only on rows at or above its
 ## min_level, and only while Playing; shallower rows stay disabled and say
 ## why. Occupied/constructing slots are never actionable.
