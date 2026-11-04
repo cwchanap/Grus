@@ -71,6 +71,16 @@ fn survival_checkpoint_met(phase: MatchPhase, next_wave: u64, core_alive: bool) 
     next_wave > SURVIVAL_DEADLINE_WAVE && matches!(phase, MatchPhase::Playing) && core_alive
 }
 
+const WAVE_CLOCK_TOLERANCE_SECONDS: f64 = 1.0;
+
+fn wave_schedule_on_track(wave: WaveState, simulated_seconds: f64) -> bool {
+    let clock_advancing = (wave.elapsed - simulated_seconds).abs() <= WAVE_CLOCK_TOLERANCE_SECONDS;
+    let no_skipped_launch = wave.next_wave <= 1
+        || wave_deadline(wave.next_wave - 1) <= wave.elapsed + WAVE_CLOCK_TOLERANCE_SECONDS;
+    let launch_not_overdue = wave.elapsed <= wave_deadline(wave.next_wave);
+    clock_advancing && no_skipped_launch && launch_not_overdue
+}
+
 fn report(world: &World, simulated_seconds: f64, wall_clock: Duration) {
     let wave = *world.resource::<WaveState>();
     eprintln!(
@@ -250,6 +260,27 @@ fn wave_deadline_checkpoint_requires_live_core_and_playing() {
 }
 
 #[test]
+fn wave_schedule_check_flags_stalled_or_skipped_launches() {
+    let on_schedule = |elapsed: f64, next_wave: u64| {
+        wave_schedule_on_track(WaveState { elapsed, next_wave }, elapsed)
+    };
+    assert!(on_schedule(250.0, 1));
+    assert!(on_schedule(1_300.0, 12));
+    assert!(on_schedule(1_383.75, 12));
+    assert!(on_schedule(1_400.0, 13));
+    assert!(!on_schedule(1_400.05, 12));
+    assert!(!on_schedule(1_500.0, 12));
+    assert!(!on_schedule(1_350.0, 14));
+    assert!(!wave_schedule_on_track(
+        WaveState {
+            elapsed: 1_300.0,
+            next_wave: 12
+        },
+        1_500.0
+    ));
+}
+
+#[test]
 #[ignore = "up to 84,000 fixed ticks; CI runs it in --release explicitly"]
 fn fixed_defense_survives_wave_10_and_falls_before_wave_40() {
     let (mut world, mut map, turrets) = reference_defense();
@@ -285,6 +316,14 @@ fn fixed_defense_survives_wave_10_and_falls_before_wave_40() {
 
         let wave = *world.resource::<WaveState>();
         let phase = active_phase(&world);
+
+        assert!(
+            wave_schedule_on_track(wave, simulated_seconds),
+            "wave schedule stalled at {simulated_seconds:.1} simulated s: \
+             wave clock {:.2} s, next wave {} of {FINAL_WAVE}",
+            wave.elapsed,
+            wave.next_wave
+        );
 
         if !checkpoint && wave.next_wave > SURVIVAL_DEADLINE_WAVE {
             let core_alive = research_center_alive(&world);
