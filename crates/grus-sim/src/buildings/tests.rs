@@ -3012,11 +3012,6 @@ fn cold_surface_efficiency_does_not_slow_construction() {
     );
 }
 
-/// `spawn_completed_building` authors a ready Gun Turret — the shared
-/// constructor fixtures use so a completed tower is never inert: the same
-/// grant the construction path issues gives it a fresh `AttackCooldown`,
-/// and the shared combat pass strikes a Swarmer in range on the next tick.
-/// A tower authored without its cooldown can never fire and fails here.
 #[test]
 fn authored_gun_turret_is_combat_ready_and_fires() {
     let (mut world, mut map, _worker) = setup_build_test();
@@ -3061,8 +3056,6 @@ fn authored_gun_turret_is_combat_ready_and_fires() {
         "a completed tower without its cooldown can never fire"
     );
 
-    // A Swarmer inside the 8-cell range takes real damage through the
-    // shared tower pass — no order or route involved.
     let swarmer = spawn_unit(
         &mut world,
         UnitId(2),
@@ -3087,8 +3080,6 @@ fn authored_gun_turret_is_combat_ready_and_fires() {
     );
 }
 
-/// A directly authored completed Research Center behaves like the seeded
-/// core: the shared grant gives it `Dropoff` and the producer queue.
 #[test]
 fn authored_research_center_grants_dropoff_and_queue() {
     let (mut world, mut map, _worker) = setup_build_test();
@@ -3117,9 +3108,6 @@ fn authored_research_center_grants_dropoff_and_queue() {
     assert!(world.get::<AttackCooldown>(entity).is_none());
 }
 
-/// A directly authored Gate reserves its cell like any building but
-/// passes only Team 1: the constructor must choose `set_gate`, never
-/// `set_blocked`.
 #[test]
 fn authored_gate_reserves_its_cell_and_passes_only_team_one() {
     let (mut world, mut map, _worker) = setup_build_test();
@@ -3148,9 +3136,6 @@ fn authored_gate_reserves_its_cell_and_passes_only_team_one() {
     assert!(world.get::<ProductionQueue>(entity).is_none());
 }
 
-/// Each call allocates a fresh `BuildingId` and blocks the whole catalogue
-/// footprint through ordinary `set_blocked`; grants stay keyed by kind —
-/// Depot gains `Dropoff`, the Barracks its empty queue, the Wall nothing.
 #[test]
 fn authored_buildings_block_footprints_hold_unique_ids_and_grant_by_kind() {
     let (mut world, mut map, _worker) = setup_build_test();
@@ -3214,8 +3199,6 @@ fn authored_buildings_block_footprints_hold_unique_ids_and_grant_by_kind() {
     assert!(world.get::<ProductionQueue>(wall_entity).is_none());
 }
 
-/// The authoring seam asserts rather than rejects: an occupied footprint
-/// cell is a fixture bug, and a failed check leaves nothing behind.
 #[test]
 #[should_panic(expected = "legal and unoccupied")]
 fn authored_building_panics_on_an_occupied_cell() {
@@ -3230,8 +3213,6 @@ fn authored_building_panics_on_an_occupied_cell() {
     );
 }
 
-/// Out-of-bounds footprint cells fail the same legal-and-unoccupied check
-/// — `is_walkable` is false outside the grid.
 #[test]
 #[should_panic(expected = "legal and unoccupied")]
 fn authored_building_panics_on_an_out_of_bounds_cell() {
