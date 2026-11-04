@@ -1,5 +1,6 @@
 use super::*;
 use crate::production::{ProductionKind, produces};
+use crate::waves::wave_deadline;
 
 #[test]
 fn workers_are_noncombatants_and_military_units_are_not() {
@@ -133,8 +134,8 @@ fn wave_tuning_is_catalogued_as_integer_values() {
     assert_eq!(WAVE_WARNING_SECONDS, 30);
     assert_eq!(MAX_LIVE_ALIENS, 150);
     assert_eq!(WAVE_BUDGET_BASE, 8);
-    assert_eq!(WAVE_BUDGET_PER_WAVE, 4);
-    assert_eq!(WAVE_BUDGET_QUADRATIC_TENTHS, 4);
+    assert_eq!(WAVE_BUDGET_PER_WAVE, 2);
+    assert_eq!(WAVE_BUDGET_QUADRATIC_TENTHS, 2);
     assert_eq!(WAVE_TWO_ZONE_START, 10);
     assert_eq!(WAVE_THREE_ZONE_START, 20);
 }
@@ -146,7 +147,7 @@ fn buildings_carry_catalogue_health() {
         (BuildingKind::Bunkhouse, 250),
         (BuildingKind::Depot, 300),
         (BuildingKind::Barracks, 400),
-        (BuildingKind::Wall, 400),
+        (BuildingKind::Wall, 2400),
         (BuildingKind::Gate, 600),
         (BuildingKind::GunTurret, 350),
         (BuildingKind::CoalFurnace, 300),
@@ -492,6 +493,16 @@ fn research_tuning_is_catalogued_as_named_constants() {
             "{kind:?} research gate"
         );
     }
+}
+
+#[test]
+fn unattended_research_cannot_outrun_the_survival_guard_window() {
+    let unattended_victory = f64::from(RESEARCH_TARGET_POINTS) / RESEARCH_BASE_PER_SECOND;
+    assert!(
+        unattended_victory > wave_deadline(40),
+        "unattended Victory at {unattended_victory:.0} s must outlast the wave-40 deadline at {:.0} s",
+        wave_deadline(40)
+    );
 }
 
 #[test]

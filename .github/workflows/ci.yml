@@ -65,6 +65,8 @@ jobs:
           name: grus-sim-coverage-lcov
           path: lcov.info
           if-no-files-found: warn
+      - name: Run release survival-balance guard
+        run: cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture
       - name: Test grus-godot library
         run: cargo test -p grus-godot --lib --locked
       - name: Test grus-godot e2e selector surface

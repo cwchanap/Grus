@@ -149,7 +149,7 @@ fn seeded_wave_spawns_distinct_aliens_and_dispatches_attack_moves_in_the_launch_
 
     let ids = live_alien_ids(&world, TeamId(2));
     assert_eq!(world.resource::<WaveState>().next_wave, 2);
-    assert_eq!(ids.len(), 12);
+    assert_eq!(ids.len(), 10);
     let mut spawned_cells = std::collections::HashSet::new();
     for id in ids {
         let entity = world.resource::<UnitIndex>().entity(id).unwrap();
@@ -184,7 +184,7 @@ fn wave_spawn_slides_off_a_blocked_entry_anchor_to_the_nearest_free_cell() {
     step_waves(&mut world, &mut map, 0.05);
 
     let ids = live_alien_ids(&world, TeamId(2));
-    assert_eq!(ids.len(), 12);
+    assert_eq!(ids.len(), 10);
     for id in ids {
         let entity = world.resource::<UnitIndex>().entity(id).unwrap();
         let cell = map.world_to_cell(world.get::<SimPosition>(entity).unwrap().current);
@@ -210,7 +210,7 @@ fn rejected_wave_routes_retry_once_per_second_after_the_path_opens() {
 
     step_waves(&mut world, &mut map, 0.05);
     let ids = live_alien_ids(&world, TeamId(2));
-    assert_eq!(ids.len(), 12);
+    assert_eq!(ids.len(), 10);
     assert!(ids.iter().all(|id| {
         let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
         world.get::<CombatOrder>(entity).is_none() && world.get::<MoveOrder>(entity).is_none()
@@ -320,8 +320,8 @@ fn live_cap_overflow_buffs_only_fresh_wave_units_and_full_cap_launches_nothing()
     assert!(!existing.contains(&fresh_id));
     let fresh = world.resource::<UnitIndex>().entity(fresh_id).unwrap();
     assert_eq!(world.get::<Unit>(fresh).unwrap().kind, UnitKind::Behemoth);
-    assert_eq!(world.get::<Health>(fresh).unwrap().max, 4400);
-    assert_eq!(world.get::<Health>(fresh).unwrap().current, 4400);
+    assert_eq!(world.get::<Health>(fresh).unwrap().max, 2400);
+    assert_eq!(world.get::<Health>(fresh).unwrap().current, 2400);
     assert_eq!(
         world.get::<Health>(world.resource::<UnitIndex>().entity(existing[0]).unwrap()),
         Some(&prior_health)
@@ -355,14 +355,14 @@ fn live_cap_overflow_buffs_only_fresh_wave_units_and_full_cap_launches_nothing()
 
 #[test]
 fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
-    assert_eq!(wave_budget(1), 12);
-    assert_eq!(wave_budget(4), 30);
-    assert_eq!(wave_budget(8), 65);
-    assert_eq!(wave_budget(10), 88);
+    assert_eq!(wave_budget(1), 10);
+    assert_eq!(wave_budget(4), 19);
+    assert_eq!(wave_budget(8), 36);
+    assert_eq!(wave_budget(10), 48);
 
     let wave1 = plan_roster(1, wave_budget(1));
-    assert_eq!(wave1.swarmers, 12);
-    assert_eq!(wave1.total_threat(), 12);
+    assert_eq!(wave1.swarmers, 10);
+    assert_eq!(wave1.total_threat(), 10);
 
     let wave4 = plan_roster(4, wave_budget(4));
     assert_eq!(
@@ -372,9 +372,9 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
             wave4.spitters,
             wave4.swarmers
         ),
-        (0, 0, 5, 15)
+        (0, 0, 3, 10)
     );
-    assert_eq!(wave4.total_threat(), 30);
+    assert_eq!(wave4.total_threat(), 19);
 
     let wave8 = plan_roster(8, wave_budget(8));
     assert_eq!(
@@ -384,9 +384,9 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
             wave8.spitters,
             wave8.swarmers
         ),
-        (0, 4, 3, 32)
+        (0, 2, 2, 18)
     );
-    assert_eq!(wave8.total_threat(), 65);
+    assert_eq!(wave8.total_threat(), 36);
 
     let wave10 = plan_roster(10, wave_budget(10));
     assert_eq!(
@@ -396,18 +396,18 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
             wave10.spitters,
             wave10.swarmers
         ),
-        (1, 3, 2, 24)
+        (1, 0, 1, 5)
     );
-    assert_eq!(wave10.total_threat(), 88);
+    assert_eq!(wave10.total_threat(), 48);
     assert_eq!(
         wave10.ordered_prefix(7),
         [
             UnitKind::Behemoth,
-            UnitKind::Brute,
-            UnitKind::Brute,
-            UnitKind::Brute,
             UnitKind::Spitter,
-            UnitKind::Spitter,
+            UnitKind::Swarmer,
+            UnitKind::Swarmer,
+            UnitKind::Swarmer,
+            UnitKind::Swarmer,
             UnitKind::Swarmer,
         ]
     );
@@ -415,7 +415,16 @@ fn integer_wave_budgets_and_ordered_rosters_are_pinned() {
     let capped_wave = plan_roster(100, wave_budget(100)).ordered_prefix(MAX_LIVE_ALIENS as usize);
     assert_eq!(capped_wave.len(), MAX_LIVE_ALIENS as usize);
     assert_eq!(capped_wave[0], UnitKind::Behemoth);
-    assert!(capped_wave[1..].iter().all(|kind| *kind == UnitKind::Brute));
+    assert!(
+        capped_wave[1..=120]
+            .iter()
+            .all(|kind| *kind == UnitKind::Brute)
+    );
+    assert!(
+        capped_wave[121..]
+            .iter()
+            .all(|kind| *kind == UnitKind::Spitter)
+    );
 }
 
 #[test]
@@ -473,19 +482,19 @@ fn launch_budget_flips_exactly_at_75_percent_research() {
     assert_eq!(effective_wave_budget(&world, 10), wave_budget(10));
 
     world.resource_mut::<ResearchState>().points = f64::from(threshold);
-    // floor(12 × 1.5) = 18; floor(17 × 1.5) = 25 — integer truncation
-    // drops the odd budget's half point; floor(88 × 1.5) = 132.
-    assert_eq!(effective_wave_budget(&world, 1), 18);
-    assert_eq!(effective_wave_budget(&world, 2), 25);
-    assert_eq!(effective_wave_budget(&world, 10), 132);
+    // floor(10 × 1.5) = 15; floor(23 × 1.5) = 34 — integer truncation
+    // drops the odd budget's half point; floor(48 × 1.5) = 72.
+    assert_eq!(effective_wave_budget(&world, 1), 15);
+    assert_eq!(effective_wave_budget(&world, 5), 34);
+    assert_eq!(effective_wave_budget(&world, 10), 72);
 
     world.resource_mut::<ResearchState>().points = f64::from(threshold) + 250.5;
-    assert_eq!(effective_wave_budget(&world, 1), 18);
+    assert_eq!(effective_wave_budget(&world, 1), 15);
 }
 
 /// A launch committed before the crossing keeps the plain roster; the
 /// FIRST launch after research reaches 75% spends the boosted budget —
-/// wave 1 at 6,749.5 buys 12 swarmers, wave 2 at 6,750 buys 25.
+/// wave 1 at 6,749.5 buys 10 swarmers, wave 2 at 6,750 buys 18.
 #[test]
 fn first_launch_after_crossing_75_percent_uses_the_boosted_budget() {
     let (mut world, mut map) = seeded_world();
@@ -570,8 +579,8 @@ fn crossing_75_percent_does_not_rebuff_an_already_launched_wave() {
 }
 
 /// Boosted budgets feed the unchanged zone rotation: wave 10's two-zone
-/// launch buys the full 58-unit roster from floor(88 × 1.5) = 132 and
-/// wave 20's three-zone launch buys 205 units from floor(248 × 1.5) =
+/// launch buys the full 21-unit roster from floor(48 × 1.5) = 72 and
+/// wave 30's three-zone launch buys 205 units from floor(248 × 1.5) =
 /// 372 — over the 150 cap, so the cap and overflow-health rules consume
 /// the boosted roster exactly like a normal one.
 #[test]
@@ -581,8 +590,8 @@ fn boosted_budgets_apply_to_two_and_three_zone_waves() {
         f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
 
     launch_wave(&mut world, &mut map, 10);
-    assert_eq!(plan_roster(10, boosted_budget(10)).total_units(), 58);
-    assert_eq!(live_alien_ids(&world, TeamId(2)).len(), 58);
+    assert_eq!(plan_roster(10, boosted_budget(10)).total_units(), 21);
+    assert_eq!(live_alien_ids(&world, TeamId(2)).len(), 21);
     // The two-zone launch splits the boosted roster across both anchors.
     let cells = unit_cells(&world, &map);
     for zone in zones_for(10) {
@@ -598,12 +607,12 @@ fn boosted_budgets_apply_to_two_and_three_zone_waves() {
     let (mut world, mut map) = seeded_world();
     world.resource_mut::<ResearchState>().points =
         f64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT));
-    launch_wave(&mut world, &mut map, 20);
-    let wave_twenty = live_alien_ids(&world, TeamId(2));
-    assert_eq!(plan_roster(20, boosted_budget(20)).total_units(), 205);
-    assert_eq!(wave_twenty.len(), MAX_LIVE_ALIENS as usize);
+    launch_wave(&mut world, &mut map, 30);
+    let wave_thirty = live_alien_ids(&world, TeamId(2));
+    assert_eq!(plan_roster(30, boosted_budget(30)).total_units(), 205);
+    assert_eq!(wave_thirty.len(), MAX_LIVE_ALIENS as usize);
     let cells = unit_cells(&world, &map);
-    for zone in zones_for(20) {
+    for zone in zones_for(30) {
         let anchor = zone.anchor();
         assert!(
             cells
@@ -614,7 +623,7 @@ fn boosted_budgets_apply_to_two_and_three_zone_waves() {
     }
     // The 55 unspawned threat points fold into health: every capped
     // spawn is buffed above its catalogue base.
-    for id in &wave_twenty {
+    for id in &wave_thirty {
         let entity = world.resource::<UnitIndex>().entity(*id).unwrap();
         let kind = world.get::<Unit>(entity).unwrap().kind;
         let health = world.get::<Health>(entity).unwrap();
@@ -629,9 +638,9 @@ fn boosted_budgets_apply_to_two_and_three_zone_waves() {
 
 /// The live-alien cap consumes the boosted roster unchanged: with one
 /// slot free, boosted wave 10 still spawns only the priority-head
-/// Behemoth, folding the larger overflow — floor(88 × 1.5) = 132 budget,
-/// 92 unspawned threat — into 6,600 health where the unboosted launch
-/// grants 4,400.
+/// Behemoth, folding the larger overflow — floor(48 × 1.5) = 72 budget,
+/// 32 unspawned threat — into 3,600 health where the unboosted launch
+/// grants 2,400.
 #[test]
 fn boosted_wave_overflow_buffs_the_capped_spawn_harder() {
     let (mut world, mut map) = seeded_world();
@@ -648,8 +657,8 @@ fn boosted_wave_overflow_buffs_the_capped_spawn_harder() {
         .entity(*ids.last().unwrap())
         .unwrap();
     assert_eq!(world.get::<Unit>(fresh).unwrap().kind, UnitKind::Behemoth);
-    assert_eq!(world.get::<Health>(fresh).unwrap().max, 6_600);
-    assert_eq!(world.get::<Health>(fresh).unwrap().current, 6_600);
+    assert_eq!(world.get::<Health>(fresh).unwrap().max, 3_600);
+    assert_eq!(world.get::<Health>(fresh).unwrap().current, 3_600);
 }
 
 /// `u64::MAX`-class budgets never wrap: the widened boost saturates, the
@@ -1252,7 +1261,7 @@ fn launch_rejected_core_attack_moves_fall_back_to_a_reachable_wall() {
     launch_wave(&mut world, &mut map, 1);
 
     let aliens = live_alien_ids(&world, TeamId(2));
-    assert_eq!(aliens.len(), 12);
+    assert_eq!(aliens.len(), 10);
     let assigned = aliens
         .iter()
         .filter_map(|id| {

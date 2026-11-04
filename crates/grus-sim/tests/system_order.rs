@@ -332,7 +332,7 @@ fn wave_spawn_hits_core_in_launch_tick(fog: bool) {
 
     step_waves(&mut world, &mut map, SIM_STEP_SECONDS);
     assert_eq!(world.resource::<WaveState>().next_wave, 2);
-    assert_eq!(world.resource::<UnitIndex>().iter().count(), 16);
+    assert_eq!(world.resource::<UnitIndex>().iter().count(), 14);
 
     step_combat(&mut world, &mut map, SIM_STEP_SECONDS);
 
