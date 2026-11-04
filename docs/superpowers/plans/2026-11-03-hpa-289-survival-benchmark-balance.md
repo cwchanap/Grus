@@ -76,7 +76,7 @@ The current repository **already has** the real 50-human/150-alien director work
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - [ ] `cargo test --workspace --locked` (normal fast tests; long guard ignored)
-- [ ] `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\\.rs$'`
+- [ ] `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path lcov.info --locked --ignore-filename-regex 'tests\.rs$'`
 - [ ] `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored`
 - [ ] `cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1`
 - [ ] 60 simulated seconds / fortress, actual tower-hit and replan/heat/alien-floor assertions
