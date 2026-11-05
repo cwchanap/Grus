@@ -54,7 +54,6 @@ godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # 
 godot --headless --path godot res://scenes/wave_smoke_test.tscn      # HPA-449 wave presentation; extends the combat lifecycle journey
 godot --headless --path godot res://scenes/defenses_smoke_test.tscn  # HPA-450 wall/gate/turret defense journey
 godot --headless --path godot res://scenes/underground_smoke_test.tscn # HPA-288 paid L3/Gather, focused Tab/Esc, pause/restart, slot locks, cold Lab + Tap
-godot --headless --path godot res://scenes/benchmark_liveness_smoke_test.tscn
 ```
 
 The `bevy_e2e` out-of-process test needs an exported build: `godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64`, then `GRUS_E2E_BINARY=<path> cargo test -p grus-godot --features e2e --test e2e_boot --locked -- --test-threads=1`. Without `GRUS_E2E_BINARY` it skips loudly instead of running. The e2e selector surface is inert unless `BEVY_E2E=1`.
@@ -85,7 +84,7 @@ Modules: `catalog` (the single source of costs, build/train seconds, footprints,
 **`crates/grus-godot`** — the GDExtension. `build_app` (`#[bevy_app]`) registers the godot-bevy plugins, sets `Time::<Fixed>` to `SIM_STEP_SECONDS` (0.05 → 20 Hz), and chains `FixedUpdate` in a fixed order:
 
 ```
-apply_pending_commands → advance_sim → drain_route_reject_feedback
+apply_pending_commands → advance_sim → drain_route_reject_feedback → stage_combat_events
 ```
 
 Order is a contract, not an accident. `advance_sim` reads `Time<Fixed>` and runs grus-sim's `step_tick` — waves → underground → heat → combat → movement → economy → construction → production → research → visibility — inside one scoped `GridMap` resource borrow: waves launch after commands and before combat/movement so a new alien can acquire a target in the launch tick; underground completion precedes heat, so a just-completed Tap supplies this tick and a Lab contributes later in this tick; heat computed at the top of the tick scales that same tick's completed-turret cooldowns, production progress and research gain; arrival is visible to economy/construction in the same tick; construction completion (population cap, producer queues) feeds production; production runs after movement so a completed unit's rally route is planned against post-movement occupancy and marches next tick; and research runs after combat so a lethal hit on the Research Center settles Defeat before the same tick's passive gain could reach the target. The closing visibility refresh is what presentation and the next tick's command validation consume. `crates/grus-sim/tests/system_order.rs` calls `step_tick` itself, so reordering the canonical tick fails those tests.

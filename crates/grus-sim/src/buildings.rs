@@ -242,9 +242,56 @@ pub fn validate_placement(
     })
 }
 
+/// Claims a footprint's cells on the map: Gate cells become the
+/// human-passable flag `is_traversable_for` honours for `TeamId(1)`, every
+/// other building blocks its cells outright.
+fn claim_footprint_cells(map: &mut GridMap, kind: BuildingKind, footprint: Footprint) {
+    for cell in footprint.cells() {
+        if kind == BuildingKind::Gate {
+            map.set_gate(cell);
+        } else {
+            map.set_blocked(cell, true);
+        }
+    }
+}
+
+/// Spawns the `Building`/`Footprint`/`Health` bundle at full health and
+/// registers it in `BuildingIndex`. `construction` carries the caller's
+/// state — a fresh site for placed buildings, `complete` for authored
+/// fixtures.
+fn spawn_building(
+    world: &mut World,
+    id: BuildingId,
+    team: TeamId,
+    kind: BuildingKind,
+    footprint: Footprint,
+    construction: ConstructionState,
+) -> Entity {
+    let spec = building_spec(kind);
+    let entity = world
+        .spawn((
+            Building {
+                id,
+                team,
+                kind,
+                construction,
+            },
+            footprint,
+            Health {
+                current: spec.max_health,
+                max: spec.max_health,
+            },
+        ))
+        .id();
+    world
+        .get_resource_or_insert_with(BuildingIndex::default)
+        .insert(id, entity);
+    entity
+}
+
 /// Applies an accepted `PlaceBuilding`: validates first, re-checks real
 /// occupancy, then spends the cost atomically — all before cancelling the
-/// builder's old activity — and finally allocates the `BuildingId`, blocks
+/// builder's old activity — and finally allocates the `BuildingId`, claims
 /// the footprint, spawns `Building + Footprint`, and routes the builder to
 /// its stored approach slot.
 pub(crate) fn apply_place_building(
@@ -303,37 +350,21 @@ pub(crate) fn apply_place_building(
     displace_footprint_occupants(world, map, plan.footprint);
     retarget_footprint_goals(world, map, plan.footprint);
 
-    for cell in plan.footprint.cells() {
-        if kind == BuildingKind::Gate {
-            map.set_gate(cell);
-        } else {
-            map.set_blocked(cell, true);
-        }
-    }
-
-    let building_entity = world
-        .spawn((
-            Building {
-                id,
-                team: issuer,
-                kind,
-                construction: ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: false,
-                    active_builder: Some(builder),
-                },
-            },
-            plan.footprint,
-            // Sites use full owning-building health from placement;
-            // construction progress does not scale it.
-            Health {
-                current: spec.max_health,
-                max: spec.max_health,
-            },
-        ))
-        .id();
-    let mut index = world.get_resource_or_insert_with(BuildingIndex::default);
-    index.insert(id, building_entity);
+    claim_footprint_cells(map, kind, plan.footprint);
+    // Sites use full owning-building health from placement; construction
+    // progress does not scale it.
+    spawn_building(
+        world,
+        id,
+        issuer,
+        kind,
+        plan.footprint,
+        ConstructionState {
+            progress_seconds: 0.0,
+            complete: false,
+            active_builder: Some(builder),
+        },
+    );
 
     world
         .entity_mut(plan.builder)
@@ -933,6 +964,14 @@ pub fn spawn_completed_building(
     kind: BuildingKind,
     anchor: GridPos,
 ) -> BuildingId {
+    // `GridMap::is_traversable_for` admits gates only for `TeamId(1)` — the
+    // locked Team-1-only passage contract. Until the map learns per-team
+    // gates, an authored gate for another team would seal cells its own
+    // side can never cross; pin the only sane use at this API boundary.
+    assert!(
+        kind != BuildingKind::Gate || team == TeamId(1),
+        "authored {kind:?} for {team:?}: Gate passage is Team-1-only"
+    );
     let spec = building_spec(kind);
     let footprint = Footprint::new(anchor, spec.width, spec.height);
     let unit_cells: HashSet<GridPos> = world
@@ -953,36 +992,19 @@ pub fn spawn_completed_building(
     }
 
     let id = world.resource_mut::<IdAllocator>().allocate_building();
-    for cell in footprint.cells() {
-        if kind == BuildingKind::Gate {
-            map.set_gate(cell);
-        } else {
-            map.set_blocked(cell, true);
-        }
-    }
-
-    let entity = world
-        .spawn((
-            Building {
-                id,
-                team,
-                kind,
-                construction: ConstructionState {
-                    progress_seconds: 0.0,
-                    complete: true,
-                    active_builder: None,
-                },
-            },
-            footprint,
-            Health {
-                current: spec.max_health,
-                max: spec.max_health,
-            },
-        ))
-        .id();
-    world
-        .get_resource_or_insert_with(BuildingIndex::default)
-        .insert(id, entity);
+    claim_footprint_cells(map, kind, footprint);
+    let entity = spawn_building(
+        world,
+        id,
+        team,
+        kind,
+        footprint,
+        ConstructionState {
+            progress_seconds: 0.0,
+            complete: true,
+            active_builder: None,
+        },
+    );
     grant_completion(world, entity, kind, team);
     id
 }

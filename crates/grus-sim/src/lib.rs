@@ -46,8 +46,8 @@ pub use economy::{
     step_economy,
 };
 pub use fixture::{
-    ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart, clear_match_world,
-    extend_with_benchmark_workload, seed_skirmish,
+    ENTRY_ZONES, EntryZone, MapFixture, RUINS, ResourceSpawn, TeamStart, benchmark_building_count,
+    clear_match_world, extend_with_benchmark_workload, seed_skirmish,
 };
 pub use heat::{HeatState, step_heat, surface_efficiency};
 pub use ids::{BuildingId, IdAllocator, ResourceId, TeamId, UnitId};
@@ -58,8 +58,8 @@ pub use production::{
     produces, step_production,
 };
 pub use research::{
-    ResearchState, add_research, building_unlocked, research_points, research_rate, step_research,
-    unlock_points,
+    ResearchState, add_research, building_unlocked, living_research_core, research_points,
+    research_rate, step_research, unlock_points,
 };
 pub use session::{
     MatchPhase, MatchResult, MatchSession, active_phase, gameplay_active, resolve_result,
@@ -71,6 +71,6 @@ pub use visibility::{
     CellVisibility, VisibilityMap, VisibilitySubject, explored_by, refresh_visibility, visible_to,
 };
 pub use waves::{
-    WaveRoster, WaveState, live_alien_ids, plan_roster, step_waves, wave_budget, wave_deadline,
-    zones_for,
+    TIMER_BOUNDARY_EPSILON_SECONDS, WaveRoster, WaveState, live_alien_ids, plan_roster, step_waves,
+    wave_budget, wave_deadline, zones_for,
 };

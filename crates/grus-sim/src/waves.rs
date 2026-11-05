@@ -25,7 +25,10 @@ use crate::research::{research_points, unlock_points};
 use crate::session::gameplay_active;
 use crate::visibility::reveal_for_team;
 
-const TIMER_BOUNDARY_EPSILON_SECONDS: f64 = 0.0001;
+/// Tolerance for comparing the wave clock against float-accumulated
+/// deadlines — published so integration checks share one epsilon with the
+/// director instead of re-guessing it.
+pub const TIMER_BOUNDARY_EPSILON_SECONDS: f64 = 0.0001;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WaveRoster {

@@ -17,7 +17,6 @@ const DEFAULT_SAMPLE_SECONDS := 10.0
 const WARMUP_SECONDS := 2.0
 const VIEW_WAIT_FRAMES := 600
 const VISIBILITY_WAIT_FRAMES := 600
-const EXPECTED_BUILDING_VIEWS := 146
 const MOVEMENT_CHECK_INTERVAL := 20
 const MOVEMENT_EPSILON := 0.05
 
@@ -177,17 +176,21 @@ func _run() -> void:
 	if not GrusBridge.has_method("combat_event_total"):
 		_fail("benchmark combat-activity counter is missing")
 		return
+	if not GrusBridge.has_method("benchmark_building_count"):
+		_fail("benchmark building census bridge is missing")
+		return
 	if not GrusBridge.reset_benchmark_fixture():
 		_fail("benchmark reset bridge rejected the benchmark fixture")
 		return
 	_progress("benchmark_reset")
 
 	# Start shape: exactly 50 human defenders plus 150 real Team-2 aliens
-	# (200 unique unit views); the authored fortress census of building
-	# views with the one Research Center inside; at least the authored 18
-	# resource sources. The workload
-	# itself was already accepted during the benchmark reset — there is no
-	# separate start call.
+	# (200 unique unit views); the authored fortress census — read from the
+	# bridge so the Rust fixture stays the single count source — with the
+	# one Research Center inside; at least the authored 18 resource
+	# sources. The workload itself was already accepted during the
+	# benchmark reset — there is no separate start call.
+	var expected_building_views := int(GrusBridge.benchmark_building_count())
 	var units: Array[Node] = []
 	var unique_ids: Dictionary = {}
 	var team_counts := {1: 0, 2: 0}
@@ -206,7 +209,7 @@ func _run() -> void:
 				team_counts[team] += 1
 		if units.size() == 200 and unique_ids.size() == 200 \
 				and team_counts[1] == 50 and team_counts[2] == 150 \
-				and get_tree().get_nodes_in_group("building_views").size() == EXPECTED_BUILDING_VIEWS \
+				and get_tree().get_nodes_in_group("building_views").size() == expected_building_views \
 				and get_tree().get_nodes_in_group("resource_views").size() >= 18:
 			break
 	if units.size() != 200 or unique_ids.size() != 200:
@@ -216,8 +219,8 @@ func _run() -> void:
 		_fail("benchmark fixture must show 50 human defenders and 150 actual aliens, found %s" % [team_counts])
 		return
 	var buildings := get_tree().get_nodes_in_group("building_views")
-	if buildings.size() != EXPECTED_BUILDING_VIEWS:
-		_fail("benchmark fixture must show the %d-building fortress, found %d building views" % [EXPECTED_BUILDING_VIEWS, buildings.size()])
+	if buildings.size() != expected_building_views:
+		_fail("benchmark fixture must show the %d-building fortress, found %d building views" % [expected_building_views, buildings.size()])
 		return
 	var research_centers := buildings.filter(func(view: Node) -> bool: return str(view.get_meta("building_kind", "")) == "ResearchCenter")
 	if research_centers.size() != 1 or int(research_centers[0].get_meta("building_id", -1)) != 1 \

@@ -90,6 +90,21 @@ pub const ENTRY_ZONES: [(EntryZone, GridPos); 4] = [
     (EntryZone::West, GridPos::new(0, 48)),
 ];
 
+/// The human start's Research Center anchor — the one coordinate the whole
+/// authored city layout is placed against: `team_starts` reads it, and the
+/// benchmark fortress below derives every wall, gate, rally cell and
+/// building anchor from it through `benchmark_cell` so the workload follows
+/// the start if the anchor ever moves.
+const HUMAN_RESEARCH_CENTER_ANCHOR: GridPos = GridPos::new(62, 46);
+
+/// A fortress cell `dx`/`dy` cells from the Research Center anchor.
+const fn benchmark_cell(dx: i32, dy: i32) -> GridPos {
+    GridPos::new(
+        HUMAN_RESEARCH_CENTER_ANCHOR.x + dx,
+        HUMAN_RESEARCH_CENTER_ANCHOR.y + dy,
+    )
+}
+
 #[derive(Clone, Debug)]
 pub struct MapFixture {
     pub map: GridMap,
@@ -105,7 +120,7 @@ impl MapFixture {
     pub fn team_starts() -> [TeamStart; 1] {
         [TeamStart {
             team: TeamId(1),
-            research_center_anchor: GridPos::new(62, 46),
+            research_center_anchor: HUMAN_RESEARCH_CENTER_ANCHOR,
             workers: [
                 GridPos::new(61, 45),
                 GridPos::new(61, 50),
@@ -348,94 +363,108 @@ fn spawn(id: ResourceId, kind: ResourceKind, x: i32, y: i32) -> ResourceSpawn {
 const BENCHMARK_REINFORCEMENTS: usize = 46;
 const BENCHMARK_WAVE: u64 = 100;
 
-const BENCHMARK_WALL_MIN: GridPos = GridPos::new(52, 37);
-const BENCHMARK_WALL_MAX: GridPos = GridPos::new(77, 60);
+const BENCHMARK_WALL_MIN: GridPos = benchmark_cell(-10, -9);
+const BENCHMARK_WALL_MAX: GridPos = benchmark_cell(15, 14);
 
 const BENCHMARK_GATES: [GridPos; 4] = [
-    GridPos::new(64, 37),
-    GridPos::new(64, 60),
-    GridPos::new(52, 48),
-    GridPos::new(77, 48),
+    benchmark_cell(2, -9),
+    benchmark_cell(2, 14),
+    benchmark_cell(-10, 2),
+    benchmark_cell(15, 2),
 ];
 
 /// Human defenders rally inside the fortress while the shared wave
 /// director sends aliens toward the central Research Center.
 const BENCHMARK_RALLY_CELLS: [GridPos; 4] = [
-    GridPos::new(64, 38),
-    GridPos::new(64, 59),
-    GridPos::new(53, 48),
-    GridPos::new(76, 48),
+    benchmark_cell(2, -8),
+    benchmark_cell(2, 13),
+    benchmark_cell(-9, 2),
+    benchmark_cell(14, 2),
 ];
 
 const BENCHMARK_COAL: u32 = 400;
 
 const BENCHMARK_GUN_ANCHORS: [GridPos; 24] = [
-    GridPos::new(53, 38),
-    GridPos::new(57, 38),
-    GridPos::new(61, 38),
-    GridPos::new(67, 38),
-    GridPos::new(71, 38),
-    GridPos::new(73, 38),
-    GridPos::new(75, 38),
-    GridPos::new(53, 58),
-    GridPos::new(57, 58),
-    GridPos::new(61, 58),
-    GridPos::new(65, 58),
-    GridPos::new(69, 58),
-    GridPos::new(71, 58),
-    GridPos::new(73, 58),
-    GridPos::new(75, 58),
-    GridPos::new(53, 40),
-    GridPos::new(53, 42),
-    GridPos::new(53, 46),
-    GridPos::new(53, 50),
-    GridPos::new(75, 40),
-    GridPos::new(75, 42),
-    GridPos::new(75, 46),
-    GridPos::new(75, 50),
-    GridPos::new(75, 56),
+    benchmark_cell(-9, -8),
+    benchmark_cell(-5, -8),
+    benchmark_cell(-1, -8),
+    benchmark_cell(5, -8),
+    benchmark_cell(9, -8),
+    benchmark_cell(11, -8),
+    benchmark_cell(13, -8),
+    benchmark_cell(-9, 12),
+    benchmark_cell(-5, 12),
+    benchmark_cell(-1, 12),
+    benchmark_cell(3, 12),
+    benchmark_cell(7, 12),
+    benchmark_cell(9, 12),
+    benchmark_cell(11, 12),
+    benchmark_cell(13, 12),
+    benchmark_cell(-9, -6),
+    benchmark_cell(-9, -4),
+    benchmark_cell(-9, 0),
+    benchmark_cell(-9, 4),
+    benchmark_cell(13, -6),
+    benchmark_cell(13, -4),
+    benchmark_cell(13, 0),
+    benchmark_cell(13, 4),
+    benchmark_cell(13, 10),
 ];
 
 const BENCHMARK_FLAME_ANCHORS: [GridPos; 10] = [
-    GridPos::new(55, 38),
-    GridPos::new(59, 38),
-    GridPos::new(65, 38),
-    GridPos::new(69, 38),
-    GridPos::new(55, 58),
-    GridPos::new(67, 58),
-    GridPos::new(53, 44),
-    GridPos::new(53, 53),
-    GridPos::new(75, 44),
-    GridPos::new(75, 53),
+    benchmark_cell(-7, -8),
+    benchmark_cell(-3, -8),
+    benchmark_cell(3, -8),
+    benchmark_cell(7, -8),
+    benchmark_cell(-7, 12),
+    benchmark_cell(5, 12),
+    benchmark_cell(-9, -2),
+    benchmark_cell(-9, 7),
+    benchmark_cell(13, -2),
+    benchmark_cell(13, 7),
 ];
 
 const BENCHMARK_LANCE_ANCHORS: [GridPos; 6] = [
-    GridPos::new(55, 41),
-    GridPos::new(62, 41),
-    GridPos::new(72, 41),
-    GridPos::new(60, 56),
-    GridPos::new(56, 49),
-    GridPos::new(73, 45),
+    benchmark_cell(-7, -5),
+    benchmark_cell(0, -5),
+    benchmark_cell(10, -5),
+    benchmark_cell(-2, 10),
+    benchmark_cell(-6, 3),
+    benchmark_cell(11, -1),
 ];
 
 const BENCHMARK_FURNACE_ANCHORS: [GridPos; 9] = [
-    GridPos::new(55, 54),
-    GridPos::new(57, 55),
-    GridPos::new(60, 54),
-    GridPos::new(62, 55),
-    GridPos::new(63, 53),
-    GridPos::new(67, 53),
-    GridPos::new(68, 55),
-    GridPos::new(71, 54),
-    GridPos::new(73, 55),
+    benchmark_cell(-7, 8),
+    benchmark_cell(-5, 9),
+    benchmark_cell(-2, 8),
+    benchmark_cell(0, 9),
+    benchmark_cell(1, 7),
+    benchmark_cell(5, 7),
+    benchmark_cell(6, 9),
+    benchmark_cell(9, 8),
+    benchmark_cell(11, 9),
 ];
 
-/// Extends the seeded survival fixture to 50 human defenders and 150 live
-/// aliens inside a completed benchmark fortress. Human reinforcements use
-/// the shared unit constructor and ordinary AttackMove dispatcher; aliens
-/// come from `step_waves` itself. The benchmark remains session-free, as
-/// the absent MatchSession means Playing.
-pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
+/// The authoritative census the benchmark fortress seeds: the one human
+/// Research Center plus the ring walls, gates, towers and furnaces. The
+/// Godot runner reads this through the bridge rather than copying a count.
+pub fn benchmark_building_count() -> usize {
+    let ring_width = (BENCHMARK_WALL_MAX.x - BENCHMARK_WALL_MIN.x + 1) as usize;
+    let ring_height = (BENCHMARK_WALL_MAX.y - BENCHMARK_WALL_MIN.y + 1) as usize;
+    let ring_cells = 2 * (ring_width + ring_height) - 4;
+    1 + ring_cells
+        + BENCHMARK_GUN_ANCHORS.len()
+        + BENCHMARK_FLAME_ANCHORS.len()
+        + BENCHMARK_LANCE_ANCHORS.len()
+        + BENCHMARK_FURNACE_ANCHORS.len()
+}
+
+/// Authors the benchmark fortress through the shared completed-building
+/// helper: the closed Wall/Gate ring, the 24/10/6 tower mix, the nine Coal
+/// Furnaces and the benchmark-only Coal stockpile. Split out so tests can
+/// run the interior staging scan on the same post-fortress map the runtime
+/// consumes — the scan must see every blocked footprint it has to skip.
+fn seed_benchmark_fortress(world: &mut World, map: &mut GridMap) {
     for y in BENCHMARK_WALL_MIN.y..=BENCHMARK_WALL_MAX.y {
         for x in BENCHMARK_WALL_MIN.x..=BENCHMARK_WALL_MAX.x {
             if x != BENCHMARK_WALL_MIN.x
@@ -477,6 +506,15 @@ pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
         .expect("the seeded human economy")
         .stockpile
         .coal = BENCHMARK_COAL;
+}
+
+/// Extends the seeded survival fixture to 50 human defenders and 150 live
+/// aliens inside a completed benchmark fortress. Human reinforcements use
+/// the shared unit constructor and ordinary AttackMove dispatcher; aliens
+/// come from `step_waves` itself. The benchmark remains session-free, as
+/// the absent MatchSession means Playing.
+pub fn extend_with_benchmark_workload(world: &mut World, map: &mut GridMap) {
+    seed_benchmark_fortress(world, map);
 
     let workers = sorted_unit_ids(world, TeamId(1), |unit| unit.kind == UnitKind::Worker);
     for (worker, source) in workers

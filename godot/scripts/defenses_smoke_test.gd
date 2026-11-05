@@ -6,7 +6,6 @@ extends "res://scripts/combat_lifecycle_smoke_test.gd"
 ## RejectReason declaration order; moving-worker occupancy can be transient
 ## while a perimeter cell is being placed.
 const REJECT_OCCUPIED := 10
-const TRACER_SAMPLE_LEAD_SECONDS := 20.0
 
 var _defense_ids: Array[int] = []
 var _ring_min := Vector2i.ZERO
@@ -15,7 +14,6 @@ var _gate_cell := Vector2i.ZERO
 var _health_at_gate_breach: Dictionary = {}
 var _turret_tracer_seen := false
 var _turret_crystal_kill_seen := false
-var _tracer_sampling_slowed := false
 
 func _run() -> void:
 	var journey_start_msec := Time.get_ticks_msec()
@@ -289,11 +287,14 @@ func _run() -> void:
 			return _turret_crystal_kill_seen,
 			10.0, "the completed Gun Turret did not kill a visible alien for Crystals"):
 		return
-	# Combat events are cosmetics drained once per render iteration, while
-	# every non-Result fixed tick clears the sim buffer: at 20x catch-up
-	# ticks drop most strikes before presentation. The crystal kill above is
-	# authoritative state, but the tracer needs its own window while the
-	# turret keeps firing at the remaining wave.
+	# Combat events are cosmetics staged per tick into a frame-scoped queue
+	# the controller drains once per rendered frame, so at 20x every strike
+	# renders. But a tracer lives 0.1 real seconds — shorter than a frame
+	# under battle load — so _on_fx_child_entered is the observation point:
+	# it checks each spawned mesh at frame end while the transient still
+	# exists, instead of polling for it afterward. The crystal kill above is
+	# authoritative state; the tracer check needs its own window only if the
+	# hook somehow never fired while the turret was shooting.
 	if not _turret_tracer_seen and not await _wait_until(func():
 			_observe_turret(turret_id, crystals_before_wave)
 			var turret_view := _building_view(turret_id)
@@ -456,22 +457,17 @@ func _post_breach_damage_seen() -> bool:
 			return true
 	return false
 func _on_fx_child_entered(node: Node, turret_id: int, crystals_before_wave: int) -> void:
-	if node is MeshInstance3D and node.mesh is BoxMesh:
-		_observe_turret.call_deferred(turret_id, crystals_before_wave)
+	if _turret_tracer_seen or not (node is MeshInstance3D and node.mesh is BoxMesh):
+		return
+	# The spawn happens mid-frame and look_at lands right after add_child —
+	# deferred to frame end the transform is set and the 0.1 s transient
+	# still lives.
+	_observe_turret.call_deferred(turret_id, crystals_before_wave)
 
 func _observe_turret(turret_id: int, crystals_before_wave: int) -> void:
 	var turret := _building_view(turret_id)
-	if not _turret_tracer_seen and not _tracer_sampling_slowed:
-		var wave: Dictionary = GrusBridge.wave_snapshot()
-		if int(wave.get("wave", 0)) >= 2 or float(wave.get("seconds_remaining", INF)) <= TRACER_SAMPLE_LEAD_SECONDS:
-			if not GrusBridge.set_sim_speed(2.0):
-				_fail("could not adjust the defense journey speed")
-				return
-			_tracer_sampling_slowed = true
 	if not _turret_tracer_seen and is_instance_valid(turret) and _turret_tracer_from(turret):
 		_turret_tracer_seen = true
-		if _tracer_sampling_slowed:
-			GrusBridge.set_sim_speed(20.0)
 	if not _turret_crystal_kill_seen \
 			and int(GrusBridge.economy_snapshot().get("crystals", 0)) > crystals_before_wave:
 		_turret_crystal_kill_seen = true

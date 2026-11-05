@@ -93,7 +93,7 @@ pub struct CombatEvent {
 pub struct CombatEvents(pub Vec<CombatEvent>);
 
 /// Monotonic count of strikes recorded in this world: unlike the per-tick
-/// `CombatEvents` buffer (cleared every non-Result tick, then consumed by
+/// `CombatEvents` buffer (cleared every non-Result tick, then staged for
 /// the presentation drain), this never rewinds, so a second reader can
 /// detect combat activity without consuming the buffer another reader
 /// owns. Reset paths drop it with `CombatEvents` so a reseeded world starts

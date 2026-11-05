@@ -476,6 +476,30 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
 
     let mut breach: Option<(usize, u64, u64)> = None;
     let mut tower_shot_seconds: HashSet<usize> = HashSet::new();
+    // Snapshot the authored perimeter once: this world only ever destroys
+    // buildings, so a Wall/Gate id absent from `Building` next tick was
+    // destroyed this tick — no need to rebuild the census every step.
+    let mut perimeter_alive: std::collections::HashMap<BuildingId, (Entity, Vec<GridPos>)> = world
+        .resource::<BuildingIndex>()
+        .iter()
+        .filter(|(_, entity)| {
+            world.get::<Building>(**entity).is_some_and(|building| {
+                matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
+            })
+        })
+        .map(|(id, entity)| {
+            (
+                *id,
+                (
+                    *entity,
+                    world
+                        .get::<Footprint>(*entity)
+                        .expect("perimeter footprint")
+                        .cells(),
+                ),
+            )
+        })
+        .collect();
     for second in 1..=60 {
         let positions: std::collections::HashMap<_, _> = world
             .resource::<UnitIndex>()
@@ -487,24 +511,6 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .map_or(0, |total| total.0);
         for _ in 0..20 {
             let revision_before = map.revision();
-            let perimeter_before: Vec<(BuildingId, Vec<GridPos>)> = world
-                .resource::<BuildingIndex>()
-                .iter()
-                .filter(|(_, entity)| {
-                    world.get::<Building>(**entity).is_some_and(|building| {
-                        matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
-                    })
-                })
-                .map(|(id, entity)| {
-                    (
-                        *id,
-                        world
-                            .get::<Footprint>(*entity)
-                            .expect("perimeter footprint")
-                            .cells(),
-                    )
-                })
-                .collect();
             crate::tick::step_tick(&mut world, &mut map, SIM_STEP_SECONDS);
             if let Some(events) = world.get_resource::<crate::combat::CombatEvents>()
                 && events
@@ -514,20 +520,15 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             {
                 tower_shot_seconds.insert(second);
             }
-            let perimeter_after: HashSet<BuildingId> = world
-                .resource::<BuildingIndex>()
+            let destroyed: Vec<BuildingId> = perimeter_alive
                 .iter()
-                .filter(|(_, entity)| {
-                    world.get::<Building>(**entity).is_some_and(|building| {
-                        matches!(building.kind, BuildingKind::Wall | BuildingKind::Gate)
-                    })
-                })
+                .filter(|(_, (entity, _))| world.get::<Building>(*entity).is_none())
                 .map(|(id, _)| *id)
                 .collect();
-            for (id, cells) in perimeter_before {
-                if perimeter_after.contains(&id) {
-                    continue;
-                }
+            for id in destroyed {
+                let (_, cells) = perimeter_alive
+                    .remove(&id)
+                    .expect("perimeter snapshot entry");
                 assert!(
                     map.revision() > revision_before,
                     "perimeter building {id:?} vanished at second {second} \
@@ -707,6 +708,10 @@ fn benchmark_staging_cells_are_free_unique_and_clear_of_authored_occupancy() {
     let mut map = fixture.map.clone();
     let mut world = World::new();
     seed_skirmish(&mut world, &mut map, &fixture);
+    // The runtime scan runs after the whole fortress has claimed its
+    // footprints — mirror that order so tower, furnace and ring cells
+    // count as blocked exactly as they do at spawn time.
+    seed_benchmark_fortress(&mut world, &mut map);
 
     let authored_units: HashSet<GridPos> = MapFixture::team_starts()
         .iter()

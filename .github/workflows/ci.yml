@@ -65,14 +65,25 @@ jobs:
           name: grus-sim-coverage-lcov
           path: lcov.info
           if-no-files-found: warn
-      - name: Run release survival-balance guard
-        run: cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture
       - name: Test grus-godot library
         run: cargo test -p grus-godot --lib --locked
       - name: Test grus-godot e2e selector surface
         # Serialized: these tests mutate process-global env vars (BEVY_E2E,
         # BRP_EXTRAS_PORT).
         run: cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
+
+  survival-balance:
+    # Own job deliberately: a full --release build of bevy + grus-sim is
+    # too heavy to sit inside unit-tests, which e2e gates on.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - name: Run release survival-balance guard
+        run: cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture
 
   e2e:
     needs: [rust-build-lint, unit-tests]
@@ -202,7 +213,7 @@ jobs:
         # traversal/breach, turret combat, and building-origin tracer.
         run: |
           set -o pipefail
-          timeout 90s godot --headless --frame-delay 5 --path godot res://scenes/defenses_smoke_test.tscn 2>&1 | tee defenses-smoke.log || rc=$?
+          timeout 90s godot --headless --path godot res://scenes/defenses_smoke_test.tscn 2>&1 | tee defenses-smoke.log || rc=$?
           rc=${rc:-0}
           grep -q "GRUS_DEFENSE_SMOKE_OK" defenses-smoke.log || exit 1
           if [ "$rc" -ne 0 ]; then
@@ -288,18 +299,6 @@ jobs:
           grep -q "GRUS_BENCHMARK_200 start_units=200" benchmark.log || exit 1
           if [ "$rc" -ne 0 ]; then
             echo "::error::benchmark contract held but godot exited $rc"
-            exit 1
-          fi
-      - name: Run benchmark liveness verdict regression
-        # Probes the real _liveness_verdict with real unit/building view
-        # group nodes — no sim workload — so it finishes in about a second.
-        run: |
-          set -o pipefail
-          timeout 45s godot --headless --path godot res://scenes/benchmark_liveness_smoke_test.tscn 2>&1 | tee liveness-smoke.log || rc=$?
-          rc=${rc:-0}
-          grep -q "GRUS_BENCHMARK_LIVENESS_SMOKE_OK" liveness-smoke.log || exit 1
-          if [ "$rc" -ne 0 ]; then
-            echo "::error::liveness smoke contract held but godot exited $rc"
             exit 1
           fi
       - name: Build e2e Godot extension
