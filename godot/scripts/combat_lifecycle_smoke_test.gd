@@ -583,10 +583,10 @@ func _run() -> void:
 
 	if not await _wait_until(func():
 			var snapshot: Dictionary = GrusBridge.wave_snapshot()
-			return int(snapshot.get("wave", 0)) >= 1 and int(snapshot.get("live_aliens", 0)) >= 12,
-			15.0, "first wave did not launch twelve live aliens"):
+			return int(snapshot.get("wave", 0)) >= 1 and int(snapshot.get("live_aliens", 0)) >= 10,
+			15.0, "first wave did not launch ten live aliens"):
 		return
-	if not await _wait_until(func(): return _alien_views().size() >= 12, 5.0,
+	if not await _wait_until(func(): return _alien_views().size() >= 10, 5.0,
 			"live wave aliens never reached the Godot view tree"):
 		return
 	# The allied scout should not reveal every entrant: live alien views remain

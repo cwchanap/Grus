@@ -71,6 +71,7 @@ func _run() -> void:
 	if scrap_source == null:
 		_fail("a visible Scrap source is required for concurrent gathering")
 		return
+	var scrap_source_id := int(scrap_source.get_meta("resource_id", -1))
 	var gatherer_id := int(gatherer.get_meta("unit_id", -1))
 	var turret_scrap := int(turret_spec.get("scrap", 0))
 	if gatherer_id == builder_id:
@@ -216,7 +217,7 @@ func _run() -> void:
 			# visibility, keeping the spawn-time hidden state observable.
 			GrusBridge.set_paused(true)
 			return true,
-			35.0, "the real North wave did not launch twelve aliens"):
+			35.0, "the launched wave horde did not reach twelve live aliens"):
 		return
 	if not await _wait_until(func():
 			return _alien_views().size() >= 12, 5.0,
@@ -299,7 +300,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, int(scrap_source.get_meta("resource_id", -1)), float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	get_tree().quit(0)
 
 func _perimeter_cells() -> Array[Vector2i]:
