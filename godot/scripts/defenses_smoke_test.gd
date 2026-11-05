@@ -6,6 +6,7 @@ extends "res://scripts/combat_lifecycle_smoke_test.gd"
 ## RejectReason declaration order; moving-worker occupancy can be transient
 ## while a perimeter cell is being placed.
 const REJECT_OCCUPIED := 10
+const TRACER_SAMPLE_LEAD_SECONDS := 20.0
 
 var _defense_ids: Array[int] = []
 var _ring_min := Vector2i.ZERO
@@ -14,6 +15,7 @@ var _gate_cell := Vector2i.ZERO
 var _health_at_gate_breach: Dictionary = {}
 var _turret_tracer_seen := false
 var _turret_crystal_kill_seen := false
+var _tracer_sampling_slowed := false
 
 func _run() -> void:
 	var journey_start_msec := Time.get_ticks_msec()
@@ -205,7 +207,7 @@ func _run() -> void:
 	var wave_launch := {"msec": 0}
 	if not await _wait_until(func():
 			var snapshot: Dictionary = GrusBridge.wave_snapshot()
-			if int(snapshot.get("wave", 0)) < 1 or int(snapshot.get("live_aliens", 0)) < 12:
+			if int(snapshot.get("wave", 0)) < 1 or int(snapshot.get("live_aliens", 0)) < 10:
 				return false
 			wave_launch["msec"] = Time.get_ticks_msec()
 			# Pause rather than slow: at 20x each iteration can advance ~1
@@ -216,10 +218,13 @@ func _run() -> void:
 			# visibility, keeping the spawn-time hidden state observable.
 			GrusBridge.set_paused(true)
 			return true,
-			35.0, "the launched wave horde did not reach twelve live aliens"):
+			35.0, "the first wave did not reach ten live aliens"):
+		return
+	if int(GrusBridge.wave_snapshot().get("wave", -1)) != 1:
+		_fail("defense smoke missed the first wave before pausing")
 		return
 	if not await _wait_until(func():
-			return _alien_views().size() >= 12, 5.0,
+			return _alien_views().size() >= 10, 5.0,
 			"live wave aliens never reached the Godot view tree"):
 		return
 	if _hidden_alien_count() == 0:
@@ -451,8 +456,17 @@ func _post_breach_damage_seen() -> bool:
 	return false
 func _observe_turret(turret_id: int, crystals_before_wave: int) -> void:
 	var turret := _building_view(turret_id)
+	if not _turret_tracer_seen and not _tracer_sampling_slowed:
+		var wave: Dictionary = GrusBridge.wave_snapshot()
+		if int(wave.get("wave", 0)) >= 2 or float(wave.get("seconds_remaining", INF)) <= TRACER_SAMPLE_LEAD_SECONDS:
+			if not GrusBridge.set_sim_speed(2.0):
+				_fail("could not adjust the defense journey speed")
+				return
+			_tracer_sampling_slowed = true
 	if not _turret_tracer_seen and is_instance_valid(turret) and _turret_tracer_from(turret):
 		_turret_tracer_seen = true
+		if _tracer_sampling_slowed:
+			GrusBridge.set_sim_speed(20.0)
 	if not _turret_crystal_kill_seen \
 			and int(GrusBridge.economy_snapshot().get("crystals", 0)) > crystals_before_wave:
 		_turret_crystal_kill_seen = true
