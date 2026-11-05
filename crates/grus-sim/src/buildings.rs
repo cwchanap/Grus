@@ -935,9 +935,19 @@ pub fn spawn_completed_building(
 ) -> BuildingId {
     let spec = building_spec(kind);
     let footprint = Footprint::new(anchor, spec.width, spec.height);
+    let unit_cells: HashSet<GridPos> = world
+        .get_resource::<UnitIndex>()
+        .map(|index| {
+            index
+                .iter()
+                .filter_map(|(_, entity)| world.get::<SimPosition>(*entity))
+                .map(|position| map.world_to_cell(position.current))
+                .collect()
+        })
+        .unwrap_or_default();
     for cell in footprint.cells() {
         assert!(
-            map.is_walkable(cell),
+            map.is_walkable(cell) && !unit_cells.contains(&cell),
             "authored {kind:?} footprint cells must be legal and unoccupied: {cell:?}"
         );
     }

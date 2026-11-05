@@ -290,6 +290,18 @@ jobs:
             echo "::error::benchmark contract held but godot exited $rc"
             exit 1
           fi
+      - name: Run benchmark liveness verdict regression
+        # Probes the real _liveness_verdict with real unit/building view
+        # group nodes — no sim workload — so it finishes in about a second.
+        run: |
+          set -o pipefail
+          timeout 45s godot --headless --path godot res://scenes/benchmark_liveness_smoke_test.tscn 2>&1 | tee liveness-smoke.log || rc=$?
+          rc=${rc:-0}
+          grep -q "GRUS_BENCHMARK_LIVENESS_SMOKE_OK" liveness-smoke.log || exit 1
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::liveness smoke contract held but godot exited $rc"
+            exit 1
+          fi
       - name: Build e2e Godot extension
         # Built and staged only now that every strict-exit consumer has run.
         # The e2e feature (bevy_e2e → bevy_remote → bevy_tasks/async-io) is

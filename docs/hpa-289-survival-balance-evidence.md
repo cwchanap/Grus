@@ -1,6 +1,6 @@
 # HPA-289 — Survival balance evidence
 
-Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes now pass on this branch — see §6–§7 for before/after detail. Remaining pending verification can update the sections marked below.
+Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes now pass on this branch — see §6–§7 for before/after detail. A final architecture-review fix wave then landed after `15ec6a3`: it changed real sim code (`buildings.rs`), the benchmark liveness predicate in Rust and GDScript, and added a focused liveness smoke — so `ee6a32a`-era results below describe the pre-fix code and the fix wave's fresh verification is recorded in §8. Remaining pending verification can update the sections marked below.
 
 Spec: [`docs/superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md`](superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md) §§4–6.
 
@@ -41,22 +41,30 @@ Every figure below was captured on the macOS workspace host
 measurement ran at is stated explicitly; `ee6a32a` differs from some of them
 but no catalogue or gameplay-impacting change landed between the latest
 verification commits and `ee6a32a` — tasks 3–4 touched only
-`fixture.rs`/its tests, `benchmark_200.gd` and `ci.yml`. Later commits on this
-branch are docs-only apart from `6bbabe2` and a follow-up defenses-smoke
-lifetime fix, which changed smoke GDScript only — no Rust or simulation
-code — so checks the controller ran against the `ee6a32a` code still describe
-the shipped Rust implementation; scene-smoke results were measured on the
-repaired scripts.
+`fixture.rs`/its tests, `benchmark_200.gd` and `ci.yml`. Commits between
+`ee6a32a` and `15ec6a3` are docs-only apart from `6bbabe2` and a follow-up
+defenses-smoke lifetime fix, which changed smoke GDScript only — no Rust or
+simulation code. The **final fix wave after `15ec6a3`** is the exception: it
+changed `buildings.rs` (sim code — `spawn_completed_building` now also rejects
+footprints over live unit cells), `fixture/tests.rs` and `benchmark_200.gd`
+(the liveness verdict now counts a side as present while any of its units
+*or buildings* survive), and added the focused `benchmark_liveness_smoke_test`
+scene. Rows measured at `ee6a32a` therefore describe the pre-fix sim code for
+the files the wave touched; the shipped code was re-verified wholesale in §8.
+`crates/grus-godot` Rust code has no changes since `ee6a32a`, so the serialized
+e2e-feature library result still describes the shipped bridge crate.
+Scene-smoke results were measured on the repaired scripts.
 
 | Measurement | Commit it ran at | Notes |
 |---|---|---|
 | Survival guard, pre-tune baseline | task-2 working tree before the catalogue edit (original catalogue: Wall 400, per-wave 4, quadratic 4) | release profile |
 | Survival guard, post-tune | `f05dd07`; re-verified `526b8ae`, `65bfd5e` | release profile, exact CI command |
 | Fortress 1,200-tick test (trajectory measured) | `a38da4e`; re-verified `40404fe`, `4844511` | debug profile |
-| Godot `GRUS_BENCHMARK_200` marker runs | task-4 working tree, content committed as `ee6a32a` | debug non-e2e extension, headless/dummy driver (§5.2) |
+| Godot `GRUS_BENCHMARK_200` marker runs | task-4 working tree, content committed as `ee6a32a` | debug non-e2e extension, headless/dummy driver (§5.2); pre-fix `benchmark_200.gd` — a fresh post-fix run is in §8 |
 | `smoke_test.tscn`, `reset_test.tscn` | same task-4 tree | exit 0 |
-| `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code (no Rust/sim diffs since — later commits are docs or smoke GDScript only) | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
-| Serialized e2e-feature library tests | `ee6a32a` code | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
+| `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code — pre-fix-wave; the shipped-code re-run is in §8 | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
+| Serialized e2e-feature library tests | `ee6a32a` code (still current — the fix wave did not touch `crates/grus-godot`) | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
+| Final fix-wave re-verification (workspace tests, fmt, clippy, coverage re-run, release survival guard, rebuilt+codesigned extension, liveness smoke, `GRUS_BENCHMARK_200` marker) | final fix-wave working tree, committed on this branch | all pass — §8 |
 | Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass**; defenses re-verified twice after the lambda-lifetime fix — exit 0, marker, zero freed-capture errors — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
 
 ## 3. Fixed-defense survival guard (spec §4)
@@ -228,11 +236,12 @@ unmeasured (§5.2). Consequently:
 
 | Gate | Result | Time domain |
 |---|---|---|
-| Fixed-defense survives wave 10, falls before wave 40 | **PASS** — defeat wave 11 @ 1,383.75 s | simulated |
-| Fortress 60-s trajectory (breach, tower fire, alien floor, heat) | **PASS** — §5.1 | simulated |
-| `cargo llvm-cov` 90% gate (`ee6a32a` code) | **PASS** — 96.77% lines (LH 4,710 / LF 4,867), exit 0 | — |
-| Serialized e2e-feature lib tests (`ee6a32a` code): `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` | **PASS** — 39/39 | — |
-| `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless, dummy driver) | **PASS** ×2 — §5.2 | wall clock ≈19.7 s for a requested 10 s; simulated duration unmeasured |
+| Fixed-defense survives wave 10, falls before wave 40 | **PASS** — defeat wave 11 @ 1,383.75 s; **re-verified identically on the final fix-wave code (§8)** | simulated |
+| Fortress 60-s trajectory (breach, tower fire, alien floor, heat) | **PASS** — §5.1; re-run green on the final fix-wave code (§8) | simulated |
+| `cargo llvm-cov` 90% gate (`ee6a32a` code) | **PASS** — 96.77% lines (LH 4,710 / LF 4,867), exit 0; **re-run on the shipped code: 96.78% lines, exit 0 (§8)** | — |
+| Serialized e2e-feature lib tests (`ee6a32a` code): `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` | **PASS** — 39/39; bridge crate unchanged by the fix wave, so still current | — |
+| `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless, dummy driver) | **PASS** ×2 — §5.2; **re-verified on the rebuilt post-fix extension (§8)** | wall clock ≈19.7 s for a requested 10 s; simulated duration unmeasured |
+| `benchmark_liveness_smoke_test` four-leg regression (final fix wave) | **PASS** — building-only presence fails quiet, unit presence fails quiet, extinct side passes quiet, movement passes; exit 0 (§8) | — |
 | Scene smokes, 7 total | **7 PASS** — first run on `ee6a32a` code was 5 PASS / 2 FAIL (combat_lifecycle + wave expected the pre-tune 12-alien first wave); after updating the stale first-wave assertions to the tuned 10-alien roster, all seven exit 0 with their markers (§7); the defenses run's earlier freed-lambda-capture ERROR lines are gone after the callback-lifetime fix | — |
 
 ## 7. Remaining gate status — NOT RUN / BLOCKED / controller-run results
@@ -304,8 +313,8 @@ unmeasured (§5.2). Consequently:
   `GRUS_DEFENSE_SMOKE_OK` (setup_s 22.7/22.6, post_wave_s 10.9/11.0), zero
   `Lambda capture`/ERROR lines; before/after logs in the plan workspace.
 - **Coverage gate — RUN and PASSED on the `ee6a32a` code** (controller-run
-  after this doc's first version; no Rust/sim diffs since — later commits are
-  docs or smoke GDScript only):
+  after this doc's first version; that revision predates the final fix wave —
+  the shipped-code re-run is in §8):
   `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path .superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/coverage-final.lcov --locked --offline --ignore-filename-regex 'tests\.rs$'`
   → **exit 0, 96.77% lines (LH 4,710 / LF 4,867)**. The earlier version of this
   section asserted the gate "was green at each implementation commit" — no such
@@ -318,3 +327,53 @@ unmeasured (§5.2). Consequently:
   those on the docs commits is claimed here.
 - Any figure above may be updated by pending verification; nothing here is a
   promise about runs that have not happened.
+
+## 8. Final fix wave — post-`15ec6a3` verification
+
+The final architecture-review fix wave landed after every measurement above
+except those labelled §8. It changed sim code, so rows measured at `ee6a32a`
+are retained as *historical* provenance and this section records the fresh,
+whole-check re-verification on the shipped code. Scope of the wave:
+
+- **Liveness predicate** (`benchmark_200.gd`, `fixture/tests.rs`): a quiet
+  window now fails while each side still has *live units or live buildings* —
+  previously a Team-1 building surviving after the last defender died read as
+  "team 1 extinct" and let a frozen scene pass. Both implementations derive
+  presence from the same sources the rest of the gate uses: actual
+  `unit_views`/`building_views` nodes and `team_id` metadata in Godot, and
+  actual `UnitIndex`/`BuildingIndex` entities' `Unit.team`/`Building.team` in
+  Rust — no fixed census. A dedicated four-leg GDScript regression
+  (`benchmark_liveness_smoke_test.tscn`) drives real group membership through
+  the real `_liveness_verdict`: surviving-team-1-building + live aliens + no
+  activity → fail; live units both sides + no activity → fail; one side fully
+  extinct → pass; movement → pass. The Rust counterpart test pauses the
+  session so the quiet window is deterministic.
+- **`spawn_completed_building` unit-cell guard** (`buildings.rs`): the
+  fixture helper previously checked only static `GridMap` occupancy (units
+  reserve no cells), so an authored building could land on a live Worker. It
+  now collects live unit cells from `UnitIndex` + `SimPosition` through
+  `map.world_to_cell` and rejects any intersecting footprint cell — before
+  `IdAllocator::allocate_building()` and before any `set_blocked`/`set_gate`,
+  so a rejected call allocates nothing and mutates nothing. A missing
+  `UnitIndex` degrades to the prior static-only check.
+- No catalogue, balance, wave-tuning or fixture-layout change; the approved
+  provisional tuning is untouched.
+
+Fresh results on the fix-wave code (same macOS host/toolchain as §2, debug
+profile unless stated):
+
+| Check | Result |
+|---|---|
+| `cargo test -p grus-sim --lib` (targeted new tests) | 3 building-overlap + 1 liveness tests pass; RED before implementation is recorded in the fix report |
+| `godot --headless --path godot res://scenes/benchmark_liveness_smoke_test.tscn` | exit 1 with `liveness verdict passed a quiet window contested only by a surviving team-1 building` **before** the fix; exit 0 with `GRUS_BENCHMARK_LIVENESS_SMOKE_OK building_presence=fails_quiet unit_presence=fails_quiet extinct=passes_quiet movement=passes` after — re-run again on the rebuilt/staged extension |
+| `cargo test -p grus-sim fixture::tests` (includes the real 60-s benchmark trajectory) | 17 passed in 128.02 s |
+| `cargo test --workspace --locked --offline` | **370** `grus-sim` + **36** `grus-godot` + all integration targets pass, 0 failures |
+| `cargo fmt --all -- --check` / workspace `cargo clippy` | clean / no warnings |
+| `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --offline --ignore-filename-regex 'tests\.rs$'` | exit 0 — **96.78%** lines; `buildings.rs` 95.06% |
+| Release survival guard `cargo test -p grus-sim --release --locked --test survival_balance -- --ignored` | **identical** result: Defeat during wave 11 at **1,383.75 simulated s**, `Result(MatchResult(TeamId(2)))`, 9.01 s wall clock — the overlap guard does not alter the authored-defense outcome |
+| Extension rebuild/stage/sign | `cargo build -p grus-godot` → copied to `godot/bin/libgrus_godot.dylib` → `codesign --force --sign -` (`replacing existing signature`); staged artifact hash-matched the fresh build pre-signing |
+| `GRUS_BENCHMARK_SECONDS=10 godot --headless --path godot res://scenes/benchmark_200.tscn` | exit 0, full `GRUS_BENCHMARK_200 start_units=200 human_units=50 alien_units=150` marker; every liveness window showed real movement (`stage=active frames` 121–158); `end_buildings=146` with the pinned kind census; heat 123/112 @ 1.000; `duration_s=19.61` for the requested 10 s (same ~10.1 s single-frame overshoot as §5.3, cause still unverified) |
+
+Not claimed: Linux software-GL CI, Linux hardware acceptance, packaged e2e,
+normal-match progression and owner playtest remain exactly as §7 states —
+this wave added no measurement in any of those categories.
