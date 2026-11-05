@@ -259,14 +259,13 @@ unmeasured (§5.2). Consequently:
   llvmpipe numbers are not substitutes, and verified engineering is not being
   held indefinitely on this external dependency.
 - **Linux software-GL CI fortress run** (`GRUS_BENCHMARK_SECONDS=10`, xvfb,
-  `LIBGL_ALWAYS_SOFTWARE`, exit-0 + sentinel, 1920×1080): **NOT RUN** on this
-  branch's fortress workload at the time of writing — it runs on the next CI
-  execution; llvmpipe frame costs (~450 ms+ historically) make the new
-  `VIEW_WAIT_FRAMES = 600` headroom the thing to watch, and its frames are not
-  a performance signal.
-- **Linux export / packaged bevy-E2E on this branch: NOT RUN** — the only
-  e2e-surface check executed so far is the serialized in-process library run
-  below.
+  `LIBGL_ALWAYS_SOFTWARE`, exit-0 + sentinel, 1920×1080): **PASS** on
+  `8499332` in CI run `41954922854`. The marker reported 200 start units,
+  146 end buildings, 13.97 s sampled over 29 frames, and Mesa llvmpipe.
+  These software-rendered frames are not a hardware acceptance result.
+- **Linux x86_64 smoke export and exported bridge smoke: PASS** on `8499332`
+  in the same run. **Packaged bevy-E2E: NOT RUN** — skipped after the
+  subsequent liveness regression failure (§10).
 - **Scene smokes — all 7 pass after a GDScript-only follow-up fix:**
   `smoke_test`, `reset_test`, `economy_smoke_test`, `defenses_smoke_test` and
   `underground_smoke_test` exit 0 with their markers against the `ee6a32a` code
@@ -372,9 +371,9 @@ profile unless stated):
 | Extension rebuild/stage/sign | `cargo build -p grus-godot` → copied to `godot/bin/libgrus_godot.dylib` → `codesign --force --sign -` (`replacing existing signature`); staged artifact hash-matched the fresh build pre-signing |
 | `GRUS_BENCHMARK_SECONDS=10 godot --headless --path godot res://scenes/benchmark_200.tscn` | exit 0, full `GRUS_BENCHMARK_200 start_units=200 human_units=50 alien_units=150` marker; every liveness window showed real movement (`stage=active frames` 121–158); `end_buildings=146` with the pinned kind census; heat 123/112 @ 1.000; `duration_s=19.61` for the requested 10 s (same ~10.1 s single-frame overshoot as §5.3, cause still unverified) |
 
-Not claimed: Linux software-GL CI, Linux hardware acceptance, packaged e2e,
-normal-match progression and owner playtest remain exactly as §7 states —
-this wave added no measurement in any of those categories.
+At the end of this fix wave, Linux software-GL CI, Linux hardware acceptance,
+packaged e2e, normal-match progression and owner playtest had not been measured.
+Later Linux CI results are recorded in §§9–10.
 
 ## 9. Linux defense-smoke follow-up
 
@@ -400,5 +399,30 @@ On the same macOS headless host, the added first-wave assertion failed with
 the old 12-alien gate, and the repaired smoke passed four normal runs with
 the full marker and exit 0. Three final runs took 47.1–47.9 wall-clock
 seconds, within the CI step's 90-second limit. A separate run limiting
-the combat phase to 15 fps also passed in 42.3 seconds. These are local
-contract checks, not evidence that the Linux CI rerun has passed.
+the combat phase to 15 fps also passed in 42.3 seconds. Linux CI on
+`8499332` subsequently passed the defense smoke in 43.2 wall-clock seconds
+with the same full marker; the overall job then failed in the separate
+liveness regression described in §10.
+
+## 10. Liveness regression isolation follow-up
+
+CI run `41954922854` passed the Linux smoke export and the software-rendered
+fortress benchmark but failed `benchmark_liveness_smoke_test.tscn`:
+the quiet-window check reported that team 1 was not extinct after the
+test's team-1 probe nodes were freed. The packaged bevy-E2E steps were
+skipped. The Linux log did not record a census of the remaining views.
+
+The same extinction failure was reproduced locally at fixed 60 fps. Diagnostic
+output showed the standalone regression's alien probe alongside four real
+team-1 Workers and a Research Center that Bevy had attached to the global
+view groups during the test. Thus the verdict correctly saw a surviving team;
+the supposedly isolated test was racing fixture startup.
+
+The regression scene now disables the Bevy app host before advancing frames,
+waits through two physics frames, and asserts that both global view groups are
+empty before adding its own probes. This changes only the standalone test
+scene, not the benchmark or gameplay. Without the host isolation, the new
+contamination assertion failed locally at default and fixed 60 fps; with it,
+the full four-case marker and exit 0 were observed at default, fixed 60 fps
+(three runs), fixed 20 fps and fixed 1 fps. A fresh Linux CI run is still
+required to verify the fix and the previously skipped packaged bevy-E2E.

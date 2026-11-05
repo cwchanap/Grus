@@ -38,6 +38,8 @@ cargo test -p grus-sim economy::tests               # one inline module
 # coverage gate (90% lines on grus-sim gameplay code; `tests.rs` files excluded)
 cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$'
 
+cargo test -p grus-sim --release --locked --test survival_balance -- --ignored --nocapture
+
 # e2e-feature unit tests mutate process-global env vars — must be serialized
 cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 ```
@@ -52,6 +54,7 @@ godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # 
 godot --headless --path godot res://scenes/wave_smoke_test.tscn      # HPA-449 wave presentation; extends the combat lifecycle journey
 godot --headless --path godot res://scenes/defenses_smoke_test.tscn  # HPA-450 wall/gate/turret defense journey
 godot --headless --path godot res://scenes/underground_smoke_test.tscn # HPA-288 paid L3/Gather, focused Tab/Esc, pause/restart, slot locks, cold Lab + Tap
+godot --headless --path godot res://scenes/benchmark_liveness_smoke_test.tscn
 ```
 
 The `bevy_e2e` out-of-process test needs an exported build: `godot --headless --path godot --export-debug "Linux x86_64" ../build/Grus.x86_64`, then `GRUS_E2E_BINARY=<path> cargo test -p grus-godot --features e2e --test e2e_boot --locked -- --test-threads=1`. Without `GRUS_E2E_BINARY` it skips loudly instead of running. The e2e selector surface is inert unless `BEVY_E2E=1`.
