@@ -1,6 +1,6 @@
 # HPA-289 — Survival balance evidence
 
-Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes passed locally — see §6–§7 for before/after detail. A final architecture-review fix wave then landed after `15ec6a3`: it changed real sim code (`buildings.rs`), the benchmark liveness predicate in Rust and GDScript, and added a focused liveness smoke — so `ee6a32a`-era results below describe the pre-fix code and the fix wave's fresh verification is recorded in §8. Later Linux CI failures and fixes are recorded in §§9–11.
+Status: **engineering evidence recorded; owner playtest and Linux hardware acceptance NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes passed locally — see §6–§7 for before/after detail. A final architecture-review fix wave then landed after `15ec6a3`: it changed real sim code (`buildings.rs`), the benchmark liveness predicate in Rust and GDScript, and added a focused liveness smoke — so `ee6a32a`-era results below describe the pre-fix code and the fix wave's fresh verification is recorded in §8. Later Linux CI failures, fixes and passing results are recorded in §§9–12.
 
 Spec: [`docs/superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md`](superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md) §§4–6.
 
@@ -263,9 +263,9 @@ unmeasured (§5.2). Consequently:
   `8499332` in CI run `41954922854`. The marker reported 200 start units,
   146 end buildings, 13.97 s sampled over 29 frames, and Mesa llvmpipe.
   These software-rendered frames are not a hardware acceptance result.
-- **Linux x86_64 smoke export and exported bridge smoke: PASS** on `8499332`
-  in the same run. **Packaged bevy-E2E: NOT RUN** — skipped after the
-  subsequent liveness regression failure (§10).
+- **Linux x86_64 smoke export, exported bridge smoke and packaged bevy-E2E:
+  PASS** on `68271d9` in CI run `41960766950` (§12). Packaged bevy-E2E had
+  been skipped in the earlier `8499332` run after the liveness failure (§10).
 - **Scene smokes — all 7 pass after a GDScript-only follow-up fix:**
   `smoke_test`, `reset_test`, `economy_smoke_test`, `defenses_smoke_test` and
   `underground_smoke_test` exit 0 with their markers against the `ee6a32a` code
@@ -426,7 +426,8 @@ contamination assertion failed locally at default and fixed 60 fps; with it,
 the full four-case marker and exit 0 were observed at default, fixed 60 fps
 (three runs), fixed 20 fps and fixed 1 fps. The following Linux CI run on
 `a9c7767` failed earlier in the defense smoke and did not reach this test;
-Linux verification of the isolation fix and packaged bevy-E2E is pending.
+the isolation fix and packaged bevy-E2E subsequently passed on `68271d9`
+in the run recorded in §12.
 
 ## 11. Defense-smoke presentation race follow-up
 
@@ -452,4 +453,17 @@ Without these changes the delayed run failed locally at the same breach
 assertion; one subsequent attempt also exposed an overwritten move-command
 label. After the changes, four delayed 5 ms runs, two delayed 8 ms runs,
 and two ordinary runs passed locally with the full defense marker and exit 0.
-Linux CI must still verify the final revision.
+Linux CI subsequently passed this step on `68271d9` (§12).
+
+## 12. Passing Linux CI
+
+GitHub Actions run `41960766950` on `68271d9` completed successfully:
+lint, unit tests, coverage and the Linux e2e job all passed. The
+frame-delayed defense smoke, isolated liveness regression, Linux smoke
+export and exported bridge smoke all passed. The packaged bevy-E2E test
+`boot_ready_and_fixture_markers` passed (1 test, 0 failed).
+
+The 1920×1080 software-GL fortress benchmark emitted its full marker:
+200 starting units, 146 end buildings and a 10.50 s sample over 18 frames
+using Mesa llvmpipe. This is a CI contract check, not the unrun 60-second
+hardware-rendered acceptance benchmark. The owner playtest remains unrun.
