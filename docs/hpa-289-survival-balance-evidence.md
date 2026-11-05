@@ -1,6 +1,6 @@
 # HPA-289 — Survival balance evidence
 
-Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes — 5 pass, 2 fail) were executed against the `ee6a32a` code after this document's first version and are recorded in §6–§7; remaining pending verification can update the sections marked below.
+Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes now pass on this branch — see §6–§7 for before/after detail. Remaining pending verification can update the sections marked below.
 
 Spec: [`docs/superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md`](superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md) §§4–6.
 
@@ -54,7 +54,7 @@ still describe the shipped implementation.
 | `smoke_test.tscn`, `reset_test.tscn` | same task-4 tree | exit 0 |
 | `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code (docs-only diffs since) | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
 | Serialized e2e-feature library tests | `ee6a32a` code | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
-| Seven Godot scene smokes | `ee6a32a` code | **5 pass / 2 fail** — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
+| Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass** — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
 
 ## 3. Fixed-defense survival guard (spec §4)
 
@@ -230,7 +230,7 @@ unmeasured (§5.2). Consequently:
 | `cargo llvm-cov` 90% gate (`ee6a32a` code) | **PASS** — 96.77% lines (LH 4,710 / LF 4,867), exit 0 | — |
 | Serialized e2e-feature lib tests (`ee6a32a` code): `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` | **PASS** — 39/39 | — |
 | `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless, dummy driver) | **PASS** ×2 — §5.2 | wall clock ≈19.7 s for a requested 10 s; simulated duration unmeasured |
-| Scene smokes, 7 total (`ee6a32a` code) | **5 PASS / 2 FAIL** — smoke_test, reset_test, economy, defenses, underground pass; combat_lifecycle + wave fail on a stale first-wave twelve-alien expectation (§7) | — |
+| Scene smokes, 7 total | **7 PASS** — first run on `ee6a32a` code was 5 PASS / 2 FAIL (combat_lifecycle + wave expected the pre-tune 12-alien first wave); after updating the stale first-wave assertions to the tuned 10-alien roster, all seven exit 0 with their markers (§7) | — |
 
 ## 7. Remaining gate status — NOT RUN / BLOCKED / controller-run results
 
@@ -255,16 +255,38 @@ unmeasured (§5.2). Consequently:
 - **Linux export / packaged bevy-E2E on this branch: NOT RUN** — the only
   e2e-surface check executed so far is the serialized in-process library run
   below.
-- **Scene smokes — 5 of 7 pass on this tree; 2 FAIL, do not read as all-green:**
+- **Scene smokes — all 7 pass after a GDScript-only follow-up fix:**
   `smoke_test`, `reset_test`, `economy_smoke_test`, `defenses_smoke_test` and
   `underground_smoke_test` exit 0 with their markers against the `ee6a32a` code
   (logs under `.superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/<scene>.log`).
-  `combat_lifecycle_smoke_test` and `wave_smoke_test` **fail** at
+  `combat_lifecycle_smoke_test` and `wave_smoke_test` initially **failed** at
   `combat_lifecycle_smoke_test.gd:27` — "first wave did not launch twelve live
-  aliens (waited 15s)". The smokes still expect the pre-tune wave-1 roster of
-  12; the tuned `WAVE_BUDGET_*` now spawns 10. This is a stale smoke
-  expectation **awaiting a controller follow-up fix** — recorded as failed,
-  not explained away.
+  aliens (waited 15s)". The smokes still expected the pre-tune wave-1 roster of
+  12; the tuned `WAVE_BUDGET_*` now spawns 10 (`wave_budget(1) = 8 + 2 + 0`;
+  `plan_roster` pins 10 Swarmers in `crates/grus-sim/src/waves/tests.rs`).
+  **Repair (GDScript only, no sim/Rust change, same headless Godot 4.7.1 host):**
+  the lifecycle smoke's first-wave gates now assert `live_aliens >= 10` and
+  `_alien_views() >= 10` — still the full actual roster, not a weakened
+  nonzero check; the wave smoke shares that journey and needed no separate
+  edit. After the fix both exit 0 with their real markers:
+  `GRUS_COMBAT_LIFECYCLE_SMOKE_OK` and `GRUS_WAVE_SMOKE_OK` (exit 0 verified
+  from the process status, not the marker text alone).
+  `defenses_smoke_test.gd` (extends the same lifecycle script) was probed for
+  the same staleness: its `live_aliens >= 12` gate passed post-tune only by
+  accumulating wave 1 + wave 2 (22 live). Tightening it to `>= 10` was tried
+  and **reverted after two identical real failures** — observing the intact
+  10-Swarmer pack at the wave-1 launch tick lets the horde converge on and
+  destroy the lone Gun Turret before a tracer renders, while the accumulated
+  horde keeps the turret firing long enough. The `>= 12` horde-size gate is
+  therefore retained; only its timeout message was corrected (it no longer
+  claims the North wave itself launches twelve). The same repair also
+  deflaked the smoke's marker line: it now prints the `resource_id` captured
+  while the Scrap-source view was provably alive instead of dereferencing the
+  view at exit — the worker can legitimately deplete the 400-Scrap node
+  mid-journey, which freed the view and crashed the final `print` on one
+  verification run (a pre-existing latent flake, not caused by the tuning).
+  `defenses_smoke_test` re-verified green: exit 0,
+  `GRUS_DEFENSE_SMOKE_OK` (gather_source=3).
 - **Coverage gate — RUN and PASSED on the `ee6a32a` code** (controller-run
   after this doc's first version; docs-only diffs since):
   `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path .superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/coverage-final.lcov --locked --offline --ignore-filename-regex 'tests\.rs$'`
