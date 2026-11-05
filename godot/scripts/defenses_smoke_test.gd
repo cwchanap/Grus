@@ -86,7 +86,7 @@ func _run() -> void:
 	if not await _select_worker(gatherer):
 		return
 	var gather_revision := int(GrusBridge.command_feedback_revision())
-	await _mouse_click(_main.camera.unproject_position(scrap_source.global_position), MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), _main.camera.unproject_position(scrap_source.global_position), MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Gather command queued":
 		_fail("controller did not queue a real concurrent Scrap gather: %s" % [_main.command_status.text])
 		return
@@ -164,7 +164,7 @@ func _run() -> void:
 		_fail("construction Worker was outside the closed ring before the Gate traversal proof")
 		return
 	var move_revision := int(GrusBridge.command_feedback_revision())
-	await _mouse_click(_cell_screen(outside_gate), MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), _cell_screen(outside_gate), MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Move command queued":
 		_fail("controller did not issue the ordinary move through the Gate: %s" % [_main.command_status.text])
 		return
@@ -204,6 +204,7 @@ func _run() -> void:
 		_fail("defense setup overran the first wave clock: %s" % [initial_wave])
 		return
 	var crystals_before_wave := int(GrusBridge.economy_snapshot().get("crystals", 0))
+	_fx.child_entered_tree.connect(_on_fx_child_entered.bind(turret_id, crystals_before_wave))
 	var wave_launch := {"msec": 0}
 	if not await _wait_until(func():
 			var snapshot: Dictionary = GrusBridge.wave_snapshot()
@@ -454,6 +455,10 @@ func _post_breach_damage_seen() -> bool:
 		if view == null or float(view.call("health_ratio")) < float(_health_at_gate_breach[id]) - 0.001:
 			return true
 	return false
+func _on_fx_child_entered(node: Node, turret_id: int, crystals_before_wave: int) -> void:
+	if node is MeshInstance3D and node.mesh is BoxMesh:
+		_observe_turret.call_deferred(turret_id, crystals_before_wave)
+
 func _observe_turret(turret_id: int, crystals_before_wave: int) -> void:
 	var turret := _building_view(turret_id)
 	if not _turret_tracer_seen and not _tracer_sampling_slowed:
