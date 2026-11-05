@@ -3,6 +3,7 @@ extends "res://scripts/benchmark_200.gd"
 var _captured_failure := ""
 
 func _ready() -> void:
+	BevyAppSingleton.process_mode = Node.PROCESS_MODE_DISABLED
 	call_deferred("_run_liveness_regressions")
 
 func _fail(message: String) -> void:
@@ -25,6 +26,13 @@ func _quiet_verdict(frame: int) -> bool:
 	return _liveness_verdict(0, frame)
 
 func _run_liveness_regressions() -> void:
+	await get_tree().physics_frame
+	await get_tree().physics_frame
+	await get_tree().process_frame
+	if not get_tree().get_nodes_in_group("unit_views").is_empty() \
+			or not get_tree().get_nodes_in_group("building_views").is_empty():
+		_regression_fail("liveness test fixture was contaminated by simulation views")
+		return
 	var alien := _probe("unit_views", {"unit_id": 9001, "team_id": 2, "unit_kind": "Swarmer"})
 	var turret := _probe("building_views", {"building_id": 9001, "team_id": 1, "building_kind": "GunTurret"})
 
