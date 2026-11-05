@@ -65,7 +65,7 @@ Scene-smoke results were measured on the repaired scripts.
 | `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code — pre-fix-wave; the shipped-code re-run is in §8 | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
 | Serialized e2e-feature library tests | `ee6a32a` code (still current — the fix wave did not touch `crates/grus-godot`) | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
 | Final fix-wave re-verification (workspace tests, fmt, clippy, coverage re-run, release survival guard, rebuilt+codesigned extension, liveness smoke, `GRUS_BENCHMARK_200` marker) | final fix-wave working tree, committed on this branch | all pass — §8 |
-| Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass**; defenses re-verified twice after the lambda-lifetime fix — exit 0, marker, zero freed-capture errors — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
+| Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass** | defenses re-verified twice after the lambda-lifetime fix — exit 0, marker, zero freed-capture errors — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
 
 ## 3. Fixed-defense survival guard (spec §4)
 
