@@ -202,7 +202,7 @@ jobs:
         # traversal/breach, turret combat, and building-origin tracer.
         run: |
           set -o pipefail
-          timeout 90s godot --headless --path godot res://scenes/defenses_smoke_test.tscn 2>&1 | tee defenses-smoke.log || rc=$?
+          timeout 90s godot --headless --frame-delay 5 --path godot res://scenes/defenses_smoke_test.tscn 2>&1 | tee defenses-smoke.log || rc=$?
           rc=${rc:-0}
           grep -q "GRUS_DEFENSE_SMOKE_OK" defenses-smoke.log || exit 1
           if [ "$rc" -ne 0 ]; then

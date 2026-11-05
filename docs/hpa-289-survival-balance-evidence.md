@@ -1,6 +1,6 @@
 # HPA-289 — Survival balance evidence
 
-Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes now pass on this branch — see §6–§7 for before/after detail. A final architecture-review fix wave then landed after `15ec6a3`: it changed real sim code (`buildings.rs`), the benchmark liveness predicate in Rust and GDScript, and added a focused liveness smoke — so `ee6a32a`-era results below describe the pre-fix code and the fix wave's fresh verification is recorded in §8. Remaining pending verification can update the sections marked below.
+Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes) were executed against the `ee6a32a` code after this document's first version; the two wave-count failures recorded there were repaired in a later GDScript-only follow-up and all seven smokes passed locally — see §6–§7 for before/after detail. A final architecture-review fix wave then landed after `15ec6a3`: it changed real sim code (`buildings.rs`), the benchmark liveness predicate in Rust and GDScript, and added a focused liveness smoke — so `ee6a32a`-era results below describe the pre-fix code and the fix wave's fresh verification is recorded in §8. Later Linux CI failures and fixes are recorded in §§9–11.
 
 Spec: [`docs/superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md`](superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md) §§4–6.
 
@@ -424,5 +424,32 @@ empty before adding its own probes. This changes only the standalone test
 scene, not the benchmark or gameplay. Without the host isolation, the new
 contamination assertion failed locally at default and fixed 60 fps; with it,
 the full four-case marker and exit 0 were observed at default, fixed 60 fps
-(three runs), fixed 20 fps and fixed 1 fps. A fresh Linux CI run is still
-required to verify the fix and the previously skipped packaged bevy-E2E.
+(three runs), fixed 20 fps and fixed 1 fps. The following Linux CI run on
+`a9c7767` failed earlier in the defense smoke and did not reach this test;
+Linux verification of the isolation fix and packaged bevy-E2E is pending.
+
+## 11. Defense-smoke presentation race follow-up
+
+CI run `41957230181` on `a9c7767` failed the defense smoke while waiting
+for a ring breach; its diagnostic rerun instead failed to observe the
+turret tracer. The later liveness and packaged bevy-E2E steps were skipped.
+
+The breach timeout was reproduced locally with `--frame-delay 5`. Diagnostic
+output showed real turret attacks reaching the presentation controller, but
+one tracer was created and freed six milliseconds apart, between the smoke's
+physics-frame polls. The smoke consequently missed it, stayed at 2× speed,
+and ran out of breach-wait frames despite sustained combat.
+
+The smoke now listens for newly added tracer meshes and defers the existing
+origin check until the mesh transform is set. It still requires a real
+turret-origin tracer, Crystal kill, ring breach and post-breach damage.
+Two command-status checks also now inspect their transient queued labels
+immediately after real input, before a later frame can overwrite them with
+the authoritative acceptance. The CI defense step uses `--frame-delay 5`
+to exercise the reproduced timing path.
+
+Without these changes the delayed run failed locally at the same breach
+assertion; one subsequent attempt also exposed an overwritten move-command
+label. After the changes, four delayed 5 ms runs, two delayed 8 ms runs,
+and two ordinary runs passed locally with the full defense marker and exit 0.
+Linux CI must still verify the final revision.
