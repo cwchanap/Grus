@@ -6,8 +6,9 @@ extends Node
 ## live and visible-in-tree unit counts sampled once per liveness window for a
 ## real-time duration. A liveness checkpoint between fixed frame intervals fails a
 ## sample that shows neither unit movement nor combat activity while the
-## battle is still contested (both sides have live units). Real combat
-## deaths are expected: units are never respawned and health is never reset.
+## battle is still contested (each side still has live units or buildings).
+## Real combat deaths are expected: units are never respawned and health is
+## never reset.
 ## The workload self-sustains: the wave director retargets aliens onto the
 ## remaining team-1 buildings and units until one side is extinct.
 
@@ -112,8 +113,7 @@ func _visible_in_tree_count() -> int:
 func _liveness_verdict(moved: int, window_end_frame: int) -> bool:
 	var events := int(GrusBridge.combat_event_total())
 	if moved == 0 and events <= _last_combat_event_total:
-		var counts := _team_live_counts()
-		if int(counts.get(1, 0)) > 0 and int(counts.get(2, 0)) > 0:
+		if _side_present(1) and _side_present(2):
 			_fail("benchmark liveness window ending at frame %d showed neither unit movement nor combat activity" % window_end_frame)
 			return false
 		# One side is extinct: silence is the real end state, not a frozen
@@ -131,6 +131,14 @@ func _team_live_counts() -> Dictionary:
 		if counts.has(team):
 			counts[team] += 1
 	return counts
+
+func _side_present(team: int) -> bool:
+	if int(_team_live_counts().get(team, 0)) > 0:
+		return true
+	for building in get_tree().get_nodes_in_group("building_views"):
+		if int(building.get_meta("team_id", -1)) == team:
+			return true
+	return false
 
 ## Appends one live and one visible-in-tree sample for the liveness window
 ## ending at `now_ticks`, storing the measured window duration alongside so

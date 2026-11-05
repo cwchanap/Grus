@@ -11,6 +11,7 @@ use crate::economy::{ResourceIndex, ResourceSource, TeamEconomy, WorkerTask};
 use crate::ids::IdAllocator;
 use crate::map::Footprint;
 use crate::movement::{SimPosition, Unit};
+use crate::session::{MatchPhase, MatchSession};
 use crate::underground::Underground;
 
 /// Team-1's Research Center anchors the authored central city: its 4×4
@@ -197,6 +198,54 @@ fn authored_alien_entry_zones_reach_the_central_research_center() {
 /// Team-kind census over the live `UnitIndex` — counts only.
 fn units_of_kind(world: &World, team: TeamId, kind: UnitKind) -> usize {
     sorted_unit_ids(world, team, |unit| unit.kind == kind).len()
+}
+
+fn side_present(world: &World, team: TeamId) -> bool {
+    let unit_present = world.get_resource::<UnitIndex>().is_some_and(|index| {
+        index.iter().any(|(_, entity)| {
+            world
+                .get::<Unit>(*entity)
+                .is_some_and(|unit| unit.team == team)
+        })
+    });
+    unit_present
+        || world.get_resource::<BuildingIndex>().is_some_and(|index| {
+            index.iter().any(|(_, entity)| {
+                world
+                    .get::<Building>(*entity)
+                    .is_some_and(|building| building.team == team)
+            })
+        })
+}
+
+fn window_activity(world: &mut World, map: &mut GridMap) -> (bool, u64) {
+    let positions: std::collections::HashMap<_, _> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(id, entity)| (*id, world.get::<SimPosition>(*entity).unwrap().current))
+        .collect();
+    let strikes = world
+        .get_resource::<crate::combat::CombatEventTotal>()
+        .map_or(0, |total| total.0);
+    for _ in 0..20 {
+        crate::tick::step_tick(world, map, SIM_STEP_SECONDS);
+    }
+    let moving = world.resource::<UnitIndex>().iter().any(|(id, entity)| {
+        positions.get(id).is_some_and(|before| {
+            before.distance(world.get::<SimPosition>(*entity).unwrap().current) > 0.05
+        })
+    });
+    let new_strikes = world
+        .get_resource::<crate::combat::CombatEventTotal>()
+        .map_or(0, |total| total.0);
+    (moving, new_strikes.saturating_sub(strikes))
+}
+
+fn quiet_window_passes(moving: bool, strikes_delta: u64, world: &World) -> bool {
+    moving
+        || strikes_delta > 0
+        || !side_present(world, TeamId(1))
+        || !side_present(world, TeamId(2))
 }
 
 #[test]
@@ -514,11 +563,13 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
             .iter()
             .filter(|(_, entity)| world.get::<Unit>(**entity).unwrap().team == TeamId(2))
             .count();
-        // A contested second must show movement or combat; once either side
-        // is extinct, quiet is the real end state rather than a frozen sim.
+        // A contested second must show movement or combat; a side stays
+        // contested while any of its units or buildings survive — once a
+        // side is fully extinct, quiet is the real end state rather than a
+        // frozen sim.
         assert!(
-            moving || new_strikes > strikes || humans == 0 || aliens == 0,
-            "benchmark went idle at second {second}: humans={humans}, live={}, buildings={}",
+            quiet_window_passes(moving, new_strikes - strikes, &world),
+            "benchmark went idle at second {second}: humans={humans}, aliens={aliens}, live={}, buildings={}",
             world.resource::<UnitIndex>().iter().count(),
             world.resource::<BuildingIndex>().iter().count(),
         );
@@ -551,6 +602,101 @@ fn benchmark_workload_keeps_real_activity_for_the_sixty_second_sample() {
          {BENCHMARK_LIVE_ALIEN_FLOOR} (breach at second {breach_second}, \
          revision {initial_revision} -> {breach_revision}, \
          tower seconds {tower_shot_seconds:?})"
+    );
+}
+
+#[test]
+fn liveness_window_stays_contested_while_a_team_one_building_survives() {
+    let fixture = MapFixture::battlefield();
+    let mut map = fixture.map.clone();
+    let mut world = World::new();
+    seed_skirmish(&mut world, &mut map, &fixture);
+    world.insert_resource(MatchSession {
+        phase: MatchPhase::Paused,
+    });
+
+    let unit_entities: Vec<Entity> = world
+        .resource::<UnitIndex>()
+        .iter()
+        .map(|(_, entity)| *entity)
+        .collect();
+    for entity in unit_entities {
+        crate::combat::destroy_unit(&mut world, entity);
+    }
+    let building_entities: Vec<Entity> = world
+        .resource::<BuildingIndex>()
+        .iter()
+        .map(|(_, entity)| *entity)
+        .collect();
+    for entity in building_entities {
+        crate::combat::destroy_building(&mut world, &mut map, entity);
+    }
+    spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::GunTurret,
+        GridPos::new(90, 80),
+    );
+    let alien_id = world.resource_mut::<IdAllocator>().allocate_unit();
+    spawn_unit(
+        &mut world,
+        alien_id,
+        TeamId(2),
+        Vec2::new(0.5, 0.5),
+        UnitKind::Swarmer,
+        unit_spec(UnitKind::Swarmer).speed,
+    );
+
+    let live_of = |team: TeamId| {
+        world
+            .resource::<UnitIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Unit>(**entity)
+                    .is_some_and(|unit| unit.team == team)
+            })
+            .count()
+    };
+    assert_eq!(live_of(TeamId(1)), 0, "no live team-1 units remain");
+    assert_eq!(live_of(TeamId(2)), 1, "one live alien");
+    assert_eq!(
+        world
+            .resource::<BuildingIndex>()
+            .iter()
+            .filter(|(_, entity)| {
+                world
+                    .get::<Building>(**entity)
+                    .is_some_and(|building| building.team == TeamId(1))
+            })
+            .count(),
+        1,
+        "exactly one team-1 building survives"
+    );
+    let (moving, strikes_delta) = window_activity(&mut world, &mut map);
+    assert!(
+        !moving && strikes_delta == 0,
+        "the paused window must be quiet: moved={moving}, strikes={strikes_delta}"
+    );
+    assert!(
+        !quiet_window_passes(moving, strikes_delta, &world),
+        "zero human units + surviving turret + live aliens + no activity \
+         must still fail the liveness window"
+    );
+
+    let turret = world
+        .resource::<BuildingIndex>()
+        .iter()
+        .map(|(_, entity)| *entity)
+        .next()
+        .expect("the surviving turret");
+    crate::combat::destroy_building(&mut world, &mut map, turret);
+    assert!(!side_present(&world, TeamId(1)) && side_present(&world, TeamId(2)));
+    let (moving, strikes_delta) = window_activity(&mut world, &mut map);
+    assert!(
+        quiet_window_passes(moving, strikes_delta, &world),
+        "a quiet window with team 1 fully extinct must pass: moved={moving}, strikes={strikes_delta}"
     );
 }
 

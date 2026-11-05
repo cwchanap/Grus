@@ -3215,6 +3215,68 @@ fn authored_building_panics_on_an_occupied_cell() {
 
 #[test]
 #[should_panic(expected = "legal and unoccupied")]
+fn authored_building_panics_over_a_live_unit_cell() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Depot,
+        GridPos::new(10, 10),
+    );
+}
+
+#[test]
+fn authored_building_rejected_over_a_unit_changes_nothing() {
+    let (mut world, mut map, _worker) = setup_build_test();
+    let next_building = world.resource::<IdAllocator>().next_building;
+    let revision = map.revision();
+
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        spawn_completed_building(
+            &mut world,
+            &mut map,
+            TeamId(1),
+            BuildingKind::Depot,
+            GridPos::new(10, 10),
+        );
+    }));
+
+    assert!(result.is_err(), "the live-unit overlap must reject");
+    assert_eq!(world.resource::<IdAllocator>().next_building, next_building);
+    assert_eq!(map.revision(), revision);
+    let spec = building_spec(BuildingKind::Depot);
+    for cell in Footprint::new(GridPos::new(10, 10), spec.width, spec.height).cells() {
+        assert!(map.is_walkable(cell), "rejected footprint blocked {cell:?}");
+    }
+    assert_eq!(
+        world
+            .get_resource::<BuildingIndex>()
+            .map_or(0, |index| index.iter().count()),
+        0,
+        "the rejected call registered a building"
+    );
+}
+
+#[test]
+fn authored_building_without_unit_index_checks_static_occupancy_only() {
+    let mut world = World::new();
+    world.insert_resource(IdAllocator::new(10, 10, 10));
+    let mut map = GridMap::new(64, 64);
+
+    let id = spawn_completed_building(
+        &mut world,
+        &mut map,
+        TeamId(1),
+        BuildingKind::Wall,
+        GridPos::new(9, 9),
+    );
+    assert_eq!(id, BuildingId(10));
+    assert!(!map.is_walkable(GridPos::new(9, 9)));
+}
+
+#[test]
+#[should_panic(expected = "legal and unoccupied")]
 fn authored_building_panics_on_an_out_of_bounds_cell() {
     let (mut world, mut map, _worker) = setup_build_test();
     spawn_completed_building(
