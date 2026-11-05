@@ -239,7 +239,7 @@ CI also boots the exported executable headlessly and verifies that the Rust GDEx
 
 ## Testing / CI
 
-CI runs three jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave/defense/underground smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
+CI runs four jobs. `rust-build-lint` gates formatting, Clippy, and workspace compilation. `unit-tests` enforces the 90% `grus-sim` line-coverage gate and runs the `grus-godot` library unit tests. `survival-balance` runs the ignored release survival-balance guard in its own job because the full release build is too heavy for `unit-tests`. `e2e` runs the Godot import, the bridge/reset/economy/combat-lifecycle/wave/defense/underground smokes, the Linux export validation, the bevy-e2e boot test against the exported build, and the 200-unit benchmark.
 
 Rust build/lint:
 
