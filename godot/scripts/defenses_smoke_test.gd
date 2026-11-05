@@ -193,8 +193,7 @@ func _run() -> void:
 	if not await _wait_until(_building_complete.bind(turret_id), 20.0,
 			"Gun Turret did not complete before the first wave"):
 		return
-	var turret := _building_view(turret_id)
-	if turret == null:
+	if _building_view(turret_id) == null:
 		_fail("completed Gun Turret view is missing")
 		return
 
@@ -260,13 +259,13 @@ func _run() -> void:
 			if destroyed:
 				if _health_at_gate_breach.is_empty():
 					_capture_health_at_gate_breach()
-				_observe_turret(turret, crystals_before_wave)
+				_observe_turret(turret_id, crystals_before_wave)
 				return damaged
 			for alien in _alien_views():
 				if _inside_ring(alien.global_position):
 					_fail("alien entered the ring before any defence was destroyed")
 					return false
-			_observe_turret(turret, crystals_before_wave)
+			_observe_turret(turret_id, crystals_before_wave)
 			return false,
 			45.0, "aliens did not AttackMove to and destroy a ring defence"):
 		return
@@ -275,12 +274,12 @@ func _run() -> void:
 		return
 
 	if not await _wait_until(func():
-			_observe_turret(turret, crystals_before_wave)
+			_observe_turret(turret_id, crystals_before_wave)
 			return _post_breach_damage_seen(),
 			20.0, "aliens stopped attacking after the Gate breach instead of damaging another structure"):
 		return
 	if not await _wait_until(func():
-			_observe_turret(turret, crystals_before_wave)
+			_observe_turret(turret_id, crystals_before_wave)
 			return _turret_crystal_kill_seen,
 			10.0, "the completed Gun Turret did not kill a visible alien for Crystals"):
 		return
@@ -290,8 +289,9 @@ func _run() -> void:
 	# authoritative state, but the tracer needs its own window while the
 	# turret keeps firing at the remaining wave.
 	if not _turret_tracer_seen and not await _wait_until(func():
-			_observe_turret(turret, crystals_before_wave)
-			return _turret_tracer_from(turret),
+			_observe_turret(turret_id, crystals_before_wave)
+			var turret_view := _building_view(turret_id)
+			return turret_view != null and _turret_tracer_from(turret_view),
 			10.0, "Gun Turret combat event did not render a tracer from the building view"):
 		return
 
@@ -449,7 +449,8 @@ func _post_breach_damage_seen() -> bool:
 		if view == null or float(view.call("health_ratio")) < float(_health_at_gate_breach[id]) - 0.001:
 			return true
 	return false
-func _observe_turret(turret: Node3D, crystals_before_wave: int) -> void:
+func _observe_turret(turret_id: int, crystals_before_wave: int) -> void:
+	var turret := _building_view(turret_id)
 	if not _turret_tracer_seen and is_instance_valid(turret) and _turret_tracer_from(turret):
 		_turret_tracer_seen = true
 	if not _turret_crystal_kill_seen \
