@@ -286,12 +286,10 @@ unmeasured (§5.2). Consequently:
   `defenses_smoke_test.gd` (extends the same lifecycle script) was probed for
   the same staleness: its `live_aliens >= 12` gate passed post-tune only by
   accumulating wave 1 + wave 2 (22 live). Tightening it to `>= 10` was tried
-  and **reverted after two identical real failures** — observing the intact
-  10-Swarmer pack at the wave-1 launch tick lets the horde converge on and
-  destroy the lone Gun Turret before a tracer renders, while the accumulated
-  horde keeps the turret firing long enough. The `>= 12` horde-size gate is
-  therefore retained; only its timeout message was corrected (it no longer
-  claims the North wave itself launches twelve). The same repair also
+  and **initially reverted after two identical tracer failures**. Retaining the
+  `>= 12` gate later failed in Linux CI as well; the follow-up in §9 instead
+  observes wave 1 and samples the real tracer at a slower simulation speed.
+  The original repair also
   deflaked the smoke's marker line: it now prints the `resource_id` captured
   while the Scrap-source view was provably alive instead of dereferencing the
   view at exit — the worker can legitimately deplete the 400-Scrap node
@@ -377,3 +375,30 @@ profile unless stated):
 Not claimed: Linux software-GL CI, Linux hardware acceptance, packaged e2e,
 normal-match progression and owner playtest remain exactly as §7 states —
 this wave added no measurement in any of those categories.
+
+## 9. Linux defense-smoke follow-up
+
+On commit `aba2212`, Linux CI failed the defense journey twice: the initial
+run and its diagnostic rerun both reported that the Gun Turret tracer was
+not observed. Later Linux export, benchmark and packaged-E2E steps were
+skipped, so they remain unverified.
+
+The smoke waited for 12 live aliens even though wave 1 now contains 10.
+In a local diagnostic run, that delayed the pause until wave 2, after
+769 combat events and a Crystal-producing kill. The smoke had not yet
+started observing the turret. At 20× speed, multiple fixed ticks can also
+clear the current-tick combat-event buffer before presentation drains it.
+
+The smoke now pauses on wave 1 with 10 live aliens and explicitly rejects
+missing that wave. It observes the turret throughout the battle and slows
+the simulation to 2× for the presentation sample near the next wave,
+returning to 20× after observing a real turret-origin tracer. The real
+breach, post-breach damage, Crystal kill and tracer checks remain required;
+no attacks or effects are synthesized.
+
+On the same macOS headless host, the added first-wave assertion failed with
+the old 12-alien gate, and the repaired smoke passed four normal runs with
+the full marker and exit 0. Three final runs took 47.1–47.9 wall-clock
+seconds, within the CI step's 90-second limit. A separate run limiting
+the combat phase to 15 fps also passed in 42.3 seconds. These are local
+contract checks, not evidence that the Linux CI rerun has passed.
