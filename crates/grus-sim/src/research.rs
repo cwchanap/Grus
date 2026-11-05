@@ -130,9 +130,10 @@ pub fn step_research(world: &mut World, seconds: f32) {
 /// entry is the alive fact (combat removal drops it before the despawn).
 /// Completion is deliberately not part of the gate: canonical-tick tests
 /// run an incomplete core to zero the heat supply, and accrual has no
-/// reason to stop for it. Shared (`pub(crate)`) with the underground step
-/// and both underground commands — one core-liveness fact everywhere.
-pub(crate) fn living_research_core(world: &World) -> bool {
+/// reason to stop for it. Shared with the underground step, both
+/// underground commands and the survival-balance regression — one
+/// core-liveness fact everywhere.
+pub fn living_research_core(world: &World) -> bool {
     world.get_resource::<BuildingIndex>().is_some_and(|index| {
         index.iter().any(|(_, entity)| {
             world.get::<Building>(*entity).is_some_and(|building| {

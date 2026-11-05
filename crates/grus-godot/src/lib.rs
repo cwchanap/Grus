@@ -18,8 +18,8 @@ use grus_sim::{
     RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResourceId,
     ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Underground, Unit,
     UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
-    WorkerTask, active_phase, apply_player_command, clear_match_world, explored_by,
-    extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
+    WorkerTask, active_phase, apply_player_command, benchmark_building_count, clear_match_world,
+    explored_by, extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
     population_used, produces, refresh_visibility, research_points, research_rate, resolve_target,
     seed_skirmish, set_paused, start_match, step_tick, surface_efficiency, target_eligible,
     unlock_points, validate_placement, visible_to,
@@ -57,6 +57,20 @@ struct CommandFeedback {
     text: String,
     last_reject_code: Option<RejectReason>,
 }
+
+/// Frame-scoped presentation queue for combat cosmetics. `step_combat`
+/// keeps `CombatEvents` current-tick-only by design, but GDScript drains
+/// once per rendered frame — at high sim speed several fixed ticks land in
+/// one frame, so a per-frame read of the per-tick buffer drops every strike
+/// but the last tick's. `stage_combat_events` moves each tick's buffer here
+/// right after `step_tick`; `drain_combat_events` reads this queue.
+#[derive(Default, Resource)]
+struct StagedCombatEvents(Vec<CombatEvent>);
+
+/// Backstop bound on the staged queue: cosmetics are droppable (unlike the
+/// authoritative `CombatEventTotal`), so a scene that stops draining while
+/// Playing sheds the oldest events rather than growing without bound.
+const STAGED_COMBAT_EVENTS_CAP: usize = 4096;
 
 impl Default for CommandFeedback {
     fn default() -> Self {
@@ -522,14 +536,15 @@ impl GrusBridgeNode {
         true
     }
 
-    /// Current-tick combat events for cosmetics: drains and returns them while
-    /// the session is Playing, plus the settle tick's buffer on Result —
-    /// `strike()` records the killing blow and resolves the match in the same
-    /// fixed tick, and that buffer must present once. Returns an empty array
-    /// in Start/Paused. The guard is defense in depth: `step_combat` clears
-    /// `CombatEvents` on every non-Result tick — Playing or frozen — so stale
-    /// events can never survive a pause to replay as fresh effects; Result
-    /// ticks hold the buffer until this drain reads it.
+    /// Frame-scoped combat events for cosmetics: drains and returns every
+    /// event staged since the previous drain while the session is Playing,
+    /// plus the settle tick's events on Result — `strike()` records the
+    /// killing blow and resolves the match in the same fixed tick, and those
+    /// events must present once. Returns an empty array in Start/Paused. The
+    /// guard is defense in depth: `step_combat` clears `CombatEvents` on
+    /// every non-Result tick — Playing or frozen — and `stage_combat_events`
+    /// drops the queue on frozen ticks, so stale events can never survive a
+    /// pause to replay as fresh effects.
     #[func]
     fn drain_combat_events(&self) -> Array<VarDictionary> {
         let Some(mut app_node) = bevy_app_singleton() else {
@@ -574,6 +589,14 @@ impl GrusBridgeNode {
                 .unwrap_or_default()
         })
         .unwrap_or_default()
+    }
+
+    /// The authored fortress census `reset_benchmark_fixture` seeds — the
+    /// Godot runner asserts its building views against this instead of a
+    /// copied literal.
+    #[func]
+    fn benchmark_building_count(&self) -> i64 {
+        benchmark_building_count() as i64
     }
 
     #[func]
@@ -1271,6 +1294,7 @@ fn build_app(app: &mut App) {
         .init_resource::<PlacementCommandResults>()
         .init_resource::<CommandFeedback>()
         .init_resource::<LastRouteReject>()
+        .init_resource::<StagedCombatEvents>()
         .add_systems(Startup, setup_fixture)
         .add_systems(
             Update,
@@ -1289,6 +1313,7 @@ fn build_app(app: &mut App) {
                 apply_pending_commands,
                 advance_sim,
                 drain_route_reject_feedback,
+                stage_combat_events,
             )
                 .chain(),
         );
@@ -1455,22 +1480,23 @@ fn queue_command(command: PlayerCommand, placement_request_id: Option<i64>) -> b
     true
 }
 
-/// Drains the current-tick combat events while the session is Playing, and
-/// once on Result: `strike()` pushes the killing blow and resolves the Town
+/// Drains the staged combat events while the session is Playing, and once
+/// on Result: `strike()` pushes the killing blow and resolves the Town
 /// Center destruction to Result in the same fixed tick, so that settle
-/// tick's buffer must still drain or the winning hit/death cosmetics never
-/// present. Start/Paused stay blocked — defense in depth on top of
-/// `step_combat` clearing the buffer on every non-Result tick, so nothing
-/// frozen can ever replay as fresh cosmetics across a pause; Result ticks
-/// hold the buffer until this drain reads it.
+/// tick's staged events must still drain or the winning hit/death cosmetics
+/// never present. Start/Paused stay blocked — defense in depth on top of
+/// `stage_combat_events` dropping the queue on frozen ticks, so nothing
+/// frozen can ever replay as fresh cosmetics across a pause; Result keeps
+/// the staged settle events until this drain reads them.
 fn take_presentable_events(world: &mut World) -> Vec<CombatEvent> {
     if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
         return Vec::new();
     }
-    let mut events = world
-        .get_resource_mut::<CombatEvents>()
-        .map(|mut events| std::mem::take(&mut events.0))
-        .unwrap_or_default();
+    let mut events = std::mem::take(
+        &mut world
+            .get_resource_or_insert_with(StagedCombatEvents::default)
+            .0,
+    );
     // Presentation permission is derived here, before dictionaries reach
     // GDScript: a hidden enemy attacker must not expose its stable id as a
     // tracer origin (GDScript never re-looks-up live attackers). The event's
@@ -1983,10 +2009,13 @@ fn reset_benchmark_world(world: &mut World) {
 /// sim-owned clear lives in grus-sim (`clear_match_world`, the seed's
 /// inverse), so sim tests exercise the identical reset the bridge runs —
 /// never a copied list that can drift. What remains here is only what the
-/// bridge itself owns: queued commands and their placement tickets,
-/// command feedback and the route-reject channel.
+/// bridge itself owns: staged combat events, queued commands and their
+/// placement tickets, command feedback and the route-reject channel.
 fn clear_gameplay_world(world: &mut World) {
     clear_match_world(world);
+    // The staged combat-event buffer is bridge-owned, so the sim's shared
+    // clear can't see it: leftover per-frame strikes die with the match here.
+    world.remove_resource::<StagedCombatEvents>();
     if let Some(mut pending) = world.get_resource_mut::<PendingCommands>() {
         pending.0.clear();
     }
@@ -2112,8 +2141,9 @@ fn format_command_result(result: &CommandResult) -> String {
 // the tick if a high-speed scenario ever shows tunneling or overshoot.
 /// The one fixed-step gameplay system: reads the fixed delta and runs the
 /// canonical grus-sim `step_tick` order inside a single scoped `GridMap`
-/// borrow. Command application runs before it and the route-reject drain
-/// after it; everything between them is `step_tick`'s contract.
+/// borrow. Command application runs before it; the route-reject drain and
+/// combat-event staging run after it; everything between them is
+/// `step_tick`'s contract.
 fn advance_sim(world: &mut World) {
     world.resource_mut::<SimTick>().0 += 1;
     let seconds = world.resource::<Time<Fixed>>().delta().as_secs_f32();
@@ -2177,6 +2207,34 @@ fn drain_route_reject_feedback(world: &mut World) {
     feedback.revision = feedback.revision.wrapping_add(1);
     feedback.text = format!("Worker route impossible ({reason:?})");
     feedback.last_reject_code = Some(reason);
+}
+
+/// Moves the tick's `CombatEvents` into the frame-scoped staging queue so a
+/// once-per-rendered-frame drain still sees every strike from a multi-tick
+/// frame. Start/Paused ticks instead drop the staging queue: `step_combat`
+/// already cleared the per-tick buffer, and undrained leftovers must never
+/// replay across a pause as fresh effects. Result keeps the settle tick's
+/// staged events for the one Result-frame drain.
+fn stage_combat_events(world: &mut World) {
+    if matches!(active_phase(world), MatchPhase::Start | MatchPhase::Paused) {
+        if let Some(mut staged) = world.get_resource_mut::<StagedCombatEvents>() {
+            staged.0.clear();
+        }
+        return;
+    }
+    let tick_events = world
+        .get_resource_mut::<CombatEvents>()
+        .map(|mut events| std::mem::take(&mut events.0))
+        .unwrap_or_default();
+    if tick_events.is_empty() {
+        return;
+    }
+    let mut staged = world.get_resource_or_insert_with(StagedCombatEvents::default);
+    staged.0.extend(tick_events);
+    let overflow = staged.0.len().saturating_sub(STAGED_COMBAT_EVENTS_CAP);
+    if overflow > 0 {
+        staged.0.drain(..overflow);
+    }
 }
 
 fn job_seconds(job: &ProductionJob) -> f32 {
@@ -2331,13 +2389,13 @@ mod tests {
         };
         let mut world = World::new();
 
-        // A frozen session keeps the last Playing tick's events readable;
-        // the drain must not take or replay them.
+        // A frozen session keeps the staged events in place; the drain must
+        // not take or replay them.
         for phase in [MatchPhase::Paused, MatchPhase::Start] {
             world.insert_resource(MatchSession { phase });
-            world.insert_resource(CombatEvents(vec![event]));
+            world.insert_resource(StagedCombatEvents(vec![event]));
             assert!(take_presentable_events(&mut world).is_empty());
-            assert_eq!(world.resource::<CombatEvents>().0.len(), 1);
+            assert_eq!(world.resource::<StagedCombatEvents>().0.len(), 1);
         }
 
         // Without a UnitIndex the attacker's existence (and therefore its
@@ -2346,27 +2404,80 @@ mod tests {
         let mut scrubbed = event;
         scrubbed.attacker = CombatTarget::Unit(UnitId(0));
 
-        // Result releases the settle tick's buffer once — `strike()` records
-        // the killing blow and resolves the match in the same fixed tick —
-        // and the drained buffer stays empty on later Result frames.
+        // Result releases the settle tick's staged events once — `strike()`
+        // records the killing blow and resolves the match in the same fixed
+        // tick — and the drained queue stays empty on later Result frames.
         world.insert_resource(MatchSession {
             phase: MatchPhase::Result(MatchResult(TeamId(2))),
         });
         assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
-        assert!(world.resource::<CombatEvents>().0.is_empty());
+        assert!(world.resource::<StagedCombatEvents>().0.is_empty());
         assert!(take_presentable_events(&mut world).is_empty());
 
-        // Playing takes the events and leaves the buffer empty.
+        // Playing takes the events and leaves the queue empty.
         world.insert_resource(MatchSession {
             phase: MatchPhase::Playing,
         });
-        world.insert_resource(CombatEvents(vec![event]));
+        world.insert_resource(StagedCombatEvents(vec![event]));
         assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
-        assert!(world.resource::<CombatEvents>().0.is_empty());
+        assert!(world.resource::<StagedCombatEvents>().0.is_empty());
         // A missing session reads as Playing (benchmark contract).
         world.remove_resource::<MatchSession>();
-        world.insert_resource(CombatEvents(vec![event]));
+        world.insert_resource(StagedCombatEvents(vec![event]));
         assert_eq!(take_presentable_events(&mut world), vec![scrubbed]);
+    }
+
+    /// The per-frame drain must see every strike from a multi-tick frame:
+    /// staging moves each tick's `CombatEvents` into the queue (the sim's
+    /// buffer is cleared on the next tick regardless), frozen ticks drop the
+    /// queue instead of letting leftovers replay across a pause, and Result
+    /// keeps the settle tick's staged events for the one Result-frame drain.
+    #[test]
+    fn combat_event_staging_accumulates_ticks_until_the_frame_drains() {
+        let event = |id: u32| CombatEvent {
+            attacker: CombatTarget::Unit(UnitId(id)),
+            target: CombatTarget::Unit(UnitId(100 + id)),
+            damage: 3,
+            position: Vec2::new(4.0, 5.0),
+            ranged: true,
+            killed: false,
+        };
+        let mut world = World::new();
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+
+        for id in 1..=3 {
+            world.insert_resource(CombatEvents(vec![event(id)]));
+            stage_combat_events(&mut world);
+        }
+        assert!(world.resource::<CombatEvents>().0.is_empty());
+        assert_eq!(world.resource::<StagedCombatEvents>().0.len(), 3);
+
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Paused,
+        });
+        stage_combat_events(&mut world);
+        assert!(world.resource::<StagedCombatEvents>().0.is_empty());
+
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Playing,
+        });
+        world.insert_resource(CombatEvents(vec![event(4)]));
+        stage_combat_events(&mut world);
+        // The settle tick resolves to Result inside `step_combat`; the stage
+        // that same tick keeps its events for the one Result-frame drain.
+        world.insert_resource(MatchSession {
+            phase: MatchPhase::Result(MatchResult(TeamId(2))),
+        });
+        world.insert_resource(CombatEvents(vec![event(5)]));
+        stage_combat_events(&mut world);
+        assert_eq!(
+            take_presentable_events(&mut world).len(),
+            2,
+            "the Result drain must see both the last Playing tick and the settle tick"
+        );
+        assert!(take_presentable_events(&mut world).is_empty());
     }
 
     #[test]
@@ -2535,7 +2646,7 @@ mod tests {
         refresh_visibility(&mut world, &map);
         world.insert_resource(map.clone());
         let missing = UnitId(999);
-        world.insert_resource(CombatEvents(vec![
+        world.insert_resource(StagedCombatEvents(vec![
             event_from(CombatTarget::Unit(UnitId(1))),
             event_from(CombatTarget::Unit(enemy_at_home)),
             event_from(CombatTarget::Unit(missing)),
@@ -2590,9 +2701,9 @@ mod tests {
             "a scrubbed hidden building serializes only the absent unit identity"
         );
         world.remove_resource::<GridMap>();
-        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Building(
-            hidden_building,
-        ))]));
+        world.insert_resource(StagedCombatEvents(vec![event_from(
+            CombatTarget::Building(hidden_building),
+        )]));
         let drained = take_presentable_events(&mut world);
         assert_eq!(
             drained[0].attacker,
@@ -2605,9 +2716,9 @@ mod tests {
             .entity(visible_building)
             .unwrap();
         world.get_mut::<Health>(dead_building).unwrap().current = 0;
-        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Building(
-            visible_building,
-        ))]));
+        world.insert_resource(StagedCombatEvents(vec![event_from(
+            CombatTarget::Building(visible_building),
+        )]));
         let drained = take_presentable_events(&mut world);
         assert_eq!(
             drained[0].attacker,
@@ -2627,7 +2738,7 @@ mod tests {
             .entity_mut(enemy_entity)
             .insert(SimPosition::new(map.cell_center(seen_cell)));
         refresh_visibility(&mut world, &map);
-        world.insert_resource(CombatEvents(vec![event_from(CombatTarget::Unit(
+        world.insert_resource(StagedCombatEvents(vec![event_from(CombatTarget::Unit(
             enemy_at_home,
         ))]));
         let drained = take_presentable_events(&mut world);
@@ -2922,6 +3033,7 @@ mod tests {
             MatchPhase::Start
         ));
         assert!(world.get_resource::<CombatEvents>().is_none());
+        assert!(world.get_resource::<StagedCombatEvents>().is_none());
     }
 
     #[test]
@@ -2949,6 +3061,14 @@ mod tests {
         world.insert_resource(CombatEvents(vec![CombatEvent {
             attacker: CombatTarget::Unit(UnitId(1)),
             target: CombatTarget::Unit(UnitId(2)),
+            damage: 1,
+            position: Vec2::ZERO,
+            ranged: false,
+            killed: false,
+        }]));
+        world.insert_resource(StagedCombatEvents(vec![CombatEvent {
+            attacker: CombatTarget::Unit(UnitId(3)),
+            target: CombatTarget::Unit(UnitId(4)),
             damage: 1,
             position: Vec2::ZERO,
             ranged: false,

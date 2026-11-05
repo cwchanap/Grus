@@ -5,10 +5,10 @@ use bevy::prelude::World;
 use grus_sim::catalog::building_spec;
 use grus_sim::{
     AttackCooldown, Building, BuildingId, BuildingIndex, BuildingKind, CombatEvents, CombatTarget,
-    Footprint, GridMap, GridPos, Health, HeatState, MapFixture, MatchPhase, MatchResult,
-    MatchSession, SIM_STEP_SECONDS, TeamId, UnitIndex, UnitKind, VisibilityMap, WaveState,
-    WorkerTask, active_phase, seed_skirmish, sorted_unit_ids, spawn_completed_building,
-    start_match, step_heat, step_tick, surface_efficiency, wave_deadline,
+    Footprint, GridMap, GridPos, HeatState, MapFixture, MatchPhase, MatchResult, MatchSession,
+    SIM_STEP_SECONDS, TIMER_BOUNDARY_EPSILON_SECONDS, TeamId, UnitIndex, UnitKind, VisibilityMap,
+    WaveState, WorkerTask, active_phase, living_research_core, seed_skirmish, sorted_unit_ids,
+    spawn_completed_building, start_match, step_heat, step_tick, surface_efficiency, wave_deadline,
 };
 
 const TEAM: TeamId = TeamId(1);
@@ -50,36 +50,18 @@ fn authored_cells(anchor: GridPos) -> Vec<GridPos> {
     cells
 }
 
-fn research_center_alive(world: &World) -> bool {
-    world
-        .get_resource::<BuildingIndex>()
-        .map(|index| {
-            index.iter().any(|(_, entity)| {
-                world.get::<Building>(*entity).is_some_and(|building| {
-                    building.team == TEAM
-                        && building.kind == BuildingKind::ResearchCenter
-                        && world
-                            .get::<Health>(*entity)
-                            .is_some_and(|health| health.current > 0)
-                })
-            })
-        })
-        .unwrap_or(false)
-}
-
 fn survival_checkpoint_met(phase: MatchPhase, next_wave: u64, core_alive: bool) -> bool {
     next_wave > SURVIVAL_DEADLINE_WAVE && matches!(phase, MatchPhase::Playing) && core_alive
 }
 
 const WAVE_CLOCK_TOLERANCE_SECONDS: f64 = 1.0;
-const WAVE_LAUNCH_EPSILON_SECONDS: f64 = 0.0001;
 
 fn wave_schedule_on_track(wave: WaveState, simulated_seconds: f64) -> bool {
     let clock_advancing = (wave.elapsed - simulated_seconds).abs() <= WAVE_CLOCK_TOLERANCE_SECONDS;
     let no_skipped_launch = wave.next_wave <= 1
         || wave_deadline(wave.next_wave - 1) <= wave.elapsed + WAVE_CLOCK_TOLERANCE_SECONDS;
     let launch_not_overdue = wave.elapsed <= wave_deadline(wave.next_wave)
-        && simulated_seconds <= wave_deadline(wave.next_wave) + WAVE_LAUNCH_EPSILON_SECONDS;
+        && simulated_seconds <= wave_deadline(wave.next_wave) + TIMER_BOUNDARY_EPSILON_SECONDS;
     clock_advancing && no_skipped_launch && launch_not_overdue
 }
 
@@ -113,45 +95,16 @@ fn reference_defense() -> (World, GridMap, [BuildingId; 2]) {
 
     let start = MapFixture::team_starts()[0];
     let anchor = start.research_center_anchor;
+    // `spawn_completed_building` already asserts every footprint cell is
+    // legal and unit-free; the one property it cannot check is that the
+    // authored layout does not overlap itself.
     let authored = authored_cells(anchor);
-
     let unique: HashSet<GridPos> = authored.iter().copied().collect();
     assert_eq!(
         unique.len(),
         authored.len(),
         "authored cells overlap each other"
     );
-    let core = Footprint::new(
-        anchor,
-        building_spec(BuildingKind::ResearchCenter).width,
-        building_spec(BuildingKind::ResearchCenter).height,
-    );
-    for cell in &authored {
-        assert!(
-            map.is_walkable(*cell),
-            "authored cell {cell:?} is not free terrain"
-        );
-        assert!(
-            !core.cells().contains(cell),
-            "authored cell {cell:?} overlaps the Research Center"
-        );
-        assert!(
-            !start.workers.contains(cell),
-            "authored cell {cell:?} overlaps a Worker spawn"
-        );
-    }
-    for spawn in fixture
-        .resources
-        .iter()
-        .filter(|spawn| start.safe_sources.contains(&spawn.id))
-    {
-        assert!(
-            !authored.contains(&spawn.cell),
-            "authored cells cover safe source {:?} at {:?}",
-            spawn.id,
-            spawn.cell
-        );
-    }
 
     let gate = gate_cell(anchor);
     for cell in ring_cells(anchor) {
@@ -342,7 +295,7 @@ fn fixed_defense_survives_wave_10_and_falls_before_wave_40() {
         );
 
         if !checkpoint && wave.next_wave > SURVIVAL_DEADLINE_WAVE {
-            let core_alive = research_center_alive(&world);
+            let core_alive = living_research_core(&world);
             assert!(
                 survival_checkpoint_met(phase, wave.next_wave, core_alive),
                 "premature end at the wave-{SURVIVAL_DEADLINE_WAVE} deadline boundary: \
