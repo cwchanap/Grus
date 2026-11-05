@@ -1,6 +1,6 @@
 # HPA-289 — Survival balance evidence
 
-Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Pending verification (the controller's final gate run and future CI runs on this branch) can update the sections marked below.
+Status: **engineering evidence recorded; owner playtest and several Linux-side gates NOT RUN / BLOCKED.** This document records only what was actually measured, at the revision where it was measured, and labels everything else honestly. Some controller-run checks (coverage gate, serialized e2e-feature library tests, the seven scene smokes — 5 pass, 2 fail) were executed against the `ee6a32a` code after this document's first version and are recorded in §6–§7; remaining pending verification can update the sections marked below.
 
 Spec: [`docs/superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md`](superpowers/specs/2026-11-03-hpa-289-survival-benchmark-balance-design.md) §§4–6.
 
@@ -38,18 +38,23 @@ survival window, since `9,000 / 2.0 = 4,500 s > wave_deadline(40) = 4,200 s`
 Every figure below was captured on the macOS workspace host
 `Darwin Chans-MacBook-Pro-3.local 25.6.0 arm64` (Apple Silicon), Godot
 `4.7.1.stable.official.a13da4feb`, Rust 1.95.0 pinned toolchain. The commit each
-measurement ran at is stated explicitly; current HEAD (`ee6a32a`) differs from
-some of them but no catalogue or gameplay-impacting change landed between the
-latest verification commits and HEAD — tasks 3–4 touched only
-`fixture.rs`/its tests, `benchmark_200.gd` and `ci.yml`.
+measurement ran at is stated explicitly; `ee6a32a` differs from some of them
+but no catalogue or gameplay-impacting change landed between the latest
+verification commits and `ee6a32a` — tasks 3–4 touched only
+`fixture.rs`/its tests, `benchmark_200.gd` and `ci.yml`. Later commits on this
+branch are docs-only, so checks the controller ran against the `ee6a32a` code
+still describe the shipped implementation.
 
 | Measurement | Commit it ran at | Notes |
 |---|---|---|
 | Survival guard, pre-tune baseline | task-2 working tree before the catalogue edit (original catalogue: Wall 400, per-wave 4, quadratic 4) | release profile |
 | Survival guard, post-tune | `f05dd07`; re-verified `526b8ae`, `65bfd5e` | release profile, exact CI command |
 | Fortress 1,200-tick test (trajectory measured) | `a38da4e`; re-verified `40404fe`, `4844511` | debug profile |
-| Godot `GRUS_BENCHMARK_200` marker runs | task-4 working tree, content committed as `ee6a32a` | debug non-e2e extension |
+| Godot `GRUS_BENCHMARK_200` marker runs | task-4 working tree, content committed as `ee6a32a` | debug non-e2e extension, headless/dummy driver (§5.2) |
 | `smoke_test.tscn`, `reset_test.tscn` | same task-4 tree | exit 0 |
+| `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code (docs-only diffs since) | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
+| Serialized e2e-feature library tests | `ee6a32a` code | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
+| Seven Godot scene smokes | `ee6a32a` code | **5 pass / 2 fail** — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
 
 ## 3. Fixed-defense survival guard (spec §4)
 
@@ -154,11 +159,17 @@ Census after extend (asserted once in Rust): **146 buildings**
 | Heat | `surface_efficiency == 1.0` at t=0 and t=60; supply **123** (RC 15 + 9×12) vs demand **112** (RC 10 + 24×2 + 10×3 + 6×4) |
 | Fuel | 400 benchmark Coal vs 9 furnaces × 0.5/s × 60 s = 270 needed |
 
-### 5.2 Rendered marker runs — local contract evidence only
+### 5.2 Headless marker runs — local scene-contract evidence only
 
-Host/renderer: macOS 25.6.0 arm64, Godot 4.7.1, `gl_compatibility`,
-`display=headless`, **debug non-e2e** `libgrus_godot.dylib` — not the Linux
-llvmpipe CI path and not the missing hardware reference host.
+Host/method: macOS 25.6.0 arm64, Godot 4.7.1, **debug non-e2e**
+`libgrus_godot.dylib`, launched `--headless` with `--rendering-method
+gl_compatibility`. `gl_compatibility` is the *configured* rendering method, not
+a detected renderer: Godot's headless display driver uses the **dummy rendering
+driver** — the marker itself prints empty `adapter=`/`vendor=` fields and
+`display=headless` — so **no GPU rendering occurred**. These are headless/dummy
+scene-contract runs: they prove the real workload simulates and every view
+instantiates without error, nothing about rendered frame cost. Still not the
+Linux llvmpipe CI path and not the missing hardware reference host.
 
 Command (run twice, both exit 0):
 
@@ -182,38 +193,46 @@ GRUS_BENCHMARK_SECONDS=10 godot --headless --path godot \
 | `coal` at sample end | 350 | 350 |
 
 Population/heat/fuel framing: units started at 200 (50 human + 150 alien) and
-ended at 178 live; every authored building survived the ~10-sim-second window
-(`end_buildings=146`, `visibility_revision=206` ≈ 10.3 simulated s at 20 Hz);
-heat stayed saturated at 123/112 = 1.000; benchmark coal ended at 350 after
-starting at 400 (furnace burn net of worker deposits — observed value, not
+ended at 178 live; every authored building survived the sampled window
+(`end_buildings=146`). `visibility_revision=206` is recorded as an observation
+only — `VisibilityMap.revision` increments only when effective visibility
+changes and already accumulates during setup/readiness, so it is **not** a
+simulated-time clock; the sampled simulated duration is **unmeasured** (the
+runner logs no simulated-time field). Heat stayed saturated at 123/112 = 1.000;
+benchmark coal ended at 350 after starting at 400 (observed value, not
 derived).
 
 ### 5.3 Wall-clock versus simulated seconds — read this before comparing
 
 `GRUS_BENCHMARK_SECONDS` is a **wall-clock** sample bound. These runs requested
 10 wall-clock s but reported `duration_s ≈ 19.7` because a single ~10.1 s frame
-(`max_ms ≈ 10,150`, repeatable — a one-time first-use cost, likely shader/asset
-warmup when combat effects first spawn) overshot the deadline mid-sample; the
-loop is a single-frame overshoot by design. Likewise, on a slow renderer,
-**60 wall-clock seconds do not equal 60 simulated seconds** — fixed 20 Hz ticks
-lose time under `max_physics_steps_per_frame`. Consequently:
+(`max_ms ≈ 10,150`, repeatable) overshot the deadline mid-sample; the loop is a
+single-frame overshoot by design and the stall's cause is **unverified** (a
+headless run compiles no shaders, so "shader warmup" is not an available
+explanation either). More generally, on any slow target **60 wall-clock seconds
+do not equal 60 simulated seconds** — fixed 20 Hz ticks lose time under
+`max_physics_steps_per_frame` — and the sampled simulated duration is
+unmeasured (§5.2). Consequently:
 
 - the **breach** evidence is owned by the Rust test (§5.1, simulated time);
-  **no breach is claimed for the rendered run** — all 146 buildings stood;
-- the fortress Rust journey asserts 60 *simulated* seconds; the rendered marker
-  proves only that ~10 simulated seconds of the real workload render without
-  error on this host.
+  **no breach is claimed for the headless marker run** — all 146 buildings
+  stood at sample end;
+- the headless marker proves only that the real 200-unit workload simulates,
+  instantiates all views and reaches the marker without error on this host —
+  it rendered nothing and measured no simulated duration.
 
-## 6. Balance-guard vs rendered workload summary
+## 6. Gate summary — measured and contract checks
 
 | Gate | Result | Time domain |
 |---|---|---|
 | Fixed-defense survives wave 10, falls before wave 40 | **PASS** — defeat wave 11 @ 1,383.75 s | simulated |
 | Fortress 60-s trajectory (breach, tower fire, alien floor, heat) | **PASS** — §5.1 | simulated |
-| `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless) | **PASS** ×2 — §5.2 | wall clock ≈19.7 s for a requested 10 s |
-| `smoke_test.tscn`, `reset_test.tscn` locally | **PASS** exit 0 | — |
+| `cargo llvm-cov` 90% gate (`ee6a32a` code) | **PASS** — 96.77% lines (LH 4,710 / LF 4,867), exit 0 | — |
+| Serialized e2e-feature lib tests (`ee6a32a` code): `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` | **PASS** — 39/39 | — |
+| `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless, dummy driver) | **PASS** ×2 — §5.2 | wall clock ≈19.7 s for a requested 10 s; simulated duration unmeasured |
+| Scene smokes, 7 total (`ee6a32a` code) | **5 PASS / 2 FAIL** — smoke_test, reset_test, economy, defenses, underground pass; combat_lifecycle + wave fail on a stale first-wave twelve-alien expectation (§7) | — |
 
-## 7. NOT RUN / BLOCKED — no claim made
+## 7. Remaining gate status — NOT RUN / BLOCKED / controller-run results
 
 - **Normal-match progression baseline and owner interactive playtest: NOT RUN /
   BLOCKED.** The spec requires at least one recorded real playtest (Victory/
@@ -224,24 +243,39 @@ lose time under `max_physics_steps_per_frame`. Consequently:
   this record. Per owner direction, PR #17 stays open and unmerged until that
   playtest happens; follow-up playtest iterations belong in separate tickets.
 - **Hardware-rendered 60-s Linux x86_64 packaged benchmark: BLOCKED / not
-  run** — no suitable reference host exists. macOS headless and llvmpipe
-  numbers are not substitutes, and verified engineering is not being held
-  indefinitely on this external dependency.
+  run** — no suitable reference host exists. Headless dummy-driver runs and
+  llvmpipe numbers are not substitutes, and verified engineering is not being
+  held indefinitely on this external dependency.
 - **Linux software-GL CI fortress run** (`GRUS_BENCHMARK_SECONDS=10`, xvfb,
   `LIBGL_ALWAYS_SOFTWARE`, exit-0 + sentinel, 1920×1080): **NOT RUN** on this
   branch's fortress workload at the time of writing — it runs on the next CI
   execution; llvmpipe frame costs (~450 ms+ historically) make the new
   `VIEW_WAIT_FRAMES = 600` headroom the thing to watch, and its frames are not
   a performance signal.
-- **Linux export / packaged bevy-E2E on this branch: NOT RUN** locally; CI owns
-  it.
-- **Godot smokes beyond `smoke_test`/`reset_test`** (economy, combat lifecycle,
-  wave, defenses, underground) on the fortress branch: **NOT RUN** locally on
-  this tree — CI owns them; `defenses_smoke_test` was analyzed for the
-  2,400-HP wall coupling (breach well inside its 45 real-second window).
-- **`cargo llvm-cov` 90% gate, full `cargo test --workspace`, clippy/fmt** were
-  green at each implementation commit (task reports 2–4); the **final
-  consolidated run on this docs commit is the controller's** — this document
-  does not claim it.
+- **Linux export / packaged bevy-E2E on this branch: NOT RUN** — the only
+  e2e-surface check executed so far is the serialized in-process library run
+  below.
+- **Scene smokes — 5 of 7 pass on this tree; 2 FAIL, do not read as all-green:**
+  `smoke_test`, `reset_test`, `economy_smoke_test`, `defenses_smoke_test` and
+  `underground_smoke_test` exit 0 with their markers against the `ee6a32a` code
+  (logs under `.superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/<scene>.log`).
+  `combat_lifecycle_smoke_test` and `wave_smoke_test` **fail** at
+  `combat_lifecycle_smoke_test.gd:27` — "first wave did not launch twelve live
+  aliens (waited 15s)". The smokes still expect the pre-tune wave-1 roster of
+  12; the tuned `WAVE_BUDGET_*` now spawns 10. This is a stale smoke
+  expectation **awaiting a controller follow-up fix** — recorded as failed,
+  not explained away.
+- **Coverage gate — RUN and PASSED on the `ee6a32a` code** (controller-run
+  after this doc's first version; docs-only diffs since):
+  `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path .superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/coverage-final.lcov --locked --offline --ignore-filename-regex 'tests\.rs$'`
+  → **exit 0, 96.77% lines (LH 4,710 / LF 4,867)**. The earlier version of this
+  section asserted the gate "was green at each implementation commit" — no such
+  per-commit runs exist in the task reports, and that claim was removed.
+- **Serialized e2e-feature library tests — RUN and PASSED** on the `ee6a32a`
+  code: `cargo test -p grus-godot --lib --features e2e --locked --offline --
+  --test-threads=1` → **exit 0, 39/39 passed**.
+- `cargo fmt`, `cargo clippy` and `cargo test --workspace` were green at each
+  implementation commit per task reports 2–4; no fresh consolidated run of
+  those on the docs commits is claimed here.
 - Any figure above may be updated by pending verification; nothing here is a
   promise about runs that have not happened.
