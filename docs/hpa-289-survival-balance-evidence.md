@@ -42,8 +42,11 @@ measurement ran at is stated explicitly; `ee6a32a` differs from some of them
 but no catalogue or gameplay-impacting change landed between the latest
 verification commits and `ee6a32a` — tasks 3–4 touched only
 `fixture.rs`/its tests, `benchmark_200.gd` and `ci.yml`. Later commits on this
-branch are docs-only, so checks the controller ran against the `ee6a32a` code
-still describe the shipped implementation.
+branch are docs-only apart from `6bbabe2` and a follow-up defenses-smoke
+lifetime fix, which changed smoke GDScript only — no Rust or simulation
+code — so checks the controller ran against the `ee6a32a` code still describe
+the shipped Rust implementation; scene-smoke results were measured on the
+repaired scripts.
 
 | Measurement | Commit it ran at | Notes |
 |---|---|---|
@@ -52,9 +55,9 @@ still describe the shipped implementation.
 | Fortress 1,200-tick test (trajectory measured) | `a38da4e`; re-verified `40404fe`, `4844511` | debug profile |
 | Godot `GRUS_BENCHMARK_200` marker runs | task-4 working tree, content committed as `ee6a32a` | debug non-e2e extension, headless/dummy driver (§5.2) |
 | `smoke_test.tscn`, `reset_test.tscn` | same task-4 tree | exit 0 |
-| `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code (docs-only diffs since) | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
+| `cargo llvm-cov` 90% line-coverage gate | `ee6a32a` code (no Rust/sim diffs since — later commits are docs or smoke GDScript only) | exit 0 — 96.77% (LH 4,710 / LF 4,867); controller-run after this doc's first version |
 | Serialized e2e-feature library tests | `ee6a32a` code | exit 0 — 39/39; `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` |
-| Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass** — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
+| Seven Godot scene smokes | first run on `ee6a32a` code: **5 pass / 2 fail**; after the GDScript-only wave-count fix on this branch (no sim/Rust change): **7 pass**; defenses re-verified twice after the lambda-lifetime fix — exit 0, marker, zero freed-capture errors — see §6–§7; logs under `.superpowers/sdd/…/<scene>.log` |
 
 ## 3. Fixed-defense survival guard (spec §4)
 
@@ -230,7 +233,7 @@ unmeasured (§5.2). Consequently:
 | `cargo llvm-cov` 90% gate (`ee6a32a` code) | **PASS** — 96.77% lines (LH 4,710 / LF 4,867), exit 0 | — |
 | Serialized e2e-feature lib tests (`ee6a32a` code): `cargo test -p grus-godot --lib --features e2e --locked --offline -- --test-threads=1` | **PASS** — 39/39 | — |
 | `GRUS_BENCHMARK_200` marker, exit 0 (local macOS headless, dummy driver) | **PASS** ×2 — §5.2 | wall clock ≈19.7 s for a requested 10 s; simulated duration unmeasured |
-| Scene smokes, 7 total | **7 PASS** — first run on `ee6a32a` code was 5 PASS / 2 FAIL (combat_lifecycle + wave expected the pre-tune 12-alien first wave); after updating the stale first-wave assertions to the tuned 10-alien roster, all seven exit 0 with their markers (§7) | — |
+| Scene smokes, 7 total | **7 PASS** — first run on `ee6a32a` code was 5 PASS / 2 FAIL (combat_lifecycle + wave expected the pre-tune 12-alien first wave); after updating the stale first-wave assertions to the tuned 10-alien roster, all seven exit 0 with their markers (§7); the defenses run's earlier freed-lambda-capture ERROR lines are gone after the callback-lifetime fix | — |
 
 ## 7. Remaining gate status — NOT RUN / BLOCKED / controller-run results
 
@@ -287,8 +290,22 @@ unmeasured (§5.2). Consequently:
   verification run (a pre-existing latent flake, not caused by the tuning).
   `defenses_smoke_test` re-verified green: exit 0,
   `GRUS_DEFENSE_SMOKE_OK` (gather_source=3).
+  That passing run still logged two `ERROR: Lambda capture at index 0 was
+  freed. Passed "null" instead.` lines inside `_wait_until`
+  (`combat_lifecycle_smoke_test.gd:34`; one backtrace points at
+  `defenses_smoke_test.gd:282`): the post-breach, crystal-kill and tracer wait
+  lambdas captured the turret view Node3D, which the horde can legitimately
+  destroy mid-wait; the kill/tracer latches still gated success, so the run
+  passed but its output was not clean. The lambdas now capture the stable
+  `turret_id` and `_observe_turret` re-resolves the view through
+  `_building_view` each poll under the same `is_instance_valid` guard — every
+  assertion, timeout and the marker contract unchanged. Re-verified on the
+  same headless Godot 4.7.1 host in two consecutive runs: exit 0,
+  `GRUS_DEFENSE_SMOKE_OK` (setup_s 22.7/22.6, post_wave_s 10.9/11.0), zero
+  `Lambda capture`/ERROR lines; before/after logs in the plan workspace.
 - **Coverage gate — RUN and PASSED on the `ee6a32a` code** (controller-run
-  after this doc's first version; docs-only diffs since):
+  after this doc's first version; no Rust/sim diffs since — later commits are
+  docs or smoke GDScript only):
   `cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --lcov --output-path .superpowers/sdd/2026-11-03-hpa-289-survival-benchmark-balance/coverage-final.lcov --locked --offline --ignore-filename-regex 'tests\.rs$'`
   → **exit 0, 96.77% lines (LH 4,710 / LF 4,867)**. The earlier version of this
   section asserted the gate "was green at each implementation commit" — no such
