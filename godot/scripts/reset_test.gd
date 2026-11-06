@@ -2,6 +2,14 @@ extends Node
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
+func _visible_text(control: Control) -> String:
+	if control is RichTextLabel:
+		return (control as RichTextLabel).get_parsed_text()
+	return str(control.get("text"))
+
+func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
+	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -216,12 +224,21 @@ func _run() -> void:
 		return
 	var heat_label_text := ""
 	for _frame in range(30):
-		heat_label_text = str((get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label).text)
+		var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
+		heat_label_text = _visible_text(economy_label)
 		if heat_label_text.contains("Heat 15 / 10 · surface 100%"):
 			break
 		await get_tree().process_frame
 	if not heat_label_text.contains("Heat 15 / 10 · surface 100%"):
 		_fail("reset smoke HUD does not show the warm heat baseline: \"%s\"" % heat_label_text)
+		return
+	var reset_economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
+	for icon_name in ["food", "scrap", "coal", "crystals", "heat"]:
+		if not _rich_text_has_icon(reset_economy_label, "res://assets/ui/icons/resources/%s.png" % icon_name):
+			_fail("reset HUD is missing resource icon %s" % icon_name)
+			return
+	if _rich_text_has_icon(reset_economy_label, "res://assets/ui/icons/status/surface_cold.png"):
+		_fail("reset HUD shows an incorrect cold warning at 100% efficiency")
 		return
 	wave_error = SmokeHelpers.no_launched_wave_error("reset smoke")
 	if not wave_error.is_empty():

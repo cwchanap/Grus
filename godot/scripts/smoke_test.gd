@@ -235,6 +235,46 @@ func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
 		return false
 	return true
 
+func _assert_action_icon_paths(main: Node3D) -> bool:
+	for spec in [
+		["HUD/CommandPanel/BuildGrid", "buildings", 9],
+		["HUD/CommandPanel/TrainGrid", "units", 3],
+	]:
+		var grid := main.get_node_or_null(spec[0]) as Container
+		if grid == null:
+			_fail("action icon grid is missing: %s" % spec[0])
+			return false
+		var count := 0
+		for node in grid.get_children():
+			if not node is Button:
+				continue
+			var button := node as Button
+			count += 1
+			var kind := str(button.get_meta("kind", ""))
+			var expected := "res://assets/ui/icons/%s/%s.png" % [spec[1], kind.to_snake_case()]
+			var actual := button.icon.resource_path if button.icon != null else ""
+			if kind.is_empty() or actual != expected:
+				_fail("%s icon path is %s; expected %s" % [button.name, actual if not actual.is_empty() else "missing", expected])
+				return false
+		if count != int(spec[2]):
+			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
+			return false
+	return true
+
+func _has_visible_icon(root: Node, resource_path: String) -> bool:
+	var nodes: Array[Node] = [root]
+	nodes.append_array(root.find_children("*", "", true, false))
+	for node in nodes:
+		if node is CanvasItem and not node.is_visible_in_tree():
+			continue
+		if node is TextureRect:
+			var texture := (node as TextureRect).texture
+			if texture != null and texture.resource_path == resource_path:
+				return true
+		elif node is RichTextLabel and (node as RichTextLabel).text.contains(resource_path):
+			return true
+	return false
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -247,6 +287,8 @@ func _run() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
 	if viewport_size != Vector2(TEST_VIEWPORT_SIZE):
 		_fail("smoke viewport did not resize to project baseline: %s" % viewport_size)
+		return
+	if not _assert_action_icon_paths(get_node("Main") as Node3D):
 		return
 
 	var units: Array[Node] = []
@@ -361,10 +403,13 @@ func _run() -> void:
 	var research_bar := get_node_or_null("Main/HUD/ResearchPanel/ResearchBar") as ProgressBar
 	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
 	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
-	var wave_hud := get_node("Main/HUD/WaveLabel") as Label
+	var wave_hud := get_node("Main/HUD/WaveLabel") as Control
 	if research_panel == null or research_bar == null or research_label == null \
 			or analyze_button == null or wave_hud == null:
 		_fail("research HUD nodes are missing under HUD/ResearchPanel")
+		return
+	if not _has_visible_icon(get_node("Main/HUD"), "res://assets/ui/icons/status/research_progress.png"):
+		_fail("research HUD is missing status/research_progress.png")
 		return
 	# The compact panel hugs the left edge below the InputShield band,
 	# inside the 1280x720 viewport, and fully contains its Analyze button —

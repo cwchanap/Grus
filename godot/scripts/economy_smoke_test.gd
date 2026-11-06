@@ -50,6 +50,14 @@ const RALLY_CELL := Vector2i(20, 58)
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
+func _visible_text(control: Control) -> String:
+	if control is RichTextLabel:
+		return (control as RichTextLabel).get_parsed_text()
+	return str(control.get("text"))
+
+func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
+	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
+
 var _camera: Camera3D
 var _start_ms := 0
 var _building_ids := {}
@@ -212,8 +220,10 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 			or int(economy.get("heat_demand", -1)) != demand \
 			or absf(float(economy.get("surface_efficiency", 0.0)) - efficiency) > 0.0001:
 		return false
-	var lines := (get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label).text.split("\n")
-	return lines.size() > 2 and str(lines[2]) == hud_line
+	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
+	var lines := _visible_text(label).split("\n")
+	var cold_icon := _rich_text_has_icon(label, "res://assets/ui/icons/status/surface_cold.png")
+	return lines.size() > 2 and str(lines[2]) == hud_line and cold_icon == (efficiency < 1.0)
 
 ## A building view's body tint matches the icy or warm-blue material its
 ## Rust-pushed set_cold flag should currently produce (building_view.gd
@@ -415,14 +425,23 @@ func _run() -> void:
 	# boot values — Crystals included — straight off economy_snapshot. The
 	# session is still at Start, so the label cannot have drifted from the
 	# 200/300/150/0 seed; the placeholder's zero stocks differ on Food.
-	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Label
+	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
 	if economy_label == null:
 		_fail("economy HUD label is missing")
 		return
+	for icon_name in ["food", "scrap", "coal", "crystals", "heat"]:
+		var icon_path := "res://assets/ui/icons/resources/%s.png" % icon_name
+		if not _rich_text_has_icon(economy_label, icon_path):
+			_fail("economy HUD is missing required icon %s" % icon_path)
+			return
+	if _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/surface_cold.png"):
+		_fail("warm economy HUD shows an incorrect surface-cold warning")
+		return
+	var economy_text := _visible_text(economy_label)
 	for currency in ["Food", "Scrap", "Coal", "Crystals"]:
 		var shown := "%s %d" % [currency, int(boot.get(currency.to_lower(), -1))]
-		if not economy_label.text.contains(shown):
-			_fail("economy HUD does not show live %s (want \"%s\"): \"%s\"" % [currency, shown, economy_label.text])
+		if not economy_text.contains(shown):
+			_fail("economy HUD does not show live %s (want \"%s\"): \"%s\"" % [currency, shown, economy_text])
 			return
 	# Rendered bounds, not just text: after the layout settles, the label's
 	# laid-out extent (rect grown to the minimum text size — wrapping is
@@ -430,7 +449,11 @@ func _run() -> void:
 	# inside EconomyPanel and the baseline viewport.
 	await get_tree().process_frame
 	var rendered := economy_label.get_global_rect()
-	rendered.size = rendered.size.max(economy_label.get_minimum_size())
+	var content_size := economy_label.get_minimum_size()
+	if economy_label is RichTextLabel:
+		var rich_label := economy_label as RichTextLabel
+		content_size = content_size.max(Vector2(rich_label.get_content_width(), rich_label.get_content_height()))
+	rendered.size = rendered.size.max(content_size)
 	var panel_rect := (get_node("Main/HUD/EconomyPanel") as Control).get_global_rect()
 	if not panel_rect.encloses(rendered):
 		_fail("economy HUD label rendered bounds %s escape EconomyPanel %s" % [rendered, panel_rect])
@@ -441,16 +464,16 @@ func _run() -> void:
 		return
 	# Crystals rides the Population line so the first currency line stays
 	# narrow enough for the authored rectangle.
-	var hud_lines := economy_label.text.split("\n")
+	var hud_lines := economy_text.split("\n")
 	if hud_lines.size() != 3 or hud_lines[0].contains("Crystals") \
 			or not hud_lines[1].contains("Crystals") or not hud_lines[1].contains("Population"):
-		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_label.text)
+		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_text)
 		return
 	# HPA-181: the third line is the live heat boundary. The boot is still at
 	# Start, whose ticks recompute supply/demand without burning anything, so
 	# the label must show the warm Research Center baseline exactly.
 	if hud_lines[2] != "Heat 15 / 10 · surface 100%":
-		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_label.text)
+		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_text)
 		return
 	var research_center := _building_view(1)
 	if research_center == null:

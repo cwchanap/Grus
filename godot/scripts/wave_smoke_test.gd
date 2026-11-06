@@ -8,6 +8,25 @@ const UNIT_VIEW_SCENE := preload("res://scenes/unit_view.tscn")
 
 var _stage5_passed := false
 
+func _visible_text(control: Control) -> String:
+	if control is RichTextLabel:
+		return (control as RichTextLabel).get_parsed_text()
+	return str(control.get("text"))
+
+func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
+	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
+
+func _wave_hud_fits(control: Control) -> bool:
+	var rect := control.get_global_rect()
+	var content_size := control.get_minimum_size()
+	if control is RichTextLabel:
+		var rich_label := control as RichTextLabel
+		content_size = Vector2(rich_label.get_content_width(), rich_label.get_content_height())
+		if rich_label.get_visible_line_count() != rich_label.get_line_count():
+			return false
+	rect.size = rect.size.max(content_size)
+	return Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).encloses(rect)
+
 func _run() -> void:
 	await get_tree().process_frame
 	var main := get_node_or_null("Main") as Node3D
@@ -18,9 +37,15 @@ func _run() -> void:
 	if start_label == null or not start_label.text.to_lower().contains("surviv"):
 		_stage5_fail("Start overlay does not describe survival: %s" % [start_label.text if start_label != null else "missing"])
 		return
-	var wave_label := main.get_node_or_null("HUD/WaveLabel") as Label
+	var wave_label := main.get_node_or_null("HUD/WaveLabel") as Control
 	if wave_label == null:
 		_stage5_fail("wave HUD label is missing")
+		return
+	if not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/wave_countdown.png"):
+		_stage5_fail("wave HUD is missing status/wave_countdown.png")
+		return
+	if _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
+		_stage5_fail("wave HUD shows incoming-zone art before a warning")
 		return
 	# The countdown must be rendered from a live bridge read, not the
 	# scene's placeholder text: poll until the label shows the snapshot's
@@ -28,15 +53,16 @@ func _run() -> void:
 	var live_wave: Dictionary = {}
 	for _frame in 8:
 		live_wave = GrusBridge.wave_snapshot()
-		if wave_label.text.contains("Next wave %d" % int(live_wave.get("next_wave", -1))):
+		if _visible_text(wave_label).contains("Next wave %d" % int(live_wave.get("next_wave", -1))):
 			break
 		await get_tree().process_frame
 	var next_wave := int(live_wave.get("next_wave", -1))
 	var remaining := maxi(ceili(float(live_wave.get("seconds_remaining", 0.0))), 0)
 	var expected_time := "%d:%02d" % [int(remaining / 60), remaining % 60]
-	if not wave_label.text.contains("Next wave %d" % next_wave) \
-			or not wave_label.text.contains(expected_time):
-		_stage5_fail("wave HUD does not render the live snapshot countdown (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, wave_label.text])
+	var start_text := _visible_text(wave_label)
+	if not start_text.contains("Next wave %d" % next_wave) \
+			or not start_text.contains(expected_time) or not _wave_hud_fits(wave_label):
+		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, start_text])
 		return
 	if not await _probe_alien_roles():
 		return
@@ -124,14 +150,17 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	await get_tree().process_frame
 	var warning: Dictionary = warning_box["snapshot"]
 	var zones: Array = warning.get("incoming_zones", [])
-	var wave_label := main.get_node("HUD/WaveLabel") as Label
+	var wave_label := main.get_node("HUD/WaveLabel") as Control
 	if int(warning.get("wave", -1)) != 0 or int(warning.get("next_wave", -1)) != 1 \
 			or zones.size() != 1 or str(zones[0].get("name", "")) != "North":
 		_stage5_fail("warning snapshot is not the first authored zone: %s" % [warning])
 		return
-	if not wave_label.text.contains("Prep") or not wave_label.text.contains("Next wave 1") \
-			or not wave_label.text.contains("Incoming: North"):
-		_stage5_fail("HUD does not render the live warning snapshot: %s" % [wave_label.text])
+	var warning_text := _visible_text(wave_label)
+	if not warning_text.contains("Prep") or not warning_text.contains("Next wave 1") \
+			or not warning_text.contains("Incoming: North") \
+			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png") \
+			or not _wave_hud_fits(wave_label):
+		_stage5_fail("HUD does not render the live warning snapshot and incoming icon without clipping: %s" % [warning_text])
 		return
 	var minimap := main.get_node("HUD/Minimap") as Control
 	var pings: PackedVector2Array = minimap.get("incoming_ping_points")
@@ -158,7 +187,8 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	await get_tree().process_frame
 	var expired_pings: PackedVector2Array = minimap.get("incoming_ping_points")
 	if not expired_pings.is_empty() \
-			or not wave_label.text.contains("Incoming: North"):
+			or not _visible_text(wave_label).contains("Incoming: North") \
+			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
 		_stage5_fail("short-lived border ping did not expire while the authoritative HUD warning remained")
 		return
 	_stage5_passed = true
