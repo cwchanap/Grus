@@ -104,6 +104,9 @@ func _slot(level: int, slot: int) -> Button:
 func _slot_state(level: int, slot: int) -> Dictionary:
 	return GrusBridge.underground_snapshot().levels[level - 1].slots[slot]
 
+func _icon_path(button: Button) -> String:
+	return button.icon.resource_path if button.icon != null else ""
+
 func _stock() -> Dictionary:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	return {"food": int(economy.food), "scrap": int(economy.scrap),
@@ -173,6 +176,15 @@ func _run() -> void:
 	_excavate = _panel.get_node("ExcavateButton")
 	_levels = _panel.get_node("ScrollContainer/LevelsBox")
 	_catalogue = GrusBridge.catalogue_snapshot()
+	for room_kind in _catalogue.underground.room_kinds:
+		var kind_button := _kind(room_kind)
+		var expected_icon := "res://assets/ui/icons/underground/%s.png" % str(room_kind).to_snake_case()
+		if not _check(_icon_path(kind_button) == expected_icon,
+				"%s room-kind Button icon is %s; expected %s" % [room_kind, _icon_path(kind_button), expected_icon]):
+			return
+	if not _check(_icon_path(_excavate) == "res://assets/ui/icons/underground/excavate.png",
+			"Excavate Button is missing underground/excavate.png"):
+		return
 	if not _check(GrusBridge.set_sim_speed(20.0), "20x speed rejected"):
 		return
 	if not await _wait(_fixture_ready, 5.0, "fixture views never settled"):
@@ -309,6 +321,9 @@ func _run() -> void:
 		for slot in 4:
 			if not _check(str(row.slots[slot].kind) == "" and not bool(row.slots[slot].complete), "bad 0-based empty slot"):
 				return
+			if not _check(_icon_path(_slot(index + 1, slot)).is_empty(),
+					"empty L%d slot %d shows an icon" % [index + 1, slot]):
+				return
 
 	# Fund Lab+Tap and two ordinary Barracks. Retire gatherers before exact
 	# debit/no-spend checks so no real deposit can disguise a broken charge.
@@ -376,6 +391,8 @@ func _run() -> void:
 			if not _check(button.disabled and button.text.contains("L3") and button.tooltip_text.contains("requires L3"),
 					"Lab armed did not disable/explain shallow target"):
 				return
+			if not _check(_icon_path(button).is_empty(), "Requires L3 slot shows an icon"):
+				return
 			SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await _settle()
 	if not _check(_stock() == disabled_before and GrusBridge.command_feedback_revision() == disabled_revision \
@@ -395,6 +412,9 @@ func _run() -> void:
 			and str(_slot_state(3, 0).kind) == "Lab" and not bool(_slot_state(3, 0).complete),
 			"Lab did not charge once at L3/slot0 and start construction"):
 		return
+	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png",
+			"building Lab slot is missing its room icon"):
+		return
 	await _click(_kind("Shelter"))
 	if not _check(not _slot(1, 0).disabled and _slot(3, 0).disabled, "Shelter failed to re-enable L1 or occupied slot actionable"):
 		return
@@ -409,6 +429,10 @@ func _run() -> void:
 
 	if not await _wait(func(): return bool(_slot_state(3, 0).complete) \
 			and int(GrusBridge.economy_snapshot().heat_demand) == 16, 8.0, "Lab/Barracks never completed"):
+		return
+	await _settle()
+	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png",
+			"completed Lab slot lost its room icon"):
 		return
 	var cold: Dictionary = GrusBridge.economy_snapshot()
 	var cold_rate := float(GrusBridge.research_snapshot().rate_per_second)
@@ -426,7 +450,14 @@ func _run() -> void:
 			and str(_slot_state(3, 1).kind) == "GeothermalTap" and not bool(_slot_state(3, 1).complete),
 			"Tap did not charge exactly once at L3/slot1"):
 		return
+	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png",
+			"building Geothermal Tap slot is missing its room icon"):
+		return
 	if not await _wait(func(): return bool(_slot_state(3, 1).complete), 6.0, "Tap did not complete"):
+		return
+	await _settle()
+	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png",
+			"completed Geothermal Tap slot lost its room icon"):
 		return
 	var warm: Dictionary = GrusBridge.economy_snapshot()
 	if not _check(int(warm.heat_supply) == int(cold.heat_supply) + tap_heat and int(warm.heat_demand) == 16 \
