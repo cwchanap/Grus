@@ -36,7 +36,7 @@
 
 - [ ] Produce all ten building models with the specified silhouette distinctions, plus the construction-site asset. Keep the frozen/scrap/concrete palette consistent with existing winter terrain and HPA-44 PNG icons.
 - [ ] Use 1×1 normalized X/Z bounds, Y-grounded origin, no overhang, no added collision/nav/occlusion, sensible triangle limits. Make Wall and Gate connect along both X and Z when placed tile-to-tile; avoid neighbor masks, rotations, special junction state and consolidated mesh placement.
-- [ ] Commit Godot-importable GLBs, committed texture dependencies (at least a shared diffuse asset if using textures), required `.import` settings and short asset provenance/regeneration notes. Test import on a clean Godot cache; no uncommitted generated resource dependencies.
+- [ ] Commit Godot-importable GLBs, at least one shared diffuse texture PNG referenced by the models, required `.import` settings and short asset provenance/regeneration notes. Test import on a clean Godot cache; no uncommitted generated resource dependencies.
 - [ ] Connect **all ten** `building_kind` strings to matching imported assets in the one `BuildingView` presentation path. Keep a visible fallback (with warning) for an unknown kind; the import smoke must fail if any expected catalogue kind is unmapped.
 
 ## Checkpoint 4 — State, selection, and view regressions
