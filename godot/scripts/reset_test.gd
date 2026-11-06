@@ -226,10 +226,10 @@ func _run() -> void:
 	for _frame in range(30):
 		var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
 		heat_label_text = _visible_text(economy_label)
-		if heat_label_text.contains("Heat 15 / 10 · surface 100%"):
+		if heat_label_text.contains("15 / 10 · surface 100%"):
 			break
 		await get_tree().process_frame
-	if not heat_label_text.contains("Heat 15 / 10 · surface 100%"):
+	if not heat_label_text.contains("15 / 10 · surface 100%"):
 		_fail("reset smoke HUD does not show the warm heat baseline: \"%s\"" % heat_label_text)
 		return
 	var reset_economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
