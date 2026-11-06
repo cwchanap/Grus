@@ -1,65 +1,73 @@
 # HPA-291 — Structure art implementation plan
 
-**Status:** Proposed; **documentation-only planning draft**. Checkboxes below are NOT claims that artwork, tests, or verification exist.
+**Status:** Proposed; **documentation-only draft**, revised after [GitHub design review](https://github.com/cwchanap/Grus/pull/20#issuecomment-6690066100). Checkboxes do NOT claim artwork, code, tests, or verification exist.
 **Ticket:** https://linear.app/cwchanap/issue/HPA-291/grus-survival-art-structure-models
 **Design:** [HPA-291 scoped design](../specs/2026-11-06-hpa-291-structure-models-design.md)
-**Branch / PR:** `hpa-291-structure-models`; **one PR per ticket**. Continue implementation, evidence, and all review fixes on this same draft PR.
+**Branch / PR:** `hpa-291-structure-models`; **one PR for HPA-291**. Add artwork, implementation, verification, and review fixes to this same draft PR.
 
-## Scope / audit summary
+## Audited existing seams and scope
 
-- The existing Rust bridge already applies the catalogue-derived 4×4 / 3×3 / 2×2 / 1×1 footprint and calls `set_cold` and `set_health_ratio`. Keep `crates/grus-sim` and `crates/grus-godot` untouched.
-- `building_view.tscn` and `building_view.gd` own all existing surface-building visuals, and `GrusBridge.building_snapshot(id).complete` is enough to show a construction site without a bridge change.
-- Current `economy_smoke_test.gd::_tint_is` is tied to a solid primitive `Body` material; its warm/cold proof must be moved to the actual imported mesh material and remain equally strong.
-- Existing `scripts/build_winter_assets.py`, `godot/assets/winter/winter_glb_import.gd`, and `.glb.import` files are the known-good Blender/GLB import pattern.
+- `crates/grus-sim/src/catalog.rs::building_spec` owns all ten building kinds/footprint sizes. `crates/grus-godot/src/lib.rs::building_view_transform` already centers and scales each view root X/Z to the footprint while Y stays 1.
+- `crates/grus-godot/src/lib.rs::update_cold_tints` already gathers `building.construction.complete` and the authoritative cold flag per view on every Update. Narrowly extend its `set_view_cold` helper to call Godot `set_state(complete, cold)` without touching simulation or tick order. **No per-building `building_snapshot` polling.**
+- `godot/scripts/resource_view.gd` already demonstrates kind-based model attachment, a visible fallback, and stopping `_process` when metadata has arrived. Reuse the pattern in `building_view.gd`; the building `HealthBar` and `set_health_ratio` stay in place.
+- `scripts/build_winter_assets.py` is the mandatory authored source for this art family: extend its existing generator, export assertions, colors and single-command regeneration. Reuse `winter_glb_import.gd` and the winter `.glb.import` recipe; avoid a forked generator.
+- `economy_smoke_test.gd::_tint_is` currently checks flat `Body` albedo. After integration, assert the **active model** meshes' `material_overlay` instead, without reducing the heat/warm/cold/recovery checks.
+- `battlefield_controller.gd` already has `_projected_art_rect` / `_view_art_bounds` for resources. Reuse them to pick large visible building silhouettes while excluding the `HealthBar` mesh.
+- **Allowed change:** Godot scenes, scripts, GLBs, textures, import settings, Blender source, smoke tests, docs, and the tiny **`crates/grus-godot` view projection**. No changes under `crates/grus-sim`, catalogue, gameplay balance, movement, buildings state, or tick sequencing. Unit art and audio stay on their separate tickets.
 
-## Checkpoint 1 — Freeze the asset/view contract, then add failing import assertions
+## Checkpoint 1 — Freeze contracts and protect the pilot without breaking CI
 
-**Files:** `godot/scripts/smoke_test.gd`, `godot/scripts/economy_smoke_test.gd`, `godot/scripts/defenses_smoke_test.gd`; maybe `godot/assets/structures/README.md`.
+**Files:** design/plan, existing `godot/scripts/{smoke_test,economy_smoke_test,defenses_smoke_test}.gd` when needed.
 
-- [ ] Add a strict list of the **ten** expected `BuildingKind`/GLB path pairs (plus the visual-only `construction_site.glb`) to art documentation. Pull the actual dimensions from `GrusBridge.catalogue_snapshot().buildings` where available; do not create a second hand-maintained size catalogue.
-- [ ] In the existing smoke, load/instantiate all eleven GLBs with a short bounded helper; assert nonempty mesh bounds, local X/Z within ±0.5, Y grounded, imported `scene_file_path` and absence of physics/navigation/occluder nodes. Fail visibly while they are missing.
-- [ ] Add live Research Center / construction / finished-building checks: model path, world-space bounds matching the authoritative scale, intact health/selection identity. Add a Wall–Gate–Wall row/column visual contract to the existing defenses journey where viable, rather than spawning a new test framework.
-- [ ] Preserve the real temperature/cold test semantics (`15/16` efficiency deficit and furnace recovery). Replace old `Body`-only tint assertions **only alongside the new model material integration**.
+- [ ] Identify the exact `Model` child / metadata / health bar / root transform seam and update any test helpers using primitive `Body`.
+- [ ] Keep the existing seven smoke flows **green at each checkpoint**. Do **not** assert all 11 missing GLBs in the first commit: `smoke_test.gd` quits on its first `_fail`, which would mask all later selection, fog, input and research regressions during the pilot.
+- [ ] Stage only the targeted two-asset pilot checks alongside Checkpoint 2; defer the catalogue-wide import loop until all models exist in Checkpoint 3.
+- [ ] Reuse the current catalogue `buildings` keys and `kind.to_snake_case()` to find assets; do not maintain a second ten-item mapping table in GDScript or a custom resource cache.
 
-## Checkpoint 2 — Author one pilot model and a construction-site proof
+## Checkpoint 2 — Bunkhouse + construction-site pilot, including state/overlay/picking
 
-**Files:** `godot/assets/structures/`; optional `scripts/build_structure_assets.py`; `godot/scenes/building_view.tscn` and `godot/scripts/building_view.gd`.
+**Files:** `scripts/build_winter_assets.py`, `godot/assets/structures/`, `godot/scenes/building_view.tscn`, `godot/scripts/building_view.gd`, `crates/grus-godot/src/lib.rs`, existing smoke scripts and a shared ice-overlay material if needed.
 
-- [ ] Make one **2×2 Bunkhouse pilot** with original textured/glTF art and a reusable normalized `construction_site.glb`. Validate local origin, exact footprint, shape at default camera zoom, and clean Godot 4.7.1 import. Reuse existing import post-processor/settings, not a new tooling architecture.
-- [ ] Wire `BuildingView` to load pilot art by metadata after the bridge stamps `building_kind`; leave `BuildingView` root scale and `HealthBar` untouched. While `building_snapshot(id).complete` is false, show generic construction art; switch to Bunkhouse GLB at completion. Poll the snapshot **only until finished**. Use the real gameplay construction state, not an invented timer.
-- [ ] Implement view-local duplicated materials and the existing `set_cold(bool)` API's ice tint + warm restoration, retaining vertex colors/albedo texture. Confirm two instances never share tint state.
-- [ ] Inspect a real 1280×720 Bunkhouse under construction, complete, cold, and reheated; correct silhouette/texture scale/health-bar offset before batch authoring. Do not batch ten models before the pilot is validated.
+- [ ] Extend existing Blender `export()` with optional `out_dir`, `footprint`, `max_height` parameters while preserving the six existing winter-prop outputs. Author Bunkhouse at **true 2×2 world size**, then divide its Blender horizontal X/Y coordinates by 2 on export, leaving Blender Z/Godot Y untouched. Assert normalized ±0.5 horizontal bounds, grounded base, allowed height, <4k triangles. Use `--python-exit-code 1`. Produce `bunkhouse.glb`, `construction_site.glb` and the required texture PNG via this same source.
+- [ ] Import pilot GLBs using the existing import post-processor and `.glb.import` recipe. Verify texture references, real camera silhouette, clean imports and no accidentally generated physics/collision/navigation/occluder nodes.
+- [ ] Change the bridge view projection to `set_view_state(handle, complete, cold)`, calling Godot `set_state(complete: bool, cold: bool)`; **do not add a sim state field or new bridge snapshot method**. Value-gate repeated pushes in the GDScript view. Cache early pushes until `building_kind` metadata arrives; style once, then `set_process(false)` as in `resource_view.gd`.
+- [ ] Follow the `resource_view.gd` `Model` holder/fallback pattern. While `complete=false`, display the generic normalized site; on `complete=true`, swap **once** to the kind's final GLB. Preserve the root/id/footprint and health bar. Do not poll `GrusBridge` in `building_view.gd`; the selected-building HUD remains the consumer of `building_snapshot` progress.
+- [ ] Remove obsolete solid Team-1/Team-2 building tinting. Reuse one pale translucent `StandardMaterial3D` overlay, assigned to active `MeshInstance3D.material_overlay` on cold and `null` when warm, excluding the `HealthBar`. Never duplicate/mutate the imported mesh or its materials. Position the health bar from the active model's AABB.
+- [ ] Switch building picking to the existing projected-art-rect test (closest eligible center, team/fog filters unchanged); inspect **only the active `Model`**, not the `HealthBar`. Keep the center-radius fallback while metadata/art is not ready and preserve resource/unit picks.
+- [ ] Add just Bunkhouse/construction-site import, construction-completion, cold/warm/recovery, selectable-roof and geometry tests to **existing** smoke scenes. Preserve their remaining legs. Capture an actual 1280×720 pilot screenshot for review before batching.
 
-## Checkpoint 3 — Complete the ten-building art family, no new gameplay rules
+## Checkpoint 3 — Complete models, then enable catalogue-wide import coverage
 
-**Files:** `godot/assets/structures/{research_center,bunkhouse,depot,barracks,wall,gate,gun_turret,coal_furnace,flame_tower,crystal_lance,construction_site}.glb`, referenced texture PNG(s), their import settings, optional Blender source, `godot/assets/structures/README.md`.
+**Files:** `scripts/build_winter_assets.py`, `godot/assets/structures/README.md`, 11 GLBs, shared texture(s), Godot import settings, existing `smoke_test.gd`.
 
-- [ ] Produce all ten building models with the specified silhouette distinctions, plus the construction-site asset. Keep the frozen/scrap/concrete palette consistent with existing winter terrain and HPA-44 PNG icons.
-- [ ] Use 1×1 normalized X/Z bounds, Y-grounded origin, no overhang, no added collision/nav/occlusion, sensible triangle limits. Make Wall and Gate connect along both X and Z when placed tile-to-tile; avoid neighbor masks, rotations, special junction state and consolidated mesh placement.
-- [ ] Commit Godot-importable GLBs, at least one shared diffuse texture PNG referenced by the models, required `.import` settings and short asset provenance/regeneration notes. Test import on a clean Godot cache; no uncommitted generated resource dependencies.
-- [ ] Connect **all ten** `building_kind` strings to matching imported assets in the one `BuildingView` presentation path. Keep a visible fallback (with warning) for an unknown kind; the import smoke must fail if any expected catalogue kind is unmapped.
+- [ ] Add nine remaining finished models to the same Blender source: Research Center, Depot, Barracks, Wall, Gate, Gun Turret, Coal Furnace, Flame Tower, Crystal Lance. Together with pilot Bunkhouse: **ten final building models plus one construction site**.
+- [ ] Author **at each structure's actual world footprint** (4×4, 3×3, 2×2, 1×1), then normalize only horizontal dimensions before export. This preserves round barrel/chimney proportions when the existing bridge root scale is applied. Keep grounded, non-overhanging geometry; Wall and Gate meet neighboring edges in either axis without rotations or neighbor masks.
+- [ ] Keep a single small committed diffuse texture referenced by the GLBs and vertex-color accents. Use the existing winter palette; avoid new normal/metallic atlases, shaders, LODs, animation or additional runtime systems. Commit glTF, textures, Godot import settings and mandatory generation/provenance README.
+- [ ] **Only after all eleven files are committed**, extend the existing `smoke_test.gd` to iterate `GrusBridge.catalogue_snapshot().buildings`: for each kind, derive `res://assets/structures/%s.glb` from `to_snake_case()`, import/instantiate, verify nonempty meshes, normalized X/Z bounds, grounded Y, absence of foreign gameplay nodes, and correct view hookup. Check `construction_site.glb` separately. No duplicate kind/size table.
+- [ ] Run the **whole existing smoke suite** at this checkpoint before continuing. No eighth runner or separate implementation PR.
 
-## Checkpoint 4 — State, selection, and view regressions
+## Checkpoint 4 — Stress view transitions and existing gameplay journeys
 
-**Files:** `godot/scripts/building_view.gd`, existing `godot/scripts/{smoke_test,economy_smoke_test,defenses_smoke_test,reset_test}.gd`; only touch `battlefield_controller.gd` if actual model-picking proof fails.
+**Files:** existing `godot/scripts/{smoke_test,economy_smoke_test,defenses_smoke_test,reset_test}.gd`, `godot/scripts/battlefield_controller.gd` only for agreed picking change; update README where appropriate.
 
-- [ ] Check seeded Research Center, then a real Bunkhouse construction transition. Assert the site and final model share the same root/id/footprint; after restart, no stale scaffold/old material remains. Confirm cold-state calls arriving before art load are replayed on the loaded material.
-- [ ] Keep cold/warm assertions at the **actual imported MeshInstance3D materials**, and verify a second same-kind building has an independent material. Cold is only applied to completed Team-1, heat-demanding structures; Wall, Gate and Furnace remain normal even in deficits.
-- [ ] In the defenses smoke, verify imported Wall/Gate/GunTurret art during construction and after completion; preserve human path through Gate, alien obstruction, turret fire/tracer and damaged-health-bar checks. Add at most local presentation-level picking/height corrections where the real asset would otherwise be unclickable.
-- [ ] Verify Research Center HUD/selection, Bunkhouse/Depot/Barracks build flow, research-gated asset paths (Flame Tower/Crystal Lance), fog, restart and benchmark fortress census. Do not require building a 50%-research tower in a short Godot smoke; test import for all kinds separately.
+- [ ] Assert seeded 4×4 Research Center and active Bunkhouse/Depot/Barracks/Wall/Gate/Turret views use catalogue-scaled, grounded assets; Wall–Gate–Wall reads as one line in both orientations.
+- [ ] Validate push timing: state delivered before metadata, unfinished site → completed kind exactly once, later cold on/off and recovery, no stale model after restart. No per-frame snapshot reads; `_process` stops once metadata styling is done, while `set_state` continues reacting to authoritative pushes.
+- [ ] Replace `_tint_is` old `Body.material_override.albedo_color` check with every active model mesh's shared `material_overlay == ICE` when cold, `null` when warm, including repeated same-kind buildings. Retain the existing 15/16 deficit, furnace restoration, and zero-demand (Wall/Gate/Furnace) guards. No mutable per-instance material duplication test is needed.
+- [ ] Keep all established defenses smoke checks: Gate permits humans, walls obstruct aliens, turrets attack, health bars react, and selection/repair continues. Verify clicking the **Research Center roof** at maximum zoom and building silhouettes beyond the old 20px center, not merely the ground center. Exclude clicks on health-bar-only pixels.
+- [ ] Preserve resource-gather picking, unit picking, fog visibility, research UI, pause/restart, underground panel and benchmark fortress census. Research-gated Flame Tower/Crystal Lance require asset-import proof, **not** a fabricated mid-game research unlock for short smoke runs.
 
-## Checkpoint 5 — Run the existing gates and finish this PR
+## Checkpoint 5 — Existing quality gates and evidence on this PR
 
-- [ ] Fresh Godot import: `godot --headless --path godot --editor --quit-after 120`; check import warnings/errors for each GLB and texture.
-- [ ] Stage the current GDExtension as documented in `CLAUDE.md`, then run all seven scenes: `smoke_test`, `reset_test`, `economy_smoke_test`, `combat_lifecycle_smoke_test`, `wave_smoke_test`, `defenses_smoke_test`, `underground_smoke_test`. Require their existing success markers **and process exit 0**.
-- [ ] Use existing CI for `cargo fmt --all -- --check`, Clippy, workspace/Rust bridge tests, >90% sim coverage, Linux export/E2E, and survival wave benchmark; no new CI job or unnecessary Rust-only test target. Any failed gate is reported honestly and fixed on this PR.
-- [ ] Capture and inspect actual rendered **1280×720** scenes: completed city, partially built structure, cold tint/recovery, and horizontal/vertical Wall–Gate–Wall. Include images/provenance/observed limits in `docs/hpa-291-structure-art-evidence.md`; never claim visual review from headless-only logs.
-- [ ] Update `README.md` only for the new structures art and verification, check no diff under `crates/`, and link the completed implementation/evidence back to Linear HPA-291. Mark PR ready **only when assets, integration and proof are present**.
+- [ ] Fresh editor import: `godot --headless --path godot --editor --quit-after 120`; check glTF/texture import errors/warnings and confirm cached imports regenerate.
+- [ ] Stage the current compiled GDExtension per `CLAUDE.md` (do not run smokes against a stale library). Execute **all seven** existing headless scenes: `smoke_test`, `reset_test`, `economy_smoke_test`, `combat_lifecycle_smoke_test`, `wave_smoke_test`, `defenses_smoke_test`, `underground_smoke_test`. Require success markers **and exit code 0**.
+- [ ] Existing CI gates: Rust fmt/Clippy/workspace tests and bridge tests, >90% sim coverage, Linux export/packaged E2E, survival benchmark. If an artifact or gate fails, document actual evidence; no duplicate CI job.
+- [ ] Inspect real **1280×720** frames of a completed city, construction in progress, cold deficit/recovery and horizontal/vertical Wall–Gate–Wall. Capture screenshots/provenance, observed visual issues and executed commands in `docs/hpa-291-structure-art-evidence.md`. Headless success alone is not visual proof.
+- [ ] Update `README.md`, ensure only the narrowly permitted `crates/grus-godot` view-projection lines changed and **no `crates/grus-sim` changes**, link evidence to HPA-291 and complete this same PR. Mark ready only after assets and verification land.
 
 ## Acceptance checklist
 
-- [ ] Exactly ten distinct structure GLBs + one reusable construction-site appearance, Godot-importable with referenced texture assets committed under `godot/`.
-- [ ] Visual footprints match the live catalogue, and Wall/Gate runs visibly tile along both axes.
-- [ ] Cold and construction states are readable, reversible/authoritative, and do not mutate shared imported materials.
-- [ ] Existing health bars, selecting, placing, constructing, combat, pause/restart, fog and seven smokes remain valid.
-- [ ] Real gameplay screenshots + provenance and actual CI results documented; **no Rust, no unit art, no SFX, one PR for HPA-291**.
+- [ ] Ten distinct final structure GLBs + one construction-site GLB; Godot-importable with diffuse texture and required importer settings under `godot/`; **reproducible generation source in existing script**.
+- [ ] Models authored at true world footprint, exported normalized, then correctly scaled by unchanged catalogue-driven runtime transform; walls and gates tile in both axes.
+- [ ] Authoritative bridge-pushed completion/cold state; reversible shared ice overlay, no mutated imported materials and no GDScript snapshot polling.
+- [ ] Building silhouette picking, health bars, selection, placement, construction, fog, restart and combat continue to work.
+- [ ] Seven existing smokes and CI results reported, real screenshots inspected; **one PR, no gameplay/sim change, no unit art or SFX**.
