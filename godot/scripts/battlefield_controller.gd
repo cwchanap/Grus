@@ -5,6 +5,9 @@ const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
 const MAX_CAMERA_SIZE := 120.0
 const ZOOM_STEP := 6.0
+const FOOD_ICON_PATH := "res://assets/ui/icons/resources/food.png"
+const BARRACKS_ICON_PATH := "res://assets/ui/icons/buildings/barracks.png"
+const GREENHOUSE_ICON_PATH := "res://assets/ui/icons/underground/greenhouse.png"
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
@@ -12,7 +15,7 @@ const ZOOM_STEP := 6.0
 @onready var research_bar: ProgressBar = $HUD/ResearchPanel/ResearchBar
 @onready var research_label: Label = $HUD/ResearchPanel/ResearchLabel
 @onready var analyze_button: Button = $HUD/ResearchPanel/AnalyzeButton
-@onready var economy_label: Label = $HUD/EconomyPanel/EconomyLabel
+@onready var economy_label: RichTextLabel = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
@@ -67,6 +70,9 @@ var _ug_last_phase := ""
 ## only selection state — slots derive eligibility from it every refresh.
 var _ug_armed_index := -1
 var _ug_kind_buttons: Array[Button] = []
+var _food_icon: Texture2D
+var _barracks_icon: Texture2D
+var _greenhouse_icon: Texture2D
 ## Cosmetic button labels only — the authoritative kind wire names ride the
 ## catalogue entries and bridge commands.
 const UNDERGROUND_DISPLAY_NAMES := {
@@ -79,6 +85,9 @@ const UNDERGROUND_DISPLAY_NAMES := {
 }
 
 func _ready() -> void:
+	_food_icon = _load_pilot_icon(FOOD_ICON_PATH)
+	_barracks_icon = _load_pilot_icon(BARRACKS_ICON_PATH)
+	_greenhouse_icon = _load_pilot_icon(GREENHOUSE_ICON_PATH)
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var buildings: Dictionary = catalogue.get("buildings", {})
 	var producers := {}
@@ -124,9 +133,28 @@ func _ready() -> void:
 		kind_button.toggle_mode = true
 		kind_button.add_theme_font_size_override("font_size", 14)
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		kind_button.custom_minimum_size = Vector2(52, 30)
+		kind_button.custom_minimum_size = Vector2(52, 65)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		kind_button.text = _underground_display_name(str(ug_entry.get("name", "")))
+		var display_name := _underground_display_name(str(ug_entry.get("name", "")))
+		kind_button.text = display_name
+		if str(ug_entry.get("name", "")) == "Greenhouse" and _greenhouse_icon != null:
+			kind_button.icon = _greenhouse_icon
+			kind_button.add_theme_constant_override("icon_max_width", 22)
+			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
+			kind_button.text = ""
+			kind_button.accessibility_name = display_name
+			var name_label := Label.new()
+			name_label.name = "KindLabel"
+			name_label.text = display_name
+			name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+			name_label.add_theme_font_size_override("font_size", 11)
+			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+			name_label.offset_top = -22
+			name_label.offset_bottom = -2
+			kind_button.add_child(name_label)
 		kind_button.tooltip_text = _ug_kind_tooltip(ug_entry)
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
 		_underground_kinds.add_child(kind_button)
@@ -134,6 +162,9 @@ func _ready() -> void:
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
+		if kind == "Barracks" and _barracks_icon != null:
+			button.icon = _barracks_icon
+			button.add_theme_constant_override("icon_max_width", 20)
 		var costs := PackedStringArray()
 		for resource in ["food", "scrap", "coal", "crystals"]:
 			var amount := int(entry.get(resource, 0))
@@ -170,6 +201,9 @@ func _process(_delta: float) -> void:
 	if _underground_panel.visible \
 			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
+
+func _load_pilot_icon(path: String) -> Texture2D:
+	return ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
 
 func _consume_placement_results() -> bool:
 	var unresolved: Array[Dictionary] = []
@@ -302,7 +336,9 @@ func _refresh_hud() -> void:
 	# value down to 99 while the sim reports any efficiency shortfall.
 	if surface_percent >= 100 and surface < 1.0:
 		surface_percent = 99
-	economy_label.text = "Food %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d\nHeat %d / %d · surface %d%%" % [
+	var food_icon := "[img=18x18]%s[/img] " % FOOD_ICON_PATH if _food_icon != null else ""
+	economy_label.text = "%sFood %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d\nHeat %d / %d · surface %d%%" % [
+		food_icon,
 		int(economy.get("food", 0)),
 		int(economy.get("scrap", 0)),
 		int(economy.get("coal", 0)),
@@ -1057,8 +1093,13 @@ func _refresh_underground_header(snap: Dictionary) -> void:
 func _refresh_underground_kinds(snap: Dictionary) -> void:
 	var depth := int(snap.get("depth", 0))
 	for index in _ug_kind_buttons.size():
+		var button := _ug_kind_buttons[index]
 		var min_level := int(_ug_rooms[index].get("min_level", 1))
-		_ug_kind_buttons[index].disabled = depth < min_level
+		button.disabled = depth < min_level
+		var name_label := button.get_node_or_null("KindLabel") as Label
+		if name_label != null:
+			var color_name := "font_disabled_color" if button.disabled else "font_color"
+			name_label.add_theme_color_override("font_color", button.get_theme_color(color_name))
 
 ## Formats a cost dictionary carried by a snapshot or catalogue entry;
 ## GDScript renders, Rust computes.
@@ -1099,6 +1140,7 @@ func _refresh_underground_slots(snap: Dictionary) -> void:
 			var slot: Dictionary = slots[slot_index]
 			var kind := str(slot.get("kind", ""))
 			if kind == "":
+				button.icon = null
 				if armed and level_number < armed_min:
 					button.text = "Requires\nL%d" % armed_min
 					button.tooltip_text = "%s requires L%d" % [
@@ -1114,6 +1156,11 @@ func _refresh_underground_slots(snap: Dictionary) -> void:
 					button.disabled = true
 				continue
 			var display := _underground_display_name(kind)
+			button.icon = _greenhouse_icon if kind == "Greenhouse" else null
+			if button.icon != null:
+				button.add_theme_constant_override("icon_max_width", 22)
+				button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
 			if bool(slot.get("complete", false)):
 				button.text = "%s\n%s" % [display, str(slot.get("benefit", ""))]
 				button.tooltip_text = "%s — complete: %s" % [kind, str(slot.get("benefit", ""))]

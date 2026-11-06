@@ -1,6 +1,6 @@
 # HPA-44 icon inventory
 
-This checkpoint records the runtime PNG paths expected by the HUD and action controls. Artwork and runtime bindings are intentionally pending; no PNG files are present yet.
+This checkpoint records the runtime PNG paths expected by the HUD and action controls. The Food, Barracks and Greenhouse pilot PNGs and bindings are present; the remaining artwork and bindings are pending.
 
 All 33 files are planned as original 128 × 128 transparent RGBA PNGs under `godot/assets/ui/icons/`, grouped by purpose. The Godot resource paths are:
 
@@ -53,3 +53,5 @@ All 33 files are planned as original 128 × 128 transparent RGBA PNGs under `god
 - `res://assets/ui/icons/units/behemoth.png`
 
 The four alien unit and Research Center icons remain catalogue-only art; this inventory does not add gameplay controls. Image provenance and visual QA belong with the artwork delivery.
+
+Pilot provenance: OpenAI built-in image generation, using winter survival food crate, snow-covered barracks and illuminated underground greenhouse prompts. Images were cropped to their alpha bounds and resized to 128 × 128 with transparent padding.
