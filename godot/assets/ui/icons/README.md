@@ -1,8 +1,8 @@
 # HPA-44 icon inventory
 
-This checkpoint records the runtime PNG paths expected by the HUD and action controls. The Food, Barracks and Greenhouse pilot PNGs and bindings are present; the remaining artwork and bindings are pending.
+This checkpoint records the runtime PNG paths expected by the HUD and action controls. These runtime PNGs illustrate the existing HUD and action controls; the Research Center and four alien images are catalogue-only artwork.
 
-All 33 files are planned as original 128 × 128 transparent RGBA PNGs under `godot/assets/ui/icons/`, grouped by purpose. The Godot resource paths are:
+All 33 files are original 128 × 128 transparent RGBA PNGs under `godot/assets/ui/icons/`, grouped by purpose. The Godot resource paths are:
 
 ## Resources and heat (5)
 
@@ -52,6 +52,6 @@ All 33 files are planned as original 128 × 128 transparent RGBA PNGs under `god
 - `res://assets/ui/icons/units/brute.png`
 - `res://assets/ui/icons/units/behemoth.png`
 
-The four alien unit and Research Center icons remain catalogue-only art; this inventory does not add gameplay controls. Image provenance and visual QA belong with the artwork delivery.
+The four alien unit and Research Center icons remain catalogue-only art; this inventory does not add gameplay controls. The contact sheet was inspected at 20 px on light and dark backgrounds; game-state visual verification is recorded separately.
 
-Pilot provenance: OpenAI built-in image generation, using winter survival food crate, snow-covered barracks and illuminated underground greenhouse prompts. Images were cropped to their alpha bounds and resized to 128 × 128 with transparent padding.
+Provenance: generated with OpenAI built-in image generation from individual subject prompts in a cohesive painted winter-survival style (cold steel and snow, orange warmth, cyan crystal light), with the food pilot supplied as a style reference for the remaining subjects. Outputs were cropped to their alpha bounds and downsampled to 128 × 128 with transparent padding. The committed PNGs are the runtime originals; `.png.import` files record Godot import settings.
