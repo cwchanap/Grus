@@ -402,9 +402,10 @@ func _run() -> void:
 	var research_panel := get_node_or_null("Main/HUD/ResearchPanel") as Panel
 	var research_bar := get_node_or_null("Main/HUD/ResearchPanel/ResearchBar") as ProgressBar
 	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
+	var research_icon := get_node_or_null("Main/HUD/ResearchPanel/ResearchIcon") as TextureRect
 	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
 	var wave_hud := get_node("Main/HUD/WaveLabel") as Control
-	if research_panel == null or research_bar == null or research_label == null \
+	if research_panel == null or research_bar == null or research_label == null or research_icon == null \
 			or analyze_button == null or wave_hud == null:
 		_fail("research HUD nodes are missing under HUD/ResearchPanel")
 		return
@@ -419,6 +420,16 @@ func _run() -> void:
 	var research_rect := research_panel.get_global_rect()
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
+		return
+	var research_icon_rect := research_icon.get_global_rect()
+	var research_icon_minimum := research_icon.get_combined_minimum_size()
+	if not research_rect.encloses(research_icon_rect) \
+			or not research_icon_rect.size.is_equal_approx(Vector2(18.0, 18.0)) \
+			or research_icon_minimum.x > 18.0 or research_icon_minimum.y > 18.0 \
+			or research_icon_rect.intersects(research_label.get_global_rect()) \
+			or research_icon_rect.intersects(analyze_button.get_global_rect()):
+		_fail("research icon exceeds its 18x18 slot or overlaps HUD controls: rect=%s minimum=%s" % [
+			research_icon_rect, research_icon_minimum])
 		return
 	if not camera.global_transform.is_equal_approx(default_camera_transform) \
 			or not is_equal_approx(camera.size, default_camera_size):

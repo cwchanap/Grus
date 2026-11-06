@@ -28,6 +28,9 @@ func _wave_hud_fits(control: Control) -> bool:
 	return Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).encloses(rect)
 
 func _run() -> void:
+	var window := get_window()
+	window.content_scale_size = TEST_VIEWPORT_SIZE
+	window.size = TEST_VIEWPORT_SIZE
 	await get_tree().process_frame
 	var main := get_node_or_null("Main") as Node3D
 	if main == null:
@@ -40,12 +43,6 @@ func _run() -> void:
 	var wave_label := main.get_node_or_null("HUD/WaveLabel") as Control
 	if wave_label == null:
 		_stage5_fail("wave HUD label is missing")
-		return
-	if not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/wave_countdown.png"):
-		_stage5_fail("wave HUD is missing status/wave_countdown.png")
-		return
-	if _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
-		_stage5_fail("wave HUD shows incoming-zone art before a warning")
 		return
 	# The countdown must be rendered from a live bridge read, not the
 	# scene's placeholder text: poll until the label shows the snapshot's
@@ -60,6 +57,12 @@ func _run() -> void:
 	var remaining := maxi(ceili(float(live_wave.get("seconds_remaining", 0.0))), 0)
 	var expected_time := "%d:%02d" % [int(remaining / 60), remaining % 60]
 	var start_text := _visible_text(wave_label)
+	if not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/wave_countdown.png"):
+		_stage5_fail("wave HUD is missing status/wave_countdown.png")
+		return
+	if _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
+		_stage5_fail("wave HUD shows incoming-zone art before a warning")
+		return
 	if not start_text.contains("Next wave %d" % next_wave) \
 			or not start_text.contains(expected_time) or not _wave_hud_fits(wave_label):
 		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, start_text])

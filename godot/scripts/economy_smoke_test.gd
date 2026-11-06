@@ -222,8 +222,12 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 		return false
 	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
 	var lines := _visible_text(label).split("\n")
+	var hud_parts := hud_line.split(" · ")
 	var cold_icon := _rich_text_has_icon(label, "res://assets/ui/icons/status/surface_cold.png")
-	return lines.size() > 2 and str(lines[2]) == hud_line and cold_icon == (efficiency < 1.0)
+	return lines.size() > 2 and hud_parts.size() == 2 \
+			and str(lines[2]).contains(str(hud_parts[0])) \
+			and str(lines[2]).contains(str(hud_parts[1])) \
+			and cold_icon == (efficiency < 1.0)
 
 ## A building view's body tint matches the icy or warm-blue material its
 ## Rust-pushed set_cold flag should currently produce (building_view.gd
@@ -438,11 +442,27 @@ func _run() -> void:
 		_fail("warm economy HUD shows an incorrect surface-cold warning")
 		return
 	var economy_text := _visible_text(economy_label)
-	for currency in ["Food", "Scrap", "Coal", "Crystals"]:
-		var shown := "%s %d" % [currency, int(boot.get(currency.to_lower(), -1))]
-		if not economy_text.contains(shown):
-			_fail("economy HUD does not show live %s (want \"%s\"): \"%s\"" % [currency, shown, economy_text])
+	var hud_lines := economy_text.split("\n")
+	if hud_lines.size() != 3:
+		_fail("economy HUD does not keep three logical lines: \"%s\"" % economy_text)
+		return
+	var economy_markup := (economy_label as RichTextLabel).text
+	var markup_lines := economy_markup.split("\n")
+	var previous_pair_end := 0
+	for resource in [["Food", "food", 0], ["Scrap", "scrap", 0], ["Coal", "coal", 0], ["Crystals", "crystals", 1], ["Heat", "heat_supply", 2]]:
+		var currency := str(resource[0])
+		var line_index := int(resource[2])
+		var shown := str(int(boot.get(str(resource[1]), -1)))
+		if currency == "Heat":
+			shown = "%d / %d" % [int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
+		var icon_path := "res://assets/ui/icons/resources/%s.png" % currency.to_lower()
+		var expected_pair := "[img=18x18]%s[/img] %s" % [icon_path, shown]
+		var pair_position := economy_markup.find(expected_pair, previous_pair_end)
+		if pair_position < 0 or not str(markup_lines[line_index]).contains(expected_pair):
+			_fail("economy HUD does not pair the %s icon with its live value %s in line %d: \"%s\"" % [
+				currency, shown, line_index + 1, economy_text])
 			return
+		previous_pair_end = pair_position + expected_pair.length()
 	# Rendered bounds, not just text: after the layout settles, the label's
 	# laid-out extent (rect grown to the minimum text size — wrapping is
 	# off, so a wide line expands past the authored offsets) must stay
@@ -464,15 +484,14 @@ func _run() -> void:
 		return
 	# Crystals rides the Population line so the first currency line stays
 	# narrow enough for the authored rectangle.
-	var hud_lines := economy_text.split("\n")
 	if hud_lines.size() != 3 or hud_lines[0].contains("Crystals") \
-			or not hud_lines[1].contains("Crystals") or not hud_lines[1].contains("Population"):
+			or not hud_lines[1].contains("Population"):
 		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_text)
 		return
 	# HPA-181: the third line is the live heat boundary. The boot is still at
 	# Start, whose ticks recompute supply/demand without burning anything, so
 	# the label must show the warm Research Center baseline exactly.
-	if hud_lines[2] != "Heat 15 / 10 · surface 100%":
+	if not hud_lines[2].contains("15 / 10 · surface 100%"):
 		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_text)
 		return
 	var research_center := _building_view(1)
@@ -697,7 +716,7 @@ func _run() -> void:
 	# Center (15 supply / 10 demand) plus the completed Barracks (+3 demand)
 	# reads 15/13, still a full 100%.
 	if not await _wait_until(
-			_heat_stage_ok.bind(15, 13, 1.0, "Heat 15 / 13 · surface 100%"),
+			_heat_stage_ok.bind(15, 13, 1.0, "15 / 13 · surface 100%"),
 			10.0, "heat baseline after the Barracks never read 15/13 at 100%"):
 		return
 	# Funding proven earlier in the leg — retire the gatherers like the
@@ -740,7 +759,7 @@ func _run() -> void:
 	if not await _wait_until(_building_complete_at.bind(heat_turret_id), 35.0, "heat-leg Gun Turret never completed"):
 		return
 	if not await _wait_until(
-			_heat_stage_ok.bind(15, 16, 0.9375, "Heat 15 / 16 · surface 94%"),
+			_heat_stage_ok.bind(15, 16, 0.9375, "15 / 16 · surface 94%"),
 			10.0, "cold stage after Depot+Turret never read 15/16 at 94%"):
 		return
 	var heat_views: Array[Node3D] = [research_center, barracks, heat_depot, heat_turret]
@@ -765,7 +784,7 @@ func _run() -> void:
 	if not await _wait_until(_building_complete_at.bind(furnace_id), 30.0, "heat-leg Coal Furnace never completed"):
 		return
 	if not await _wait_until(
-			_heat_stage_ok.bind(27, 16, 1.0, "Heat 27 / 16 · surface 100%"),
+			_heat_stage_ok.bind(27, 16, 1.0, "27 / 16 · surface 100%"),
 			10.0, "warm stage after the Coal Furnace never read 27/16 at 100%"):
 		return
 	if not await _wait_until(_all_tinted.bind(heat_views, false), 10.0,

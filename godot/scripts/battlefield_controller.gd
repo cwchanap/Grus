@@ -5,15 +5,13 @@ const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
 const MAX_CAMERA_SIZE := 120.0
 const ZOOM_STEP := 6.0
-const FOOD_ICON_PATH := "res://assets/ui/icons/resources/food.png"
-const BARRACKS_ICON_PATH := "res://assets/ui/icons/buildings/barracks.png"
-const GREENHOUSE_ICON_PATH := "res://assets/ui/icons/underground/greenhouse.png"
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
-@onready var wave_label: Label = $HUD/WaveLabel
+@onready var wave_label: RichTextLabel = $HUD/WaveLabel
 @onready var research_bar: ProgressBar = $HUD/ResearchPanel/ResearchBar
 @onready var research_label: Label = $HUD/ResearchPanel/ResearchLabel
+@onready var research_icon: TextureRect = $HUD/ResearchPanel/ResearchIcon
 @onready var analyze_button: Button = $HUD/ResearchPanel/AnalyzeButton
 @onready var economy_label: RichTextLabel = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
@@ -70,9 +68,7 @@ var _ug_last_phase := ""
 ## only selection state — slots derive eligibility from it every refresh.
 var _ug_armed_index := -1
 var _ug_kind_buttons: Array[Button] = []
-var _food_icon: Texture2D
-var _barracks_icon: Texture2D
-var _greenhouse_icon: Texture2D
+var _icon_cache: Dictionary = {}
 ## Cosmetic button labels only — the authoritative kind wire names ride the
 ## catalogue entries and bridge commands.
 const UNDERGROUND_DISPLAY_NAMES := {
@@ -85,9 +81,9 @@ const UNDERGROUND_DISPLAY_NAMES := {
 }
 
 func _ready() -> void:
-	_food_icon = _load_pilot_icon(FOOD_ICON_PATH)
-	_barracks_icon = _load_pilot_icon(BARRACKS_ICON_PATH)
-	_greenhouse_icon = _load_pilot_icon(GREENHOUSE_ICON_PATH)
+	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
+	research_icon.texture = research_progress_icon
+	research_icon.visible = research_progress_icon != null
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var buildings: Dictionary = catalogue.get("buildings", {})
 	var producers := {}
@@ -135,10 +131,12 @@ func _ready() -> void:
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		kind_button.custom_minimum_size = Vector2(52, 65)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var display_name := _underground_display_name(str(ug_entry.get("name", "")))
+		var kind := str(ug_entry.get("name", ""))
+		var display_name := _underground_display_name(kind)
 		kind_button.text = display_name
-		if str(ug_entry.get("name", "")) == "Greenhouse" and _greenhouse_icon != null:
-			kind_button.icon = _greenhouse_icon
+		var room_icon := _icon_for_kind("underground", kind)
+		if room_icon != null:
+			kind_button.icon = room_icon
 			kind_button.add_theme_constant_override("icon_max_width", 22)
 			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
@@ -159,11 +157,16 @@ func _ready() -> void:
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
 		_underground_kinds.add_child(kind_button)
 		_ug_kind_buttons.append(kind_button)
+	var excavate_icon := _icon_for_kind("underground", "Excavate")
+	if excavate_icon != null:
+		_underground_excavate.icon = excavate_icon
+		_underground_excavate.add_theme_constant_override("icon_max_width", 20)
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
-		if kind == "Barracks" and _barracks_icon != null:
-			button.icon = _barracks_icon
+		var building_icon := _icon_for_kind("buildings", kind)
+		if building_icon != null:
+			button.icon = building_icon
 			button.add_theme_constant_override("icon_max_width", 20)
 		var costs := PackedStringArray()
 		for resource in ["food", "scrap", "coal", "crystals"]:
@@ -180,6 +183,10 @@ func _ready() -> void:
 			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
 		button.pressed.connect(_on_build_pressed.bind(kind))
 	for button in _train_grid.get_children():
+		var unit_icon := _icon_for_kind("units", str(button.get_meta("kind")))
+		if unit_icon != null:
+			button.icon = unit_icon
+			button.add_theme_constant_override("icon_max_width", 20)
 		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
 	idle_button.pressed.connect(_on_idle_pressed)
 	start_button.pressed.connect(_on_start_pressed)
@@ -202,8 +209,15 @@ func _process(_delta: float) -> void:
 			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
 
-func _load_pilot_icon(path: String) -> Texture2D:
-	return ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
+func _icon_for_kind(group: String, kind: String) -> Texture2D:
+	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
+	if not _icon_cache.has(path):
+		_icon_cache[path] = ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
+	return _icon_cache[path] as Texture2D
+
+func _inline_icon(group: String, kind: String, size := 18) -> String:
+	var icon := _icon_for_kind(group, kind)
+	return "[img=%dx%d]%s[/img] " % [size, size, icon.resource_path] if icon != null else ""
 
 func _consume_placement_results() -> bool:
 	var unresolved: Array[Dictionary] = []
@@ -336,17 +350,22 @@ func _refresh_hud() -> void:
 	# value down to 99 while the sim reports any efficiency shortfall.
 	if surface_percent >= 100 and surface < 1.0:
 		surface_percent = 99
-	var food_icon := "[img=18x18]%s[/img] " % FOOD_ICON_PATH if _food_icon != null else ""
-	economy_label.text = "%sFood %d   Scrap %d   Coal %d\nCrystals %d   Population %d/%d\nHeat %d / %d · surface %d%%" % [
-		food_icon,
+	var cold_icon := _inline_icon("status", "SurfaceCold") if surface < 1.0 else ""
+	economy_label.text = "%s%d   %s%d   %s%d\n%s%d   Population %d/%d\n%s%d / %d · %ssurface %d%%" % [
+		_inline_icon("resources", "Food"),
 		int(economy.get("food", 0)),
+		_inline_icon("resources", "Scrap"),
 		int(economy.get("scrap", 0)),
+		_inline_icon("resources", "Coal"),
 		int(economy.get("coal", 0)),
+		_inline_icon("resources", "Crystals"),
 		int(economy.get("crystals", 0)),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
+		_inline_icon("resources", "Heat"),
 		int(economy.get("heat_supply", 0)),
 		int(economy.get("heat_demand", 0)),
+		cold_icon,
 		surface_percent,
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
@@ -357,15 +376,17 @@ func _refresh_hud() -> void:
 		incoming_names.append(str(zone.get("name", "")))
 	var wave_number := int(wave.get("wave", 0))
 	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
-	wave_label.text = "%s   Next wave %d in %d:%02d   Aliens %d" % [
+	wave_label.text = "%s   %sNext wave %d in %d:%02d   Aliens %d" % [
 		current_label,
+		_inline_icon("status", "WaveCountdown"),
 		int(wave.get("next_wave", 1)),
 		int(remaining / 60),
 		remaining % 60,
 		int(wave.get("live_aliens", 0)),
 	]
 	if not incoming_names.is_empty():
-		wave_label.text += "   Incoming: " + ", ".join(incoming_names)
+		wave_label.text += "   %sIncoming: %s" % [
+			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
 	# One bridge read per frame: hand the same snapshot to the minimap so
 	# HUD text and incoming pings can never disagree.
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
@@ -1156,10 +1177,9 @@ func _refresh_underground_slots(snap: Dictionary) -> void:
 					button.disabled = true
 				continue
 			var display := _underground_display_name(kind)
-			button.icon = _greenhouse_icon if kind == "Greenhouse" else null
+			button.icon = _icon_for_kind("underground", kind)
 			if button.icon != null:
-				button.add_theme_constant_override("icon_max_width", 22)
-				button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
+				button.add_theme_constant_override("icon_max_width", 20)
 				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
 			if bool(slot.get("complete", false)):
 				button.text = "%s\n%s" % [display, str(slot.get("benefit", ""))]

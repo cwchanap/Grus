@@ -404,6 +404,15 @@ func _run() -> void:
 				return
 	if not _check(not _slot(3, 0).disabled, "L3 did not enable Lab target"):
 		return
+	var scroll := _panel.get_node("ScrollContainer") as ScrollContainer
+	for _attempt in 3:
+		if scroll.get_global_rect().has_point(_slot(3, 0).get_global_rect().get_center()):
+			break
+		SmokeHelpers.push_mouse_click(get_tree(), scroll.get_global_rect().get_center(), MOUSE_BUTTON_WHEEL_DOWN)
+		await _settle()
+	if not _check(scroll.get_global_rect().has_point(_slot(3, 0).get_global_rect().get_center()),
+			"L3 slot did not scroll into the visible underground area"):
+		return
 	var before_lab := _stock()
 	if not await _purchase(_slot(3, 0), "Lab queued (L3 slot 1)", room_costs.Lab):
 		return
