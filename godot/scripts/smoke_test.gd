@@ -279,7 +279,9 @@ func _has_visible_icon(root: Node, resource_path: String) -> bool:
 ## instantiate a nonempty mesh, carry no gameplay nodes, sit inside the
 ## normalized ±0.5 footprint with a grounded base, and resolve its diffuse
 ## texture from the committed res://assets/structures/ PNG — the recipe
-## the catalogue-wide loop applies to every building kind.
+## the catalogue-wide loop applies to every building kind. The GLB itself
+## must carry each image as exactly one source — a committed-texture uri,
+## never an embedded bufferView — or Godot's importer warns.
 func _assert_structure_import(path: String) -> bool:
 	if not ResourceLoader.exists(path):
 		_fail("structure import is missing: %s" % path)
@@ -314,6 +316,30 @@ func _assert_structure_import(path: String) -> bool:
 		if texture == null or not texture.resource_path.begins_with("res://assets/structures/"):
 			_fail("%s mesh material does not resolve a committed structures texture: %s" % [
 				path, texture.resource_path if texture != null else "missing"])
+			return false
+	var glb := FileAccess.open(path, FileAccess.READ)
+	if glb == null or glb.get_32() != 0x46546C67:
+		_fail("%s is not a binary glTF" % path)
+		return false
+	glb.get_32()
+	glb.get_32()
+	var json_length := glb.get_32()
+	if glb.get_32() != 0x4E4F534A:
+		_fail("%s first glTF chunk is not JSON" % path)
+		return false
+	var gltf: Variant = JSON.parse_string(glb.get_buffer(json_length).get_string_from_utf8())
+	if gltf == null:
+		_fail("%s glTF JSON chunk did not parse" % path)
+		return false
+	for image in (gltf as Dictionary).get("images", []):
+		var has_uri := (image as Dictionary).has("uri")
+		if has_uri == (image as Dictionary).has("bufferView"):
+			_fail("%s image must carry exactly one source: %s" % [path, image])
+			return false
+		var texture_path := path.get_base_dir().path_join(str((image as Dictionary).get("uri", "")))
+		if has_uri and (not texture_path.begins_with("res://assets/structures/") \
+				or not FileAccess.file_exists(texture_path)):
+			_fail("%s image uri does not resolve a committed structures texture: %s" % [path, texture_path])
 			return false
 	model.free()
 	return true

@@ -2,17 +2,32 @@
 pilot. Run: blender --background --factory-startup --python-exit-code 1
 --python scripts/build_winter_assets.py."""
 
+import json
 import math
 from pathlib import Path
 import random
+import struct
 
 import bpy
 from mathutils import Matrix, Vector
+import io_scene_gltf2.blender.exp.material.image as gltf_image_export
 
 
 OUT = Path(__file__).resolve().parents[1] / "godot/assets/winter"
 STRUCTURE_OUT = Path(__file__).resolve().parents[1] / "godot/assets/structures"
 RNG = random.Random(290)
+
+
+_gather_buffer_view = gltf_image_export.__gather_buffer_view
+
+
+def _gather_buffer_view_uri_reference(export_image, mime_type, name, export_settings):
+    if export_image.original is not None:
+        return None, None
+    return _gather_buffer_view(export_image, mime_type, name, export_settings)
+
+
+gltf_image_export.__gather_buffer_view = _gather_buffer_view_uri_reference
 
 
 def prop_material():
@@ -152,6 +167,12 @@ def export(name, resource=False, out_dir=None, footprint=1.0, max_height=None):
         export_keep_originals=True,
         export_vertex_color="ACTIVE",
     )
+    glb_path = (out_dir or OUT) / f"{name}.glb"
+    glb_bytes = glb_path.read_bytes()
+    json_length = struct.unpack_from("<I", glb_bytes, 12)[0]
+    gltf = json.loads(glb_bytes[20:20 + json_length])
+    for image in gltf.get("images", []):
+        assert "uri" in image and "bufferView" not in image, (name, image)
     print(f"WINTER_ASSET_OK {name}: {triangles} triangles")
     bpy.ops.object.delete(use_global=False)
 
