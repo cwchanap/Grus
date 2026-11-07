@@ -1460,21 +1460,27 @@ func _run() -> void:
 		return
 	# The 2x2 cabin is too small at the default framing to probe a point
 	# past the old 20 px center radius, so frame it like the resource-pick
-	# leg: middle-drag the view onto it and wheel-zoom to the minimum size.
-	# Both are the real input paths the game itself handles.
+	# leg: minimap-recenter the view onto it and wheel-zoom to the minimum
+	# size. Both are the real input paths the game itself handles.
 	var bunkhouse_zoom_start := camera.size
-	var bunkhouse_screen := camera.unproject_position(pilot_bunkhouse.global_position)
+	var bunkhouse_world := pilot_bunkhouse.global_position
 	var viewport_center := viewport_size * 0.5
-	for _step in range(8):
-		bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
-		if not Rect2(Vector2.ZERO, viewport_size).has_point(bunkhouse_screen) \
-				or bunkhouse_screen.distance_to(viewport_center) <= 8.0:
-			break
-		_mouse_drag(bunkhouse_screen, viewport_center, MOUSE_BUTTON_MIDDLE)
-		await get_tree().process_frame
-	bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
+	var minimap_point := minimap.get_global_rect().position + Vector2(bunkhouse_world.x, bunkhouse_world.z)
+	var recenter_press := InputEventMouseButton.new()
+	recenter_press.button_index = MOUSE_BUTTON_LEFT
+	recenter_press.position = minimap_point
+	recenter_press.pressed = true
+	get_tree().root.push_input(recenter_press)
+	var recenter_release := InputEventMouseButton.new()
+	recenter_release.button_index = MOUSE_BUTTON_LEFT
+	recenter_release.position = minimap_point
+	recenter_release.pressed = false
+	get_tree().root.push_input(recenter_release)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var bunkhouse_screen := camera.unproject_position(pilot_bunkhouse.global_position)
 	if bunkhouse_screen.distance_to(viewport_center) > 60.0:
-		_fail("middle-drag never centered the roof-pick Bunkhouse: %s" % bunkhouse_screen)
+		_fail("minimap recenter never centered the roof-pick Bunkhouse: %s" % bunkhouse_screen)
 		return
 	for _step in range(16):
 		if camera.size <= controller.MIN_CAMERA_SIZE:
