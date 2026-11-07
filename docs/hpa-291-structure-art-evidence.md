@@ -4,7 +4,8 @@ Local verification on 2026-11-07, macOS / Apple M1 Pro (macOS 26), Godot
 4.7.1.stable.official (`gl_compatibility`, OpenGL 4.1 Metal), Rust 1.95.0
 (`aarch64-apple-darwin`, the only installed target) and Blender 5.2.1 LTS at
 `/Applications/Blender.app/Contents/MacOS/Blender`. Branch
-`hpa-291-structure-models`, evidence captured at commit `3ce8fc2`. No
+`hpa-291-structure-models`, evidence captured at commits
+`3ce8fc2`–`86ccca8`. No
 `crates/grus-sim` or gameplay change exists on this branch (`git diff
 main...HEAD -- crates/grus-sim` is empty); the only
 `crates/grus-godot/src/lib.rs` delta is the permitted view-projection
@@ -25,7 +26,7 @@ main...HEAD -- crates/grus-sim` is empty); the only
 | `res://scenes/wave_smoke_test.tscn` | same | `GRUS_WAVE_SMOKE_OK start_pause_clock_frozen=true warning_hud=true snapshot_anchor_pings=true fog_markers_gated=true role_probes=white_box journey=kill_crystal_defeat_restart` |
 | `res://scenes/defenses_smoke_test.tscn` | same | `GRUS_DEFENSE_SMOKE_OK wall_ring=28 ... turret_tracer_origin=building_view defense_models=catalogue_glb_grounded setup_s=16.3 post_wave_s=17.6` |
 | `res://scenes/underground_smoke_test.tscn` | same | `GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=740 gathered_coal=110 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=40.00 elapsed_ms=13706` |
-| Packaged smoke-entry context | `godot --headless --path <scratch copy> --export-pack "Linux x86_64" <pck>` under the project's own preset, then the official 4.7.1 `godot_macos_debug` template binary run headless against the side-car `.pck` with `bin/libgrus_godot.dylib` beside it — the layout CI's export step produces | Exit 0; `SMOKE_STRUCTURE_AUDIT source_bytes=skipped_packaged` then the full `GRUS_GODOT_SMOKE_OK` contract (input/selection/move/cadence, fog scout leg, `structures=catalogue_hookup`, gate corridor/contact/run, push contract). The PCK carries the same `res://.godot/imported/*.scn` remaps and compiled `.gdc` scripts a Linux export produces. Pre-fix this exact setup reproduced the CI failure (`res://assets/structures/research_center.glb is not a binary glTF`, exit 1). Recorded in the follow-up fix commit; Linux CI still gates the real Linux binary. |
+| Packaged smoke-entry context | `godot --headless --path <scratch copy> --export-pack "Linux x86_64" <pck>` under the project's own preset, then the official 4.7.1 `godot_macos_debug` template binary run headless against the side-car `.pck` with `bin/libgrus_godot.dylib` beside it — the layout CI's export step produces | Exit 0; `SMOKE_STRUCTURE_AUDIT source_bytes=skipped_packaged` then the full `GRUS_GODOT_SMOKE_OK` contract (input/selection/move/cadence, fog scout leg, `structures=catalogue_hookup`, gate corridor/contact/run, push contract). The PCK carries the same `res://.godot/imported/*.scn` remaps and compiled `.gdc` scripts a Linux export produces. Pre-fix this exact setup reproduced the CI failure (`res://assets/structures/research_center.glb is not a binary glTF`, exit 1). Recorded in the follow-up fix commit `86ccca8`; Linux CI remains the gate for the real Linux binary — run `42367529198` on `86ccca8` has since passed it (CI section below). |
 | fmt | `cargo fmt --all -- --check` | Exit 0 |
 | Clippy workspace | `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | Exit 0 |
 | Clippy e2e feature | `cargo clippy -p grus-godot --all-targets --features e2e --locked --offline -- -D warnings` | Exit 0 |
@@ -50,11 +51,42 @@ not reproduce here.
   refused), and a Linux x86_64 binary cannot execute natively on this Mac.
   Godot 4.7.1 Linux export templates are installed, but no local path can
   produce or run the Linux GDExtension. The `e2e_boot` test therefore
-  skipped loudly as designed. CI (Linux jobs) is the gate for these, as
-  with previous tickets. Note the packaged *smoke* context itself is no
+  skipped loudly as designed. CI (Linux jobs) remains the gate for
+  these, as with previous tickets — run `42367529198` on `86ccca8`
+  passed the Linux export, exported-smoke and packaged bevy-e2e legs
+  (CI section below). Note the packaged *smoke* context itself is no
   longer unverifiable locally: the export-pack + macOS-template row above
   exercises the same PCK remaps the Linux packaged smoke runs against.
 - No toolchain or config was changed to work around the above.
+
+## GitHub CI (Linux reference host)
+
+Recorded 2026-11-07 from the GitHub MCP. Two runs on this branch,
+distinguished by exact head commit:
+
+- Run
+  [`42364893406`](https://github.com/cwchanap/Grus/actions/runs/42364893406)
+  on `b65ef28` — every source gate passed, but the exported smoke-entry
+  binary exited 1 on `res://assets/structures/research_center.glb is not
+  a binary glTF`: in an export, FileAccess on the `.glb` path reads a
+  remapped imported PackedScene inside the PCK, so the original bytes
+  are absent. Commit `86ccca8` corrected those source-only checks; the
+  local packaged-PCK RED/GREEN proof is the table row above.
+- Run
+  [`42367529198`](https://github.com/cwchanap/Grus/actions/runs/42367529198)
+  on `86ccca86442ef95303ff1c3263ff832f56175ff7` (`86ccca8`) completed
+  successfully: check runs `rust-build-lint`, `unit-tests`,
+  `survival-balance`, `codecov/patch` and `e2e` all passed. The e2e job
+  ([`128389684421`](https://github.com/cwchanap/Grus/actions/runs/42367529198/job/128389684421))
+  ran the real Linux x86_64 export, passed the exported bridge smoke
+  contract — the exact leg that failed on `b65ef28` — rendered the
+  200-unit benchmark at 1080p on the Linux host and packaged bevy-e2e:
+  the legs the section above records as impossible on this Mac.
+
+These results cover `86ccca8` only; this docs-only evidence update had
+not itself been through CI when written. Every number in the checks
+table remains a local macOS measurement — Linux CI status is recorded
+only in this section.
 
 ## Rendered evidence — real 1280×720 frames
 
