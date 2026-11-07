@@ -577,6 +577,76 @@ func _roof_pick_point(view: Node3D, camera: Camera3D, viewport_size: Vector2, ma
 			return candidate
 	return Vector2.INF
 
+func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
+	var model := view.get_node_or_null("Model") as Node3D
+	var neighbor_model := neighbor.get_node_or_null("Model") as Node3D
+	if model == null or neighbor_model == null:
+		return Vector2.INF
+	var view_rect: Rect2 = main.call("_projected_art_rect", view, model)
+	var neighbor_rect: Rect2 = main.call("_projected_art_rect", neighbor, neighbor_model)
+	var view_screen := camera.unproject_position(view.global_position)
+	var neighbor_screen := camera.unproject_position(neighbor.global_position)
+	var hud_rects: Array[Rect2] = []
+	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
+		var control := node as Control
+		if control != null and control.is_visible_in_tree() \
+				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			hud_rects.append(control.get_global_rect())
+	var roof_faces: Array[Array] = []
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		for surface_index in mesh_instance.mesh.get_surface_count():
+			var arrays := mesh_instance.mesh.surface_get_arrays(surface_index)
+			var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			var indices = arrays[Mesh.ARRAY_INDEX]
+			var triangle_count := int(indices.size() / 3) if indices != null and not indices.is_empty() else int(vertices.size() / 3)
+			for face_index in triangle_count:
+				var va := vertices[indices[face_index * 3]] if indices != null and not indices.is_empty() else vertices[face_index * 3]
+				var vb := vertices[indices[face_index * 3 + 1]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 1]
+				var vc := vertices[indices[face_index * 3 + 2]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 2]
+				var a: Vector3 = mesh_instance.global_transform * va
+				var b: Vector3 = mesh_instance.global_transform * vb
+				var c: Vector3 = mesh_instance.global_transform * vc
+				if (b - a).cross(c - a).normalized().y <= 0.5:
+					continue
+				roof_faces.append([a, b, c])
+	roof_faces.sort_custom(func(a, b): return (a[0] + a[1] + a[2]).y > (b[0] + b[1] + b[2]).y)
+	var best := Vector2.INF
+	var best_margin := 0.0
+	for face in roof_faces:
+		var centroid: Vector3 = (face[0] + face[1] + face[2]) / 3.0
+		var projected_triangle := PackedVector2Array([
+				camera.unproject_position(face[0] as Vector3),
+				camera.unproject_position(face[1] as Vector3),
+				camera.unproject_position(face[2] as Vector3)])
+		var interior_points: Array[Vector3] = [centroid]
+		for vertex_index in 3:
+			var vertex := face[vertex_index] as Vector3
+			interior_points.append(centroid + (vertex - centroid) * 0.5)
+			interior_points.append(centroid + (vertex - centroid) * 0.8)
+		for vertex_index in 3:
+			var edge_mid := ((face[vertex_index] as Vector3) + (face[(vertex_index + 1) % 3] as Vector3)) * 0.5
+			interior_points.append(centroid + (edge_mid - centroid) * 0.9)
+		for world_point in interior_points:
+			var candidate := camera.unproject_position(world_point)
+			if not Geometry2D.is_point_in_polygon(candidate, projected_triangle) \
+					or not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+					or not view_rect.has_point(candidate) \
+					or neighbor_rect.has_point(candidate) \
+					or hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)) \
+					or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
+				continue
+			var neighbor_distance := neighbor_screen.distance_to(candidate)
+			if neighbor_distance > main.CLICK_RADIUS:
+				continue
+			var margin := view_screen.distance_to(candidate) - neighbor_distance
+			if margin > best_margin:
+				best = candidate
+				best_margin = margin
+	return best
+
 func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 	var hud_rects: Array[Rect2] = []
 	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
@@ -2080,5 +2150,146 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc healthbar_px=excluded" % max_visual_step)
+
+	if not GrusBridge.start_match():
+		_fail("radius-steal leg could not reopen the match")
+		return
+	var steal_rc := _building_view(1)
+	if steal_rc == null or (steal_rc.get_node_or_null("Model") as Node3D) == null:
+		_fail("restarted Research Center view is missing its model for the radius-steal leg")
+		return
+	var rc_footprint_depth := float(building_catalogue.get("ResearchCenter", {}).get("height", 0))
+	if rc_footprint_depth <= 0.0:
+		_fail("catalogue exposes no Research Center height for the radius-steal leg")
+		return
+	var steal_row := floori(steal_rc.global_position.z - rc_footprint_depth * 0.5) - 2
+	var anchor_x_min := floori(steal_rc.global_position.x - rc_footprint_depth * 0.5)
+	var anchor_candidates: Array[Vector2i] = []
+	for x in range(anchor_x_min - 1, anchor_x_min + int(rc_footprint_depth) + 2):
+		anchor_candidates.append(Vector2i(x, steal_row))
+	var rc_ground_x := steal_rc.global_position.x
+	anchor_candidates.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return absf(a.x + 0.5 - rc_ground_x) < absf(b.x + 0.5 - rc_ground_x))
+	var wall_anchor := Vector2i(-1, -1)
+	for candidate_anchor in anchor_candidates:
+		var anchor_preview: Dictionary = GrusBridge.placement_preview(1, "Wall", candidate_anchor.x, candidate_anchor.y)
+		if bool(anchor_preview.get("valid", false)):
+			wall_anchor = candidate_anchor
+			break
+	if wall_anchor.x < 0:
+		_fail("no valid Wall anchor along the Research Center's north edge")
+		return
+	if not GrusBridge.place_building(1, "Wall", wall_anchor.x, wall_anchor.y):
+		_fail("radius-steal Wall placement was not queued")
+		return
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("could not accelerate the radius-steal Wall construction")
+		return
+	var steal_wall_box := [null]
+	if not await _wait_until(func():
+			for node in get_tree().get_nodes_in_group("building_views"):
+				var view := node as Node3D
+				if str(view.get_meta("building_kind", "")) != "Wall":
+					continue
+				var view_model := view.get_node_or_null("Model") as Node3D
+				if view_model == null or not view_model.scene_file_path.ends_with("wall.glb"):
+					continue
+				if bool(GrusBridge.building_snapshot(int(view.get_meta("building_id", -1))).get("complete", false)):
+					steal_wall_box[0] = view
+					return true
+			return false,
+			30.0, "the placed Wall never completed with its styled model"):
+		return
+	var steal_wall := steal_wall_box[0] as Node3D
+	var park_ids := PackedInt32Array()
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		if int(unit_node.get_meta("team_id", -1)) == 1:
+			park_ids.append(int(unit_node.get_meta("unit_id")))
+	if park_ids.is_empty():
+		_fail("no Team-1 workers remain for the radius-steal park")
+		return
+	var park_target := Vector2(steal_rc.global_position.x - 27.5, steal_rc.global_position.z - 3.5)
+	var park_revision := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(park_ids, park_target):
+		_fail("radius-steal worker park move was not queued")
+		return
+	if not await _wait_until(func():
+			for unit_node in get_tree().get_nodes_in_group("unit_views"):
+				var unit := unit_node as Node3D
+				if unit == null or int(unit.get_meta("team_id", -1)) != 1:
+					continue
+				if unit.global_position.distance_to(Vector3(park_target.x, 0.0, park_target.y)) > 5.0:
+					return false
+			return true,
+			30.0, "radius-steal workers never parked clear of the Research Center"):
+		return
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not restore sim speed after the radius-steal park")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(),
+		minimap.get_global_rect().position + Vector2(steal_rc.global_position.x, steal_rc.global_position.z),
+		MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	for _step in range(16):
+		if camera.size >= default_camera_size:
+			break
+		_mouse_click(viewport_center, MOUSE_BUTTON_WHEEL_DOWN)
+		await get_tree().process_frame
+	if not is_equal_approx(camera.size, default_camera_size):
+		_fail("wheel zoom never restored the default camera size for the radius-steal pick: %s" % camera.size)
+		return
+	var steal_point := _radius_steal_pick_point(steal_rc, steal_wall, camera, viewport_size, main)
+	if steal_point == Vector2.INF:
+		_fail("no Research Center roof triangle lands inside the Wall's center radius while staying outside its art rect")
+		return
+	var wall_screen := camera.unproject_position(steal_wall.global_position)
+	var rc_screen_steal := camera.unproject_position(steal_rc.global_position)
+	var radius_hit := main.call("_building_at", steal_point, 1) as Node3D
+	if radius_hit != steal_rc:
+		_fail("a Research Center roof pixel %.2fpx from the Wall center and %.2fpx from the Research Center center picked %s — the legacy center radius let the neighbor steal the click" % [
+			wall_screen.distance_to(steal_point), rc_screen_steal.distance_to(steal_point),
+			str(radius_hit.get_meta("building_kind", radius_hit)) if radius_hit != null else "nothing"])
+		return
+	var deselect_screen := _clear_click_point(viewport_size, main)
+	if deselect_screen == Vector2.INF:
+		_fail("no empty pixel exists for the pre-steal deselection")
+		return
+	_mouse_click(deselect_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == -1 and main.selected_ids.is_empty(),
+			5.0, "the pre-steal deselection click did not clear the selection"):
+		return
+	_mouse_click(steal_point, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == 1 and main.selected_ids.is_empty(),
+			5.0, "left-click on the Research Center roof beside the styled Wall selected building %d units=%s" % [
+				int(main.selected_building_id), main.selected_ids]):
+		return
+	var fallback_screen := _clear_click_point(viewport_size, main)
+	if fallback_screen == Vector2.INF:
+		_fail("no empty pixel exists for the unstyled-view fallback probe")
+		return
+	var fallback_origin := camera.project_ray_origin(fallback_screen)
+	var fallback_direction := camera.project_ray_normal(fallback_screen)
+	if absf(fallback_direction.y) < 0.0001:
+		_fail("the fallback-probe camera ray never reaches the ground")
+		return
+	var fallback_ground := fallback_origin + fallback_direction * (-fallback_origin.y / fallback_direction.y)
+	var unready_view := building_view_scene.instantiate() as Node3D
+	unready_view.set_meta("team_id", 1)
+	unready_view.position = Vector3(fallback_ground.x, 0.0, fallback_ground.z)
+	unready_view.visible = true
+	add_child(unready_view)
+	await get_tree().process_frame
+	if (main.call("_building_at", fallback_screen, 0) as Node3D) != unready_view:
+		_fail("the center-radius fallback did not pick the unstyled building view")
+		return
+	var fallback_side := Vector2(signf(viewport_center.x - fallback_screen.x) * (main.CLICK_RADIUS + 5.0), 0.0)
+	if (main.call("_building_at", fallback_screen + fallback_side, 0) as Node3D) == unready_view:
+		_fail("the unstyled view was picked beyond its center-radius fallback")
+		return
+	unready_view.free()
+
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc healthbar_px=excluded radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
 	get_tree().quit(0)

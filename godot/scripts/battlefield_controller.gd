@@ -768,12 +768,20 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 		var center_px := camera.unproject_position(view.global_position)
 		var distance := center_px.distance_to(screen_position)
 		var model := view.get_node_or_null("Model") as Node3D
-		var hit := distance <= CLICK_RADIUS \
-				or (model != null and _projected_art_rect(view, model).has_point(screen_position))
+		var hit := distance <= CLICK_RADIUS
+		if model != null and _model_art_usable(model):
+			hit = _projected_art_rect(view, model).has_point(screen_position)
 		if hit and distance < nearest_distance:
 			nearest = view
 			nearest_distance = distance
 	return nearest
+
+func _model_art_usable(model: Node3D) -> bool:
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		if mesh.mesh != null and mesh.get_aabb().size.length() >= 0.001:
+			return true
+	return false
 
 func _friendly_units() -> Array[Node3D]:
 	var result: Array[Node3D] = []
