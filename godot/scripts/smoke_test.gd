@@ -275,6 +275,49 @@ func _has_visible_icon(root: Node, resource_path: String) -> bool:
 			return true
 	return false
 
+## Pilot structure import check (HPA-291): the PackedScene must load and
+## instantiate a nonempty mesh, carry no gameplay nodes, sit inside the
+## normalized ±0.5 footprint with a grounded base, and resolve its diffuse
+## texture from the committed res://assets/structures/ PNG — the same
+## recipe Checkpoint 3 extends to the whole building catalogue.
+func _assert_structure_import(path: String) -> bool:
+	if not ResourceLoader.exists(path):
+		_fail("pilot structure import is missing: %s" % path)
+		return false
+	var packed := load(path) as PackedScene
+	if packed == null:
+		_fail("pilot structure import did not load as a PackedScene: %s" % path)
+		return false
+	var model := packed.instantiate() as Node3D
+	if model == null:
+		_fail("pilot structure import did not instantiate a Node3D: %s" % path)
+		return false
+	# A detached node has no global transform — park it in the tree at the
+	# origin so _art_bounds sees the same space the live view would.
+	add_child(model)
+	var foreign := _foreign_nodes(model)
+	if not foreign.is_empty():
+		_fail("%s imported gameplay nodes: %s" % [path, foreign])
+		return false
+	var meshes := model.find_children("*", "MeshInstance3D", true, false)
+	if meshes.is_empty():
+		_fail("%s imported no meshes" % path)
+		return false
+	var bounds := _art_bounds(model)
+	if bounds.size.length() < 0.1 or bounds.position.x < -0.51 or bounds.end.x > 0.51 \
+			or bounds.position.z < -0.51 or bounds.end.z > 0.51 or bounds.position.y < -0.01:
+		_fail("%s art escapes the normalized footprint: %s" % [path, bounds])
+		return false
+	for node in meshes:
+		var material := (node as MeshInstance3D).get_active_material(0) as StandardMaterial3D
+		var texture := material.albedo_texture if material != null else null
+		if texture == null or not texture.resource_path.begins_with("res://assets/structures/"):
+			_fail("%s mesh material does not resolve a committed structures texture: %s" % [
+				path, texture.resource_path if texture != null else "missing"])
+			return false
+	model.free()
+	return true
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -507,6 +550,14 @@ func _run() -> void:
 		if bounds.size.length() < 0.1 or bounds.position.x < -0.5 or bounds.end.x > 0.5 \
 				or bounds.position.z < -0.5 or bounds.end.z > 0.5 or bounds.position.y < -0.01:
 			_fail("resource %s art extends outside its gather cell: %s" % [kind, bounds])
+			return
+
+	# HPA-291 pilot structure imports: only the two committed assets are
+	# asserted here — asserting the whole catalogue now would mask every
+	# later selection/fog/input leg on the first missing GLB (Checkpoint 3
+	# adds the catalogue-wide loop once all eleven models exist).
+	for structure in ["construction_site", "bunkhouse"]:
+		if not _assert_structure_import("res://assets/structures/%s.glb" % structure):
 			return
 
 	var size_before_zoom := camera.size
@@ -1006,6 +1057,28 @@ func _run() -> void:
 				_fail("right-click while placing did not cancel without a contextual command")
 				return
 
+	# HPA-291 pilot: an unfinished building renders the generic construction
+	# site until Rust pushes complete — the freshest Gate (8s build) is
+	# still mid-construction here, so its model must be the site GLB.
+	var freshest_gate: Node3D = null
+	for node in get_tree().get_nodes_in_group("building_views"):
+		if str(node.get_meta("building_kind", "")) == "Gate":
+			freshest_gate = node as Node3D
+	if freshest_gate == null:
+		_fail("placed Gate view is missing for the construction-site check")
+		return
+	if not await _wait_until(func():
+			return freshest_gate.get_node_or_null("Model") != null, 5.0,
+			"placed Gate view never attached its construction model"):
+		return
+	var freshest_gate_id := int(freshest_gate.get_meta("building_id"))
+	var gate_model := freshest_gate.get_node("Model") as Node3D
+	if bool(GrusBridge.building_snapshot(freshest_gate_id).get("complete", false)) \
+			or not gate_model.scene_file_path.ends_with("construction_site.glb"):
+		_fail("unfinished Gate does not show the generic construction site: %s" % [
+			gate_model.scene_file_path])
+		return
+
 	# Each preview is affordable against the current stockpile. Queue one
 	# turret for another worker, then submit the visible-button placement before
 	# the next fixed tick. The first spend makes the second command fail with
@@ -1250,6 +1323,39 @@ func _run() -> void:
 				and main.selected_ids.is_empty(),
 			5.0, "left-click on the Research Center view did not select building 1"):
 		return
+	# HPA-291 silhouette picking: a click inside the model's projected art
+	# rect — beyond the old 20 px center-radius — must select the same
+	# building. The point derives from the live view's active Model bounds
+	# (the HealthBar is scoped out of the pick), so it tracks whatever art
+	# is attached.
+	var rc_model := rc_view.get_node_or_null("Model") as Node3D
+	if rc_model == null:
+		_fail("Research Center view has no Model for the silhouette pick")
+		return
+	var rc_art_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_model)
+	var silhouette_farthest := Vector2.ZERO
+	var silhouette_distance := -1.0
+	for corner in [rc_art_rect.position,
+			Vector2(rc_art_rect.end.x, rc_art_rect.position.y), rc_art_rect.end,
+			Vector2(rc_art_rect.position.x, rc_art_rect.end.y)]:
+		var distance := rc_screen.distance_to(corner)
+		if distance > silhouette_distance and Rect2(Vector2.ZERO, viewport_size).has_point(corner):
+			silhouette_farthest = corner
+			silhouette_distance = distance
+	if silhouette_distance <= main.CLICK_RADIUS + 5.0:
+		_fail("Research Center art rect %s cannot probe a pick past the old center radius" % rc_art_rect)
+		return
+	var silhouette_point := rc_screen + (silhouette_farthest - rc_screen) * 0.9
+	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func(): return int(main.selected_building_id) == -1,
+			5.0, "Research Center did not deselect before the silhouette pick"):
+		return
+	_mouse_click(silhouette_point, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == 1 \
+				and main.selected_ids.is_empty(),
+			5.0, "left-click on the Research Center's projected art did not select building 1"):
+		return
 	# The enabled state follows the session+selection contract: Playing with
 	# the owned, completed Research Center selected — never Crystal cost.
 	if not await _wait_until(func(): return not analyze_button.disabled,
@@ -1314,6 +1420,141 @@ func _run() -> void:
 		_fail("a click on the disabled Analyze button reached the bridge")
 		return
 
+	var pilot_bunkhouse: Node3D = null
+	var pilot_bunkhouse_id := -1
+	var resume_bunkhouse: Node3D = null
+	var resume_bunkhouse_id := -1
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var view := node as Node3D
+		if str(view.get_meta("building_kind", "")) != "Bunkhouse":
+			continue
+		var id := int(view.get_meta("building_id", -1))
+		if bool(GrusBridge.building_snapshot(id).get("complete", false)):
+			pilot_bunkhouse = view
+			pilot_bunkhouse_id = id
+			break
+		resume_bunkhouse = view
+		resume_bunkhouse_id = id
+	if pilot_bunkhouse == null and resume_bunkhouse != null:
+		if not GrusBridge.resume_construction(1, resume_bunkhouse_id):
+			_fail("resume_construction for the roof-pick Bunkhouse was not queued")
+			return
+		if not GrusBridge.set_sim_speed(20.0):
+			_fail("could not accelerate the Bunkhouse completion for the roof pick")
+			return
+		if not await _wait_until(func():
+				return bool(GrusBridge.building_snapshot(resume_bunkhouse_id).get("complete", false)),
+				20.0, "roof-pick Bunkhouse never completed after resume_construction"):
+			return
+		if not GrusBridge.set_sim_speed(1.0):
+			_fail("could not restore sim speed after the Bunkhouse completion")
+			return
+		pilot_bunkhouse = resume_bunkhouse
+		pilot_bunkhouse_id = resume_bunkhouse_id
+	if pilot_bunkhouse == null:
+		_fail("no placed Bunkhouse exists for the roof silhouette pick")
+		return
+	var bunkhouse_model := pilot_bunkhouse.get_node_or_null("Model") as Node3D
+	if bunkhouse_model == null or not bunkhouse_model.scene_file_path.ends_with("bunkhouse.glb"):
+		_fail("completed Bunkhouse does not carry the pilot GLB for the roof silhouette pick")
+		return
+	# The 2x2 cabin is too small at the default framing to probe a point
+	# past the old 20 px center radius, so frame it like the resource-pick
+	# leg: middle-drag the view onto it and wheel-zoom to the minimum size.
+	# Both are the real input paths the game itself handles.
+	var bunkhouse_zoom_start := camera.size
+	var bunkhouse_screen := camera.unproject_position(pilot_bunkhouse.global_position)
+	var viewport_center := viewport_size * 0.5
+	for _step in range(8):
+		bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
+		if not Rect2(Vector2.ZERO, viewport_size).has_point(bunkhouse_screen) \
+				or bunkhouse_screen.distance_to(viewport_center) <= 8.0:
+			break
+		_mouse_drag(bunkhouse_screen, viewport_center, MOUSE_BUTTON_MIDDLE)
+		await get_tree().process_frame
+	bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
+	if bunkhouse_screen.distance_to(viewport_center) > 60.0:
+		_fail("middle-drag never centered the roof-pick Bunkhouse: %s" % bunkhouse_screen)
+		return
+	for _step in range(16):
+		if camera.size <= controller.MIN_CAMERA_SIZE:
+			break
+		_mouse_click(viewport_center, MOUSE_BUTTON_WHEEL_UP)
+		await get_tree().process_frame
+	bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
+	var bunkhouse_art_rect: Rect2 = main.call("_projected_art_rect", pilot_bunkhouse, bunkhouse_model)
+	var roof_point := Vector2.INF
+	for t in [0.5, 0.2, 0.8, 0.05, 0.95]:
+		var candidate := Vector2(
+				bunkhouse_art_rect.position.x + bunkhouse_art_rect.size.x * t,
+				bunkhouse_art_rect.position.y + 2.0)
+		if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate):
+			continue
+		if bunkhouse_screen.distance_to(candidate) <= main.CLICK_RADIUS + 5.0:
+			continue
+		if (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
+			continue
+		if main.call("_building_at", candidate, 1) == pilot_bunkhouse:
+			roof_point = candidate
+			break
+	if roof_point == Vector2.INF:
+		_fail("Bunkhouse art rect %s has no in-viewport roof point beyond the old center radius" % bunkhouse_art_rect)
+		return
+	_mouse_click(roof_point, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == pilot_bunkhouse_id \
+				and main.selected_ids.is_empty(),
+			5.0, "left-click on the Bunkhouse's projected roof did not select its building"):
+		return
+	# Restore the prior zoom through real input like the gather leg — the
+	# reset and any later camera-dependent probes keep their framing.
+	for _step in range(16):
+		if camera.size >= bunkhouse_zoom_start:
+			break
+		_mouse_click(viewport_center, MOUSE_BUTTON_WHEEL_DOWN)
+		await get_tree().process_frame
+	if camera.size != bunkhouse_zoom_start:
+		_fail("wheel zoom never restored the pre-pick camera size: %s" % camera.size)
+		return
+
+	# HPA-291 pilot state leg: every building view carries a Model — the
+	# generic construction site exactly while the snapshot reports
+	# incomplete, the finished model once complete (bunkhouse.glb for the
+	# pilot kind, the placeholder for unlanded ones). The seeded-complete
+	# Research Center guarantees a finished-model proof regardless of how
+	# far the construction queue drained before the clear-out move leg;
+	# economy_smoke owns the full site→GLB completion-swap journey.
+	var model_offender := ["none"]
+	if not await _wait_until(func():
+			model_offender[0] = "a building view has no Model"
+			var finished := 0
+			for node in get_tree().get_nodes_in_group("building_views"):
+				var view := node as Node3D
+				var id := int(view.get_meta("building_id", -1))
+				var kind := str(view.get_meta("building_kind", ""))
+				var model := view.get_node_or_null("Model") as Node3D
+				if model == null:
+					model_offender[0] = "%s %d has no Model" % [kind, id]
+					return false
+				var complete := bool(GrusBridge.building_snapshot(id).get("complete", false))
+				var is_site := model.scene_file_path.ends_with("construction_site.glb")
+				if complete == is_site:
+					model_offender[0] = "%s %d complete=%s but model is %s" % [
+						kind, id, complete, model.scene_file_path]
+					return false
+				if complete and kind == "Bunkhouse" \
+						and not model.scene_file_path.ends_with("bunkhouse.glb"):
+					model_offender[0] = "completed Bunkhouse %d model is %s" % [
+						id, model.scene_file_path]
+					return false
+				if complete:
+					finished += 1
+			model_offender[0] = "no completed building views yet"
+			return finished >= 1,
+			30.0, "building views never satisfied the site/finished model contract"):
+		_fail("building-model offender: %s" % model_offender[0])
+		return
+
 	if not GrusBridge.reset_fixture():
 		_fail("restart after defense placement was rejected")
 		return
@@ -1338,5 +1579,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather pilot_structures=site_to_glb silhouette_pick=art_rect" % max_visual_step)
 	get_tree().quit(0)

@@ -153,6 +153,23 @@ func _run() -> void:
 		_fail("completed Gate view disappeared before the wave")
 		return
 
+	# HPA-291 pilot: every completed defense carries a visible Model — the
+	# construction site only while the snapshot reports incomplete. Wall,
+	# Gate and Gun Turret have no committed GLB yet, so their finished
+	# model is the code-authored placeholder until Checkpoint 3 lands the
+	# remaining catalogue.
+	for id in _defense_ids:
+		var defense_view := _building_view(id)
+		if defense_view == null:
+			_fail("completed defense %d lost its view" % id)
+			return
+		var defense_model := defense_view.get_node_or_null("Model") as Node3D
+		if defense_model == null or not defense_model.is_visible_in_tree() \
+				or defense_model.scene_file_path.ends_with("construction_site.glb"):
+			_fail("completed defense %d has no finished model: %s" % [
+				id, defense_model.scene_file_path if defense_model != null else "missing"])
+			return
+
 	# This ground goal is outside the one-cell Gate. With the ring closed, a
 	# successful route proves humans traverse the Gate while it is complete.
 	var outside_gate := Vector2i(_gate_cell.x - 2, _gate_cell.y - 1)
@@ -193,8 +210,14 @@ func _run() -> void:
 	if not await _wait_until(_building_complete.bind(turret_id), 20.0,
 			"Gun Turret did not complete before the first wave"):
 		return
-	if _building_view(turret_id) == null:
+	var done_turret_view := _building_view(turret_id)
+	if done_turret_view == null:
 		_fail("completed Gun Turret view is missing")
+		return
+	var turret_model := done_turret_view.get_node_or_null("Model") as Node3D
+	if turret_model == null or not turret_model.is_visible_in_tree() \
+			or turret_model.scene_file_path.ends_with("construction_site.glb"):
+		_fail("completed Gun Turret has no finished model")
 		return
 
 	var initial_wave: Dictionary = GrusBridge.wave_snapshot()
@@ -307,7 +330,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=site_to_finished setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	get_tree().quit(0)
 
 func _perimeter_cells() -> Array[Vector2i]:
