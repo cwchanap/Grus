@@ -586,20 +586,9 @@ func _run() -> void:
 			return model != null and model.scene_file_path.ends_with("bunkhouse.glb"),
 			10.0, "completed Bunkhouse never swapped to its final model"):
 		return
-	var bunkhouse_bounds := AABB()
-	var bunkhouse_mesh_found := false
-	for node in (bunkhouse.get_node("Model") as Node3D).find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		var local: AABB = bunkhouse.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
-		bunkhouse_bounds = local if not bunkhouse_mesh_found else bunkhouse_bounds.merge(local)
-		bunkhouse_mesh_found = true
-	if not bunkhouse_mesh_found or bunkhouse_bounds.position.x < -0.51 or bunkhouse_bounds.end.x > 0.51 \
-			or bunkhouse_bounds.position.z < -0.51 or bunkhouse_bounds.end.z > 0.51 \
-			or bunkhouse_bounds.position.y < -0.01 or bunkhouse_bounds.end.y > 1.01:
-		_fail("completed Bunkhouse art escapes its normalized footprint: %s" % bunkhouse_bounds)
-		return
-	if bunkhouse_bounds.position.y > 0.01:
-		_fail("completed Bunkhouse art floats %.4f above the ground plane" % bunkhouse_bounds.position.y)
+	var art_err := SmokeHelpers.view_art_error(bunkhouse)
+	if art_err != "":
+		_fail(art_err)
 		return
 
 	# Fog retarget (HPA-473): the Depot anchor (40,20) and the northwest
@@ -781,8 +770,6 @@ func _run() -> void:
 	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
 	# The ring slot west of the city is probed off the live RC view.
-	if not await _wait_until(_building_complete_at.bind(barracks_id), 40.0, "Barracks never completed"):
-		return
 	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "":
 		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s" % [_blocked_reason(barracks_id), _queue_label(barracks_id)])
 		return
@@ -1002,7 +989,7 @@ func _run() -> void:
 	if selected_after_pick != barracks_id:
 		var screen := _camera.unproject_position(barracks.global_position)
 		var unit_pick = main.call("_nearest_view", "unit_views", screen, 1) as Node3D
-		var building_pick = main.call("_nearest_view", "building_views", screen, 1) as Node3D
+		var building_pick = main.call("_building_at", screen, 1) as Node3D
 		var selected_unit := _unit_view(6)
 		var session_panel := main.get_node("HUD/SessionPanel") as Control
 		_fail("Barracks click did not select its producer: wanted=%d selected=%d unit_pick=%s building_pick=%s screen=%s barracks=%s visible=%s panel=%s phase=%s placement=%s left_pressed=%s last_press=%s selected_units=%s selected_unit_screen=%s" % [

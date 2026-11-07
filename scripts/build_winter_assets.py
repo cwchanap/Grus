@@ -18,6 +18,8 @@ STRUCTURE_OUT = Path(__file__).resolve().parents[1] / "godot/assets/structures"
 RNG = random.Random(290)
 
 
+# Blender 5.2.1's glTF exporter resolves images through the private
+# io_scene_gltf2 symbol below; revalidate this patch on any Blender upgrade.
 _gather_buffer_view = gltf_image_export.__gather_buffer_view
 
 
@@ -126,18 +128,26 @@ def project_uv(obj, cube_size=0.4):
 
 
 def export(name, resource=False, out_dir=None, footprint=1.0, max_height=None):
+    meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.context.view_layer.objects.active = meshes[0]
+    bpy.ops.object.join()
+    obj = bpy.context.object
+    obj.name = name
+    bpy.context.scene.cursor.location = (0, 0, 0)
+    bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     if footprint != 1.0:
         # Buildings are authored at their true catalogue footprint; the
         # view root scales the normalized ±0.5 cell up to it, so authored
         # X/Y shrink to that cell here. Blender Z is Godot Y — heights are
-        # world units on both sides and are never touched.
+        # world units on both sides and are never touched. Applying the
+        # shrink directly to mesh data after join avoids losing shear on
+        # tilted parts rotated on X/Y.
         shrink = Matrix.Diagonal((1.0 / footprint, 1.0 / footprint, 1.0, 1.0))
-        for obj in bpy.context.scene.objects:
-            if obj.type == "MESH":
-                obj.matrix_world = shrink @ obj.matrix_world
+        obj.data.transform(shrink)
     bpy.context.view_layer.update()
-    meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
-    points = [obj.matrix_world @ Vector(corner) for obj in meshes for corner in obj.bound_box]
+    points = [Vector(corner) for corner in obj.bound_box]
     # The runtime scales obstacle X/Z to the authoritative blocked rectangle.
     assert points and all(abs(p.x) <= 0.5 and abs(p.y) <= 0.5 for p in points), name
     if not resource:
@@ -148,14 +158,6 @@ def export(name, resource=False, out_dir=None, footprint=1.0, max_height=None):
     assert min(p.z for p in points) >= -0.00001, name
     height_cap = max_height if max_height is not None else (1 if resource else 2)
     assert max(p.z for p in points) <= height_cap, name
-    bpy.ops.object.select_all(action="SELECT")
-    bpy.context.view_layer.objects.active = meshes[0]
-    bpy.ops.object.join()
-    obj = bpy.context.object
-    obj.name = name
-    bpy.context.scene.cursor.location = (0, 0, 0)
-    bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
-    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
     triangles = sum(len(face.vertices) - 2 for face in obj.data.polygons)
     assert triangles < 4000, (name, triangles)
     bpy.ops.export_scene.gltf(

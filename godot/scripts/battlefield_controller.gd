@@ -306,11 +306,24 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 			"building":
 				attacker = _building_view(attacker_id)
 		if attacker != null:
-			_fx.spawn_tracer(attacker.global_position + Vector3(0.0, 0.8, 0.0), hit)
+			var attacker_kind := str(event.get("attacker_kind", ""))
+			_fx.spawn_tracer(_attacker_muzzle_position(attacker, attacker_kind), hit)
 	_fx.spawn_hit(hit)
 	if bool(event.get("killed", false)):
 		_fx.spawn_death(hit)
 	_fx.play_hit_cue()
+
+func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
+	var height := 0.8
+	if attacker_kind == "building":
+		match str(attacker.get_meta("building_kind", "")):
+			"GunTurret":
+				height = 0.62
+			"FlameTower":
+				height = 0.9
+			"CrystalLance":
+				height = 1.8
+	return attacker.global_position + Vector3(0.0, height, 0.0)
 
 ## Selection truth is the live view tree, never the cosmetic event buffer:
 ## step_combat clears CombatEvents on every non-Result tick, so a kill can
@@ -750,15 +763,17 @@ func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 	return camera.unproject_position(view.global_position).distance_to(screen_position)
 
-## Building picking prioritizes the closest projected art-rect hit of the
-## view's active Model — the silhouette itself, including height, at any
-## zoom. The center-radius floor stays as the fallback when no art rect
-## claims the click (e.g. for small buildings at wide zoom or unstyled
-## views), and the closest eligible center wins on overlap. Hidden (fogged)
-## views are never picked.
+## Building picking tests the projected silhouette of the view's active
+## Model (health bar excluded) via ray-triangle intersection, with closest-hit
+## depth sorting along the camera ray so foreground geometry wins over background
+## structures. The center-radius floor stays as the fallback when no silhouette
+## is hit (e.g. for small buildings at wide zoom or unstyled views). Hidden
+## (fogged) views are never picked.
 func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
-	var nearest: Node3D = null
-	var nearest_distance := INF
+	var ray_origin := camera.project_ray_origin(screen_position)
+	var ray_direction := camera.project_ray_normal(screen_position)
+	var nearest_hit_view: Node3D = null
+	var nearest_hit_depth := INF
 	var fallback: Node3D = null
 	var fallback_distance := CLICK_RADIUS
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -770,23 +785,62 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 			continue
 		var center_px := camera.unproject_position(view.global_position)
 		var distance := center_px.distance_to(screen_position)
-		var model := view.get_node_or_null("Model") as Node3D
-		if model != null and _model_art_usable(model) \
-				and _projected_art_rect(view, model).has_point(screen_position):
-			if distance < nearest_distance:
-				nearest = view
-				nearest_distance = distance
-		elif distance <= fallback_distance:
+		if distance <= fallback_distance:
 			fallback = view
 			fallback_distance = distance
-	return nearest if nearest != null else fallback
+		var model := view.get_node_or_null("Model") as Node3D
+		if model == null:
+			continue
+		var rect := _projected_art_rect(view, model)
+		if not rect.has_point(screen_position):
+			continue
+		var depth := _model_ray_hit_depth(view, model, ray_origin, ray_direction)
+		if depth >= 0.0 and depth < nearest_hit_depth:
+			nearest_hit_view = view
+			nearest_hit_depth = depth
+	return nearest_hit_view if nearest_hit_view != null else fallback
 
-func _model_art_usable(model: Node3D) -> bool:
+func _model_triangles(view: Node3D, model: Node3D) -> PackedVector3Array:
+	if view.has_meta("_cached_triangles"):
+		return view.get_meta("_cached_triangles") as PackedVector3Array
+	var triangles := PackedVector3Array()
 	for node in model.find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		if mesh.mesh != null and mesh.get_aabb().size.length() >= 0.001:
-			return true
-	return false
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance == null or mesh_instance.mesh == null:
+			continue
+		var xform := mesh_instance.global_transform
+		for surface in mesh_instance.mesh.get_surface_count():
+			var arrays := mesh_instance.mesh.surface_get_arrays(surface)
+			var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			var indices = arrays[Mesh.ARRAY_INDEX]
+			var has_indices: bool = indices != null and not (indices as PackedInt32Array).is_empty()
+			var count := int(indices.size() / 3) if has_indices else int(vertices.size() / 3)
+			for i in count:
+				var a := xform * (vertices[indices[i * 3]] if has_indices else vertices[i * 3])
+				var b := xform * (vertices[indices[i * 3 + 1]] if has_indices else vertices[i * 3 + 1])
+				var c := xform * (vertices[indices[i * 3 + 2]] if has_indices else vertices[i * 3 + 2])
+				triangles.append(a)
+				triangles.append(b)
+				triangles.append(c)
+	view.set_meta("_cached_triangles", triangles)
+	return triangles
+
+func _model_ray_hit_depth(view: Node3D, model: Node3D, ray_origin: Vector3, ray_dir: Vector3) -> float:
+	var triangles := _model_triangles(view, model)
+	var tri_count := int(triangles.size() / 3)
+	if tri_count == 0:
+		return -1.0
+	var min_depth := INF
+	for i in tri_count:
+		var a := triangles[i * 3]
+		var b := triangles[i * 3 + 1]
+		var c := triangles[i * 3 + 2]
+		var hit = Geometry3D.ray_intersects_triangle(ray_origin, ray_dir, a, b, c)
+		if hit != null:
+			var depth: float = (hit - ray_origin).dot(ray_dir)
+			if depth < min_depth:
+				min_depth = depth
+	return min_depth if min_depth < INF else -1.0
 
 func _friendly_units() -> Array[Node3D]:
 	var result: Array[Node3D] = []
@@ -908,16 +962,22 @@ func _projected_art_rect(view: Node3D, art_root: Node3D = null) -> Rect2:
 ## keeps its sibling HealthBar out of the pick silhouette, while a missing
 ## root still walks the whole view (resource models are the view).
 func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
+	if art_root != null and view.has_meta("_cached_art_bounds"):
+		return view.get_meta("_cached_art_bounds") as AABB
 	var bounds := AABB()
 	var first := true
 	for node in (art_root if art_root != null else view).find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
+		if mesh == null or mesh.mesh == null:
+			continue
 		var local: AABB = view.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
 		bounds = local if first else bounds.merge(local)
 		first = false
 	if bounds.size.length() < 0.001:
 		# No art yet (kind meta arrives a frame late): fall back to the cell.
 		bounds = AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
+	if art_root != null:
+		view.set_meta("_cached_art_bounds", bounds)
 	return bounds
 
 func _building_complete(building_id: int) -> bool:

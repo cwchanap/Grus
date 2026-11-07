@@ -368,6 +368,8 @@ func _mesh_triangles(model: Node3D) -> Array:
 	var triangles := []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_node := node as MeshInstance3D
+		if mesh_node == null or mesh_node.mesh == null:
+			continue
 		var to_model: Transform3D = model.global_transform.affine_inverse() * mesh_node.global_transform
 		for surface in mesh_node.mesh.get_surface_count():
 			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
@@ -602,12 +604,7 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 	var neighbor_rect: Rect2 = main.call("_projected_art_rect", neighbor, neighbor_model)
 	var view_screen := camera.unproject_position(view.global_position)
 	var neighbor_screen := camera.unproject_position(neighbor.global_position)
-	var hud_rects: Array[Rect2] = []
-	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
-		var control := node as Control
-		if control != null and control.is_visible_in_tree() \
-				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
-			hud_rects.append(control.get_global_rect())
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	var roof_faces: Array[Array] = []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
@@ -664,12 +661,7 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 	return best
 
 func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
-	var hud_rects: Array[Rect2] = []
-	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
-		var control := node as Control
-		if control != null and control.is_visible_in_tree() \
-				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
-			hud_rects.append(control.get_global_rect())
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for row in [viewport_size.y - 30.0, viewport_size.y - 60.0, viewport_size.y * 0.5, 40.0]:
 		for column in range(20, int(viewport_size.x) - 20, 40):
 			var point := Vector2(float(column), row)
@@ -1090,12 +1082,7 @@ func _run() -> void:
 	var gathered := {}
 	# Click points must reach _unhandled_input: skip any spot a HUD Control
 	# would consume (shield, minimap, panels, buttons).
-	var hud_rects: Array[Rect2] = []
-	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
-		var control := node as Control
-		if control != null and control.is_visible_in_tree() \
-				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
-			hud_rects.append(control.get_global_rect())
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for resource in get_tree().get_nodes_in_group("resource_views"):
 		if not resource.is_visible_in_tree():
 			continue
@@ -1821,19 +1808,17 @@ func _run() -> void:
 		_fail("Research Center view has no Model for the silhouette pick")
 		return
 	var rc_art_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_model)
-	var silhouette_farthest := Vector2.ZERO
-	var silhouette_distance := -1.0
-	for corner in [rc_art_rect.position,
-			Vector2(rc_art_rect.end.x, rc_art_rect.position.y), rc_art_rect.end,
-			Vector2(rc_art_rect.position.x, rc_art_rect.end.y)]:
-		var distance := rc_screen.distance_to(corner)
-		if distance > silhouette_distance and Rect2(Vector2.ZERO, viewport_size).has_point(corner):
-			silhouette_farthest = corner
-			silhouette_distance = distance
-	if silhouette_distance <= main.CLICK_RADIUS + 5.0:
-		_fail("Research Center art rect %s cannot probe a pick past the old center radius" % rc_art_rect)
+	# Empty ground in the model's projected bounding-box corner must not select the RC:
+	var corner_candidate := rc_art_rect.position
+	if Rect2(Vector2.ZERO, viewport_size).has_point(corner_candidate) \
+			and rc_screen.distance_to(corner_candidate) > main.CLICK_RADIUS + 5.0:
+		if (main.call("_building_at", corner_candidate, 0) as Node3D) == rc_view:
+			_fail("clicking empty ground in the Research Center's bounding box corner selected the Research Center")
+			return
+	var silhouette_point := _roof_pick_point(rc_view, camera, viewport_size, main)
+	if silhouette_point == Vector2.INF:
+		_fail("Research Center roof mesh exposes no upward triangle projecting beyond the old center radius")
 		return
-	var silhouette_point := rc_screen + (silhouette_farthest - rc_screen) * 0.9
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return int(main.selected_building_id) == -1,
 			5.0, "Research Center did not deselect before the silhouette pick"):
@@ -1954,16 +1939,7 @@ func _run() -> void:
 	var bunkhouse_world := pilot_bunkhouse.global_position
 	var viewport_center := viewport_size * 0.5
 	var minimap_point := minimap.get_global_rect().position + Vector2(bunkhouse_world.x, bunkhouse_world.z)
-	var recenter_press := InputEventMouseButton.new()
-	recenter_press.button_index = MOUSE_BUTTON_LEFT
-	recenter_press.position = minimap_point
-	recenter_press.pressed = true
-	get_tree().root.push_input(recenter_press)
-	var recenter_release := InputEventMouseButton.new()
-	recenter_release.button_index = MOUSE_BUTTON_LEFT
-	recenter_release.position = minimap_point
-	recenter_release.pressed = false
-	get_tree().root.push_input(recenter_release)
+	SmokeHelpers.push_mouse_click(get_tree(), minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var bunkhouse_screen := camera.unproject_position(pilot_bunkhouse.global_position)
@@ -1993,16 +1969,7 @@ func _run() -> void:
 	# covered only by the HealthBar never selects anything.
 	var rc_roof_world := rc_view.global_position
 	var rc_minimap_point := minimap.get_global_rect().position + Vector2(rc_roof_world.x, rc_roof_world.z)
-	var rc_recenter_press := InputEventMouseButton.new()
-	rc_recenter_press.button_index = MOUSE_BUTTON_LEFT
-	rc_recenter_press.position = rc_minimap_point
-	rc_recenter_press.pressed = true
-	get_tree().root.push_input(rc_recenter_press)
-	var rc_recenter_release := InputEventMouseButton.new()
-	rc_recenter_release.button_index = MOUSE_BUTTON_LEFT
-	rc_recenter_release.position = rc_minimap_point
-	rc_recenter_release.pressed = false
-	get_tree().root.push_input(rc_recenter_release)
+	SmokeHelpers.push_mouse_click(get_tree(), rc_minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var rc_screen_zoomed := camera.unproject_position(rc_view.global_position)
@@ -2028,65 +1995,6 @@ func _run() -> void:
 				and main.selected_ids.is_empty(),
 			5.0, "left-click on the Research Center's projected roof did not select building 1"):
 		return
-	# The pick silhouette is scoped to the active Model: a HealthBar-only
-	# pixel — inside the view's projected art but clear of the model's — must
-	# select nothing. A centered bar always projects inside the model's
-	# bound, so nudge the bar clear of the roof to make the discriminating
-	# region real, then click it through the real input path.
-	rc_view.set_health_ratio(0.5)
-	var health_bar := rc_view.get_node("HealthBar") as MeshInstance3D
-	var bar_home := health_bar.position
-	health_bar.position = bar_home + Vector3(0.0, 4.0, 0.0)
-	await get_tree().process_frame
-	var scoped_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_view.get_node("Model"))
-	var bar_hud_rects: Array[Rect2] = []
-	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
-		var control := node as Control
-		if control != null and control.is_visible_in_tree() \
-				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
-			bar_hud_rects.append(control.get_global_rect())
-	var bar_point := Vector2.INF
-	for surface_index in health_bar.mesh.get_surface_count():
-		var arrays := health_bar.mesh.surface_get_arrays(surface_index)
-		var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
-		var indices = arrays[Mesh.ARRAY_INDEX]
-		var triangle_count := int(indices.size() / 3) if indices != null and not indices.is_empty() else int(vertices.size() / 3)
-		for face_index in triangle_count:
-			var va := vertices[indices[face_index * 3]] if indices != null and not indices.is_empty() else vertices[face_index * 3]
-			var vb := vertices[indices[face_index * 3 + 1]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 1]
-			var vc := vertices[indices[face_index * 3 + 2]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 2]
-			var projected_bar := PackedVector2Array([
-					camera.unproject_position(health_bar.global_transform * va),
-					camera.unproject_position(health_bar.global_transform * vb),
-					camera.unproject_position(health_bar.global_transform * vc)])
-			var bar_centroid := (projected_bar[0] + projected_bar[1] + projected_bar[2]) / 3.0
-			for candidate in [bar_centroid,
-					bar_centroid + (projected_bar[0] - bar_centroid) * 0.5,
-					bar_centroid + (projected_bar[1] - bar_centroid) * 0.5,
-					bar_centroid + (projected_bar[2] - bar_centroid) * 0.5]:
-				if not Geometry2D.is_point_in_polygon(candidate, projected_bar) \
-						or not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
-						or scoped_rect.has_point(candidate) \
-						or bar_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)) \
-						or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
-					continue
-				bar_point = candidate
-				break
-			if bar_point != Vector2.INF:
-				break
-		if bar_point != Vector2.INF:
-			break
-	if bar_point == Vector2.INF:
-		_fail("no HealthBar triangle projects a pixel clear of the Research Center's model silhouette")
-		return
-	_mouse_click(bar_point, MOUSE_BUTTON_LEFT)
-	if not await _wait_until(func():
-			return int(main.selected_building_id) == -1 and main.selected_ids.is_empty(),
-			5.0, "a health-bar-only click selected something: building=%d units=%s" % [
-				int(main.selected_building_id), main.selected_ids]):
-		return
-	health_bar.position = bar_home
-	rc_view.set_health_ratio(1.0)
 
 	# Restore the prior zoom through real input like the gather leg — the
 	# reset and any later camera-dependent probes keep their framing.
@@ -2316,5 +2224,5 @@ func _run() -> void:
 		return
 	unready_view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc healthbar_px=excluded radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
 	get_tree().quit(0)

@@ -7,7 +7,18 @@ extends Node3D
 ## stamped building_kind metadata just cache until _process first sees it.
 const ICE_OVERLAY := preload("res://assets/structures/ice_overlay.tres")
 const SITE_MODEL := preload("res://assets/structures/construction_site.glb")
-const STRUCTURE_DIR := "res://assets/structures/"
+const MODELS := {
+	"ResearchCenter": preload("res://assets/structures/research_center.glb"),
+	"Bunkhouse": preload("res://assets/structures/bunkhouse.glb"),
+	"Depot": preload("res://assets/structures/depot.glb"),
+	"Barracks": preload("res://assets/structures/barracks.glb"),
+	"Wall": preload("res://assets/structures/wall.glb"),
+	"Gate": preload("res://assets/structures/gate.glb"),
+	"GunTurret": preload("res://assets/structures/gun_turret.glb"),
+	"CoalFurnace": preload("res://assets/structures/coal_furnace.glb"),
+	"FlameTower": preload("res://assets/structures/flame_tower.glb"),
+	"CrystalLance": preload("res://assets/structures/crystal_lance.glb"),
+}
 
 @onready var health_bar: MeshInstance3D = $HealthBar
 var _styled_kind := ""
@@ -50,6 +61,10 @@ func set_state(complete: bool, cold: bool) -> void:
 		_attach_model()
 
 func _attach_model() -> void:
+	if has_meta("_cached_triangles"):
+		remove_meta("_cached_triangles")
+	if has_meta("_cached_art_bounds"):
+		remove_meta("_cached_art_bounds")
 	var previous := get_node_or_null("Model")
 	if previous != null:
 		remove_child(previous)
@@ -58,10 +73,8 @@ func _attach_model() -> void:
 	if not _complete:
 		model = SITE_MODEL.instantiate()
 	else:
-		var path := STRUCTURE_DIR + _styled_kind.to_snake_case() + ".glb"
-		var packed := load(path) as PackedScene if ResourceLoader.exists(path) else null
-		if packed != null:
-			model = packed.instantiate()
+		if MODELS.has(_styled_kind):
+			model = (MODELS[_styled_kind] as PackedScene).instantiate()
 		else:
 			# A kind whose GLB has not landed yet must still render and be
 			# debuggable — an invisible building would silently stand.
