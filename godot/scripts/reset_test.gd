@@ -129,6 +129,15 @@ func _run() -> void:
 	if not GrusBridge.has_method("reset_fixture"):
 		_fail("fixture reset bridge is missing")
 		return
+	var seeded_model := _building_view(1).get_node_or_null("Model") as Node3D
+	if seeded_model == null or not seeded_model.scene_file_path.ends_with("research_center.glb"):
+		_fail("seeded Research Center does not render its finished GLB: %s" % [
+			seeded_model.scene_file_path if seeded_model != null else "missing"])
+		return
+	var seeded_art_error := SmokeHelpers.view_art_error(_building_view(1))
+	if not seeded_art_error.is_empty():
+		_fail("seeded Research Center fails the catalogue geometry contract: %s" % seeded_art_error)
+		return
 	if not await _assert_runtime_visibility("setup"):
 		return
 	var wave_error := SmokeHelpers.no_launched_wave_error("reset smoke before reset")
@@ -192,6 +201,26 @@ func _run() -> void:
 		if str(building.get_meta("building_kind", "")) != "ResearchCenter":
 			_fail("building view %d is not a Research Center" % int(building.get_meta("building_id", -1)))
 			return
+	# Restart must restyle a fresh view from scratch: the reseeded Research
+	# Center carries its finished GLB — never a stale construction site or
+	# a model orphaned from the pre-reset view.
+	var restarted_model: Node3D = null
+	for _frame in range(30):
+		var restarted_view := _building_view(1)
+		if restarted_view != null:
+			restarted_model = restarted_view.get_node_or_null("Model") as Node3D
+		if restarted_model != null \
+				and restarted_model.scene_file_path.ends_with("research_center.glb"):
+			break
+		await get_tree().process_frame
+	if restarted_model == null or not restarted_model.scene_file_path.ends_with("research_center.glb"):
+		_fail("restarted Research Center does not render its finished GLB: %s" % [
+			restarted_model.scene_file_path if restarted_model != null else "missing"])
+		return
+	var restarted_error := SmokeHelpers.view_art_error(_building_view(1))
+	if not restarted_error.is_empty():
+		_fail("restarted Research Center fails the catalogue geometry contract: %s" % restarted_error)
+		return
 	# Post-reset fog rides the settled view tree: the fresh fixture must
 	# boot the same 128x96 visibility payload as the first setup.
 	if not await _assert_runtime_visibility("restart"):

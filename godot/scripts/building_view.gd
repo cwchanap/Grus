@@ -1,81 +1,117 @@
 extends Node3D
 
-const TEAM_WARM_BLUE := Color(0.2, 0.55, 0.95, 1.0)
-const TEAM_RED := Color(0.9, 0.3, 0.25, 1.0)
-## Icy cold tint: visibly desaturated/whitened, never the saturated warm blue.
-const TEAM_COLD_ICE := Color(0.72, 0.82, 0.95, 1.0)
+## The bridge pushes live building state every Update: `complete` flips the
+## generic construction site for the kind's final GLB exactly once, `cold`
+## toggles one shared pale overlay on the active model's meshes. Neither
+## flag is polled — Rust is authoritative — and pushes arriving before the
+## stamped building_kind metadata just cache until _process first sees it.
+const ICE_OVERLAY := preload("res://assets/structures/ice_overlay.tres")
+const SITE_MODEL := preload("res://assets/structures/construction_site.glb")
+const STRUCTURE_DIR := "res://assets/structures/"
 
-@onready var body: MeshInstance3D = $Body
 @onready var health_bar: MeshInstance3D = $HealthBar
-var _styled_team := -1
 var _styled_kind := ""
-var _health_ratio := 1.0
+var _complete := false
 var _cold := false
+var _health_ratio := 1.0
 
 func _ready() -> void:
 	add_to_group("building_views")
 
 func _process(_delta: float) -> void:
-	if not has_meta("team_id") or not has_meta("building_kind"):
+	if not has_meta("building_kind"):
 		return
 	var kind := str(get_meta("building_kind"))
-	if kind != _styled_kind:
-		_style_kind(kind)
-	var team := int(get_meta("team_id"))
-	if team != _styled_team:
-		_styled_team = team
-		_apply_team_color()
-
-func _style_kind(kind: String) -> void:
+	if kind == _styled_kind:
+		return
 	_styled_kind = kind
-	match kind:
-		"Wall":
-			var wall := BoxMesh.new()
-			wall.size = Vector3(1.0, 0.9, 1.0)
-			body.mesh = wall
-			body.position.y = 0.45
-		"Gate":
-			body.visible = false
-			_add_gate_part("GatePostLeft", Vector3(0.16, 1.2, 0.16), Vector3(-0.34, 0.6, 0.0))
-			_add_gate_part("GatePostRight", Vector3(0.16, 1.2, 0.16), Vector3(0.34, 0.6, 0.0))
-			_add_gate_part("GateLintel", Vector3(0.84, 0.16, 0.16), Vector3(0.0, 1.12, 0.0))
-		"GunTurret", "FlameTower", "CrystalLance":
-			var turret := CylinderMesh.new()
-			turret.top_radius = 0.36
-			turret.bottom_radius = 0.55
-			turret.height = 1.3
-			body.mesh = turret
-			body.position.y = 0.65
+	# The kind meta is stamped once at spawn and never changes, and every
+	# later state change arrives through set_state — style once, then stop
+	# polling every frame.
+	set_process(false)
+	_attach_model()
 
-func _add_gate_part(part_name: String, size: Vector3, position: Vector3) -> void:
-	var part := MeshInstance3D.new()
-	var mesh := BoxMesh.new()
-	mesh.size = size
-	part.name = part_name
-	part.mesh = mesh
-	part.material_override = body.material_override
-	part.position = position
-	add_child(part)
-
-## Called from the Rust side every Update with the live cold value. The
-## cached flag skips redundant material writes; an early call before team
-## metadata exists just caches, and the team styling below reapplies the
-## cold material once metadata lands (late-attached views included).
-func set_cold(cold: bool) -> void:
-	if cold == _cold:
+## Rust calls this every Update with the authoritative state. The cached
+## flags gate redundant work: the completion swap fires exactly once here,
+## and cold/warm pushes only rewrite the overlay on real transitions.
+func set_state(complete: bool, cold: bool) -> void:
+	var finishing := complete and not _complete
+	_complete = complete
+	if cold != _cold:
+		_cold = cold
+		_apply_cold()
+	if _styled_kind == "":
+		# Pushed before building_kind metadata was stamped (or before
+		# _process first saw it): the cached flags drive the first
+		# _attach_model, so a seeded-complete building renders its final
+		# model without ever flashing the site.
 		return
-	_cold = cold
-	_apply_team_color()
+	if finishing:
+		_attach_model()
 
-## Team color plus the cached cold state in one write, so re-styling a
-## view's team can never leave a stale warm/cold material behind.
-func _apply_team_color() -> void:
-	if not has_meta("team_id"):
-		return
-	if int(get_meta("team_id")) == 1:
-		body.material_override.albedo_color = TEAM_COLD_ICE if _cold else TEAM_WARM_BLUE
+func _attach_model() -> void:
+	var previous := get_node_or_null("Model")
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
+	var model: Node3D
+	if not _complete:
+		model = SITE_MODEL.instantiate()
 	else:
-		body.material_override.albedo_color = TEAM_RED
+		var path := STRUCTURE_DIR + _styled_kind.to_snake_case() + ".glb"
+		if ResourceLoader.exists(path):
+			model = (load(path) as PackedScene).instantiate()
+		else:
+			# A kind whose GLB has not landed yet must still render and be
+			# debuggable — an invisible building would silently stand.
+			push_warning("building_view: no model for building_kind '%s', using placeholder" % _styled_kind)
+			model = _placeholder()
+	model.name = "Model"
+	add_child(model)
+	_apply_cold()
+	_seat_health_bar()
+
+func _placeholder() -> Node3D:
+	var holder := Node3D.new()
+	var mesh_instance := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.8, 1.0, 0.8)
+	mesh_instance.mesh = box
+	mesh_instance.position.y = 0.5
+	var material := StandardMaterial3D.new()
+	material.albedo_color = Color(0.62, 0.67, 0.72, 1.0)
+	material.roughness = 0.85
+	mesh_instance.material_override = material
+	holder.add_child(mesh_instance)
+	return holder
+
+## The one shared translucent ice material sits on the active model's
+## meshes while cold — multiplying vertex-colored albedo would only
+## darken, so a pale overlay whitens instead. HealthBar never takes it.
+func _apply_cold() -> void:
+	var model := get_node_or_null("Model") as Node3D
+	if model == null:
+		return
+	var overlay: Material = ICE_OVERLAY if _cold else null
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		(node as MeshInstance3D).material_overlay = overlay
+
+## The bar seats just above the active model's real AABB each time the
+## model swaps, so a flat site and a tall final GLB both read correctly.
+func _seat_health_bar() -> void:
+	var model := get_node_or_null("Model") as Node3D
+	if model == null:
+		return
+	var bounds := AABB()
+	var first := true
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		var local: AABB = global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
+		bounds = local if first else bounds.merge(local)
+		first = false
+	if first:
+		return
+	health_bar.position = Vector3(bounds.get_center().x, bounds.end.y + 0.15, bounds.get_center().z)
 
 ## Called from the Rust side on Changed<Health>; the bar appears and shrinks
 ## once a building takes damage. Full health stays hidden.

@@ -582,7 +582,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			selected_ids.append(id)
 		_apply_selection()
 		return
-	var building := _nearest_view("building_views", screen_position, 1)
+	var building := _building_at(screen_position, 1)
 	if building != null:
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
@@ -650,7 +650,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 			else:
 				command_status.text = "Gather command rejected"
 			return
-		var building := _nearest_view("building_views", screen_position)
+		var building := _building_at(screen_position)
 		if building != null and int(building.get_meta("team_id", -1)) == 1:
 			var building_id := int(building.get_meta("building_id", -1))
 			if not _building_complete(building_id):
@@ -740,7 +740,7 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 ## tie-break across both view groups.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 	var unit := _nearest_view("unit_views", screen_position, 2)
-	var building := _nearest_view("building_views", screen_position, 2)
+	var building := _building_at(screen_position, 2)
 	if unit == null:
 		return building
 	if building == null:
@@ -749,6 +749,39 @@ func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 
 func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 	return camera.unproject_position(view.global_position).distance_to(screen_position)
+
+## Building picking tests the projected art rect of the view's active
+## Model — the silhouette itself, including height, at any zoom — exactly
+## like _resource_at. The old center-radius stays as the fallback while
+## metadata or art has not attached, and the closest eligible center wins
+## on overlap. Hidden (fogged) views are never picked.
+func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
+	var nearest: Node3D = null
+	var nearest_distance := INF
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var view := node as Node3D
+		if view == null or not view.is_visible_in_tree() \
+				or camera.is_position_behind(view.global_position):
+			continue
+		if team_filter != 0 and int(view.get_meta("team_id", -1)) != team_filter:
+			continue
+		var center_px := camera.unproject_position(view.global_position)
+		var distance := center_px.distance_to(screen_position)
+		var model := view.get_node_or_null("Model") as Node3D
+		var hit := distance <= CLICK_RADIUS
+		if model != null and _model_art_usable(model):
+			hit = _projected_art_rect(view, model).has_point(screen_position)
+		if hit and distance < nearest_distance:
+			nearest = view
+			nearest_distance = distance
+	return nearest
+
+func _model_art_usable(model: Node3D) -> bool:
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		if mesh.mesh != null and mesh.get_aabb().size.length() >= 0.001:
+			return true
+	return false
 
 func _friendly_units() -> Array[Node3D]:
 	var result: Array[Node3D] = []
@@ -854,8 +887,8 @@ func _resource_pick_radius() -> float:
 	var pixels_per_unit := viewport_height / maxf(camera.size, 0.001)
 	return maxf(CLICK_RADIUS, pixels_per_unit * sqrt(0.5) + 1.0)
 
-func _projected_art_rect(view: Node3D) -> Rect2:
-	var bounds := _view_art_bounds(view)
+func _projected_art_rect(view: Node3D, art_root: Node3D = null) -> Rect2:
+	var bounds := _view_art_bounds(view, art_root)
 	var rect := Rect2()
 	var first := true
 	for x in [bounds.position.x, bounds.end.x]:
@@ -866,10 +899,13 @@ func _projected_art_rect(view: Node3D) -> Rect2:
 				first = false
 	return rect
 
-func _view_art_bounds(view: Node3D) -> AABB:
+## art_root scopes the mesh scan — passing a building view's active Model
+## keeps its sibling HealthBar out of the pick silhouette, while a missing
+## root still walks the whole view (resource models are the view).
+func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 	var bounds := AABB()
 	var first := true
-	for node in view.find_children("*", "MeshInstance3D", true, false):
+	for node in (art_root if art_root != null else view).find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
 		var local: AABB = view.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
 		bounds = local if first else bounds.merge(local)
