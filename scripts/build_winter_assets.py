@@ -383,13 +383,14 @@ export("barracks", out_dir=STRUCTURE_OUT, footprint=3.0, max_height=1.7)
 
 # Wall: a symmetric four-side barricade authored at its 1x1 cell — band and
 # parapet reach every edge so straight runs read continuous in either axis,
-# and the corner shoulders meet a neighbor gate's portal posts.
+# and the corner blocks run into both bands before meeting a neighbor
+# gate's portal posts.
 sbox("Plinth", (0, 0, 0.03), (1.0, 1.0, 0.06), CONCRETE)
 sbox("Band X", (0, 0, 0.31), (1.0, 0.34, 0.5), CONCRETE)
 sbox("Band Y", (0, 0, 0.31), (0.34, 1.0, 0.5), CONCRETE)
-for x in (-0.45, 0.45):
-    for y in (-0.45, 0.45):
-        sbox("Corner shoulder", (x, y, 0.31), (0.1, 0.1, 0.5), STEEL)
+for x in (-0.31, 0.31):
+    for y in (-0.31, 0.31):
+        sbox("Corner block", (x, y, 0.31), (0.38, 0.38, 0.5), STEEL)
 sbox("Rail X", (0, 0, 0.58), (1.0, 0.12, 0.08), STEEL)
 sbox("Rail Y", (0, 0, 0.58), (0.12, 1.0, 0.08), STEEL)
 for x in (-0.35, 0.0, 0.35):

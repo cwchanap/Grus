@@ -383,8 +383,27 @@ func _assert_gate_corridor(path: String) -> bool:
 	model.free()
 	return true
 
+func _elevated_reach(triangles: Array, start: AABB, goal: AABB) -> bool:
+	var queue := []
+	var visited := {}
+	for i in triangles.size():
+		if triangles[i].intersects(start):
+			queue.append(i)
+			visited[i] = true
+	while not queue.is_empty():
+		var i: int = queue.pop_back()
+		var triangle: AABB = triangles[i]
+		if triangle.intersects(goal):
+			return true
+		for j in triangles.size():
+			if not visited.has(j) and triangle.intersects(triangles[j]):
+				visited[j] = true
+				queue.append(j)
+	return false
+
 func _assert_wall_gate_contact(wall_path: String, gate_path: String) -> bool:
 	var edge_spans := {}
+	var triangles := {}
 	for path in [wall_path, gate_path]:
 		var packed := load(path) as PackedScene
 		var model := packed.instantiate() as Node3D if packed != null else null
@@ -392,8 +411,9 @@ func _assert_wall_gate_contact(wall_path: String, gate_path: String) -> bool:
 			_fail("structure import did not instantiate: %s" % path)
 			return false
 		add_child(model)
+		triangles[path] = _mesh_triangles(model)
 		var spans := {"x+": [], "x-": [], "z+": [], "z-": []}
-		for triangle in _mesh_triangles(model):
+		for triangle in triangles[path]:
 			if triangle.end.y <= 0.085:
 				continue
 			if absf(triangle.end.x - 0.5) < 0.001:
@@ -416,6 +436,16 @@ func _assert_wall_gate_contact(wall_path: String, gate_path: String) -> bool:
 					contact = true
 		if not contact:
 			_fail("wall and gate share no elevated edge contact on edge %s" % edge)
+			return false
+	var band := AABB(Vector3(-0.17, 0.2, -0.17), Vector3(0.34, 0.2, 0.34))
+	var elevated := []
+	for triangle in triangles[wall_path]:
+		if triangle.end.y > 0.085:
+			elevated.append(triangle.grow(0.001))
+	for corner in [Vector2(0.4, 0.4), Vector2(0.4, -0.5), Vector2(-0.5, 0.4), Vector2(-0.5, -0.5)]:
+		var anchor := AABB(Vector3(corner.x, 0.085, corner.y), Vector3(0.1, 0.915, 0.1))
+		if not _elevated_reach(elevated, anchor, band):
+			_fail("wall corner %s has no continuous elevated path to the central band" % corner)
 			return false
 	return true
 
