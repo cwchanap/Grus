@@ -153,21 +153,30 @@ func _run() -> void:
 		_fail("completed Gate view disappeared before the wave")
 		return
 
-	# HPA-291 pilot: every completed defense carries a visible Model — the
-	# construction site only while the snapshot reports incomplete. Wall,
-	# Gate and Gun Turret have no committed GLB yet, so their finished
-	# model is the code-authored placeholder until Checkpoint 3 lands the
-	# remaining catalogue.
+	# Every completed defense carries a visible Model — the kind's own
+	# catalogue GLB once finished, the construction site only while the
+	# snapshot reports incomplete — scaled and grounded inside its
+	# catalogue footprint.
 	for id in _defense_ids:
 		var defense_view := _building_view(id)
 		if defense_view == null:
 			_fail("completed defense %d lost its view" % id)
 			return
+		var defense_kind := str(defense_view.get_meta("building_kind", ""))
 		var defense_model := defense_view.get_node_or_null("Model") as Node3D
 		if defense_model == null or not defense_model.is_visible_in_tree() \
 				or defense_model.scene_file_path.ends_with("construction_site.glb"):
 			_fail("completed defense %d has no finished model: %s" % [
 				id, defense_model.scene_file_path if defense_model != null else "missing"])
+			return
+		if not defense_model.scene_file_path.ends_with("%s.glb" % defense_kind.to_snake_case()):
+			_fail("completed %s %d does not render its catalogue GLB: %s" % [
+				defense_kind, id, defense_model.scene_file_path])
+			return
+		var defense_art_error := SmokeHelpers.view_art_error(defense_view)
+		if not defense_art_error.is_empty():
+			_fail("completed %s %d fails the catalogue geometry contract: %s" % [
+				defense_kind, id, defense_art_error])
 			return
 
 	# This ground goal is outside the one-cell Gate. With the ring closed, a
@@ -216,8 +225,13 @@ func _run() -> void:
 		return
 	var turret_model := done_turret_view.get_node_or_null("Model") as Node3D
 	if turret_model == null or not turret_model.is_visible_in_tree() \
-			or turret_model.scene_file_path.ends_with("construction_site.glb"):
-		_fail("completed Gun Turret has no finished model")
+			or not turret_model.scene_file_path.ends_with("gun_turret.glb"):
+		_fail("completed Gun Turret does not render its catalogue GLB: %s" % [
+			turret_model.scene_file_path if turret_model != null else "missing"])
+		return
+	var turret_art_error := SmokeHelpers.view_art_error(done_turret_view)
+	if not turret_art_error.is_empty():
+		_fail("completed Gun Turret fails the catalogue geometry contract: %s" % turret_art_error)
 		return
 
 	var initial_wave: Dictionary = GrusBridge.wave_snapshot()
@@ -330,7 +344,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=site_to_finished setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=catalogue_glb_grounded setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	get_tree().quit(0)
 
 func _perimeter_cells() -> Array[Vector2i]:

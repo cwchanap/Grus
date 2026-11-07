@@ -74,6 +74,67 @@ static func barracks_anchor(builder_id: int, research_center: Node3D) -> Vector2
 			return candidate
 	return Vector2i(-1, -1)
 
+## World-space triangle AABBs of a building view's active Model —
+## elevated-seam and corridor probes measure the rendered geometry rather
+## than trusting the catalogue transform alone. Returns [] when the view
+## carries no Model or a mesh cannot be read.
+static func world_triangles(view: Node3D) -> Array:
+	var model := view.get_node_or_null("Model") as Node3D
+	if model == null:
+		return []
+	var tool := MeshDataTool.new()
+	var triangles := []
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node := node as MeshInstance3D
+		for surface in mesh_node.mesh.get_surface_count():
+			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
+				return []
+			for face in tool.get_face_count():
+				var triangle := AABB(mesh_node.global_transform * tool.get_vertex(tool.get_face_vertex(face, 0)), Vector3.ZERO)
+				triangle = triangle.expand(mesh_node.global_transform * tool.get_vertex(tool.get_face_vertex(face, 1)))
+				triangle = triangle.expand(mesh_node.global_transform * tool.get_vertex(tool.get_face_vertex(face, 2)))
+				triangles.append(triangle)
+	return triangles
+
+## The live-view geometry contract behind `building_view_transform`: the
+## bridge scales the view to the catalogue footprint and centers it, and
+## the attached Model — construction site or finished GLB — must sit inside
+## that footprint with its base on the ground plane (a floating base fails
+## just like one sunk below it). All sizes come from `catalogue_snapshot`,
+## never a copied table. Returns "" on success, else the failure message.
+static func view_art_error(view: Node3D) -> String:
+	var kind := str(view.get_meta("building_kind", ""))
+	var spec: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get(kind, {})
+	var spec_width := float(spec.get("width", 0))
+	var spec_height := float(spec.get("height", 0))
+	if spec_width <= 0.0 or spec_height <= 0.0:
+		return "%s has no catalogue footprint" % kind
+	if absf(view.scale.x - spec_width) > 0.001 or absf(view.scale.z - spec_height) > 0.001:
+		return "%s view scale %s does not match the %sx%s catalogue footprint" % [
+			kind, view.scale, spec_width, spec_height]
+	var model := view.get_node_or_null("Model") as Node3D
+	if model == null:
+		return "%s has no Model" % kind
+	var bounds := AABB()
+	var first := true
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh := node as MeshInstance3D
+		var world_bounds: AABB = mesh.global_transform * mesh.get_aabb()
+		bounds = world_bounds if first else bounds.merge(world_bounds)
+		first = false
+	if first:
+		return "%s Model carries no meshes" % kind
+	var origin := view.global_position
+	if bounds.position.y < origin.y - 0.02:
+		return "%s art sinks below ground: %s" % [kind, bounds]
+	if bounds.position.y > origin.y + 0.02:
+		return "%s art floats %.4f above ground" % [kind, bounds.position.y - origin.y]
+	var half := Vector2(spec_width, spec_height) * 0.5
+	if bounds.position.x < origin.x - half.x - 0.05 or bounds.end.x > origin.x + half.x + 0.05 \
+			or bounds.position.z < origin.z - half.y - 0.05 or bounds.end.z > origin.z + half.y + 0.05:
+		return "%s art escapes its %sx%s footprint: %s" % [kind, spec_width, spec_height, bounds]
+	return ""
+
 ## A valid anchor for `kind` probed through the read-only placement preview
 ## in a ring around the live Research Center footprint — the heat leg's
 ## Depot/Gun Turret/Coal Furnace slots: barracks_anchor generalized to any

@@ -27,13 +27,13 @@ const TARGET_SCRAP := 400
 const TARGET_FOOD := 320
 const TARGET_COAL := 160
 
-## Post-reset heat leg solvency: the Barracks pre-spend (120) during the
-## funding leg leaves Bunkhouse 50 + Depot 75 + Gun Turret 100 + Coal
-## Furnace 80 + the 40-Scrap Rifleman queue = 345 to cover, so the reset's
-## 300 starting Scrap forces at least 165 extra Scrap through real gather
-## cycles before the remaining placements (the funding wait runs after the
-## Barracks placement). The Turret's 20 Coal comes out of the untouched
-## 150 stockpile, leaving fuel for the Furnace burn proof.
+## Post-reset heat leg solvency: the Barracks/Wall/Gate pre-spend (160)
+## during the funding leg leaves Bunkhouse 50 + Depot 75 + Gun Turret 100 +
+## Coal Furnace 80 + the 40-Scrap Rifleman queue = 345 to cover, so the
+## reset's 300 starting Scrap forces at least 205 extra Scrap through real
+## gather cycles before the remaining placements (the funding wait runs
+## after the defense pre-charges). The Turret's 20 Coal comes out of the
+## untouched 150 stockpile, leaving fuel for the Furnace burn proof.
 const HEAT_FUNDING_SCRAP := 345
 
 ## Free anchors: a Bunkhouse slot beside the central city's south-east
@@ -598,6 +598,9 @@ func _run() -> void:
 			or bunkhouse_bounds.position.y < -0.01 or bunkhouse_bounds.end.y > 1.01:
 		_fail("completed Bunkhouse art escapes its normalized footprint: %s" % bunkhouse_bounds)
 		return
+	if bunkhouse_bounds.position.y > 0.01:
+		_fail("completed Bunkhouse art floats %.4f above the ground plane" % bunkhouse_bounds.position.y)
+		return
 
 	# Fog retarget (HPA-473): the Depot anchor (40,20) and the northwest
 	# expansion salvage boot Unexplored — placement validates explored
@@ -709,12 +712,13 @@ func _run() -> void:
 		return
 
 	# HPA-181 heat leg funding: the reset's 300 starting Scrap cannot cover
-	# the six spenditures — Barracks 120 + Bunkhouse 50 + Depot 75 + Gun
-	# Turret 100 + Coal Furnace 80 + the 40-Scrap Rifleman queue = 465 — so
-	# the Barracks pre-spends during the gather leg while workers 1-3 bank
-	# real gather/deposit cycles off the salvage source; the stockpile only
-	# moves on deposits, so reaching the remaining 345 proves the funding
-	# (300 start − 120 Barracks + ≥165 gathered ≥ 345).
+	# the eight spenditures — Barracks 120 + Bunkhouse 50 + Depot 75 + Gun
+	# Turret 100 + Coal Furnace 80 + Wall 10 + Gate 30 + the 40-Scrap
+	# Rifleman queue = 505 — so Barracks, Wall and Gate pre-spend during
+	# the gather leg while workers 1-3 bank real gather/deposit cycles off
+	# the salvage source; the stockpile only moves on deposits, so reaching
+	# the remaining 345 proves the funding (300 start − 160 pre-spend +
+	# ≥205 gathered ≥ 345).
 	for worker_id in [1, 2, 3]:
 		var gatherer := _unit_view(worker_id)
 		var salvage := _resource_view(SALVAGE_ID)
@@ -732,9 +736,41 @@ func _run() -> void:
 	if barracks == null:
 		return
 	var barracks_id := int(barracks.get_meta("building_id"))
+	# Zero-demand defenses never feed the heat ledger: the builder raises a
+	# Wall and a Gate while the funding gather still runs, so both stand
+	# complete when the deficit below arrives — the stage stays pinned and
+	# neither view ever takes the cold overlay.
+	var wall_anchor := SmokeHelpers.ring_anchor(4, "Wall", research_center)
+	if wall_anchor.x < 0:
+		_fail("no valid heat-leg Wall anchor near the Research Center")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button, wall_anchor)
+	var heat_wall := await _wait_building("Wall", 25.0)
+	if heat_wall == null:
+		return
+	var heat_wall_id := int(heat_wall.get_meta("building_id"))
+	var gate_anchor := SmokeHelpers.ring_anchor(4, "Gate", research_center)
+	if gate_anchor.x < 0:
+		_fail("no valid heat-leg Gate anchor near the Research Center")
+		return
+	await _place_building(builder, get_node("Main/HUD/CommandPanel/BuildGrid/GateButton") as Button, gate_anchor)
+	var heat_gate := await _wait_building("Gate", 25.0)
+	if heat_gate == null:
+		return
+	var heat_gate_id := int(heat_gate.get_meta("building_id"))
+	# Wall/Gate tools stay armed for consecutive sites after each accepted
+	# click — left Esc uncleared, the retirement clicks below would feed
+	# rejected placements and the right-click would only disarm, never
+	# issuing the park move.
+	_key_tap(KEY_ESCAPE)
+	await get_tree().process_frame
 	if not await _wait_until(
 			func(): return int(GrusBridge.economy_snapshot().get("scrap", -1)) >= HEAT_FUNDING_SCRAP,
 			120.0, "heat leg never banked %d Scrap through real gather cycles" % HEAT_FUNDING_SCRAP):
+		return
+	if not await _wait_until(_building_complete_at.bind(heat_wall_id), 15.0, "heat-leg Wall never completed"):
+		return
+	if not await _wait_until(_building_complete_at.bind(heat_gate_id), 15.0, "heat-leg Gate never completed"):
 		return
 
 	# Step 7: the Barracks is the single military producer — it accepts both
@@ -834,6 +870,16 @@ func _run() -> void:
 			_fail("cold Bunkhouse mesh does not share the single ICE_OVERLAY resource")
 			return
 
+	# The zero-demand defenses standing through this deficit never take the
+	# cold overlay — and the 15/17 stage above already proved their presence
+	# never moves the heat ledger.
+	if not _overlay_is(heat_wall, false):
+		_fail("the zero-demand Wall took the cold overlay")
+		return
+	if not _overlay_is(heat_gate, false):
+		_fail("the zero-demand Gate took the cold overlay")
+		return
+
 	# The fueled Coal Furnace (+12 supply) restores 27/17 — clamped back to
 	# a full 100% — and every cold view must drop the icy overlay entirely.
 	# The Furnace itself demands no heat, so it never overlays. Then the burn: the
@@ -865,6 +911,22 @@ func _run() -> void:
 			func(): return int(GrusBridge.economy_snapshot().get("coal", -1)) < coal_before_burn,
 			15.0, "fueled Coal Furnace never decreased the Coal stockpile"):
 		return
+
+	# Every live view placed this leg — RC, Barracks, Depot, Turret,
+	# Bunkhouse, Wall, Gate, Furnace — renders its finished kind GLB scaled
+	# and grounded by the catalogue footprint, whatever the heat stage did.
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var view := node as Node3D
+		var kind := str(view.get_meta("building_kind", ""))
+		var model := view.get_node_or_null("Model") as Node3D
+		if model == null or not model.scene_file_path.ends_with("%s.glb" % kind.to_snake_case()):
+			_fail("completed %s does not render its catalogue GLB: %s" % [
+				kind, model.scene_file_path if model != null else "missing"])
+			return
+		var art_error := SmokeHelpers.view_art_error(view)
+		if not art_error.is_empty():
+			_fail("completed %s fails the catalogue geometry contract: %s" % [kind, art_error])
+			return
 
 	await _park_at_staging(builder)
 	await _select_building(barracks)
@@ -1067,7 +1129,7 @@ func _run() -> void:
 		return
 
 	var end: Dictionary = GrusBridge.economy_snapshot()
-	print("GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery food=%d scrap=%d coal=%d cap=%d units=%d buildings=%d unaffordable_reject=%d elapsed_ms=%d" % [
+	print("GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=%d scrap=%d coal=%d cap=%d units=%d buildings=%d unaffordable_reject=%d elapsed_ms=%d" % [
 		int(end.get("food", 0)),
 		int(end.get("scrap", 0)),
 		int(end.get("coal", 0)),
