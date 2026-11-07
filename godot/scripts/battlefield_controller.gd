@@ -750,14 +750,17 @@ func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 	return camera.unproject_position(view.global_position).distance_to(screen_position)
 
-## Building picking tests the projected art rect of the view's active
-## Model — the silhouette itself, including height, at any zoom — exactly
-## like _resource_at. The old center-radius stays as the fallback while
-## metadata or art has not attached, and the closest eligible center wins
-## on overlap. Hidden (fogged) views are never picked.
+## Building picking prioritizes the closest projected art-rect hit of the
+## view's active Model — the silhouette itself, including height, at any
+## zoom. The center-radius floor stays as the fallback when no art rect
+## claims the click (e.g. for small buildings at wide zoom or unstyled
+## views), and the closest eligible center wins on overlap. Hidden (fogged)
+## views are never picked.
 func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_distance := INF
+	var fallback: Node3D = null
+	var fallback_distance := CLICK_RADIUS
 	for node in get_tree().get_nodes_in_group("building_views"):
 		var view := node as Node3D
 		if view == null or not view.is_visible_in_tree() \
@@ -768,13 +771,15 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 		var center_px := camera.unproject_position(view.global_position)
 		var distance := center_px.distance_to(screen_position)
 		var model := view.get_node_or_null("Model") as Node3D
-		var hit := distance <= CLICK_RADIUS
-		if model != null and _model_art_usable(model):
-			hit = _projected_art_rect(view, model).has_point(screen_position)
-		if hit and distance < nearest_distance:
-			nearest = view
-			nearest_distance = distance
-	return nearest
+		if model != null and _model_art_usable(model) \
+				and _projected_art_rect(view, model).has_point(screen_position):
+			if distance < nearest_distance:
+				nearest = view
+				nearest_distance = distance
+		elif distance <= fallback_distance:
+			fallback = view
+			fallback_distance = distance
+	return nearest if nearest != null else fallback
 
 func _model_art_usable(model: Node3D) -> bool:
 	for node in model.find_children("*", "MeshInstance3D", true, false):
