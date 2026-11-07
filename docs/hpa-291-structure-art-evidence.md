@@ -61,17 +61,27 @@ Captured on the live game (`godot --path godot`, Metal/GL renderer, real
 `place_building`, `placement_preview`) and read snapshots — the same
 commands the HUD buttons produce. The script was deleted after the run;
 each PNG was asserted 1280×720 at capture. Orthographic camera framing was
-set on the live `Camera3D` only (position/size; no state change). All
-frames were taken while the session was **Playing**, so no pause/session
-overlay obscures them; the HUD itself is intentionally visible as
-provenance. Workers gathered the required Scrap through real gather cycles;
-buildings were placed and completed through the real construction path
-before wave 1 (which never launched during capture; the run finished at
-~2:30 remaining on the prep clock with `Aliens 0`).
+set on the live `Camera3D` only (position/size; no state change), followed
+by `reset_physics_interpolation()` (the project runs with
+`common/physics_interpolation=true`, which otherwise lerps ortho `size`
+across a physics tick and can leak a mid-transition frame into the viewport
+readback). Every saved frame was verified in-script before saving: the two
+authored food sources at cells (58,42)/(69,42) had to render at their
+`unproject_position` pixels, so each PNG provably shows its labelled
+framing rather than a stale or interpolated frame (log:
+`SHOT_SAVED <name> marks=verified` for all 11 frames; per-frame
+`SHOT_META` lines record `camera_size`, projected world height and camera
+position). All frames were taken while the session was **Playing**, so no
+pause/session overlay obscures them; the HUD itself is intentionally
+visible as provenance. Workers gathered the required Scrap through real
+gather cycles; buildings were placed and completed through the real
+construction path before wave 1 (which never launched during capture; the
+run finished at ~2:30 remaining on the prep clock with `Aliens 0`).
 
 | Frame | What it shows |
 | --- | --- |
-| `hpa-291-construction-in-progress.png` | City mid-construction at size-20 zoom: the Barracks still building (site state, snapshot progress>0) beside the completed Research Center; fast 5 s Wall builds already finished (north run visible), Bunkhouse/Depot/GunTurret sites present; HUD `Population 4/10`, `heat 15/10 surface 100%`, wave prep 3:56. |
+| `hpa-291-construction-in-progress.png` | City mid-construction at size 24 — the gameplay minimum zoom (`MIN_CAMERA_SIZE`): the Barracks still building (site state, snapshot progress>0) beside the completed Research Center; north Wall/Gate sites and Bunkhouse/Depot/GunTurret sites carry scaffold rails + orange work lights; HUD `Population 4/10`, `heat 15/10 surface 100%`, wave prep 3:56. |
+| `hpa-291-construction-in-progress-detail.png` | Supplemental close-up of the same moment at size 20 — below the gameplay minimum zoom and therefore not reachable in play; kept only to make the construction-site mesh details (railings, glowing interior) legible. |
 | `hpa-291-city-cold-deficit.png` | Completed deficit city at size 45: `heat 15/17 · surface 88%` — every completed heat-demanding structure (RC, Barracks, Bunkhouse, Depot, GunTurret) carries the shared pale ice `material_overlay`; zero-demand Wall/Gate stays un-iced. |
 | `hpa-291-city-cold-deficit-detail.png` | Same deficit at size 24 (the game's minimum zoom): frosted, washed palettes vs. authored colors; HUD `surface 88%`. |
 | `hpa-291-city-complete-warm.png` | Completed city after Coal-Furnace recovery at the same size-45 framing: `heat 27/17 · surface 100%`; all structures warm — authored palettes, RC cyan mast, Barracks parapet, turret shield, CoalFurnace dark body with orange vent. |
@@ -94,11 +104,14 @@ Walls/Gates exempt); completed CoalFurnace → supply 27 → 1.000 and warm.
 - The build-grid HUD occupies the lower-left of the size-24/14 frames; it
   does not occlude any assessed structure. HUD presence is deliberate
   provenance that these are live game frames.
-- `hpa-291-construction-in-progress.png` catches a realistic mix: fast
-  walls already complete, Barracks mid-progress — the construction-site
-  model is most legible at the Barracks footprint; sites at this zoom are
-  distinguishable from finished models mainly by their low dark slab/scaffold
-  silhouette.
+- `hpa-291-construction-in-progress.png` is the construction record at the
+  gameplay minimum zoom (size 24): fast walls already complete, Barracks
+  mid-progress — the construction-site model is most legible at the
+  Barracks footprint, and sites are distinguishable from finished models
+  mainly by their low dark slab/scaffold silhouette plus orange work
+  lights. `hpa-291-construction-in-progress-detail.png` repeats the moment
+  at size 20 — a supplemental zoom below what gameplay permits, retained
+  purely for mesh-detail legibility.
 - `benchmark_200` frame times (mean 137.8 ms, max 9.6 s on one frame) are a
   debug-GDExtension macOS measurement under a 200-unit siege — a contract
   result, not a hardware-acceptance number.
@@ -107,6 +120,7 @@ Walls/Gates exempt); completed CoalFurnace → supply 27 → 1.000 and warm.
   frames — pathing to a gather source, not a wall collision.
 
 ![Construction in progress](hpa-291-construction-in-progress.png)
+![Construction close-up — supplemental below-min zoom](hpa-291-construction-in-progress-detail.png)
 ![Cold deficit city](hpa-291-city-cold-deficit.png)
 ![Cold deficit detail](hpa-291-city-cold-deficit-detail.png)
 ![Completed warm city](hpa-291-city-complete-warm.png)
