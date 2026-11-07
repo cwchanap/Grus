@@ -275,22 +275,22 @@ func _has_visible_icon(root: Node, resource_path: String) -> bool:
 			return true
 	return false
 
-## Pilot structure import check (HPA-291): the PackedScene must load and
+## Structure import check (HPA-291): the PackedScene must load and
 ## instantiate a nonempty mesh, carry no gameplay nodes, sit inside the
 ## normalized ±0.5 footprint with a grounded base, and resolve its diffuse
-## texture from the committed res://assets/structures/ PNG — the same
-## recipe Checkpoint 3 extends to the whole building catalogue.
+## texture from the committed res://assets/structures/ PNG — the recipe
+## the catalogue-wide loop applies to every building kind.
 func _assert_structure_import(path: String) -> bool:
 	if not ResourceLoader.exists(path):
-		_fail("pilot structure import is missing: %s" % path)
+		_fail("structure import is missing: %s" % path)
 		return false
 	var packed := load(path) as PackedScene
 	if packed == null:
-		_fail("pilot structure import did not load as a PackedScene: %s" % path)
+		_fail("structure import did not load as a PackedScene: %s" % path)
 		return false
 	var model := packed.instantiate() as Node3D
 	if model == null:
-		_fail("pilot structure import did not instantiate a Node3D: %s" % path)
+		_fail("structure import did not instantiate a Node3D: %s" % path)
 		return false
 	# A detached node has no global transform — park it in the tree at the
 	# origin so _art_bounds sees the same space the live view would.
@@ -552,13 +552,35 @@ func _run() -> void:
 			_fail("resource %s art extends outside its gather cell: %s" % [kind, bounds])
 			return
 
-	# HPA-291 pilot structure imports: only the two committed assets are
-	# asserted here — asserting the whole catalogue now would mask every
-	# later selection/fog/input leg on the first missing GLB (Checkpoint 3
-	# adds the catalogue-wide loop once all eleven models exist).
-	for structure in ["construction_site", "bunkhouse"]:
-		if not _assert_structure_import("res://assets/structures/%s.glb" % structure):
+	# HPA-291 catalogue structure imports: every kind's GLB sits at the
+	# same to_snake_case-derived path building_view.gd resolves, so the
+	# hookup probe below proves the site -> finished swap even for kinds
+	# this short run never builds. The generic site is checked separately
+	# as the only non-catalogue asset.
+	var building_view_scene := load("res://scenes/building_view.tscn") as PackedScene
+	for kind in GrusBridge.catalogue_snapshot().get("buildings", {}):
+		var kind_path := "res://assets/structures/%s.glb" % str(kind).to_snake_case()
+		if not _assert_structure_import(kind_path):
 			return
+		var hookup_view := building_view_scene.instantiate() as Node3D
+		hookup_view.set_meta("building_kind", kind)
+		add_child(hookup_view)
+		await get_tree().process_frame
+		var hookup_model := hookup_view.get_node_or_null("Model") as Node3D
+		if hookup_model == null \
+				or not hookup_model.scene_file_path.ends_with("construction_site.glb"):
+			_fail("%s view did not attach the construction site before completion" % kind)
+			return
+		hookup_view.set_state(true, false)
+		hookup_model = hookup_view.get_node_or_null("Model") as Node3D
+		if hookup_model == null \
+				or not hookup_model.scene_file_path.ends_with("%s.glb" % str(kind).to_snake_case()):
+			_fail("%s view did not swap to its catalogue GLB on completion: %s" % [
+				kind, hookup_model.scene_file_path if hookup_model != null else "missing"])
+			return
+		hookup_view.free()
+	if not _assert_structure_import("res://assets/structures/construction_site.glb"):
+		return
 
 	var size_before_zoom := camera.size
 	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
@@ -1559,13 +1581,13 @@ func _run() -> void:
 		_fail("wheel zoom never restored the pre-pick camera size: %s" % camera.size)
 		return
 
-	# HPA-291 pilot state leg: every building view carries a Model — the
+	# HPA-291 model state leg: every building view carries a Model — the
 	# generic construction site exactly while the snapshot reports
-	# incomplete, the finished model once complete (bunkhouse.glb for the
-	# pilot kind, the placeholder for unlanded ones). The seeded-complete
-	# Research Center guarantees a finished-model proof regardless of how
-	# far the construction queue drained before the clear-out move leg;
-	# economy_smoke owns the full site→GLB completion-swap journey.
+	# incomplete, the kind's to_snake_case GLB once complete. The
+	# seeded-complete Research Center guarantees a finished-model proof
+	# regardless of how far the construction queue drained before the
+	# clear-out move leg; economy_smoke owns the full site→GLB
+	# completion-swap journey.
 	var model_offender := ["none"]
 	if not await _wait_until(func():
 			model_offender[0] = "a building view has no Model"
@@ -1584,10 +1606,10 @@ func _run() -> void:
 					model_offender[0] = "%s %d complete=%s but model is %s" % [
 						kind, id, complete, model.scene_file_path]
 					return false
-				if complete and kind == "Bunkhouse" \
-						and not model.scene_file_path.ends_with("bunkhouse.glb"):
-					model_offender[0] = "completed Bunkhouse %d model is %s" % [
-						id, model.scene_file_path]
+				if complete and not model.scene_file_path.ends_with(
+						"%s.glb" % kind.to_snake_case()):
+					model_offender[0] = "completed %s %d model is %s" % [
+						kind, id, model.scene_file_path]
 					return false
 				if complete:
 					finished += 1
@@ -1621,5 +1643,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather pilot_structures=site_to_glb silhouette_pick=roof_triangle" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup silhouette_pick=roof_triangle" % max_visual_step)
 	get_tree().quit(0)
