@@ -4,6 +4,7 @@ extends "res://scripts/combat_lifecycle_smoke_test.gd"
 ## parent smoke owns all gameplay; this scene checks its HUD/minimap rendering.
 
 const STAGE5_ALIEN_KINDS := ["Swarmer", "Spitter", "Brute", "Behemoth"]
+const UNIT_MODEL_KINDS := ["Worker", "Guard", "Rifleman"] + STAGE5_ALIEN_KINDS
 const UNIT_VIEW_SCENE := preload("res://scenes/unit_view.tscn")
 
 var _stage5_passed := false
@@ -98,39 +99,37 @@ func _run() -> void:
 	await super._run()
 
 func _probe_alien_roles() -> bool:
-	# White-box presentation probes exercise all four primitive silhouettes;
+	# Presentation probes exercise all seven imported unit models;
 	# the real wave journey below still uses bridge-authored unit metadata.
 	var probes: Array[Node3D] = []
-	for index in STAGE5_ALIEN_KINDS.size():
+	for index in UNIT_MODEL_KINDS.size():
 		var probe := UNIT_VIEW_SCENE.instantiate() as Node3D
 		probe.name = "RoleProbe%d" % index
 		probe.visible = true
 		probe.set_meta("unit_id", 900 + index)
-		probe.set_meta("team_id", 2)
-		probe.set_meta("unit_kind", STAGE5_ALIEN_KINDS[index])
+		probe.set_meta("team_id", 1 if index < 3 else 2)
+		probe.set_meta("unit_kind", UNIT_MODEL_KINDS[index])
 		add_child(probe)
 		probes.append(probe)
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var signatures := {}
+	var meshes := {}
 	for index in probes.size():
 		var probe := probes[index]
-		var body := probe.get_node("Body") as MeshInstance3D
-		var marker := probe.get_node("RoleMarker") as Node3D
-		var shapes := PackedStringArray()
-		for child in marker.get_children():
-			var marker_mesh := child as MeshInstance3D
-			if marker_mesh != null and marker_mesh.mesh != null:
-				shapes.append(marker_mesh.mesh.get_class())
-		shapes.sort()
-		var signature := "%.2f:%s" % [body.scale.x, ",".join(shapes)]
-		if shapes.is_empty() or signatures.has(signature):
+		var model := probe.get_node_or_null("Model")
+		var parts := model.find_children("*", "MeshInstance3D", true, false) if model != null else []
+		var mesh: Mesh = parts[0].mesh if parts.size() == 1 else null
+		var material := parts[0].get_active_material(0) as StandardMaterial3D if mesh != null else null
+		if mesh == null or meshes.has(mesh) or material == null \
+				or material.albedo_texture == null \
+				or material.texture_filter != BaseMaterial3D.TEXTURE_FILTER_NEAREST \
+				or probe.get_node("Body").visible:
 			for old_probe in probes:
 				old_probe.queue_free()
-			_stage5_fail("alien role %s has no unique primitive silhouette (%s)" % [STAGE5_ALIEN_KINDS[index], signature])
+			_stage5_fail("unit role %s did not load a distinct textured model" % UNIT_MODEL_KINDS[index])
 			return false
-		signatures[signature] = true
+		meshes[mesh] = true
 	for probe in probes:
 		probe.queue_free()
 	await get_tree().process_frame
