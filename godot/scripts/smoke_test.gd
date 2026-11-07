@@ -1488,15 +1488,51 @@ func _run() -> void:
 		_mouse_click(viewport_center, MOUSE_BUTTON_WHEEL_UP)
 		await get_tree().process_frame
 	bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
-	var bunkhouse_art_rect: Rect2 = main.call("_projected_art_rect", pilot_bunkhouse, bunkhouse_model)
+	var roof_faces: Array[Array] = []
+	for node in bunkhouse_model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		for surface_index in mesh_instance.mesh.get_surface_count():
+			var arrays := mesh_instance.mesh.surface_get_arrays(surface_index)
+			var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+			var indices = arrays[Mesh.ARRAY_INDEX]
+			var triangle_count := int(indices.size() / 3) if indices != null and not indices.is_empty() else int(vertices.size() / 3)
+			for face_index in triangle_count:
+				var va := vertices[indices[face_index * 3]] if indices != null and not indices.is_empty() else vertices[face_index * 3]
+				var vb := vertices[indices[face_index * 3 + 1]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 1]
+				var vc := vertices[indices[face_index * 3 + 2]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 2]
+				var a: Vector3 = mesh_instance.global_transform * va
+				var b: Vector3 = mesh_instance.global_transform * vb
+				var c: Vector3 = mesh_instance.global_transform * vc
+				if (b - a).cross(c - a).normalized().y <= 0.5:
+					continue
+				roof_faces.append([a, b, c, (a + b + c) / 3.0])
+	if roof_faces.is_empty():
+		_fail("Bunkhouse model exposes no upward roof triangle for the silhouette pick")
+		return
+	roof_faces.sort_custom(func(a, b): return a[3].y > b[3].y)
 	var roof_point := Vector2.INF
-	for t in [0.5, 0.2, 0.8, 0.05, 0.95]:
-		var candidate := Vector2(
-				bunkhouse_art_rect.position.x + bunkhouse_art_rect.size.x * t,
-				bunkhouse_art_rect.position.y + 2.0)
+	for face in roof_faces:
+		var farthest_vertex: Vector3 = face[0]
+		var farthest_distance := -1.0
+		for vertex_index in 3:
+			var vertex := face[vertex_index] as Vector3
+			var distance := bunkhouse_screen.distance_to(camera.unproject_position(vertex))
+			if distance > farthest_distance:
+				farthest_distance = distance
+				farthest_vertex = vertex
+		var interior := (face[3] as Vector3) + (farthest_vertex - (face[3] as Vector3)) * 0.75
+		var candidate := camera.unproject_position(interior)
 		if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate):
 			continue
 		if bunkhouse_screen.distance_to(candidate) <= main.CLICK_RADIUS + 5.0:
+			continue
+		var projected_triangle := PackedVector2Array([
+				camera.unproject_position(face[0] as Vector3),
+				camera.unproject_position(face[1] as Vector3),
+				camera.unproject_position(face[2] as Vector3)])
+		if not Geometry2D.is_point_in_polygon(candidate, projected_triangle):
 			continue
 		if (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
 			continue
@@ -1504,7 +1540,7 @@ func _run() -> void:
 			roof_point = candidate
 			break
 	if roof_point == Vector2.INF:
-		_fail("Bunkhouse art rect %s has no in-viewport roof point beyond the old center radius" % bunkhouse_art_rect)
+		_fail("Bunkhouse roof mesh exposes %d upward faces but none projects inside the viewport beyond the old center radius" % roof_faces.size())
 		return
 	_mouse_click(roof_point, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
@@ -1585,5 +1621,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather pilot_structures=site_to_glb silhouette_pick=art_rect" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather pilot_structures=site_to_glb silhouette_pick=roof_triangle" % max_visual_step)
 	get_tree().quit(0)
