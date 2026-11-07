@@ -59,8 +59,9 @@ func _attach_model() -> void:
 		model = SITE_MODEL.instantiate()
 	else:
 		var path := STRUCTURE_DIR + _styled_kind.to_snake_case() + ".glb"
-		if ResourceLoader.exists(path):
-			model = (load(path) as PackedScene).instantiate()
+		var packed := load(path) as PackedScene if ResourceLoader.exists(path) else null
+		if packed != null:
+			model = packed.instantiate()
 		else:
 			# A kind whose GLB has not landed yet must still render and be
 			# debuggable — an invisible building would silently stand.

@@ -736,10 +736,15 @@ func _run() -> void:
 	if barracks == null:
 		return
 	var barracks_id := int(barracks.get_meta("building_id"))
+	if not await _wait_until(_building_complete_at.bind(barracks_id), 40.0, "Barracks never completed"):
+		return
+
 	# Zero-demand defenses never feed the heat ledger: the builder raises a
 	# Wall and a Gate while the funding gather still runs, so both stand
 	# complete when the deficit below arrives — the stage stays pinned and
-	# neither view ever takes the cold overlay.
+	# neither view ever takes the cold overlay. Each site completes before
+	# the builder is reassigned, and Wall/Gate tool arming is cleared with
+	# Esc so subsequent clicks target views cleanly.
 	var wall_anchor := SmokeHelpers.ring_anchor(4, "Wall", research_center)
 	if wall_anchor.x < 0:
 		_fail("no valid heat-leg Wall anchor near the Research Center")
@@ -749,6 +754,11 @@ func _run() -> void:
 	if heat_wall == null:
 		return
 	var heat_wall_id := int(heat_wall.get_meta("building_id"))
+	_key_tap(KEY_ESCAPE)
+	await get_tree().process_frame
+	if not await _wait_until(_building_complete_at.bind(heat_wall_id), 15.0, "heat-leg Wall never completed"):
+		return
+
 	var gate_anchor := SmokeHelpers.ring_anchor(4, "Gate", research_center)
 	if gate_anchor.x < 0:
 		_fail("no valid heat-leg Gate anchor near the Research Center")
@@ -758,19 +768,14 @@ func _run() -> void:
 	if heat_gate == null:
 		return
 	var heat_gate_id := int(heat_gate.get_meta("building_id"))
-	# Wall/Gate tools stay armed for consecutive sites after each accepted
-	# click — left Esc uncleared, the retirement clicks below would feed
-	# rejected placements and the right-click would only disarm, never
-	# issuing the park move.
 	_key_tap(KEY_ESCAPE)
 	await get_tree().process_frame
+	if not await _wait_until(_building_complete_at.bind(heat_gate_id), 15.0, "heat-leg Gate never completed"):
+		return
+
 	if not await _wait_until(
 			func(): return int(GrusBridge.economy_snapshot().get("scrap", -1)) >= HEAT_FUNDING_SCRAP,
 			120.0, "heat leg never banked %d Scrap through real gather cycles" % HEAT_FUNDING_SCRAP):
-		return
-	if not await _wait_until(_building_complete_at.bind(heat_wall_id), 15.0, "heat-leg Wall never completed"):
-		return
-	if not await _wait_until(_building_complete_at.bind(heat_gate_id), 15.0, "heat-leg Gate never completed"):
 		return
 
 	# Step 7: the Barracks is the single military producer — it accepts both
