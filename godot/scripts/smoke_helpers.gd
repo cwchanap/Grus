@@ -86,6 +86,8 @@ static func world_triangles(view: Node3D) -> Array:
 	var triangles := []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_node := node as MeshInstance3D
+		if mesh_node == null or mesh_node.mesh == null:
+			continue
 		for surface in mesh_node.mesh.get_surface_count():
 			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
 				return []
@@ -95,6 +97,18 @@ static func world_triangles(view: Node3D) -> Array:
 				triangle = triangle.expand(mesh_node.global_transform * tool.get_vertex(tool.get_face_vertex(face, 2)))
 				triangles.append(triangle)
 	return triangles
+
+## Clickable HUD rectangles from visible Controls with non-ignore mouse filter.
+static func hud_rects(hud_root: Node) -> Array[Rect2]:
+	var rects: Array[Rect2] = []
+	if hud_root == null:
+		return rects
+	for node in hud_root.find_children("*", "Control", true, false):
+		var control := node as Control
+		if control != null and control.is_visible_in_tree() \
+				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			rects.append(control.get_global_rect())
+	return rects
 
 ## The live-view geometry contract behind `building_view_transform`: the
 ## bridge scales the view to the catalogue footprint and centers it, and
@@ -119,6 +133,8 @@ static func view_art_error(view: Node3D) -> String:
 	var first := true
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh := node as MeshInstance3D
+		if mesh == null or mesh.mesh == null:
+			continue
 		var world_bounds: AABB = mesh.global_transform * mesh.get_aabb()
 		bounds = world_bounds if first else bounds.merge(world_bounds)
 		first = false

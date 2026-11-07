@@ -85,6 +85,12 @@ impl Default for CommandFeedback {
 #[derive(Component)]
 struct ViewMetaInitialized;
 
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+struct BuildingLastViewState {
+    complete: bool,
+    cold: bool,
+}
+
 #[derive(Component)]
 struct GameplayViewRequested;
 
@@ -1949,37 +1955,47 @@ fn building_is_cold(world: &World, team: TeamId, kind: BuildingKind, complete: b
 /// the per-view projection beside `update_health_bars`, never per-building
 /// GDScript snapshot polling. `complete` lets the view swap the generic
 /// construction site for its final kind model; `cold` lets it restyle.
-/// Re-evaluating both every frame covers late-attached views and heating
-/// recovery; the view script caches the flags and skips redundant work.
+/// Transitions are value-gated here: steady-state views skip the dynamic
+/// `set_state` call entirely.
 fn update_building_view_states(world: &mut World) {
-    let mut query = world.query::<(&Building, &GodotNodeHandle)>();
-    let batch: Vec<(TeamId, BuildingKind, bool, GodotNodeHandle)> = query
+    let mut query = world.query::<(
+        Entity,
+        &Building,
+        &GodotNodeHandle,
+        Option<&BuildingLastViewState>,
+    )>();
+    let batch: Vec<(Entity, bool, bool, GodotNodeHandle)> = query
         .iter(world)
-        .map(|(building, handle)| {
-            (
-                building.team,
-                building.kind,
-                building.construction.complete,
-                *handle,
-            )
+        .filter_map(|(entity, building, handle, last_state)| {
+            let complete = building.construction.complete;
+            let cold = building_is_cold(world, building.team, building.kind, complete);
+            let changed = match last_state {
+                Some(last) => last.complete != complete || last.cold != cold,
+                None => true,
+            };
+            if changed {
+                Some((entity, complete, cold, *handle))
+            } else {
+                None
+            }
         })
         .collect();
-    for (team, kind, complete, handle) in batch {
-        set_view_state(
-            handle,
-            complete,
-            building_is_cold(world, team, kind, complete),
-        );
+    for (entity, complete, cold, handle) in batch {
+        if set_view_state(handle, complete, cold) {
+            world
+                .entity_mut(entity)
+                .insert(BuildingLastViewState { complete, cold });
+        }
     }
 }
 
-/// Value-gated write; the view caches both flags so a steady-state view
-/// skips the model swap and overlay write entirely.
-fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) {
+/// Value-gated write: pushes only when complete or cold transitions on the building entity.
+fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) -> bool {
     let Some(mut node) = node_from_handle(handle) else {
-        return;
+        return false;
     };
     node.call("set_state", &[complete.to_variant(), cold.to_variant()]);
+    true
 }
 
 fn reset_fixture_world(world: &mut World) {
