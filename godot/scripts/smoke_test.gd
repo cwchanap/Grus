@@ -344,6 +344,22 @@ func _assert_structure_import(path: String) -> bool:
 	model.free()
 	return true
 
+func _mesh_triangles(model: Node3D) -> Array:
+	var tool := MeshDataTool.new()
+	var triangles := []
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node := node as MeshInstance3D
+		var to_model: Transform3D = model.global_transform.affine_inverse() * mesh_node.global_transform
+		for surface in mesh_node.mesh.get_surface_count():
+			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
+				return []
+			for face in tool.get_face_count():
+				var triangle := AABB(to_model * tool.get_vertex(tool.get_face_vertex(face, 0)), Vector3.ZERO)
+				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 1)))
+				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 2)))
+				triangles.append(triangle)
+	return triangles
+
 func _assert_gate_corridor(path: String) -> bool:
 	var packed := load(path) as PackedScene
 	var model := packed.instantiate() as Node3D if packed != null else null
@@ -355,23 +371,52 @@ func _assert_gate_corridor(path: String) -> bool:
 		AABB(Vector3(-0.5, 0.085, -0.42), Vector3(1.0, 0.915, 0.84)),
 		AABB(Vector3(-0.42, 0.085, -0.5), Vector3(0.84, 0.915, 1.0)),
 	]
-	var tool := MeshDataTool.new()
-	for node in model.find_children("*", "MeshInstance3D", true, false):
-		var mesh_node := node as MeshInstance3D
-		var to_model: Transform3D = model.global_transform.affine_inverse() * mesh_node.global_transform
-		for surface in mesh_node.mesh.get_surface_count():
-			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
-				_fail("gate mesh surface %d unreadable on %s" % [surface, mesh_node.name])
+	var triangles := _mesh_triangles(model)
+	if triangles.is_empty():
+		_fail("gate import yielded no readable mesh triangles: %s" % path)
+		return false
+	for triangle in triangles:
+		for corridor in corridors:
+			if corridor.intersects(triangle):
+				_fail("gate traversal corridor blocked: %s in %s" % [triangle, corridor])
 				return false
-			for face in tool.get_face_count():
-				var triangle := AABB(to_model * tool.get_vertex(tool.get_face_vertex(face, 0)), Vector3.ZERO)
-				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 1)))
-				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 2)))
-				for corridor in corridors:
-					if corridor.intersects(triangle):
-						_fail("gate traversal corridor blocked by %s: %s in %s" % [mesh_node.name, triangle, corridor])
-						return false
 	model.free()
+	return true
+
+func _assert_wall_gate_contact(wall_path: String, gate_path: String) -> bool:
+	var edge_spans := {}
+	for path in [wall_path, gate_path]:
+		var packed := load(path) as PackedScene
+		var model := packed.instantiate() as Node3D if packed != null else null
+		if model == null:
+			_fail("structure import did not instantiate: %s" % path)
+			return false
+		add_child(model)
+		var spans := {"x+": [], "x-": [], "z+": [], "z-": []}
+		for triangle in _mesh_triangles(model):
+			if triangle.end.y <= 0.085:
+				continue
+			if absf(triangle.end.x - 0.5) < 0.001:
+				spans["x+"].append(Vector4(triangle.position.z, triangle.end.z, triangle.position.y, triangle.end.y))
+			if absf(triangle.position.x + 0.5) < 0.001:
+				spans["x-"].append(Vector4(triangle.position.z, triangle.end.z, triangle.position.y, triangle.end.y))
+			if absf(triangle.end.z - 0.5) < 0.001:
+				spans["z+"].append(Vector4(triangle.position.x, triangle.end.x, triangle.position.y, triangle.end.y))
+			if absf(triangle.position.z + 0.5) < 0.001:
+				spans["z-"].append(Vector4(triangle.position.x, triangle.end.x, triangle.position.y, triangle.end.y))
+		model.free()
+		edge_spans[path] = spans
+	for edge in ["x+", "x-", "z+", "z-"]:
+		var contact := false
+		for wall_span in edge_spans[wall_path][edge]:
+			for gate_span in edge_spans[gate_path][edge]:
+				var lateral := minf(wall_span.y, gate_span.y) - maxf(wall_span.x, gate_span.x)
+				var vertical := minf(wall_span.w, gate_span.w) - maxf(0.085, maxf(wall_span.z, gate_span.z))
+				if lateral > 0.0 and vertical > 0.0:
+					contact = true
+		if not contact:
+			_fail("wall and gate share no elevated edge contact on edge %s" % edge)
+			return false
 	return true
 
 func _run() -> void:
@@ -638,6 +683,8 @@ func _run() -> void:
 	if not _assert_structure_import("res://assets/structures/construction_site.glb"):
 		return
 	if not _assert_gate_corridor("res://assets/structures/gate.glb"):
+		return
+	if not _assert_wall_gate_contact("res://assets/structures/wall.glb", "res://assets/structures/gate.glb"):
 		return
 
 	var size_before_zoom := camera.size
@@ -1701,5 +1748,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear silhouette_pick=roof_triangle" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact silhouette_pick=roof_triangle" % max_visual_step)
 	get_tree().quit(0)
