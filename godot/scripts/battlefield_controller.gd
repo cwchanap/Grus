@@ -316,6 +316,7 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
 	var height := 0.8
 	if attacker_kind == "building":
+		# Heights follow the weapons authored in scripts/build_winter_assets.py.
 		match str(attacker.get_meta("building_kind", "")):
 			"GunTurret":
 				height = 0.62
@@ -749,8 +750,7 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 			nearest_distance = distance
 	return nearest
 
-## Enemy picking reuses the existing _nearest_view filter and distance
-## tie-break across both view groups.
+## Compare the nearest eligible unit with the silhouette-picked building.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 	var unit := _nearest_view("unit_views", screen_position, 2)
 	var building := _building_at(screen_position, 2)
@@ -794,52 +794,26 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 		var rect := _projected_art_rect(view, model)
 		if not rect.has_point(screen_position):
 			continue
-		var depth := _model_ray_hit_depth(view, model, ray_origin, ray_direction)
+		var depth := _model_ray_hit_depth(model, ray_origin, ray_direction)
 		if depth >= 0.0 and depth < nearest_hit_depth:
 			nearest_hit_view = view
 			nearest_hit_depth = depth
 	return nearest_hit_view if nearest_hit_view != null else fallback
 
-func _model_triangles(view: Node3D, model: Node3D) -> PackedVector3Array:
-	if view.has_meta("_cached_triangles"):
-		return view.get_meta("_cached_triangles") as PackedVector3Array
-	var triangles := PackedVector3Array()
+func _model_ray_hit_depth(model: Node3D, ray_origin: Vector3, ray_dir: Vector3) -> float:
+	var min_depth := INF
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
 		if mesh_instance == null or mesh_instance.mesh == null:
 			continue
-		var xform := mesh_instance.global_transform
-		for surface in mesh_instance.mesh.get_surface_count():
-			var arrays := mesh_instance.mesh.surface_get_arrays(surface)
-			var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
-			var indices = arrays[Mesh.ARRAY_INDEX]
-			var has_indices: bool = indices != null and not (indices as PackedInt32Array).is_empty()
-			var count := int(indices.size() / 3) if has_indices else int(vertices.size() / 3)
-			for i in count:
-				var a := xform * (vertices[indices[i * 3]] if has_indices else vertices[i * 3])
-				var b := xform * (vertices[indices[i * 3 + 1]] if has_indices else vertices[i * 3 + 1])
-				var c := xform * (vertices[indices[i * 3 + 2]] if has_indices else vertices[i * 3 + 2])
-				triangles.append(a)
-				triangles.append(b)
-				triangles.append(c)
-	view.set_meta("_cached_triangles", triangles)
-	return triangles
-
-func _model_ray_hit_depth(view: Node3D, model: Node3D, ray_origin: Vector3, ray_dir: Vector3) -> float:
-	var triangles := _model_triangles(view, model)
-	var tri_count := int(triangles.size() / 3)
-	if tri_count == 0:
-		return -1.0
-	var min_depth := INF
-	for i in tri_count:
-		var a := triangles[i * 3]
-		var b := triangles[i * 3 + 1]
-		var c := triangles[i * 3 + 2]
-		var hit = Geometry3D.ray_intersects_triangle(ray_origin, ray_dir, a, b, c)
-		if hit != null:
-			var depth: float = (hit - ray_origin).dot(ray_dir)
-			if depth < min_depth:
-				min_depth = depth
+		var triangles := mesh_instance.mesh.generate_triangle_mesh()
+		if triangles == null:
+			continue
+		var inverse := mesh_instance.global_transform.affine_inverse()
+		var hit := triangles.intersect_ray(inverse * ray_origin, (inverse.basis * ray_dir).normalized())
+		if not hit.is_empty():
+			var world_hit: Vector3 = mesh_instance.global_transform * hit["position"]
+			min_depth = minf(min_depth, (world_hit - ray_origin).dot(ray_dir))
 	return min_depth if min_depth < INF else -1.0
 
 func _friendly_units() -> Array[Node3D]:
@@ -962,8 +936,8 @@ func _projected_art_rect(view: Node3D, art_root: Node3D = null) -> Rect2:
 ## keeps its sibling HealthBar out of the pick silhouette, while a missing
 ## root still walks the whole view (resource models are the view).
 func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
-	if art_root != null and view.has_meta("_cached_art_bounds"):
-		return view.get_meta("_cached_art_bounds") as AABB
+	if art_root != null and art_root.has_meta("_cached_art_bounds"):
+		return art_root.get_meta("_cached_art_bounds") as AABB
 	var bounds := AABB()
 	var first := true
 	for node in (art_root if art_root != null else view).find_children("*", "MeshInstance3D", true, false):
@@ -977,7 +951,7 @@ func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 		# No art yet (kind meta arrives a frame late): fall back to the cell.
 		bounds = AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
 	if art_root != null:
-		view.set_meta("_cached_art_bounds", bounds)
+		art_root.set_meta("_cached_art_bounds", bounds)
 	return bounds
 
 func _building_complete(building_id: int) -> bool:

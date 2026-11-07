@@ -1,6 +1,6 @@
 extends Node3D
 
-## The bridge pushes live building state every Update: `complete` flips the
+## The bridge pushes building state on first sight and transitions: `complete` flips the
 ## generic construction site for the kind's final GLB exactly once, `cold`
 ## toggles one shared pale overlay on the active model's meshes. Neither
 ## flag is polled — Rust is authoritative — and pushes arriving before the
@@ -32,19 +32,15 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if not has_meta("building_kind"):
 		return
-	var kind := str(get_meta("building_kind"))
-	if kind == _styled_kind:
-		return
-	_styled_kind = kind
+	_styled_kind = str(get_meta("building_kind"))
 	# The kind meta is stamped once at spawn and never changes, and every
 	# later state change arrives through set_state — style once, then stop
 	# polling every frame.
-	set_process(false)
-	_attach_model()
+	if _attach_model():
+		set_process(false)
 
-## Rust calls this every Update with the authoritative state. The cached
-## flags gate redundant work: the completion swap fires exactly once here,
-## and cold/warm pushes only rewrite the overlay on real transitions.
+## Rust value-gates authoritative state pushes. These flags also preserve
+## early state and make repeated completion or cold pushes idempotent.
 func set_state(complete: bool, cold: bool) -> void:
 	var finishing := complete and not _complete
 	_complete = complete
@@ -58,32 +54,35 @@ func set_state(complete: bool, cold: bool) -> void:
 		# model without ever flashing the site.
 		return
 	if finishing:
-		_attach_model()
+		set_process(not _attach_model())
 
-func _attach_model() -> void:
-	if has_meta("_cached_triangles"):
-		remove_meta("_cached_triangles")
-	if has_meta("_cached_art_bounds"):
-		remove_meta("_cached_art_bounds")
-	var previous := get_node_or_null("Model")
-	if previous != null:
-		remove_child(previous)
-		previous.queue_free()
-	var model: Node3D
+func _attach_model() -> bool:
+	var instance: Node
 	if not _complete:
-		model = SITE_MODEL.instantiate()
+		instance = SITE_MODEL.instantiate()
 	else:
 		if MODELS.has(_styled_kind):
-			model = (MODELS[_styled_kind] as PackedScene).instantiate()
+			instance = (MODELS[_styled_kind] as PackedScene).instantiate()
 		else:
 			# A kind whose GLB has not landed yet must still render and be
 			# debuggable — an invisible building would silently stand.
 			push_warning("building_view: no model for building_kind '%s', using placeholder" % _styled_kind)
-			model = _placeholder()
+			instance = _placeholder()
+	var model := instance as Node3D
+	if model == null:
+		if instance != null:
+			instance.free()
+		push_error("building_view: failed to instantiate model for '%s'" % _styled_kind)
+		return false
+	var previous := get_node_or_null("Model")
+	if previous != null:
+		remove_child(previous)
+		previous.queue_free()
 	model.name = "Model"
 	add_child(model)
 	_apply_cold()
 	_seat_health_bar()
+	return true
 
 func _placeholder() -> Node3D:
 	var holder := Node3D.new()

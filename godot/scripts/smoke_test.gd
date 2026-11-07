@@ -8,6 +8,15 @@ const EXPANSION_SALVAGE_ID := 14
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
+class RetryBuildingView extends "res://scripts/building_view.gd":
+	var failed_once := false
+
+	func _attach_model() -> bool:
+		if not failed_once:
+			failed_once = true
+			return false
+		return super._attach_model()
+
 func _ready() -> void:
 	call_deferred("_run")
 
@@ -314,12 +323,20 @@ func _assert_structure_import(path: String) -> bool:
 		_fail("%s art floats %.4f above the ground plane" % [path, bounds.position.y])
 		return false
 	for node in meshes:
-		var material := (node as MeshInstance3D).get_active_material(0) as StandardMaterial3D
-		var texture := material.albedo_texture if material != null else null
-		if texture == null or not texture.resource_path.begins_with("res://assets/structures/"):
-			_fail("%s mesh material does not resolve a committed structures texture: %s" % [
-				path, texture.resource_path if texture != null else "missing"])
+		var mesh := node as MeshInstance3D
+		if mesh.mesh == null or mesh.mesh.get_surface_count() == 0:
+			_fail("%s imported an empty mesh" % path)
 			return false
+		for surface in mesh.mesh.get_surface_count():
+			var material := mesh.get_active_material(surface) as StandardMaterial3D
+			var texture := material.albedo_texture if material != null else null
+			if texture == null or not texture.resource_path.begins_with("res://assets/structures/"):
+				_fail("%s mesh material does not resolve a committed structures texture: %s" % [
+					path, texture.resource_path if texture != null else "missing"])
+				return false
+			if not material.vertex_color_use_as_albedo:
+				_fail("%s mesh surface %d does not use its vertex colors as albedo" % [path, surface])
+				return false
 	# Raw GLB source bytes exist only under an editor binary: an export
 	# remaps the .glb to its imported PackedScene inside the PCK, where
 	# FileAccess can no longer read the original file. OS.has_feature
@@ -674,6 +691,35 @@ func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 			return point
 	return Vector2.INF
 
+func _assert_overlapping_building_pick(main: Node, camera: Camera3D, viewport_size: Vector2) -> bool:
+	var point := viewport_size * 0.5
+	var origin := camera.project_ray_origin(point)
+	var direction := camera.project_ray_normal(point)
+	var views: Array[Node3D] = []
+	# Insert the far view last so a last-hit-wins regression fails.
+	for distance in [4.0, 7.0]:
+		var view := Node3D.new()
+		var model := Node3D.new()
+		model.name = "Model"
+		var mesh := MeshInstance3D.new()
+		mesh.mesh = BoxMesh.new()
+		model.add_child(mesh)
+		view.add_child(model)
+		add_child(view)
+		view.global_position = origin + direction * distance
+		view.add_to_group("building_views")
+		views.append(view)
+	var near_first := main.call("_building_at", point, 0) as Node3D
+	remove_child(views[0])
+	add_child(views[0])
+	var near_last := main.call("_building_at", point, 0) as Node3D
+	var ok := near_first == views[0] and near_last == views[0]
+	for view in views:
+		view.free()
+	if not ok:
+		_fail("overlapping building silhouettes did not pick the foreground model")
+	return ok
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -689,6 +735,18 @@ func _run() -> void:
 		return
 	if not _assert_action_icon_paths(get_node("Main") as Node3D):
 		return
+	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
+		return
+	var muzzle_probe := Node3D.new()
+	add_child(muzzle_probe)
+	muzzle_probe.position = Vector3(3.0, 4.0, 5.0)
+	for weapon in [["GunTurret", 0.62], ["FlameTower", 0.9], ["CrystalLance", 1.8]]:
+		muzzle_probe.set_meta("building_kind", weapon[0])
+		var muzzle: Vector3 = get_node("Main").call("_attacker_muzzle_position", muzzle_probe, "building")
+		if not muzzle.is_equal_approx(muzzle_probe.global_position + Vector3(0.0, weapon[1], 0.0)):
+			_fail("%s tracer origin does not match its authored weapon height" % weapon[0])
+			return
+	muzzle_probe.free()
 
 	var units: Array[Node] = []
 	for _frame in range(160):
@@ -914,6 +972,40 @@ func _run() -> void:
 	# this short run never builds. The generic site is checked separately
 	# as the only non-catalogue asset.
 	var building_view_scene := load("res://scenes/building_view.tscn") as PackedScene
+	var retry_view := building_view_scene.instantiate() as Node3D
+	retry_view.set_script(RetryBuildingView)
+	retry_view.set_meta("building_kind", "Depot")
+	add_child(retry_view)
+	retry_view._process(0.0)
+	if not retry_view.is_processing() or retry_view.get_node_or_null("Model") != null:
+		_fail("building view stopped processing after a failed model attachment")
+		return
+	retry_view._process(0.0)
+	if retry_view.is_processing() or retry_view.get_node_or_null("Model") == null:
+		_fail("building view did not retry its failed model attachment")
+		return
+	retry_view.failed_once = false
+	retry_view.set_state(true, false)
+	if not retry_view.is_processing():
+		_fail("building view did not retry a failed completion swap")
+		return
+	retry_view._process(0.0)
+	var retry_model := retry_view.get_node_or_null("Model") as Node3D
+	if retry_view.is_processing() or retry_model == null or not retry_model.scene_file_path.ends_with("depot.glb"):
+		_fail("building view did not finish the retried completion swap")
+		return
+	retry_view.free()
+	var pending_view := building_view_scene.instantiate() as Node3D
+	pending_view.set_script(RetryBuildingView)
+	pending_view.set_meta("building_kind", "Depot")
+	add_child(pending_view)
+	pending_view._process(0.0)
+	pending_view.set_state(true, false)
+	var pending_model := pending_view.get_node_or_null("Model") as Node3D
+	if pending_view.is_processing() or pending_model == null or not pending_model.scene_file_path.ends_with("depot.glb"):
+		_fail("a successful completion push did not finish the pending initial attachment")
+		return
+	pending_view.free()
 	print("SMOKE_STRUCTURE_AUDIT source_bytes=%s" % ("editor" if OS.has_feature("editor") else "skipped_packaged"))
 	for kind in GrusBridge.catalogue_snapshot().get("buildings", {}):
 		var kind_path := "res://assets/structures/%s.glb" % str(kind).to_snake_case()
@@ -962,6 +1054,9 @@ func _run() -> void:
 	await get_tree().process_frame
 	var early_model := early_view.get_node_or_null("Model") as Node3D
 	var shared_ice: Material = early_view.get_script().get("ICE_OVERLAY")
+	if shared_ice == null:
+		_fail("building view has no shared cold overlay material")
+		return
 	if early_model == null or not early_model.scene_file_path.ends_with("depot.glb"):
 		_fail("state pushed before kind metadata did not style the completed Depot: %s" % [
 			early_model.scene_file_path if early_model != null else "missing"])
@@ -1002,11 +1097,22 @@ func _run() -> void:
 			or site_view.is_processing():
 		_fail("a fresh Depot view did not style the site then stop processing")
 		return
+	var pick_controller := get_node("Main") as Node3D
+	var swap_origin := site_view.global_transform * Vector3(-2.0, 0.94, 0.0)
+	var swap_direction := (site_view.global_basis * Vector3.RIGHT).normalized()
+	var site_bounds: AABB = pick_controller.call("_view_art_bounds", site_view, site_model)
+	if site_bounds.end.y >= 0.9 or float(pick_controller.call("_model_ray_hit_depth", site_model, swap_origin, swap_direction)) >= 0.0:
+		_fail("construction site unexpectedly reaches the Depot canopy probe")
+		return
 	site_view.set_state(true, false)
 	var finished_model := site_view.get_node_or_null("Model") as Node3D
 	if finished_model == null or finished_model == site_model \
 			or not finished_model.scene_file_path.ends_with("depot.glb"):
 		_fail("a post-styling set_state did not swap the site to the Depot GLB")
+		return
+	var finished_bounds: AABB = pick_controller.call("_view_art_bounds", site_view, finished_model)
+	if finished_bounds.end.y < 0.9 or float(pick_controller.call("_model_ray_hit_depth", finished_model, swap_origin, swap_direction)) < 0.0:
+		_fail("building picking retained the construction-site bounds or geometry after the Depot swap")
 		return
 	site_view.set_state(true, false)
 	if site_view.get_node("Model") != finished_model:
@@ -1532,7 +1638,7 @@ func _run() -> void:
 				_fail("right-click while placing did not cancel without a contextual command")
 				return
 
-	# HPA-291 pilot: an unfinished building renders the generic construction
+	# HPA-291: an unfinished building renders the generic construction
 	# site until Rust pushes complete — the freshest Gate (8s build) is
 	# still mid-construction here, so its model must be the site GLB.
 	var freshest_gate: Node3D = null
@@ -1807,14 +1913,6 @@ func _run() -> void:
 	if rc_model == null:
 		_fail("Research Center view has no Model for the silhouette pick")
 		return
-	var rc_art_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_model)
-	# Empty ground in the model's projected bounding-box corner must not select the RC:
-	var corner_candidate := rc_art_rect.position
-	if Rect2(Vector2.ZERO, viewport_size).has_point(corner_candidate) \
-			and rc_screen.distance_to(corner_candidate) > main.CLICK_RADIUS + 5.0:
-		if (main.call("_building_at", corner_candidate, 0) as Node3D) == rc_view:
-			_fail("clicking empty ground in the Research Center's bounding box corner selected the Research Center")
-			return
 	var silhouette_point := _roof_pick_point(rc_view, camera, viewport_size, main)
 	if silhouette_point == Vector2.INF:
 		_fail("Research Center roof mesh exposes no upward triangle projecting beyond the old center radius")
@@ -1893,8 +1991,8 @@ func _run() -> void:
 		_fail("a click on the disabled Analyze button reached the bridge")
 		return
 
-	var pilot_bunkhouse: Node3D = null
-	var pilot_bunkhouse_id := -1
+	var roof_bunkhouse: Node3D = null
+	var roof_bunkhouse_id := -1
 	var resume_bunkhouse: Node3D = null
 	var resume_bunkhouse_id := -1
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -1903,12 +2001,12 @@ func _run() -> void:
 			continue
 		var id := int(view.get_meta("building_id", -1))
 		if bool(GrusBridge.building_snapshot(id).get("complete", false)):
-			pilot_bunkhouse = view
-			pilot_bunkhouse_id = id
+			roof_bunkhouse = view
+			roof_bunkhouse_id = id
 			break
 		resume_bunkhouse = view
 		resume_bunkhouse_id = id
-	if pilot_bunkhouse == null and resume_bunkhouse != null:
+	if roof_bunkhouse == null and resume_bunkhouse != null:
 		if not GrusBridge.resume_construction(1, resume_bunkhouse_id):
 			_fail("resume_construction for the roof-pick Bunkhouse was not queued")
 			return
@@ -1922,27 +2020,28 @@ func _run() -> void:
 		if not GrusBridge.set_sim_speed(1.0):
 			_fail("could not restore sim speed after the Bunkhouse completion")
 			return
-		pilot_bunkhouse = resume_bunkhouse
-		pilot_bunkhouse_id = resume_bunkhouse_id
-	if pilot_bunkhouse == null:
+		roof_bunkhouse = resume_bunkhouse
+		roof_bunkhouse_id = resume_bunkhouse_id
+	if roof_bunkhouse == null:
 		_fail("no placed Bunkhouse exists for the roof silhouette pick")
 		return
-	var bunkhouse_model := pilot_bunkhouse.get_node_or_null("Model") as Node3D
-	if bunkhouse_model == null or not bunkhouse_model.scene_file_path.ends_with("bunkhouse.glb"):
-		_fail("completed Bunkhouse does not carry the pilot GLB for the roof silhouette pick")
+	if not await _wait_until(func():
+			var model := roof_bunkhouse.get_node_or_null("Model") as Node3D
+			return model != null and model.scene_file_path.ends_with("bunkhouse.glb"),
+			10.0, "completed Bunkhouse never displayed its model for the roof pick"):
 		return
 	# The 2x2 cabin is too small at the default framing to probe a point
 	# past the old 20 px center radius, so frame it like the resource-pick
 	# leg: minimap-recenter the view onto it and wheel-zoom to the minimum
 	# size. Both are the real input paths the game itself handles.
 	var bunkhouse_zoom_start := camera.size
-	var bunkhouse_world := pilot_bunkhouse.global_position
+	var bunkhouse_world := roof_bunkhouse.global_position
 	var viewport_center := viewport_size * 0.5
 	var minimap_point := minimap.get_global_rect().position + Vector2(bunkhouse_world.x, bunkhouse_world.z)
 	SmokeHelpers.push_mouse_click(get_tree(), minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var bunkhouse_screen := camera.unproject_position(pilot_bunkhouse.global_position)
+	var bunkhouse_screen := camera.unproject_position(roof_bunkhouse.global_position)
 	if bunkhouse_screen.distance_to(viewport_center) > 60.0:
 		_fail("minimap recenter never centered the roof-pick Bunkhouse: %s" % bunkhouse_screen)
 		return
@@ -1951,22 +2050,21 @@ func _run() -> void:
 			break
 		_mouse_click(viewport_center, MOUSE_BUTTON_WHEEL_UP)
 		await get_tree().process_frame
-	bunkhouse_screen = camera.unproject_position(pilot_bunkhouse.global_position)
-	var roof_point := _roof_pick_point(pilot_bunkhouse, camera, viewport_size, main)
+	bunkhouse_screen = camera.unproject_position(roof_bunkhouse.global_position)
+	var roof_point := _roof_pick_point(roof_bunkhouse, camera, viewport_size, main)
 	if roof_point == Vector2.INF:
 		_fail("Bunkhouse roof mesh exposes no upward triangle projecting beyond the old center radius")
 		return
 	_mouse_click(roof_point, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
-			return int(main.selected_building_id) == pilot_bunkhouse_id \
+			return int(main.selected_building_id) == roof_bunkhouse_id \
 				and main.selected_ids.is_empty(),
 			5.0, "left-click on the Bunkhouse's projected roof did not select its building"):
 		return
 
 	# The same geometry-proven pick on the seeded 4x4 Research Center GLB,
 	# still at minimum zoom: recenter through the real minimap path, click a
-	# live roof triangle beyond the old center radius, then prove a pixel
-	# covered only by the HealthBar never selects anything.
+	# live roof triangle beyond the old center radius.
 	var rc_roof_world := rc_view.global_position
 	var rc_minimap_point := minimap.get_global_rect().position + Vector2(rc_roof_world.x, rc_roof_world.z)
 	SmokeHelpers.push_mouse_click(get_tree(), rc_minimap_point, MOUSE_BUTTON_LEFT)
@@ -1975,6 +2073,25 @@ func _run() -> void:
 	var rc_screen_zoomed := camera.unproject_position(rc_view.global_position)
 	if rc_screen_zoomed.distance_to(viewport_center) > 60.0:
 		_fail("minimap recenter never centered the Research Center for the roof pick: %s" % rc_screen_zoomed)
+		return
+	# At this framing at least one visible bounding-box corner must be empty.
+	var rc_art_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_model)
+	var empty_corner := Vector2.INF
+	for corner in [rc_art_rect.position + Vector2(1, 1),
+			Vector2(rc_art_rect.end.x - 1, rc_art_rect.position.y + 1),
+			Vector2(rc_art_rect.position.x + 1, rc_art_rect.end.y - 1),
+			rc_art_rect.end - Vector2(1, 1)]:
+		if Rect2(Vector2.ZERO, viewport_size).has_point(corner) \
+				and rc_screen_zoomed.distance_to(corner) > main.CLICK_RADIUS + 5.0 \
+				and float(main.call("_model_ray_hit_depth", rc_model,
+						camera.project_ray_origin(corner), camera.project_ray_normal(corner))) < 0.0:
+			empty_corner = corner
+			break
+	if empty_corner == Vector2.INF:
+		_fail("no visible empty corner exists in the Research Center's projected bounds")
+		return
+	if main.call("_building_at", empty_corner, 0) == rc_view:
+		_fail("empty ground in the Research Center's bounding box selected the Research Center")
 		return
 	var rc_roof_point := _roof_pick_point(rc_view, camera, viewport_size, main)
 	if rc_roof_point == Vector2.INF:

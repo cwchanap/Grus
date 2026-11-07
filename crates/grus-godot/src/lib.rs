@@ -85,6 +85,7 @@ impl Default for CommandFeedback {
 #[derive(Component)]
 struct ViewMetaInitialized;
 
+/// Last state dispatched to a building view; absent until its first successful dispatch.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 struct BuildingLastViewState {
     complete: bool,
@@ -1677,8 +1678,8 @@ fn attach_missing_gameplay_views(
     }
 }
 
-/// The building view's unit box is scaled by the footprint so the rendered
-/// building matches the blocked cells and the placement preview exactly.
+/// Scale the building view to its footprint so its normalized model fits the
+/// blocked cells and placement preview.
 /// `Footprint::anchor` is the top-left cell, so the transform centers on
 /// anchor + half the footprint in each axis.
 fn building_view_transform(footprint: &Footprint) -> Transform {
@@ -1951,8 +1952,7 @@ fn building_is_cold(world: &World, team: TeamId, kind: BuildingKind, complete: b
         && surface_efficiency(world) < 1.0
 }
 
-/// Pushes each building view's presentation state from Rust every Update —
-/// the per-view projection beside `update_health_bars`, never per-building
+/// Projects each building view's presentation state beside `update_health_bars`, never per-building
 /// GDScript snapshot polling. `complete` lets the view swap the generic
 /// construction site for its final kind model; `cold` lets it restyle.
 /// Transitions are value-gated here: steady-state views skip the dynamic
@@ -1964,32 +1964,33 @@ fn update_building_view_states(world: &mut World) {
         &GodotNodeHandle,
         Option<&BuildingLastViewState>,
     )>();
-    let batch: Vec<(Entity, bool, bool, GodotNodeHandle)> = query
+    let batch: Vec<(Entity, BuildingLastViewState, GodotNodeHandle)> = query
         .iter(world)
         .filter_map(|(entity, building, handle, last_state)| {
-            let complete = building.construction.complete;
-            let cold = building_is_cold(world, building.team, building.kind, complete);
-            let changed = match last_state {
-                Some(last) => last.complete != complete || last.cold != cold,
-                None => true,
+            let state = BuildingLastViewState {
+                complete: building.construction.complete,
+                cold: building_is_cold(
+                    world,
+                    building.team,
+                    building.kind,
+                    building.construction.complete,
+                ),
             };
-            if changed {
-                Some((entity, complete, cold, *handle))
+            if last_state != Some(&state) {
+                Some((entity, state, *handle))
             } else {
                 None
             }
         })
         .collect();
-    for (entity, complete, cold, handle) in batch {
-        if set_view_state(handle, complete, cold) {
-            world
-                .entity_mut(entity)
-                .insert(BuildingLastViewState { complete, cold });
+    for (entity, state, handle) in batch {
+        if set_view_state(handle, state.complete, state.cold) {
+            world.entity_mut(entity).insert(state);
         }
     }
 }
 
-/// Value-gated write: pushes only when complete or cold transitions on the building entity.
+/// Dispatch the state when the Godot node exists; the caller handles value gating.
 fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) -> bool {
     let Some(mut node) = node_from_handle(handle) else {
         return false;

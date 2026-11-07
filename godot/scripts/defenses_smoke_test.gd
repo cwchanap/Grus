@@ -163,6 +163,12 @@ func _run() -> void:
 			_fail("completed defense %d lost its view" % id)
 			return
 		var defense_kind := str(defense_view.get_meta("building_kind", ""))
+		if not await _wait_until(func():
+				var model := defense_view.get_node_or_null("Model") as Node3D
+				return model != null and model.is_visible_in_tree() \
+						and model.scene_file_path.ends_with("%s.glb" % defense_kind.to_snake_case()),
+				10.0, "completed %s %d never displayed its final model" % [defense_kind, id]):
+			return
 		var defense_model := defense_view.get_node_or_null("Model") as Node3D
 		if defense_model == null or not defense_model.is_visible_in_tree() \
 				or defense_model.scene_file_path.ends_with("construction_site.glb"):
@@ -222,6 +228,12 @@ func _run() -> void:
 	var done_turret_view := _building_view(turret_id)
 	if done_turret_view == null:
 		_fail("completed Gun Turret view is missing")
+		return
+	if not await _wait_until(func():
+			var model := done_turret_view.get_node_or_null("Model") as Node3D
+			return model != null and model.is_visible_in_tree() \
+					and model.scene_file_path.ends_with("gun_turret.glb"),
+			10.0, "completed Gun Turret never displayed its final model"):
 		return
 	var turret_model := done_turret_view.get_node_or_null("Model") as Node3D
 	if turret_model == null or not turret_model.is_visible_in_tree() \
@@ -548,6 +560,6 @@ func _turret_tracer_from(turret: Node3D) -> bool:
 		if not is_equal_approx(mesh.size.x, 0.08):
 			continue
 		var origin := view.global_position + view.global_basis.z * (mesh.size.z * 0.5)
-		if origin.distance_to(turret.global_position + Vector3(0.0, 0.8, 0.0)) < 0.25:
+		if origin.distance_to(turret.global_position + Vector3(0.0, 0.62, 0.0)) < 0.05:
 			return true
 	return false
