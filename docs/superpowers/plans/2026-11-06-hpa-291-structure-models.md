@@ -1,6 +1,6 @@
 # HPA-291 — Structure art implementation plan
 
-**Status:** Proposed; **documentation-only draft**, revised after [GitHub design review](https://github.com/cwchanap/Grus/pull/20#issuecomment-6690066100). Checkboxes do NOT claim artwork, code, tests, or verification exist.
+**Status:** Implemented on this branch — post-review hardening verified locally; required CI evidence pending. Checkboxes remain unchecked: they record the planned checkpoints, not a per-item audit.
 **Ticket:** https://linear.app/cwchanap/issue/HPA-291/grus-survival-art-structure-models
 **Design:** [HPA-291 scoped design](../specs/2026-11-06-hpa-291-structure-models-design.md)
 **Branch / PR:** `hpa-291-structure-models`; **one PR for HPA-291**. Add artwork, implementation, verification, and review fixes to this same draft PR.

@@ -5,7 +5,8 @@ Local verification on 2026-11-07, macOS / Apple M1 Pro (macOS 26), Godot
 (`aarch64-apple-darwin`, the only installed target) and Blender 5.2.1 LTS at
 `/Applications/Blender.app/Contents/MacOS/Blender`. Branch
 `hpa-291-structure-models`, evidence captured at commits
-`3ce8fc2`–`86ccca8`. No
+`3ce8fc2`–`86ccca8`, with the post-review hardening round verified at
+the branch head below. No
 `crates/grus-sim` or gameplay change exists on this branch (`git diff
 main...HEAD -- crates/grus-sim` is empty); the only
 `crates/grus-godot/src/lib.rs` delta is the permitted view-projection
@@ -19,7 +20,7 @@ main...HEAD -- crates/grus-sim` is empty); the only
 | Build + stage + sign | `cargo build -p grus-godot --locked --offline`, `cp target/debug/libgrus_godot.dylib godot/bin/`, `codesign --force --sign - godot/bin/libgrus_godot.dylib` | Passed; `codesign -v` clean. Fresh binary staged before every run below. |
 | Fresh editor import | `godot --headless --path godot --editor --quit-after 120` with `godot/.godot` deleted first | Exit 0; 313-line log contains zero WARNING/ERROR lines; all 11 structure GLBs and 6 winter GLBs reimported; `.godot` cache regenerated. |
 | Blender regeneration | `blender --background --factory-startup --python-exit-code 1 --python scripts/build_winter_assets.py` (absolute app-bundle binary; `blender` is not on PATH here) | Exit 0; 17 `WINTER_ASSET_OK` lines; only two `DeprecationWarning` Python notices about `Material.use_nodes` (Blender 6.0 deprecation, unrelated to export); **zero GLB image warnings**. SHA-256 of all 11 structure GLBs + `structure_albedo.png` + all 6 winter GLBs + `snow_albedo.png` byte-identical to committed outputs (`shasum -a 256 -c`: 19/19 OK); `git status` clean afterwards. |
-| `res://scenes/smoke_test.tscn` | `godot --headless --path godot` | `GRUS_GODOT_SMOKE_OK units=4 ... structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc healthbar_px=excluded interpolation=max_step_0.118`; also prints `SMOKE_STRUCTURE_AUDIT source_bytes=editor` (raw-GLB and building_view.gd source audits run under the editor binary) |
+| `res://scenes/smoke_test.tscn` | `godot --headless --path godot` | `GRUS_GODOT_SMOKE_OK units=4 ... structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc interpolation=max_step_0.118`; also prints `SMOKE_STRUCTURE_AUDIT source_bytes=editor` (raw-GLB and building_view.gd source audits run under the editor binary) |
 | `res://scenes/reset_test.tscn` | same | `GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true heat=15/10/100%` |
 | `res://scenes/economy_smoke_test.tscn` | same | `GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded ... elapsed_ms=24661` |
 | `res://scenes/combat_lifecycle_smoke_test.tscn` | same | `GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh ... research_boundary=analyze_reject8_zero_crystal` |
@@ -87,6 +88,55 @@ These results cover `86ccca8` only; this docs-only evidence update had
 not itself been through CI when written. Every number in the checks
 table remains a local macOS measurement — Linux CI status is recorded
 only in this section.
+
+## Post-review hardening round (later on 2026-11-07)
+
+A whole-branch `/code-review` of `main...HEAD` plus the PR's automated
+reviewers produced a second fix round on top of `64699e1`. Changes:
+
+- Building picking now ray-tests the active Model's real triangles
+  (`Geometry3D.ray_intersects_triangle`, world-space triangles cached per
+  view and invalidated on model swap) and sorts hits by depth along the
+  camera ray, so a foreground structure wins over a background one whose
+  projected bounds overlap; the center-radius floor still covers
+  unstyled views and near-miss clicks on small buildings.
+- `update_building_view_states` value-gates the Godot `set_state` call
+  per building entity (`BuildingLastViewState`), so steady-state views
+  no longer receive ~8.8k dynamic calls/s in the 146-building benchmark.
+- `building_view.gd` preloads the ten finished GLBs in a const `MODELS`
+  map (the `resource_view.gd` pattern) instead of a synchronous `load()`
+  on first completion of each kind.
+- Combat tracers originate at per-kind muzzle heights for
+  GunTurret/FlameTower/CrystalLance instead of a flat 0.8.
+- `build_winter_assets.py` joins meshes before export and applies the
+  footprint shrink to mesh data, fixing shear loss on tilted parts;
+  six GLBs (barracks, bunkhouse, crystal_lance, depot, flame_tower,
+  gun_turret) regenerated — Blender re-run is byte-stable.
+- `structure_albedo.png.import` now matches the editor's own 3D recipe
+  (VRAM s3tc compression + mipmaps, same as `snow_albedo.png.import`),
+  ending the shimmer/minification the review flagged; the editor did
+  not rewrite the file on reimport.
+- Smoke hardening: `SmokeHelpers.hud_rects`/`view_art_error` dedupe
+  copy-pasted probes, mesh-less nodes can no longer hang the triangle
+  readers, the economy smoke uses the shared bounds check and the real
+  `_building_at` picker in diagnostics, and the hand-positioned
+  health-bar click leg was removed (it violated the real-input rule;
+  the bar is a `HealthBar` sibling outside `Model`, so triangle picking
+  structurally excludes it — the README no longer claims a dedicated
+  smoke leg for it).
+
+Re-verified locally at the round's head, all exit 0: `cargo fmt
+--check`, both clippy invocations, `cargo test --workspace --locked
+--offline` (432 passed, 0 failed, 1 release-ignored), fresh `godot --headless --path
+godot --editor --quit-after 120` import (no WARNING/ERROR lines), the
+Blender regeneration above, and all seven headless smokes —
+`GRUS_GODOT_SMOKE_OK ... silhouette_pick=roof_triangle_rc
+radius_steal=rect_scoped unstyled_fallback=center_radius` (the
+`healthbar_px` marker is gone with its leg), `GRUS_ECONOMY_SMOKE_OK
+bunkhouse_model=site_to_glb overlays=cold_warm_recovery
+zero_demand=wall_gate_furnace bounds=catalogue_grounded`, and the
+other five scene markers unchanged. PR CI on the new head is the
+remaining gate, same as every prior round.
 
 ## Rendered evidence — real 1280×720 frames
 
