@@ -400,22 +400,26 @@ for y in (-0.35, 0.35):
     sbox("Merlon snow", (0, y, 0.76), (0.22, 0.18, 0.04), SNOW)
 export("wall", out_dir=STRUCTURE_OUT, footprint=1.0, max_height=1.0)
 
-# Gate: four corner piers flank a centered portal on every edge — the wall
-# band's width lands inside the pier gap — with a ring beam carried high
-# enough for units to pass beneath on the worn plus-shaped threshold.
+# Gate: a slim portal frame on every edge — four corner posts stay clear
+# of the centered traversal corridor wide enough for the broadest
+# friendly body in both axes, the ring beam rides overhead, and the wall
+# band's plinth and threshold still meet every edge.
 sbox("Plinth", (0, 0, 0.03), (1.0, 1.0, 0.06), CONCRETE)
 sbox("Threshold X", (0, 0, 0.07), (1.0, 0.36, 0.02), STEEL)
 sbox("Threshold Y", (0, 0, 0.07), (0.36, 1.0, 0.02), STEEL)
-for x in (-0.33, 0.33):
-    for y in (-0.33, 0.33):
-        sbox("Corner pier", (x, y, 0.53), (0.34, 0.34, 0.94), CONCRETE)
-        sbox("Pier cap", (x, y, 1.03), (0.34, 0.34, 0.06), SNOW)
-        sbox("Hazard mark", (x * 0.47, y, 0.62), (0.02, 0.16, 0.34), ORANGE)
-        sbox("Hazard mark", (x, y * 0.47, 0.62), (0.16, 0.02, 0.34), ORANGE)
-sbox("Beam X", (0.4, 0, 1.08), (0.2, 1.0, 0.14), DARK)
-sbox("Beam X", (-0.4, 0, 1.08), (0.2, 1.0, 0.14), DARK)
-sbox("Beam Y", (0, 0.4, 1.08), (1.0, 0.2, 0.14), DARK)
-sbox("Beam Y", (0, -0.4, 1.08), (1.0, 0.2, 0.14), DARK)
+for x in (-0.4625, 0.4625):
+    for y in (-0.4625, 0.4625):
+        sbox("Portal post", (x, y, 0.54), (0.075, 0.075, 0.96), CONCRETE)
+        sbox("Post cap", (x * 0.96, y * 0.96, 1.045), (0.11, 0.11, 0.07), SNOW)
+sbox("Beam X", (0.44, 0, 1.1), (0.12, 1.0, 0.16), DARK)
+sbox("Beam X", (-0.44, 0, 1.1), (0.12, 1.0, 0.16), DARK)
+sbox("Beam Y", (0, 0.44, 1.1), (1.0, 0.12, 0.16), DARK)
+sbox("Beam Y", (0, -0.44, 1.1), (1.0, 0.12, 0.16), DARK)
+for i in (-0.25, 0.25):
+    sbox("Hazard stripe", (i, -0.26, 0.07), (0.2, 0.08, 0.02), ORANGE)
+    sbox("Hazard stripe", (i, 0.26, 0.07), (0.2, 0.08, 0.02), ORANGE)
+    sbox("Hazard stripe", (-0.26, i, 0.07), (0.08, 0.2, 0.02), ORANGE)
+    sbox("Hazard stripe", (0.26, i, 0.07), (0.08, 0.2, 0.02), ORANGE)
 export("gate", out_dir=STRUCTURE_OUT, footprint=1.0, max_height=1.3)
 
 # Gun Turret: authored at 2x2 — a squat rotating drum with a long barrel
