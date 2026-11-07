@@ -1304,7 +1304,7 @@ fn build_app(app: &mut App) {
                 sync_view_visibility,
                 sync_interpolated_unit_transforms,
                 update_health_bars,
-                update_cold_tints,
+                update_building_view_states,
             ),
         )
         .add_systems(
@@ -1945,12 +1945,13 @@ fn building_is_cold(world: &World, team: TeamId, kind: BuildingKind, complete: b
         && surface_efficiency(world) < 1.0
 }
 
-/// Pushes each building view's cold state from Rust every Update — the
-/// per-view projection beside `update_health_bars`, never per-building
-/// GDScript snapshot polling. Re-evaluating the value every frame covers
-/// late-attached views and heating recovery; the view script caches the
-/// flag and skips redundant material writes.
-fn update_cold_tints(world: &mut World) {
+/// Pushes each building view's presentation state from Rust every Update —
+/// the per-view projection beside `update_health_bars`, never per-building
+/// GDScript snapshot polling. `complete` lets the view swap the generic
+/// construction site for its final kind model; `cold` lets it restyle.
+/// Re-evaluating both every frame covers late-attached views and heating
+/// recovery; the view script caches the flags and skips redundant work.
+fn update_building_view_states(world: &mut World) {
     let mut query = world.query::<(&Building, &GodotNodeHandle)>();
     let batch: Vec<(TeamId, BuildingKind, bool, GodotNodeHandle)> = query
         .iter(world)
@@ -1964,17 +1965,21 @@ fn update_cold_tints(world: &mut World) {
         })
         .collect();
     for (team, kind, complete, handle) in batch {
-        set_view_cold(handle, building_is_cold(world, team, kind, complete));
+        set_view_state(
+            handle,
+            complete,
+            building_is_cold(world, team, kind, complete),
+        );
     }
 }
 
-/// Value-gated write; the view caches the flag so warm buildings skip the
-/// material write entirely.
-fn set_view_cold(handle: GodotNodeHandle, cold: bool) {
+/// Value-gated write; the view caches both flags so a steady-state view
+/// skips the model swap and overlay write entirely.
+fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) {
     let Some(mut node) = node_from_handle(handle) else {
         return;
     };
-    node.call("set_cold", &[cold.to_variant()]);
+    node.call("set_state", &[complete.to_variant(), cold.to_variant()]);
 }
 
 fn reset_fixture_world(world: &mut World) {
