@@ -43,9 +43,6 @@ visible = false
 mesh = SubResource("CylinderMesh_ring")
 material_override = SubResource("Material_ring")
 
-[node name="RoleMarker" type="Node3D" parent="."]
-position = Vector3(0.55, 0, 0)
-
 [node name="HealthBar" type="MeshInstance3D" parent="."]
 position = Vector3(0, 1.35, 0)
 visible = false
