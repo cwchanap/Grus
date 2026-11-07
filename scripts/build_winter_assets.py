@@ -1,5 +1,5 @@
-"""Blender source for HPA-290 winter props and the HPA-291 structure-art
-pilot. Run: blender --background --factory-startup --python-exit-code 1
+"""Blender source for HPA-290 winter props and HPA-291 structure art.
+Run: blender --background --factory-startup --python-exit-code 1
 --python scripts/build_winter_assets.py."""
 
 import json
@@ -7,6 +7,7 @@ import math
 from pathlib import Path
 import random
 import struct
+import uuid
 
 import bpy
 from mathutils import Matrix, Vector
@@ -149,32 +150,49 @@ def export(name, resource=False, out_dir=None, footprint=1.0, max_height=None):
     bpy.context.view_layer.update()
     points = [Vector(corner) for corner in obj.bound_box]
     # The runtime scales obstacle X/Z to the authoritative blocked rectangle.
-    assert points and all(abs(p.x) <= 0.5 and abs(p.y) <= 0.5 for p in points), name
+    if not points or not all(abs(p.x) <= 0.5 and abs(p.y) <= 0.5 for p in points):
+        raise ValueError(f"{name}: geometry exceeds the normalized footprint")
     if not resource:
         # Scaling assumes the footprint fills the unit square edge-to-edge;
         # under-covering a blocked rect renders walkable cells as open ground.
-        assert min(p.x for p in points) <= -0.499 and max(p.x for p in points) >= 0.499, name
-        assert min(p.y for p in points) <= -0.499 and max(p.y for p in points) >= 0.499, name
-    assert min(p.z for p in points) >= -0.00001, name
+        if min(p.x for p in points) > -0.499 or max(p.x for p in points) < 0.499:
+            raise ValueError(f"{name}: geometry does not cover the horizontal footprint")
+        if min(p.y for p in points) > -0.499 or max(p.y for p in points) < 0.499:
+            raise ValueError(f"{name}: geometry does not cover the vertical footprint")
+    if min(p.z for p in points) < -0.00001:
+        raise ValueError(f"{name}: geometry extends below ground")
     height_cap = max_height if max_height is not None else (1 if resource else 2)
-    assert max(p.z for p in points) <= height_cap, name
+    if max(p.z for p in points) > height_cap:
+        raise ValueError(f"{name}: geometry exceeds its height limit")
     triangles = sum(len(face.vertices) - 2 for face in obj.data.polygons)
-    assert triangles < 4000, (name, triangles)
-    bpy.ops.export_scene.gltf(
-        filepath=str((out_dir or OUT) / f"{name}.glb"), export_format="GLB",
-        use_selection=True, export_yup=True, export_apply=True,
-        export_cameras=False, export_lights=False,
-        # Structure materials reference the committed albedo PNG by path —
-        # keep the original URI so Godot imports it as a project texture.
-        export_keep_originals=True,
-        export_vertex_color="ACTIVE",
-    )
-    glb_path = (out_dir or OUT) / f"{name}.glb"
-    glb_bytes = glb_path.read_bytes()
-    json_length = struct.unpack_from("<I", glb_bytes, 12)[0]
-    gltf = json.loads(glb_bytes[20:20 + json_length])
-    for image in gltf.get("images", []):
-        assert "uri" in image and "bufferView" not in image, (name, image)
+    if triangles >= 4000:
+        raise ValueError(f"{name}: triangle budget exceeded ({triangles})")
+    destination = (out_dir or OUT) / f"{name}.glb"
+    staged = destination.with_name(f".{name}-{uuid.uuid4().hex}.glb")
+    staged.touch(exist_ok=False)
+    try:
+        bpy.ops.export_scene.gltf(
+            filepath=str(staged), export_format="GLB",
+            use_selection=True, export_yup=True, export_apply=True,
+            export_cameras=False, export_lights=False,
+            # Keep the texture URI relative to the final output directory.
+            export_keep_originals=True,
+            export_vertex_color="ACTIVE",
+        )
+        glb_bytes = staged.read_bytes()
+        json_length = struct.unpack_from("<I", glb_bytes, 12)[0]
+        gltf = json.loads(glb_bytes[20:20 + json_length])
+        images = gltf.get("images", [])
+        if out_dir == STRUCTURE_OUT and not images:
+            raise ValueError(f"{name}: structure has no texture image")
+        for image in images:
+            if "uri" not in image or "bufferView" in image:
+                raise ValueError(f"{name}: texture is not an external URI: {image}")
+        if destination.exists():
+            staged.chmod(destination.stat().st_mode & 0o7777)
+        staged.replace(destination)
+    finally:
+        staged.unlink(missing_ok=True)
     print(f"WINTER_ASSET_OK {name}: {triangles} triangles")
     bpy.ops.object.delete(use_global=False)
 
@@ -266,7 +284,7 @@ for x, y, z, size in [(-0.22, 0.04, 0.32, 0.23), (0.08, 0.12, 0.43, 0.25),
 rock("Frozen snow crest", (0.1, 0.16, 0.68), (0.22, 0.16, 0.07), SNOW)
 export("coal_seam", resource=True)
 
-# ── HPA-291 structure pilot ────────────────────────────────────────────────
+# ── HPA-291 structures ─────────────────────────────────────────────────────
 # Building art lives under assets/structures/, keyed by the catalogue kind
 # name in snake_case, and shares one generated grain texture tinted by the
 # same vertex-color recipe the winter props use.
@@ -358,7 +376,7 @@ srock("Snow drift", (0.8, -0.8, 0.13), (0.14, 0.11, 0.06), SNOW)
 export("depot", out_dir=STRUCTURE_OUT, footprint=2.0, max_height=1.2)
 
 # Barracks: authored at its true 3x3 footprint — a broad fortified hall
-# ringed by a crenellated parapet with corner blocks.
+# ringed by a parapet with corner blocks.
 sbox("Plinth", (0, 0, 0.06), (3.0, 3.0, 0.12), CONCRETE)
 sbox("Snow apron", (1.0, -1.2, 0.125), (0.8, 0.5, 0.02), SNOW)
 sbox("Hall", (0, 0.1, 0.62), (2.5, 2.4, 1.0), CONCRETE)
@@ -384,7 +402,7 @@ srock("Snow drift", (-1.3, -0.6, 0.14), (0.15, 0.12, 0.07), SNOW)
 export("barracks", out_dir=STRUCTURE_OUT, footprint=3.0, max_height=1.7)
 
 # Wall: a symmetric four-side barricade authored at its 1x1 cell — band and
-# parapet reach every edge so straight runs read continuous in either axis,
+# rail reach every edge so straight runs read continuous in either axis,
 # and the corner blocks run into both bands before meeting a neighbor
 # gate's portal posts.
 sbox("Plinth", (0, 0, 0.03), (1.0, 1.0, 0.06), CONCRETE)
@@ -405,8 +423,8 @@ export("wall", out_dir=STRUCTURE_OUT, footprint=1.0, max_height=1.0)
 
 # Gate: a slim portal frame on every edge — four corner posts stay clear
 # of the centered traversal corridor wide enough for the broadest
-# friendly body in both axes, the ring beam rides overhead, and the wall
-# band's plinth and threshold still meet every edge.
+# friendly body in both axes, the ring beam rides overhead, and the plinth
+# and threshold still meet every edge.
 sbox("Plinth", (0, 0, 0.03), (1.0, 1.0, 0.06), CONCRETE)
 sbox("Threshold X", (0, 0, 0.07), (1.0, 0.36, 0.02), STEEL)
 sbox("Threshold Y", (0, 0, 0.07), (0.36, 1.0, 0.02), STEEL)

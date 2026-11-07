@@ -8,10 +8,10 @@
 ## Audited existing seams and scope
 
 - `crates/grus-sim/src/catalog.rs::building_spec` owns all ten building kinds/footprint sizes. `crates/grus-godot/src/lib.rs::building_view_transform` already centers and scales each view root X/Z to the footprint while Y stays 1.
-- `crates/grus-godot/src/lib.rs::update_cold_tints` already gathers `building.construction.complete` and the authoritative cold flag per view on every Update. Narrowly extend its `set_view_cold` helper to call Godot `set_state(complete, cold)` without touching simulation or tick order. **No per-building `building_snapshot` polling.**
+- `crates/grus-godot/src/lib.rs::update_building_view_states` gathers completion and the authoritative cold flag per view, dispatching Godot `set_state(complete, cold)` on first sight or a transition without touching simulation or tick order. **No per-building `building_snapshot` polling.**
 - `godot/scripts/resource_view.gd` already demonstrates kind-based model attachment, a visible fallback, and stopping `_process` when metadata has arrived. Reuse the pattern in `building_view.gd`; the building `HealthBar` and `set_health_ratio` stay in place.
 - `scripts/build_winter_assets.py` is the mandatory authored source for this art family: extend its existing generator, export assertions, colors and single-command regeneration. Reuse the winter `.glb.import` recipe and existing post-import script at `godot/assets/winter/winter_glb_import.gd`; avoid a copied importer or forked generator.
-- `economy_smoke_test.gd::_tint_is` currently checks flat `Body` albedo. After integration, assert the **active model** meshes' `material_overlay` instead, without reducing the heat/warm/cold/recovery checks.
+- `economy_smoke_test.gd::_overlay_is` checks the **active model** meshes' `material_overlay` while retaining the heat/warm/cold/recovery checks.
 - `battlefield_controller.gd` already has `_projected_art_rect` / `_view_art_bounds` for resources. Reuse them to pick large visible building silhouettes while excluding the `HealthBar` mesh.
 - **Allowed change:** Godot scenes, scripts, GLBs, textures, import settings, Blender source, smoke tests, docs, and the tiny **`crates/grus-godot` view projection**. No changes under `crates/grus-sim`, catalogue, gameplay balance, movement, buildings state, or tick sequencing. Unit art and audio stay on their separate tickets.
 
@@ -22,7 +22,7 @@
 - [ ] Identify the exact `Model` child / metadata / health bar / root transform seam and update any test helpers using primitive `Body`.
 - [ ] Keep the existing seven smoke flows **green at each checkpoint**. Do **not** assert all 11 missing GLBs in the first commit: `smoke_test.gd` quits on its first `_fail`, which would mask all later selection, fog, input and research regressions during the pilot.
 - [ ] Stage only the targeted two-asset pilot checks alongside Checkpoint 2; defer the catalogue-wide import loop until all models exist in Checkpoint 3.
-- [ ] Reuse the current catalogue `buildings` keys and `kind.to_snake_case()` to find assets; do not maintain a second ten-item mapping table in GDScript or a custom resource cache.
+- [ ] Use a constant `MODELS` preload map keyed by catalogue kind; asset stems follow the catalogue names in snake case.
 
 ## Checkpoint 2 — Bunkhouse + construction-site pilot, including state/overlay/picking
 
@@ -30,10 +30,10 @@
 
 - [ ] Extend existing Blender `export()` with optional `out_dir`, `footprint`, `max_height` parameters while preserving the six existing winter-prop outputs. Author Bunkhouse at **true 2×2 world size**, then divide its Blender horizontal X/Y coordinates by 2 on export, leaving Blender Z/Godot Y untouched. Assert normalized ±0.5 horizontal bounds, grounded base, allowed height, <4k triangles. Use `--python-exit-code 1`. Produce `bunkhouse.glb`, `construction_site.glb` and the required texture PNG via this same source.
 - [ ] Import pilot GLBs using the existing `.glb.import` recipe with `import_script/path="res://assets/winter/winter_glb_import.gd"` (the source is under `godot/assets/winter/`, **not** `godot/scripts/`). Verify texture references, real camera silhouette, clean imports and no accidentally generated physics/collision/navigation/occluder nodes.
-- [ ] Change the bridge view projection to `set_view_state(handle, complete, cold)`, calling Godot `set_state(complete: bool, cold: bool)`; **do not add a sim state field or new bridge snapshot method**. Value-gate repeated pushes in the GDScript view. Cache early pushes until `building_kind` metadata arrives; style once, then `set_process(false)` as in `resource_view.gd`.
+- [ ] Change the bridge view projection to `set_view_state(handle, complete, cold)`, calling Godot `set_state(complete: bool, cold: bool)`; **do not add a sim state field or new bridge snapshot method**. Value-gate repeated pushes in Rust, and cache early pushes in the view until `building_kind` metadata arrives. Stop processing after a successful model attachment and retry failed attachments.
 - [ ] Follow the `resource_view.gd` `Model` holder/fallback pattern. While `complete=false`, display the generic normalized site; on `complete=true`, swap **once** to the kind's final GLB. Preserve the root/id/footprint and health bar. Do not poll `GrusBridge` in `building_view.gd`; the selected-building HUD remains the consumer of `building_snapshot` progress.
 - [ ] Remove obsolete solid Team-1/Team-2 building tinting. Reuse one pale translucent `StandardMaterial3D` overlay, assigned to active `MeshInstance3D.material_overlay` on cold and `null` when warm, excluding the `HealthBar`. Never duplicate/mutate the imported mesh or its materials. Position the health bar from the active model's AABB.
-- [ ] Switch building picking to the existing projected-art-rect test (closest eligible center, team/fog filters unchanged); inspect **only the active `Model`**, not the `HealthBar`. Keep the center-radius fallback while metadata/art is not ready and preserve resource/unit picks.
+- [ ] Use the projected-art rectangle as a broad phase, then pick the depth-nearest ray hit on **the active `Model`**, excluding the `HealthBar`; preserve team/fog filters, center-radius fallback and resource/unit picks.
 - [ ] Add just Bunkhouse/construction-site import, construction-completion, cold/warm/recovery, selectable-roof and geometry tests to **existing** smoke scenes. Preserve their remaining legs. Capture an actual 1280×720 pilot screenshot for review before batching.
 
 ## Checkpoint 3 — Complete models, then enable catalogue-wide import coverage
@@ -53,7 +53,7 @@
 - [ ] Assert seeded 4×4 Research Center and active Bunkhouse/Depot/Barracks/Wall/Gate/Turret views use catalogue-scaled, grounded assets; Wall–Gate–Wall reads as one line in both orientations.
 - [ ] Validate push timing: state delivered before metadata, unfinished site → completed kind exactly once, later cold on/off and recovery, no stale model after restart. No per-frame snapshot reads; `_process` stops once metadata styling is done, while `set_state` continues reacting to authoritative pushes.
 - [ ] Replace `_tint_is` old `Body.material_override.albedo_color` check with every active model mesh's shared `material_overlay == ICE` when cold, `null` when warm, including repeated same-kind buildings. Retain the existing 15/16 deficit, furnace restoration, and zero-demand (Wall/Gate/Furnace) guards. No mutable per-instance material duplication test is needed.
-- [ ] Keep all established defenses smoke checks: Gate permits humans, walls obstruct aliens, turrets attack, health bars react, and selection/repair continues. Verify clicking the **Research Center roof** at maximum zoom and building silhouettes beyond the old 20px center, not merely the ground center. Exclude clicks on health-bar-only pixels.
+- [ ] Keep all established defenses smoke checks: Gate permits humans, walls obstruct aliens, turrets attack, health bars react, and selection/repair continues. Verify clicking the **Research Center roof** at maximum zoom and building silhouettes beyond the old 20px center, not merely the ground center. Exclude health-bar geometry from silhouette picking.
 - [ ] Preserve resource-gather picking, unit picking, fog visibility, research UI, pause/restart, underground panel and benchmark fortress census. Research-gated Flame Tower/Crystal Lance require asset-import proof, **not** a fabricated mid-game research unlock for short smoke runs.
 
 ## Checkpoint 5 — Existing quality gates and evidence on this PR

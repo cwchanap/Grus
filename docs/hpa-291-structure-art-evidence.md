@@ -5,15 +5,37 @@ Local verification on 2026-11-07, macOS / Apple M1 Pro (macOS 26), Godot
 (`aarch64-apple-darwin`, the only installed target) and Blender 5.2.1 LTS at
 `/Applications/Blender.app/Contents/MacOS/Blender`. Branch
 `hpa-291-structure-models`, evidence captured at commits
-`3ce8fc2`–`86ccca8`, with the post-review hardening round verified at
-the branch head below. No
+`3ce8fc2`–`86ccca8`, with the later post-review hardening checks described
+below. No
 `crates/grus-sim` or gameplay change exists on this branch (`git diff
 main...HEAD -- crates/grus-sim` is empty); the only
 `crates/grus-godot/src/lib.rs` delta is the permitted view-projection
 (`update_cold_tints` → `update_building_view_states`,
 `set_view_cold` → `set_view_state(complete, cold)`).
 
-## Checks actually run (all exit 0)
+## Review follow-up (2026-11-07)
+
+- The main, economy and defenses headless smokes exited 0 with their
+  success markers; the main smoke also printed
+  `SMOKE_STRUCTURE_AUDIT source_bytes=editor`. They cover overlapping
+  picks in both scene-tree orders, picking after a model swap, attachment
+  retries, vertex-color materials and the per-kind muzzle heights. One
+  earlier main-smoke run failed its interpolation threshold; the later
+  full run passed (`max_step_0.060`). All three final runs logged a macOS
+  sandbox certificate-store access error during startup.
+- `cargo fmt --all -- --check`, workspace and e2e-feature Clippy with
+  `-D warnings`, `cargo test --workspace --locked` (432 reported passed,
+  including the packaged-e2e skip; one release-only test ignored), and
+  serialized e2e-feature library tests (40 passed) exited 0.
+- Blender 5.2.1 regenerated all 18 script outputs in a temporary tree
+  byte-for-byte against the committed files. A separate forced missing-image
+  failure left the prior GLB and its permissions intact and removed the
+  temporary output. Blender required graphics access outside the sandbox
+  and emitted its existing `Material.use_nodes` deprecation warnings.
+- These are local results for the review fixes. Hosted CI and packaged
+  export have not been rerun for this follow-up.
+
+## Earlier checks (all exit 0)
 
 | Check | Command | Result |
 | --- | --- | --- |
@@ -95,14 +117,13 @@ A whole-branch `/code-review` of `main...HEAD` plus the PR's automated
 reviewers produced a second fix round on top of `64699e1`. Changes:
 
 - Building picking now ray-tests the active Model's real triangles
-  (`Geometry3D.ray_intersects_triangle`, world-space triangles cached per
-  view and invalidated on model swap) and sorts hits by depth along the
+  (Godot's cached `Mesh.generate_triangle_mesh()`), and sorts hits by depth along the
   camera ray, so a foreground structure wins over a background one whose
   projected bounds overlap; the center-radius floor still covers
   unstyled views and near-miss clicks on small buildings.
 - `update_building_view_states` value-gates the Godot `set_state` call
   per building entity (`BuildingLastViewState`), so steady-state views
-  no longer receive ~8.8k dynamic calls/s in the 146-building benchmark.
+  no longer receive one dynamic call per rendered Update in steady state.
 - `building_view.gd` preloads the ten finished GLBs in a const `MODELS`
   map (the `resource_view.gd` pattern) instead of a synchronous `load()`
   on first completion of each kind.
@@ -145,7 +166,9 @@ Captured on the live game (`godot --path godot`, Metal/GL renderer, real
 `GrusBridge` commands (`start_match`, `set_sim_speed(20)`, `gather`,
 `place_building`, `placement_preview`) and read snapshots — the same
 commands the HUD buttons produce. The script was deleted after the run;
-each PNG was asserted 1280×720 at capture. Orthographic camera framing was
+each PNG was asserted 1280×720 at capture. Positions in the captions are
+capture notes and cannot be independently replayed without the deleted
+script. Orthographic camera framing was
 set on the live `Camera3D` only (position/size; no state change), followed
 by `reset_physics_interpolation()` (the project runs with
 `common/physics_interpolation=true`, which otherwise lerps ortho `size`
