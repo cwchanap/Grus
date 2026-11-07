@@ -1,6 +1,6 @@
 # HPA-291 — Winter Survival structure art design
 
-**Status:** Planning draft, revised after [GitHub design review](https://github.com/cwchanap/Grus/pull/20#issuecomment-6690066100); assets, integration, and testing have not yet been implemented.
+**Status:** Implemented on this branch — post-review hardening verified locally; required CI evidence pending.
 **Linear:** https://linear.app/cwchanap/issue/HPA-291/grus-survival-art-structure-models
 **Parent:** [Winter Survival gameplay contract](2026-10-21-winter-survival-design.md)
 **Execution:** This draft becomes the **one asset-and-presentation implementation PR** for HPA-291. Extend the same PR with GLBs, integration, tests, evidence, and review fixes.
