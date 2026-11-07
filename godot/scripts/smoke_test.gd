@@ -344,6 +344,36 @@ func _assert_structure_import(path: String) -> bool:
 	model.free()
 	return true
 
+func _assert_gate_corridor(path: String) -> bool:
+	var packed := load(path) as PackedScene
+	var model := packed.instantiate() as Node3D if packed != null else null
+	if model == null:
+		_fail("gate import did not instantiate: %s" % path)
+		return false
+	add_child(model)
+	var corridors := [
+		AABB(Vector3(-0.5, 0.085, -0.42), Vector3(1.0, 0.915, 0.84)),
+		AABB(Vector3(-0.42, 0.085, -0.5), Vector3(0.84, 0.915, 1.0)),
+	]
+	var tool := MeshDataTool.new()
+	for node in model.find_children("*", "MeshInstance3D", true, false):
+		var mesh_node := node as MeshInstance3D
+		var to_model: Transform3D = model.global_transform.affine_inverse() * mesh_node.global_transform
+		for surface in mesh_node.mesh.get_surface_count():
+			if tool.create_from_surface(mesh_node.mesh, surface) != OK:
+				_fail("gate mesh surface %d unreadable on %s" % [surface, mesh_node.name])
+				return false
+			for face in tool.get_face_count():
+				var triangle := AABB(to_model * tool.get_vertex(tool.get_face_vertex(face, 0)), Vector3.ZERO)
+				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 1)))
+				triangle = triangle.expand(to_model * tool.get_vertex(tool.get_face_vertex(face, 2)))
+				for corridor in corridors:
+					if corridor.intersects(triangle):
+						_fail("gate traversal corridor blocked by %s: %s in %s" % [mesh_node.name, triangle, corridor])
+						return false
+	model.free()
+	return true
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -606,6 +636,8 @@ func _run() -> void:
 			return
 		hookup_view.free()
 	if not _assert_structure_import("res://assets/structures/construction_site.glb"):
+		return
+	if not _assert_gate_corridor("res://assets/structures/gate.glb"):
 		return
 
 	var size_before_zoom := camera.size
@@ -1669,5 +1701,5 @@ func _run() -> void:
 	if not wave_error.is_empty():
 		_fail(wave_error)
 		return
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup silhouette_pick=roof_triangle" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear silhouette_pick=roof_triangle" % max_visual_step)
 	get_tree().quit(0)
