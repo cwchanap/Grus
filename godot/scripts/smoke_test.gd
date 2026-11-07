@@ -320,6 +320,23 @@ func _assert_structure_import(path: String) -> bool:
 			_fail("%s mesh material does not resolve a committed structures texture: %s" % [
 				path, texture.resource_path if texture != null else "missing"])
 			return false
+	# Raw GLB source bytes exist only under an editor binary: an export
+	# remaps the .glb to its imported PackedScene inside the PCK, where
+	# FileAccess can no longer read the original file. OS.has_feature
+	# ("editor") is true for any project run by an editor binary — the
+	# case for every source smoke — and false in exported templates;
+	# Engine.is_editor_hint() cannot distinguish because this scene does
+	# not run inside the editor.
+	if OS.has_feature("editor") and not _assert_structure_source(path):
+		return false
+	model.free()
+	return true
+
+## Source-byte half of _assert_structure_import, reachable only under an
+## editor binary (see the call-site gate): parses the committed GLB's own
+## header and JSON chunk. A packaged build never reaches this — the PCK
+## holds the imported PackedScene the runtime checks above exercise.
+func _assert_structure_source(path: String) -> bool:
 	var glb := FileAccess.open(path, FileAccess.READ)
 	if glb == null or glb.get_32() != 0x46546C67:
 		_fail("%s is not a binary glTF" % path)
@@ -344,7 +361,6 @@ func _assert_structure_import(path: String) -> bool:
 				or not FileAccess.file_exists(texture_path)):
 			_fail("%s image uri does not resolve a committed structures texture: %s" % [path, texture_path])
 			return false
-	model.free()
 	return true
 
 func _mesh_triangles(model: Node3D) -> Array:
@@ -906,6 +922,7 @@ func _run() -> void:
 	# this short run never builds. The generic site is checked separately
 	# as the only non-catalogue asset.
 	var building_view_scene := load("res://scenes/building_view.tscn") as PackedScene
+	print("SMOKE_STRUCTURE_AUDIT source_bytes=%s" % ("editor" if OS.has_feature("editor") else "skipped_packaged"))
 	for kind in GrusBridge.catalogue_snapshot().get("buildings", {}):
 		var kind_path := "res://assets/structures/%s.glb" % str(kind).to_snake_case()
 		if not _assert_structure_import(kind_path):
@@ -1018,10 +1035,18 @@ func _run() -> void:
 			return
 	twin_view.free()
 	site_view.free()
-	var view_source := FileAccess.get_file_as_string("res://scripts/building_view.gd")
-	if view_source.contains("GrusBridge"):
-		_fail("building_view.gd reads the bridge — state must arrive only via set_state pushes")
-		return
+	# Same editor-binary gate as the GLB byte audit above: an export
+	# compiles building_view.gd to .gdc inside the PCK, so a source-text
+	# poll is meaningless there — and an unreadable file must fail, never
+	# pass vacuously.
+	if OS.has_feature("editor"):
+		var view_source := FileAccess.get_file_as_string("res://scripts/building_view.gd")
+		if view_source.is_empty():
+			_fail("building_view.gd source is unreadable under the editor binary")
+			return
+		if view_source.contains("GrusBridge"):
+			_fail("building_view.gd reads the bridge — state must arrive only via set_state pushes")
+			return
 
 	var size_before_zoom := camera.size
 	_mouse_click(Vector2(640.0, 360.0), MOUSE_BUTTON_WHEEL_UP)
