@@ -871,9 +871,15 @@ func _run() -> void:
 	# cold toggles never re-swap the attached model; _process stops once
 	# styled while set_state keeps answering later pushes.
 	var early_view := building_view_scene.instantiate() as Node3D
-	early_view.set_state(true, true)
-	early_view.set_meta("building_kind", "Depot")
 	add_child(early_view)
+	early_view.set_state(true, true)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not early_view.is_processing() or early_view.get_node_or_null("Model") != null:
+		_fail("a view whose kind metadata is still delayed stopped awaiting styling: processing=%s model=%s" % [
+			early_view.is_processing(), early_view.get_node_or_null("Model")])
+		return
+	early_view.set_meta("building_kind", "Depot")
 	await get_tree().process_frame
 	var early_model := early_view.get_node_or_null("Model") as Node3D
 	var shared_ice: Material = early_view.get_script().get("ICE_OVERLAY")
@@ -1938,24 +1944,45 @@ func _run() -> void:
 	health_bar.position = bar_home + Vector3(0.0, 4.0, 0.0)
 	await get_tree().process_frame
 	var scoped_rect: Rect2 = main.call("_projected_art_rect", rc_view, rc_view.get_node("Model"))
-	var unscoped_rect: Rect2 = main.call("_projected_art_rect", rc_view)
+	var bar_hud_rects: Array[Rect2] = []
+	for node in get_node("Main/HUD").find_children("*", "Control", true, false):
+		var control := node as Control
+		if control != null and control.is_visible_in_tree() \
+				and control.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			bar_hud_rects.append(control.get_global_rect())
 	var bar_point := Vector2.INF
-	for row in 20:
-		for column in 20:
-			var candidate := Vector2(
-					unscoped_rect.position.x + unscoped_rect.size.x * (column + 0.5) / 20.0,
-					unscoped_rect.position.y + unscoped_rect.size.y * (row + 0.5) / 20.0)
-			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
-					or scoped_rect.has_point(candidate) \
-					or (main.call("_building_at", candidate, 1) as Node3D) != null \
-					or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
-				continue
-			bar_point = candidate
-			break
+	for surface_index in health_bar.mesh.get_surface_count():
+		var arrays := health_bar.mesh.surface_get_arrays(surface_index)
+		var vertices := arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array
+		var indices = arrays[Mesh.ARRAY_INDEX]
+		var triangle_count := int(indices.size() / 3) if indices != null and not indices.is_empty() else int(vertices.size() / 3)
+		for face_index in triangle_count:
+			var va := vertices[indices[face_index * 3]] if indices != null and not indices.is_empty() else vertices[face_index * 3]
+			var vb := vertices[indices[face_index * 3 + 1]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 1]
+			var vc := vertices[indices[face_index * 3 + 2]] if indices != null and not indices.is_empty() else vertices[face_index * 3 + 2]
+			var projected_bar := PackedVector2Array([
+					camera.unproject_position(health_bar.global_transform * va),
+					camera.unproject_position(health_bar.global_transform * vb),
+					camera.unproject_position(health_bar.global_transform * vc)])
+			var bar_centroid := (projected_bar[0] + projected_bar[1] + projected_bar[2]) / 3.0
+			for candidate in [bar_centroid,
+					bar_centroid + (projected_bar[0] - bar_centroid) * 0.5,
+					bar_centroid + (projected_bar[1] - bar_centroid) * 0.5,
+					bar_centroid + (projected_bar[2] - bar_centroid) * 0.5]:
+				if not Geometry2D.is_point_in_polygon(candidate, projected_bar) \
+						or not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+						or scoped_rect.has_point(candidate) \
+						or bar_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)) \
+						or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
+					continue
+				bar_point = candidate
+				break
+			if bar_point != Vector2.INF:
+				break
 		if bar_point != Vector2.INF:
 			break
 	if bar_point == Vector2.INF:
-		_fail("no health-bar-only pixel exists outside the Research Center's model silhouette")
+		_fail("no HealthBar triangle projects a pixel clear of the Research Center's model silhouette")
 		return
 	_mouse_click(bar_point, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
