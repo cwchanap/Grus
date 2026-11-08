@@ -42,13 +42,13 @@ main...HEAD -- crates/grus-sim` is empty); the only
 | Build + stage + sign | `cargo build -p grus-godot --locked --offline`, `cp target/debug/libgrus_godot.dylib godot/bin/`, `codesign --force --sign - godot/bin/libgrus_godot.dylib` | Passed; `codesign -v` clean. Fresh binary staged before every run below. |
 | Fresh editor import | `godot --headless --path godot --editor --quit-after 120` with `godot/.godot` deleted first | Exit 0; 313-line log contains zero WARNING/ERROR lines; all 11 structure GLBs and 6 winter GLBs reimported; `.godot` cache regenerated. |
 | Blender regeneration | `blender --background --factory-startup --python-exit-code 1 --python scripts/build_winter_assets.py` (absolute app-bundle binary; `blender` is not on PATH here) | Exit 0; 17 `WINTER_ASSET_OK` lines; only two `DeprecationWarning` Python notices about `Material.use_nodes` (Blender 6.0 deprecation, unrelated to export); **zero GLB image warnings**. SHA-256 of all 11 structure GLBs + `structure_albedo.png` + all 6 winter GLBs + `snow_albedo.png` byte-identical to committed outputs (`shasum -a 256 -c`: 19/19 OK); `git status` clean afterwards. |
-| `res://scenes/smoke_test.tscn` | `godot --headless --path godot` | `GRUS_GODOT_SMOKE_OK units=4 ... structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc interpolation=max_step_0.118`; also prints `SMOKE_STRUCTURE_AUDIT source_bytes=editor` (raw-GLB and building_view.gd source audits run under the editor binary) |
-| `res://scenes/reset_test.tscn` | same | `GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true heat=15/10/100%` |
-| `res://scenes/economy_smoke_test.tscn` | same | `GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded ... elapsed_ms=24661` |
-| `res://scenes/combat_lifecycle_smoke_test.tscn` | same | `GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh ... research_boundary=analyze_reject8_zero_crystal` |
-| `res://scenes/wave_smoke_test.tscn` | same | `GRUS_WAVE_SMOKE_OK start_pause_clock_frozen=true warning_hud=true snapshot_anchor_pings=true fog_markers_gated=true role_probes=white_box journey=kill_crystal_defeat_restart` |
-| `res://scenes/defenses_smoke_test.tscn` | same | `GRUS_DEFENSE_SMOKE_OK wall_ring=28 ... turret_tracer_origin=building_view defense_models=catalogue_glb_grounded setup_s=16.3 post_wave_s=17.6` |
-| `res://scenes/underground_smoke_test.tscn` | same | `GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=740 gathered_coal=110 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=40.00 elapsed_ms=13706` |
+| `res://scenes/smoke_test.tscn` | `godot --headless --path godot res://scenes/smoke_test.tscn` | `GRUS_GODOT_SMOKE_OK units=4 ... structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc interpolation=max_step_0.118`; also prints `SMOKE_STRUCTURE_AUDIT source_bytes=editor` (raw-GLB and building_view.gd source audits run under the editor binary) |
+| `res://scenes/reset_test.tscn` | `godot --headless --path godot res://scenes/reset_test.tscn` | `GRUS_RESET_SMOKE_OK units=4 buildings=1 resources=18 stockpile=200/300/150/0 population=4/10 fog=128x96 pre_wave=true heat=15/10/100%` |
+| `res://scenes/economy_smoke_test.tscn` | `godot --headless --path godot res://scenes/economy_smoke_test.tscn` | `GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded ... elapsed_ms=24661` |
+| `res://scenes/combat_lifecycle_smoke_test.tscn` | `godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn` | `GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh ... research_boundary=analyze_reject8_zero_crystal` |
+| `res://scenes/wave_smoke_test.tscn` | `godot --headless --path godot res://scenes/wave_smoke_test.tscn` | `GRUS_WAVE_SMOKE_OK start_pause_clock_frozen=true warning_hud=true snapshot_anchor_pings=true fog_markers_gated=true role_probes=white_box journey=kill_crystal_defeat_restart` |
+| `res://scenes/defenses_smoke_test.tscn` | `godot --headless --path godot res://scenes/defenses_smoke_test.tscn` | `GRUS_DEFENSE_SMOKE_OK wall_ring=28 ... turret_tracer_origin=building_view defense_models=catalogue_glb_grounded setup_s=16.3 post_wave_s=17.6` |
+| `res://scenes/underground_smoke_test.tscn` | `godot --headless --path godot res://scenes/underground_smoke_test.tscn` | `GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=740 gathered_coal=110 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=40.00 elapsed_ms=13706` |
 | Packaged smoke-entry context | `godot --headless --path <scratch copy> --export-pack "Linux x86_64" <pck>` under the project's own preset, then the official 4.7.1 `godot_macos_debug` template binary run headless against the side-car `.pck` with `bin/libgrus_godot.dylib` beside it — the layout CI's export step produces | Exit 0; `SMOKE_STRUCTURE_AUDIT source_bytes=skipped_packaged` then the full `GRUS_GODOT_SMOKE_OK` contract (input/selection/move/cadence, fog scout leg, `structures=catalogue_hookup`, gate corridor/contact/run, push contract). The PCK carries the same `res://.godot/imported/*.scn` remaps and compiled `.gdc` scripts a Linux export produces. Pre-fix this exact setup reproduced the CI failure (`res://assets/structures/research_center.glb is not a binary glTF`, exit 1). Recorded in the follow-up fix commit `86ccca8`; Linux CI remains the gate for the real Linux binary — run `42367529198` on `86ccca8` has since passed it (CI section below). |
 | fmt | `cargo fmt --all -- --check` | Exit 0 |
 | Clippy workspace | `cargo clippy --workspace --all-targets --locked --offline -- -D warnings` | Exit 0 |
@@ -156,8 +156,12 @@ radius_steal=rect_scoped unstyled_fallback=center_radius` (the
 `healthbar_px` marker is gone with its leg), `GRUS_ECONOMY_SMOKE_OK
 bunkhouse_model=site_to_glb overlays=cold_warm_recovery
 zero_demand=wall_gate_furnace bounds=catalogue_grounded`, and the
-other five scene markers unchanged. PR CI on the new head is the
-remaining gate, same as every prior round.
+other five scene markers unchanged. PR CI on the new head was the
+remaining gate, same as every prior round; it has since passed —
+[hosted CI #296](https://github.com/cwchanap/Grus/actions/runs/42433762110)
+on `38e7837` is green on all four jobs (build/lint, unit tests +
+coverage, survival-balance, and e2e with the seven gameplay smokes,
+the Linux export and the packaged-game smoke).
 
 ## Rendered evidence — real 1280×720 frames
 
