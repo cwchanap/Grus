@@ -5,26 +5,34 @@
 **Parent:** [Winter Survival design](2026-10-21-winter-survival-design.md)
 **Execution:** The draft PR for these documents is the **one implementation PR for HPA-269**. Complete SFX generation, Godot integration, tests, and review changes on this branch; do not open a separate coding PR.
 
-## Goal and scope
 
-Replace the procedural 8-bit blip in `godot/scripts/combat_fx.gd` with a coherent winter-survival sound set and add actionable wave, cold, win/lose, and winter-wind cues. All gameplay decisions remain in Rust/Bevy. HPA-269 is the **dedicated audio-art ticket**: author original (or appropriately licensed) sound files here rather than folding asset generation into another feature's code task.
+## Goal, source and boundaries
 
-**In scope:** files in `godot/assets/audio/`; the existing `godot/scenes/main.tscn`, `godot/scripts/combat_fx.gd`, `godot/scripts/battlefield_controller.gd`; focused edits to current Godot smoke scripts; documentation and audible QA.
+Replace the procedural 8-bit blip in `godot/scripts/combat_fx.gd` with a cohesive winter-survival sound set and add wave, cold, wind and outcome cues. **HPA-269 is the dedicated SFX/art ticket**; audio generation and its presentation hookup belong to this one PR, separate from the gameplay implementation tickets.
 
-**Out of scope:** `crates/`, combat events or bridge schemas, wave/heat/result rules, balance, new unit/building features, new persistent game state, a sound middleware layer, dialogue/music/voice-over, dynamic music, a procedural SFX generator, and changes to HPA-44/HPA-82/HPA-291 visual assets. No need for a second audio ticket.
+**Committed source of the sounds:** a small deterministic offline synthesis script, `scripts/build_sfx_assets.py`, using Python standard-library waveform/noise/envelope synthesis and fixed random seeds. This follows the repo's `scripts/build_unit_assets.py` / `scripts/build_winter_assets.py` convention and costs no API credits or licensing fees. It generates temporary PCM samples, then a **single documented ffmpeg cleanup/export pass** creates the committed OGG Vorbis files. The script is authoring-only, not part of game startup, CI, or a new asset pipeline. Capture the seed, settings, command and any manual editing in `godot/assets/audio/README.md`. Use distinctly layered noise/filter/pitch/envelope shapes for weapons, alien cries, stingers and a seamless wind loop; reject artificial-sounding results at the human listening gates rather than silently substituting unrelated stock audio.
 
-## Existing code contracts checked on `main`
+**Cleanup versus mixing:** apply the same reproducible ffmpeg steps to each source (trim, short edge fade where appropriate, target loudness and peak ceiling, OGG encode); for looping wind, avoid fade-out/fade-in dips and construct/crossfade a seamless boundary before export. Document exact filter arguments and any per-sound exception. In-game balance is then a **per-cue `volume_db` field** in the one cue table, not re-encoding all 18 files each time the mix changes.
 
-- `CombatFx` is a single `Node3D` in `godot/scenes/main.tscn` using `combat_fx.gd`. It currently owns one `AudioStreamPlayer` and generates a 60 ms sawtooth blip via `_make_blip()`. It also owns tracer/hit/death meshes and `clear_all()` for restart.
-- `battlefield_controller.gd::_refresh_session()` reads `session_snapshot()` once per frame, drains `drain_combat_events()` while Playing and on the **first Result frame**, and calls `_dispatch_combat_event()`. This is the integration point, not a new Godot event bus.
-- Each combat dictionary has `attacker_kind` (`unit`, `building` or scrubbed), `attacker` (stable ID), `target_kind`, `target_id`, hit `x/y`, `ranged`, and `killed`. **These are identity categories, not specific unit/building kinds.** The current controller resolves `_unit_view(id)` and `_building_view(id)`; view metadata contains `unit_kind`, `building_kind`, and `team_id`. The bridge scrubs hidden enemy attacker identity to unit ID 0 so effects cannot reveal unseen positions.
-- The target of a killing blow may already have lost its Godot view when GDScript drains the event. Resolve victim/attacker kind from a live view **or a bounded previous-frame stable-ID-to-kind cache** collected from view metadata. Refresh/prune the cache *after* processing each frame's events. A unit spawned and killed entirely between rendered frames may be unknown: use generic impact/silence, never guess a specific alien kind or change Rust just for cosmetics.
-- `_refresh_hud()` already reads `wave_snapshot()` (with `next_wave`, `incoming_zones` and `seconds_remaining`) and `economy_snapshot()` (with `surface_efficiency`). `_refresh_session_overlay()` knows Start, Playing, Paused, Result and `winner_team`. `_restart_match()` already calls `_fx.clear_all()`. Reuse those existing reads and transitions.
-- `godot/scripts/{combat_lifecycle_smoke_test,wave_smoke_test,economy_smoke_test}.gd` cover real combat/result/restart, public warning windows and a real heat deficit respectively; extend them instead of creating an eighth headless smoke runner.
+**Human quality gates:** after three prototype sounds are routed through the real Godot scene, **stop implementation and ask the user to listen and approve them**; repeat with all 18 sounds and actual gameplay before marking the PR ready. A coding agent or headless runner must not check these gates off without genuine human listening approval. The first gate controls whether to make the other 15 sounds; the second controls release readiness.
+
+**Runtime scope:** `godot/assets/audio/`, `godot/scripts/combat_fx.gd`, `godot/scripts/battlefield_controller.gd`, existing Godot smoke scripts and minimal scene wiring if needed. The offline source script is the sole `scripts/` addition.
+
+**Explicit exclusions:** `crates/`, bridge/event schema changes, gameplay/balance, new units or buildings, runtime synthesis, networking, third-party middleware, custom audio buses, spatial per-unit emitters, dynamic music, dialogue/voice-over, or changes to other art tickets. No second implementation PR and no separate SFX ticket for this existing task.
+
+## Existing integration contracts checked on `main`
+
+- `CombatFx` in `godot/scenes/main.tscn` currently owns one `AudioStreamPlayer`, a 60 ms procedurally generated blip, transient meshes, and `clear_all()` for effect hygiene. Keep its combat visuals.
+- `battlefield_controller.gd::_refresh_session()` drains combat events in Playing and on the **first Result frame**, calls `_dispatch_combat_event()` and renders the result overlay. This path already guarantees the killing blow's visuals reach the Result frame.
+- Combat dictionaries carry `attacker_kind` (identity category `unit` or `building`), `attacker` ID, `target_kind`, `target_id`, `ranged`, `killed`, and hit position, **not concrete kind**. Godot unit/building views already expose `unit_kind` / `building_kind` metadata. The bridge scrubs hidden enemy attackers to ID 0. Never infer a hidden attacker's type or add a Rust bridge field.
+- A killed target's view can disappear before event drain, so maintain **one current per-frame mapping** of view IDs to kind plus the previous frame's mapping for dead targets. Build both current maps once by scanning the view groups each rendered frame; resolve present attackers from current, killed targets from current or previous, then replace the previous maps with current. No per-event additional group scans for *audio*, no persistent growth or pruning, and no required cache-reset hooks. The existing live-view lookup for **tracer placement** remains unchanged. Entities born and killed entirely between frames may have no resolvable kind: keep the visual impact but do not invent audio.
+- `_refresh_hud()` already reads `wave_snapshot()` and `economy_snapshot()` each frame; `session_snapshot()` supplies Start/Playing/Paused/Result and winner. Reuse those same reads to drive presentation edges; do not make new bridge queries.
+- `smoke_test.gd` and `economy_smoke_test.gd` call `GrusBridge.reset_fixture()` directly, bypassing `_restart_match()`. Sound dedup must heal from snapshots across these reset paths, not require a centralized reset caller.
+- Existing `combat_lifecycle_smoke_test.gd`, `wave_smoke_test.gd`, `economy_smoke_test.gd` and `defenses_smoke_test.gd` cover the appropriate real journeys. Extend them, not the number of shipped smoke runners.
 
 ## Asset inventory: 18 original audio files
 
-Use concise, deterministic, snake_case paths in `res://assets/audio/`. Prefer compressed OGG Vorbis for all shipped files; WAV is acceptable for a short effect when quality or import behavior justifies its size. The table names use `.ogg` as the default actual deliverable, not an arbitrary naming generator.
+Use concise, deterministic snake_case paths in `res://assets/audio/`. **All 18 final assets are OGG Vorbis** (no WAV exceptions); the table is the exact path contract for source generation, Godot preloads and smoke checks.
 
 | Event | File under `godot/assets/audio/` | Sound direction |
 | --- | --- | --- |
@@ -47,38 +55,52 @@ Use concise, deterministic, snake_case paths in `res://assets/audio/`. Prefer co
 | Defeat | `alerts/defeat.ogg` | Dark, concise failure stinger |
 | Wind loop | `ambience/winter_wind_loop.ogg` | Quiet seamless cold wind; no hard loop seam |
 
-**18 files total:** 13 combat, 4 alerts/outcome, 1 ambience. Deliver every listed cue, rather than conflating alien attacks with deaths. Aim for very short combat samples, alerts around 1–2 seconds, result stingers a few seconds, and a roughly 15–30-second seamless ambient bed; adjust by listening, not by artificially enforcing durations. Remove DC offset, clipping, excess silence, abrupt sample endpoints and loudness mismatches. Keep prompts/source records, license/rights where applicable, attribution, and any editing steps in `godot/assets/audio/README.md`. Runtime needs only the committed audio files and Godot's normal import settings—no generated-on-launch or network-loaded sound.
+**18 files total:** 13 combat, 4 alerts/outcome, 1 ambience. Keep attacks separate from deaths. Target brief combat effects, concise 1–2-second warnings, short stingers and roughly 15–30 seconds of seamless ambient wind; adjust from listening. The production script/ffmpeg command and source/rights notes are recorded in `godot/assets/audio/README.md`. Commit source script and generated OGG files; **do not** run generation during application startup or CI.
 
-**Art prototype:** create and import *three* representative sounds first (Gun Turret shot, Swarmer death, wind loop). Play them together in a real 1280×720 Godot session, settle loudness/contrast and wind loop quality, then produce the other 15 sounds. One cohesive sound family, not a collection of unrelated loud stock clips.
+**Three-clip pilot:** synthesize Gun Turret fire, Swarmer death and winter wind, import them, wire them into their actual in-game event paths, and run a focused smoke assertion before the first **human listening approval**. Only then author the remaining 15 sounds. This avoids a throwaway audio test harness.
+
 
 ## Presentation integration
 
-### Combat: small cue router in existing `CombatFx`
+### One cue table and native Godot polyphony
 
-Replace `_make_blip()` with static paths or a small `Dictionary` mapping existing gameplay kind names to audio streams; load/cached streams once on `_ready()`, without per-hit disk reads or a new autoload. Keep the current tracer/hit/death visual methods unchanged. `_dispatch_combat_event()` selects one attack sound by attacker kind (building: GunTurret/FlameTower/CrystalLance; unit: Guard/Rifleman/four alien kinds) and an additional death sound when `killed` identifies an alien victim. Ordinary impact visuals still play for all hits. Do not emit a death cue for a surviving unit. If a lookup is unavailable, keep impact feedback but omit the misidentified specific sound.
+Replace `_make_blip()` with **one `const CUES` dictionary** in `combat_fx.gd`. Each row declares a cue ID, `preload("res://assets/audio/…ogg")`, starting `volume_db`, and `max_polyphony`. Construct one non-spatial `AudioStreamPlayer` per cue in a loop at `_ready()`. Use **Godot's built-in `AudioStreamPlayer.max_polyphony`** (2 for combat cues, 1 for warnings, wind and stingers initially), rather than an 8-player pool or hand-managed voice allocation. Keep the existing visual effects unchanged.
 
-**Visibility:** do not infer hidden alien attack types from a scrubbed `attacker=0`; no audio based on hidden enemy positions, and no new reveal logic. A sound for a visible alien's action is fine; unseen attackers remain generic/silent. Stable ID cache is purely presentational and cleared on restart; never used to issue commands or remember gameplay state.
+Provide one `play_cue(cue_id)` function with a short **per-cue 150 ms throttle for combat**, not another per-frame quota. Polyphony naturally caps simultaneous voices of a cue; different categories do not cut off one another. `CUES` also contains adjustable `volume_db` for mixing without touching source audio. Use an independent player for wind and each Result cue, but they come from the same table. Preserve the killing-blow sound *alongside* the Result stinger; do not duck via a nonexistent audio bus or stop combat one-shots before the stinger.
 
-**Mixing:** use a small bounded pool (suggest up to 8 reusable non-spatial `AudioStreamPlayer` one-shot voices) for overlapping combat hits; the existing one-player model would cut off each preceding hit. Bound the number started per rendered frame and rate-limit common categories to avoid a 150-alien wave becoming constant noise, especially with 20× sim speed. Prefer representative audio over dropping visual impacts; alerts/outcomes must not compete for a combat voice. This is an RTS wide-view mix, so non-spatial players are sufficient for MVP; no per-unit 3D emitters, bus tree or spatialization framework.
+**Errors are not all silence:** (a) scrubbed/unknown attacker identity stays silent, with existing visual impact; (b) a **known supported attacking unit/building kind** without a cue-table mapping calls `push_error()` so a regression is visible; (c) a missing or broken file fails at script load through `preload()`, never `ResourceLoader.exists()` fallback. A single existing smoke checks the **final 18 non-null preloads** and mappings for three towers, Guard, Rifleman, and all four alien kinds, plus four death variants. The pilot stage may assert its three provisional entries until the remaining files land. Do not raise missing-sound errors for explicitly noncombat kinds such as Worker, or for scrubbed ID 0.
 
-### Wave, heat, ambient and result
+### Combat identity and routing
 
-- **Wave horn:** the first transition to nonempty `incoming_zones` for a new `next_wave` plays once. Keep the announced wave number as the dedup key; do not re-trigger each frame, on minimap ping expiry, or when several zones are listed. Use *only* the existing authoritative wave snapshot.
-- **Freeze warning:** once on the Playing-state warm-to-cold transition when `surface_efficiency < 1.0`. Re-arm only after the base reaches full efficiency again. No repeated siren while the value remains below 100%, and no warnings while Start/Paused/Result. This is not a separate heat model.
-- **Wind:** one quiet looping `AudioStreamPlayer` under `CombatFx`, begun in Playing, paused/resumed with the session, and stopped on Result or Restart. Listen for gapless loop boundaries and for alerts to remain clearly audible.
-- **Victory / Defeat:** one stinger on *entry* into Result, chosen from `session_snapshot().winner_team == 1`. Stop or duck wind and stop combat one-shots before the stinger; the settle tick's existing visual hit/death effect must still render once. Re-entering `_process()` must not replay the stinger.
-- **Session transitions:** Start is silent; Pause freezes audio without queuing/replaying old warning/attack effects; Resume continues the wind without replaying the last horn/cold warning; Restart clears every playing one-shot, ambience, warning dedup key, last-known identities and result flag. Maintain existing `_fx.clear_all()` responsibilities, extended for audio.
-- **UI accessibility:** leave text and HUD signals intact. Alerts reinforce, never replace, existing wave and surface-efficiency indicators. Do not auto-unpause or change any gameplay rule to play a sound.
+Build the current view-kind dictionaries **once per rendered frame**. Use the current dictionary for live attackers and either current or last-frame dictionary for an alien killed this frame; swap current into last-frame after event handling. Keep tracer mesh placement using existing live view resolution. A known Guard/Rifleman or tower gets its own attack clip; each of the four alien kinds has separate attack and killed-target death clips. Play death only for `killed=true`; a killed unit's visual flash still renders even when the kind is unknown. No per-hit node or asset loading.
+
+The bridge already hides attackers not presentable under fog by substituting `attacker=0`; **do not** synthesize any specific sound for those events, look up their IDs elsewhere, or use target positions to leak the enemy's identity.
+
+### Self-healing wave, cold, session and ambience edges
+
+These rules use the **same already-fetched snapshots** as the HUD:
+
+- **Wave horn:** on each frame, if `incoming_zones.is_empty()`, set `_horn_wave = 0`. Otherwise, only while Playing and `next_wave != _horn_wave`, play the horn and set `_horn_wave = next_wave`. The warning window is continuous and separated from the next by a quiet interval, so resetting the fixture to a no-warning Start snapshot re-arms it automatically. Several zones for one wave still yield one horn. Update the empty-state reset in every phase.
+- **Freeze warning:** compute `cold = surface_efficiency < 1.0` (exactly the HUD predicate) on **every frame in every phase**. Play the warning only if `Playing && cold && !_was_cold`, then set `_was_cold = cold` unconditionally. Full recovery and a fixture reset to warm automatically re-arm it; a paused deficit does not cause a delayed alarm on Resume.
+- **Wind:** derive playback directly from phase each frame: Playing → start if stopped or unpause; Paused → set `stream_paused = true`; Start/Result → stop. No separate restart state or timer. Wind stays intentionally quiet.
+- **Victory/Defeat:** use the existing `result_frame` (first transition into Result) to play exactly one corresponding stinger from `winner_team`. Drain/render the settle-tick killing blow first, then start the stinger; repeat `_process()` calls do not replay.
+- **Cleanup:** `CombatFx.clear_all()` continues to free transient visuals and **stop currently playing sound streams**; do not rely on it to reset warning IDs, cold flags or kind maps. Those values recover from live phase/snapshots/views even if `GrusBridge.reset_fixture()` is called without the controller's `_restart_match()`.
+
+No duplicate heat state, audio lifecycle manager, new events, audio buses or autoplay background music. HUD text/icons remain authoritative for accessibility; audio supplements them.
+
 
 ## Verification and acceptance
 
-1. All **18** named OGG/WAV assets are committed and importable using Godot 4.7.1; wind loops seamlessly; provenance/rights and basic source/processing notes are in the audio README.
-2. Specific tower/human/alien attack clips and four separate alien death clips are routed by *actual* presentation kind, with a safe fallback for a missing or fog-scrubbed ID; no change to `CombatEvent` or Rust/bridge schema.
-3. One incoming-wave horn per announced wave, one cold warning per new deficit, one Victory/Defeat stinger per Result; no repeated cues on frame refresh, paused gameplay, or after restart. Existing text/icons and gameplay remain unchanged.
-4. Bursty combat has bounded overlapping audio with clearly audible priority alerts and a quiet ambient bed. Test in a real audible Godot session (wind, a populated wave, heat loss/recovery, win/lose, restart); do **not** treat a headless audio smoke as proof of sound quality.
-5. Extend existing Godot smoke assertions for asset paths/loading, correct kind routing, warning/recovery dedup, Result-entry/restart hygiene and paused sound behavior; retain their real gameplay legs, viewport checks, success markers and assertions. Use an inspectable last-cue/active-stream field only if needed, not a generic audio test framework.
-6. Run fresh Godot import plus all **seven** existing headless smokes, and existing Rust/CI gates as regression evidence. Never claim tests passed from merely adding these documents. No `crates/` edits; this planning draft alone does not satisfy the runtime acceptance.
+1. **Source and format:** one deterministic offline Python sound-authoring script, a documented uniform ffmpeg cleanup/encode command, and exactly **18** committed, importable OGG Vorbis cues under `godot/assets/audio/`; reproducible seed/provenance in audio README. No paid service or runtime generator.
+2. **Human gate #1:** the first **3** sounds are actually triggered through real gameplay paths and heard/approved by the user before producing the next 15. Stop execution for feedback; do not count a headless driver or programmatic stream load as listening.
+3. **Cue integrity:** one `const CUES` preload table with 18 non-null streams, per-cue `volume_db` and native `max_polyphony`; known missing kinds are errors, scrubbed attackers are silent, all 4 alien deaths are distinct, and combat visuals continue.
+4. **State correctness:** one horn per announced wave; one freeze warning per warm→cold edge, including when fixture reset bypasses controller; one stinger on Result; no pause/resume duplicate, no stale playback after restart, no hidden attacker identification. Wind follows session phase.
+5. **Headless coverage:** extend existing combat, wave, economy and defenses smokes with a single table-integrity assertion and appropriate per-cue count/transition assertions. No headset-dependent `is_playing()` check—headless Godot may use its Dummy driver—and **no eighth smoke scene**.
+6. **CI-grade verification:** after Godot import, each of the **seven existing smoke scenes** must pass its actual success marker, timeout and exit-zero gate as defined in `.github/workflows/ci.yml`. CI also owns Rust/coverage/export/E2E gates; do not duplicate unrelated commands in this Godot-only change.
+7. **Human gate #2:** listen to all cues during a real normal-speed playable wave, cold/recovery, pause/resume, restart and both outcomes. Confirm wind seam, balance, dynamic range, lack of clipping and recognizable event roles. Mark ready only after user audible sign-off; do not claim it from smoke output.
+
+Planning-only docs never count as completed assets, runtime tests or human approvals.
 
 ## Deliberate tradeoffs
 
-One dedicated audio ticket and one PR, a finite 18-file set, existing events/snapshots, ordinary Godot players and a small cache are enough. No real-time mixing engine, server, codecs/transcoding pipeline, new gameplay events, backward-compatibility adapters, or separate audio implementation project.
+One dedicated audio/art task and one PR. An offline source script plus ffmpeg makes the set cheap and reproducible; human listening is the quality gate. Native Godot polyphony and snapshot-derived edges replace custom audio pools and restart bookkeeping. No middleware, service dependencies, separate runtime mixer, new gameplay events, backward-compatibility layer or second PR.
