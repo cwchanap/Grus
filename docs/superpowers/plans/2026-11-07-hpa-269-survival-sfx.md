@@ -81,7 +81,7 @@ done
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
-cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\\.rs$'
+cargo llvm-cov -p grus-sim --all-targets --fail-under-lines 90 --locked --ignore-filename-regex 'tests\.rs$'
 ```
 
 Also review the existing Linux Godot export/E2E, benchmark and coverage CI outputs for regressions. Record **observed** pass/fail results and audible-QA environment in the PR, rather than pre-checking boxes in a planning-only draft.
