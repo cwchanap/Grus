@@ -32,8 +32,8 @@ main...HEAD -- crates/grus-sim` is empty); the only
   failure left the prior GLB and its permissions intact and removed the
   temporary output. Blender required graphics access outside the sandbox
   and emitted its existing `Material.use_nodes` deprecation warnings.
-- These are local results for the review fixes. Hosted CI and packaged
-  export have not been rerun for this follow-up.
+- These are local results for the review fixes. [Hosted CI #295](https://github.com/cwchanap/Grus/actions/runs/42426542937)
+  passed on `b2243fe`, including the Linux packaged export and e2e test.
 
 ## Earlier checks (all exit 0)
 
