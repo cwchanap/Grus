@@ -22,6 +22,8 @@ godot --path godot
 
 **Re-copy the library into `godot/bin/` after every rebuild.** A stale binary fails at startup with a misleading error (e.g. a false duplicate-`UnitId` panic), not silently. On a clean clone the GDExtension is not registered until the editor scans once: `godot --headless --path godot --editor --quit-after 120` (writes `godot/.godot/extension_list.cfg`). macOS gotcha: overwriting the staged dylib can invalidate its ad-hoc code signature (`cs_mtime != mtime`) — the kernel SIGKILLs Godot instantly with no output; re-sign after copying with `codesign --force --sign - godot/bin/libgrus_godot.dylib`.
 
+Godot's unit-GLB import extracts untracked `godot/assets/units/*_Unit palette.png` files and `.png.import` metadata. Imported scenes reference those files, so retain them while using the editor's import cache; the textures are recoverable from the embedded GLB images.
+
 Lint and tests (mirror CI, which uses `--locked` everywhere):
 
 ```bash
