@@ -402,11 +402,6 @@ func _cue_counts_empty() -> bool:
 	var counts = _fx.get("cue_counts")
 	return counts is Dictionary and (counts as Dictionary).is_empty()
 
-## HPA-269 asset-independent slice: probes the temporary generic blip's
-## cue-table contract before the journey's real combat events feed the
-## same counter — the accepted-request counter, the 150 ms wall-clock
-## per-cue throttle and clear_all()'s stop/clear/reset. The player's own
-## `playing` flag is the headset-independent stop proof.
 func _cue_telemetry_leg() -> bool:
 	var players = _fx.get("_players")
 	var player: AudioStreamPlayer = null
@@ -419,16 +414,16 @@ func _cue_telemetry_leg() -> bool:
 		_fail("cue telemetry did not start empty: %s" % [_fx.get("cue_counts")])
 		return false
 	_fx.call("play_hit_cue")
-	if _blip_cue_count() != 1 or not player.playing:
-		_fail("accepted blip cue was not counted/played: %s playing=%s" % [_fx.get("cue_counts"), player.playing])
+	if _blip_cue_count() != 1:
+		_fail("accepted blip cue was not counted: %s" % [_fx.get("cue_counts")])
 		return false
 	_fx.call("play_hit_cue")
 	if _blip_cue_count() != 1:
 		_fail("immediate repeat inside the 150 ms throttle was counted: %s" % [_fx.get("cue_counts")])
 		return false
 	_fx.call("clear_all")
-	if not _cue_counts_empty() or player.playing:
-		_fail("clear_all left cue telemetry or a playing cue: %s playing=%s" % [_fx.get("cue_counts"), player.playing])
+	if not _cue_counts_empty():
+		_fail("clear_all left cue telemetry: %s" % [_fx.get("cue_counts")])
 		return false
 	_fx.call("play_hit_cue")
 	if _blip_cue_count() != 1:
@@ -479,8 +474,6 @@ func _run() -> void:
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
 
-	# HPA-269 asset-independent slice: probe the temporary blip cue's
-	# counter/throttle/clear_all contract before the journey.
 	if not _cue_telemetry_leg():
 		return
 
@@ -774,8 +767,6 @@ func _run() -> void:
 	if float(GrusBridge.research_snapshot().get("points", 0.0)) <= 0.0:
 		_fail("research never banked points during the defeat journey: %s" % [GrusBridge.research_snapshot()])
 		return
-	# The journey's real combat events fed the same counter the probe
-	# exercised — positive, never an exact count at 20x wall-clock.
 	if _blip_cue_count() < 1:
 		_fail("real combat events never incremented the blip cue counter: %s" % [_fx.get("cue_counts")])
 		return

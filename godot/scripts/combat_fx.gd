@@ -1,20 +1,14 @@
 extends Node3D
 
 ## One tiny transient combat-effect helper: tracer/hit/death flashes plus a
-## generated blip behind the deliberately temporary one-row cue table.
-## Every effect is a one-shot mesh that autofrees after its lifetime; no
-## persistent effect framework, no audio asset.
+## single generated blip. Every effect is a one-shot mesh that autofrees
+## after its lifetime; no persistent effect framework, no audio asset.
 
 const CUE_THROTTLE_MS := 150
-## One row per cue: player tuning only — a real row's preloaded OGG stream
-## lands under "stream" when the pilot cue table replaces the generic blip.
 const CUES := {
-	"generic_blip": {"volume_db": -14.0, "max_polyphony": 1, "loop": false},
+	"generic_blip": {"volume_db": -14.0, "max_polyphony": 1},
 }
 
-## Test-only telemetry: cue id -> accepted playback requests, counted only
-## after the per-cue throttle passes. Read by smokes; clear_all() empties
-## it with the throttle timestamps.
 var cue_counts: Dictionary = {}
 var _live: Array[Node] = []
 var _players: Dictionary = {}
@@ -25,13 +19,7 @@ func _ready() -> void:
 	for cue_id in CUES:
 		var spec: Dictionary = CUES.get(cue_id, {})
 		var player := AudioStreamPlayer.new()
-		var stream: AudioStream = spec.get("stream")
-		if stream == null:
-			# The lone row's stand-in until the real cue table lands.
-			stream = _make_blip()
-		player.stream = stream
-		if bool(spec.get("loop", false)) and player.stream is AudioStreamOggVorbis:
-			(player.stream as AudioStreamOggVorbis).loop = true
+		player.stream = _make_blip()
 		player.volume_db = float(spec.get("volume_db", 0.0))
 		player.max_polyphony = maxi(int(spec.get("max_polyphony", 1)), 1)
 		_players[cue_id] = player
@@ -43,9 +31,6 @@ func _exit_tree() -> void:
 		player.stop()
 		player.stream = null
 
-## Requests a cue's playback through its own player. The 150 ms wall-clock
-## per-cue throttle keeps a fast tick burst a cue instead of a machine
-## gun; only an accepted request lands in cue_counts.
 func play_cue(cue_id: String) -> void:
 	var player := _players.get(cue_id) as AudioStreamPlayer
 	if player == null:
@@ -80,9 +65,7 @@ func spawn_death(position: Vector3) -> void:
 func effect_count() -> int:
 	return _live.size()
 
-## Frees every live transient, stops each cue player and wipes the
-## test-only counters plus the per-cue throttle timestamps (restart
-## hygiene).
+## Frees every live transient (restart hygiene); the sound player stays.
 func clear_all() -> void:
 	for node in _live:
 		node.queue_free()
