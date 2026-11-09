@@ -1,12 +1,14 @@
 extends Node3D
 
-## One tiny transient combat-effect helper: tracer/hit/death flashes plus a
-## single generated blip. Every effect is a one-shot mesh that autofrees
-## after its lifetime; no persistent effect framework, no audio asset.
+## Transient tracer/hit/death flashes and the pilot sound cues. The generic
+## blip remains for combat events without a dedicated pilot sound.
 
 const CUE_THROTTLE_MS := 150
 const CUES := {
 	"generic_blip": {"volume_db": -14.0, "max_polyphony": 1},
+	"gun_turret_fire": {"stream": preload("res://assets/audio/combat/gun_turret_fire.ogg"), "volume_db": -12.0, "max_polyphony": 2},
+	"swarmer_death": {"stream": preload("res://assets/audio/combat/swarmer_death.ogg"), "volume_db": -12.0, "max_polyphony": 2},
+	"winter_wind": {"stream": preload("res://assets/audio/ambience/winter_wind_loop.ogg"), "volume_db": -25.0, "max_polyphony": 1, "loop": true},
 }
 
 var cue_counts: Dictionary = {}
@@ -19,7 +21,11 @@ func _ready() -> void:
 	for cue_id in CUES:
 		var spec: Dictionary = CUES.get(cue_id, {})
 		var player := AudioStreamPlayer.new()
-		player.stream = _make_blip()
+		player.stream = spec.get("stream", null) as AudioStream
+		if player.stream == null:
+			player.stream = _make_blip()
+		if bool(spec.get("loop", false)):
+			(player.stream as AudioStreamOggVorbis).loop = true
 		player.volume_db = float(spec.get("volume_db", 0.0))
 		player.max_polyphony = maxi(int(spec.get("max_polyphony", 1)), 1)
 		_players[cue_id] = player
@@ -46,6 +52,20 @@ func play_cue(cue_id: String) -> void:
 ## stays a cue instead of a machine gun.
 func play_hit_cue() -> void:
 	play_cue("generic_blip")
+
+func set_wind_phase(phase: String) -> void:
+	var player := _players["winter_wind"] as AudioStreamPlayer
+	match phase:
+		"Playing":
+			player.stream_paused = false
+			if not player.playing:
+				player.play()
+				cue_counts["winter_wind"] = int(cue_counts.get("winter_wind", 0)) + 1
+		"Paused":
+			player.stream_paused = true
+		_:
+			player.stop()
+			player.stream_paused = false
 
 func spawn_tracer(from: Vector3, to: Vector3) -> void:
 	var span := to - from

@@ -350,6 +350,13 @@ func _run() -> void:
 			return turret_view != null and _turret_tracer_from(turret_view),
 			10.0, "Gun Turret combat event did not render a tracer from the building view"):
 		return
+	var cue_counts: Dictionary = _fx.get("cue_counts")
+	if int(cue_counts.get("gun_turret_fire", 0)) <= 0:
+		_fail("real Gun Turret combat did not trigger its pilot cue: %s" % [cue_counts])
+		return
+	if int(cue_counts.get("swarmer_death", 0)) <= 0:
+		_fail("real Swarmer combat did not trigger its death cue: %s" % [cue_counts])
+		return
 
 	var elapsed := float(Time.get_ticks_msec() - first_launch_msec) / 1000.0
 	if elapsed > 60.0:

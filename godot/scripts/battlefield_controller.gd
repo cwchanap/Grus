@@ -45,6 +45,9 @@ var _placement_generation := 0
 var _pending_placement_requests: Array[Dictionary] = []
 var _idle_cursor := 0
 var _session_phase := ""
+var _unit_kinds: Dictionary = {}
+var _previous_unit_kinds: Dictionary = {}
+var _building_kinds: Dictionary = {}
 var _attack_move_armed := false
 ## Producer building kinds come from the Rust catalogue via
 ## catalogue_snapshot — GDScript hardcodes no gameplay data.
@@ -196,6 +199,8 @@ func _ready() -> void:
 	quit_button.pressed.connect(_on_quit_pressed)
 
 func _process(_delta: float) -> void:
+	_unit_kinds = _view_kinds("unit_views", "unit_id", "unit_kind")
+	_building_kinds = _view_kinds("building_views", "building_id", "building_kind")
 	var placement_feedback_handled := _consume_placement_results()
 	var revision := int(GrusBridge.command_feedback_revision())
 	if revision != _feedback_revision:
@@ -203,11 +208,18 @@ func _process(_delta: float) -> void:
 		if not placement_feedback_handled:
 			command_status.text = str(GrusBridge.command_feedback())
 	_refresh_session()
+	_previous_unit_kinds = _unit_kinds
 	_reconcile_selection()
 	_refresh_hud()
 	if _underground_panel.visible \
 			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
+
+func _view_kinds(group: String, id_key: String, kind_key: String) -> Dictionary:
+	var kinds := {}
+	for view in get_tree().get_nodes_in_group(group):
+		kinds[int(view.get_meta(id_key, -1))] = str(view.get_meta(kind_key, ""))
+	return kinds
 
 func _icon_for_kind(group: String, kind: String) -> Texture2D:
 	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
@@ -254,6 +266,7 @@ func _refresh_session() -> void:
 	var snap: Dictionary = GrusBridge.session_snapshot()
 	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
+	_fx.set_wind_phase(_session_phase)
 	_refresh_session_overlay(snap)
 	var result_frame := _session_phase == "Result" and previous_phase != "Result"
 	if _session_phase != "Playing" and not result_frame:
@@ -311,7 +324,17 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 	_fx.spawn_hit(hit)
 	if bool(event.get("killed", false)):
 		_fx.spawn_death(hit)
-	_fx.play_hit_cue()
+		if str(event.get("target_kind", "")) == "unit":
+			var target_id := int(event.get("target_id", -1))
+			var target_kind := str(_unit_kinds.get(target_id, _previous_unit_kinds.get(target_id, "")))
+			if target_kind == "Swarmer":
+				_fx.play_cue("swarmer_death")
+	var attacker_id := int(event.get("attacker", 0))
+	if str(event.get("attacker_kind", "")) == "building" \
+			and str(_building_kinds.get(attacker_id, "")) == "GunTurret":
+		_fx.play_cue("gun_turret_fire")
+	elif attacker_id > 0:
+		_fx.play_hit_cue()
 
 func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
 	var height := 0.8

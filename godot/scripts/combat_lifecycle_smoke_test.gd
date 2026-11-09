@@ -404,6 +404,14 @@ func _cue_counts_empty() -> bool:
 
 func _cue_telemetry_leg() -> bool:
 	var players = _fx.get("_players")
+	for cue_id in ["gun_turret_fire", "swarmer_death", "winter_wind"]:
+		var pilot_player: AudioStreamPlayer = (players as Dictionary).get(cue_id) as AudioStreamPlayer
+		if pilot_player == null or not pilot_player.stream is AudioStreamOggVorbis:
+			_fail("pilot cue %s has no OGG stream" % cue_id)
+			return false
+		if cue_id == "winter_wind" and not (pilot_player.stream as AudioStreamOggVorbis).loop:
+			_fail("pilot wind stream does not loop")
+			return false
 	var player: AudioStreamPlayer = null
 	if players is Dictionary:
 		player = (players as Dictionary).get("generic_blip") as AudioStreamPlayer
@@ -520,6 +528,9 @@ func _run() -> void:
 	if not await _wait_until(
 			func(): return not _session_panel().visible and _button("HUD/PauseButton").visible,
 			5.0, "Playing phase did not hide the overlay and show Pause"):
+		return
+	if int((_fx.get("cue_counts") as Dictionary).get("winter_wind", 0)) < 1:
+		_fail("Playing did not start the pilot wind cue")
 		return
 
 	# HPA-188: the fresh match's exact zero-Crystal stockpile makes this the
@@ -705,6 +716,10 @@ func _run() -> void:
 					and not _button("HUD/SessionPanel/QuitButton").visible \
 					and _session_label().text == "Paused",
 			5.0, "Paused overlay is not showing Resume with Pause/Quit hidden"):
+		return
+	var wind_player := (_fx.get("_players") as Dictionary).get("winter_wind") as AudioStreamPlayer
+	if not wind_player.stream_paused:
+		_fail("Paused did not pause the pilot wind cue")
 		return
 	var wave_before_pause: Dictionary = GrusBridge.wave_snapshot()
 	var health_before_pause := float(_building_view(1).call("health_ratio"))
