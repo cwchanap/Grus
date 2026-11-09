@@ -392,6 +392,60 @@ func _research_boundary_leg() -> bool:
 		return false
 	return true
 
+func _blip_cue_count() -> int:
+	var counts = _fx.get("cue_counts")
+	if not counts is Dictionary:
+		return -1
+	return int((counts as Dictionary).get("generic_blip", -1))
+
+func _cue_counts_empty() -> bool:
+	var counts = _fx.get("cue_counts")
+	return counts is Dictionary and (counts as Dictionary).is_empty()
+
+## HPA-269 asset-independent slice: probes the temporary generic blip's
+## cue-table contract before the journey's real combat events feed the
+## same counter — the accepted-request counter, the 150 ms wall-clock
+## per-cue throttle and clear_all()'s stop/clear/reset. The player's own
+## `playing` flag is the headset-independent stop proof.
+func _cue_telemetry_leg() -> bool:
+	var players = _fx.get("_players")
+	var player: AudioStreamPlayer = null
+	if players is Dictionary:
+		player = (players as Dictionary).get("generic_blip") as AudioStreamPlayer
+	if player == null:
+		_fail("blip cue player is missing from the cue table: %s" % [players])
+		return false
+	if not _cue_counts_empty():
+		_fail("cue telemetry did not start empty: %s" % [_fx.get("cue_counts")])
+		return false
+	_fx.call("play_hit_cue")
+	if _blip_cue_count() != 1 or not player.playing:
+		_fail("accepted blip cue was not counted/played: %s playing=%s" % [_fx.get("cue_counts"), player.playing])
+		return false
+	_fx.call("play_hit_cue")
+	if _blip_cue_count() != 1:
+		_fail("immediate repeat inside the 150 ms throttle was counted: %s" % [_fx.get("cue_counts")])
+		return false
+	_fx.call("clear_all")
+	if not _cue_counts_empty() or player.playing:
+		_fail("clear_all left cue telemetry or a playing cue: %s playing=%s" % [_fx.get("cue_counts"), player.playing])
+		return false
+	_fx.call("play_hit_cue")
+	if _blip_cue_count() != 1:
+		_fail("post-clear request inside the old throttle window was not counted: %s" % [_fx.get("cue_counts")])
+		return false
+	_fx.call("play_hit_cue")
+	if _blip_cue_count() != 1:
+		_fail("post-clear repeat inside the fresh throttle window was counted: %s" % [_fx.get("cue_counts")])
+		return false
+	OS.delay_msec(200)
+	_fx.call("play_hit_cue")
+	if _blip_cue_count() != 2:
+		_fail("blip cue did not count again after the 150 ms throttle expired: %s" % [_fx.get("cue_counts")])
+		return false
+	_fx.call("clear_all")
+	return true
+
 func _restart_settled() -> bool:
 	if not _fixture_views_settled():
 		return false
@@ -414,7 +468,7 @@ func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
 	return true
 
 func _success_marker() -> String:
-	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true research_boundary=analyze_reject8_zero_crystal research_progress=20x_advancing restart_research=zero"
+	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true research_boundary=analyze_reject8_zero_crystal research_progress=20x_advancing restart_research=zero blip_cue=counted_throttled_cleared"
 
 func _run() -> void:
 	var window := get_window()
@@ -424,6 +478,11 @@ func _run() -> void:
 	_main = get_node("Main") as Node3D
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
+
+	# HPA-269 asset-independent slice: probe the temporary blip cue's
+	# counter/throttle/clear_all contract before the journey.
+	if not _cue_telemetry_leg():
+		return
 
 	if not GrusBridge.set_sim_speed(20.0):
 		_fail("failed to accelerate the sim")
@@ -715,6 +774,11 @@ func _run() -> void:
 	if float(GrusBridge.research_snapshot().get("points", 0.0)) <= 0.0:
 		_fail("research never banked points during the defeat journey: %s" % [GrusBridge.research_snapshot()])
 		return
+	# The journey's real combat events fed the same counter the probe
+	# exercised — positive, never an exact count at 20x wall-clock.
+	if _blip_cue_count() < 1:
+		_fail("real combat events never incremented the blip cue counter: %s" % [_fx.get("cue_counts")])
+		return
 	# The Result-phase Restart button is actually visible here, so a real
 	# click exercises the full production path — hit test, pressed signal
 	# and handler — rather than a private handler call.
@@ -753,6 +817,9 @@ func _run() -> void:
 		return
 	if int(_fx.call("effect_count")) != 0:
 		_fail("restart left transient combat effects on stage")
+		return
+	if not _cue_counts_empty():
+		_fail("restart left stale cue telemetry: %s" % [_fx.get("cue_counts")])
 		return
 
 	# The real restart path wipes banked research with the match: the live
