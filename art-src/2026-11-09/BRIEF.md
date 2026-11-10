@@ -18,7 +18,7 @@ codex --model gpt-6.1-terra -c model_reasoning_effort=xhigh
 - **Transparent background** (RGBA PNG). If transparency is impossible, use a flat solid `#FF00FF` background with nothing else on it, and say so in the report.
 - No text, letters, numbers or logos anywhere in any image.
 - After saving, downscale with `sips -Z 512 <file>` (banners: `sips -Z 768`) so the repo stays small.
-- Icons and sprites are square (1024 × 1024 before downscale). Banners are wide (1536 × 1024).
+- Icons and sprites are square (1024 × 1024 before downscale). Banners, the key art and the frost overlay are wide (1536 × 1024).
 
 ## Shared style (prepend to every prompt)
 
@@ -46,13 +46,14 @@ Single centred subject, must read clearly at 32 px.
 | `icons/mouse_right.png` | The same mouse seen from above, the RIGHT button glowing cyan. |
 | `icons/mouse_wheel.png` | The same mouse seen from above, the scroll wheel glowing cyan. |
 
-## Screen art (3) → `screens/`
+## Screen art (4) → `screens/`
 
 | File | Size | Subject |
 | --- | --- | --- |
 | `screens/emblem.png` | 1024 × 1024 | Game emblem: a round frosted steel badge showing a stylised crane (the bird) flying over a domed city, a cyan research beacon on the dome, warm orange glow under it. |
 | `screens/victory_banner.png` | 1536 × 1024 | A wide horizontal cloth banner in cyan and white with steel end caps, warm sunrise light breaking through snow clouds behind it, icicles melting. Leave the centre of the banner plain for a title laid on top later. |
 | `screens/defeat_banner.png` | 1536 × 1024 | A wide horizontal torn, scorched banner in dark red and charcoal, frost and alien claw slashes, wisps of smoke. Leave the centre plain for a title laid on top later. |
+| `screens/start_key_art.png` | 1536 × 1024, opaque | Start screen key art, the one image here with a full background: the last human city at night in a blizzard, seen from a high three-quarter view, the domed Research Center glowing cyan at its centre, warm orange windows, snow-covered walls and turrets around it, dark alien shapes gathering in the fog at the edges. Keep the left third dark and uncluttered for the title and Start button laid on top. Downscale with `sips -Z 1280`. |
 
 ## Building sprites (9) → `sprites/`
 
@@ -71,6 +72,27 @@ These replace the low-poly building models in play. Add this to the shared style
 | `sprites/flame_tower.png` | 2 × 2 | Flame tower: a squat armoured tower with a flamethrower nozzle and fuel tanks, small orange pilot flame. |
 | `sprites/crystal_lance.png` | 2 × 2 | Crystal lance: a tall steel pylon with a cyan alien crystal held at the tip, energy coils, glowing. |
 | `sprites/construction_site.png` | any | A generic construction site: square foundation with wooden scaffolding, a few steel beams, stacked crates and a tarp, light snow. No finished building. |
+
+## UI kit (7) → `ui/`
+
+Flat, front-on interface pieces for the "forged steel and frost" HUD. No perspective, no drop shadow outside the piece, and no icon or symbol on them: they are empty frames that the game stretches (9-slice) and draws content over. Add this to the shared style for every piece:
+
+> A single flat game-interface element seen straight on, like a user-interface texture sheet piece: dark blue-grey forged steel with a soft bevelled edge that is lighter along the top, faint brushed grain, and a thin line of frost along the top edge. Perfectly symmetrical, centred, empty in the middle.
+
+| File | Size | Subject |
+| --- | --- | --- |
+| `ui/plate.png` | 1024 × 1024 | A square panel plate with the top-left and bottom-right corners cut at 45 degrees, a small rivet in each of the other two corners, plain dark centre. |
+| `ui/tile_normal.png` | 1024 × 1024 | A square inset button tile with a slightly recessed dark face and a steel rim. |
+| `ui/tile_selected.png` | 1024 × 1024 | The same tile with a glowing cyan rim and a faint cyan inner glow. |
+| `ui/tile_locked.png` | 1024 × 1024 | The same tile, darker and frosted over, with frost creeping in from the corners. |
+| `ui/tile_unaffordable.png` | 1024 × 1024 | The same tile with a dull red rim and a darkened face. |
+| `ui/round_button.png` | 1024 × 1024 | A round raised steel button with a bevelled ring and a dark domed face. |
+| `ui/socket.png` | 1024 × 1024 | A round recessed socket ring: a steel ring around a dark hollow, for holding an icon. |
+| `ui/bar_frame.png` | 1536 × 1024 | A long horizontal glass tube in a steel cradle with capped ends, empty and dark inside, for a progress bar. |
+| `ui/portrait_bezel.png` | 1024 × 1024 | A square steel picture frame with all four corners cut at 45 degrees and a transparent empty centre. |
+| `ui/frost_overlay.png` | 1536 × 1024 | Frost and ice crystals growing inward from all four edges of the frame, dense at the corners and fading out, with a fully transparent centre. No steel on this one. Downscale with `sips -Z 1280`. |
+
+(The four tile states count as one kit piece, so this section is 7 pieces in 10 files.)
 
 ## Report back
 
