@@ -261,9 +261,10 @@ func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
 	return true
 
 func _assert_action_icon_paths(main: Node3D) -> bool:
+	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	for spec in [
-		["HUD/CommandPanel/BuildGrid", "buildings", 9],
-		["HUD/CommandPanel/TrainGrid", "units", 3],
+		["HUD/CommandPanel/BuildGrid", "buildings", 9, "Build"],
+		["HUD/CommandPanel/TrainGrid", "units", 3, "Train"],
 	]:
 		var grid := main.get_node_or_null(spec[0]) as Container
 		if grid == null:
@@ -291,6 +292,33 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 					button.name, button.size, button.get_theme_constant("icon_max_width"),
 					cost_label.get_theme_font_size("normal_font_size") if cost_label != null else -1])
 				return false
+			# The tooltip is the catalogue stat surface: price, time, max HP
+			# and any optional combat/counter fields — never a copied table.
+			var entry: Dictionary = catalogue.get(spec[1], {}).get(kind, {})
+			var counter: TextureRect = button.get_node_or_null("CounterIcon") as TextureRect
+			if entry.is_empty() or not button.tooltip_text.contains("Cost:") \
+					or not button.tooltip_text.contains("%s: %ds" % [spec[3], int(entry.get("seconds", 0))]) \
+					or not button.tooltip_text.contains("HP: %d" % int(entry.get("max_health", 0))):
+				_fail("%s tooltip is missing its catalogue cost/time/HP row: %s" % [button.name, button.tooltip_text])
+				return false
+			if entry.has("damage"):
+				if not button.tooltip_text.contains("Damage %d" % int(entry.get("damage", 0))) \
+						or not button.tooltip_text.contains("Range") \
+						or not button.tooltip_text.contains(str(entry.get("counter_target", ""))) \
+						or counter == null or not counter.visible \
+						or counter.texture == null \
+						or not counter.texture.resource_path.ends_with(
+							"units/%s.png" % str(entry.get("counter_target", "")).to_snake_case()):
+					_fail("%s tooltip/counter art does not project its catalogue combat row: %s" % [button.name, button.tooltip_text])
+					return false
+			elif counter != null and counter.visible:
+				_fail("%s shows a counter icon without catalogue combat stats" % button.name)
+				return false
+			if spec[1] == "buildings":
+				var heat := int(entry.get("heat_supply", 0)) + int(entry.get("heat_demand", 0))
+				if heat > 0 and not button.tooltip_text.contains("Heat:"):
+					_fail("%s tooltip omits its catalogue heat contribution" % button.name)
+					return false
 		if count != int(spec[2]):
 			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
 			return false
@@ -1273,6 +1301,42 @@ func _run() -> void:
 		_fail("left-click input did not select friendly unit 1 after camera pan/zoom")
 		return
 
+	# HPA-698 selection detail: one live worker shows exact current/max HP
+	# derived from its live view ratio and the Rust catalogue max_health, a
+	# worker task line and the Rust carry limit. A mixed selection must hide
+	# every per-unit number rather than invent an aggregate.
+	var selection_panel := get_node_or_null("Main/HUD/SelectionPanel") as Panel
+	var selection_name := get_node_or_null("Main/HUD/SelectionPanel/SelectionName") as Label
+	var selection_health := get_node_or_null("Main/HUD/SelectionPanel/HealthBar") as ProgressBar
+	var selection_health_label := get_node_or_null("Main/HUD/SelectionPanel/HealthLabel") as Label
+	var selection_task := get_node_or_null("Main/HUD/SelectionPanel/SelectionLabel") as Label
+	var carry_bar := get_node_or_null("Main/HUD/SelectionPanel/CarryBar") as ProgressBar
+	var carry_label := get_node_or_null("Main/HUD/SelectionPanel/CarryLabel") as RichTextLabel
+	if selection_panel == null or selection_name == null or selection_health == null \
+			or selection_health_label == null or selection_task == null \
+			or carry_bar == null or carry_label == null:
+		_fail("selection detail nodes are missing under HUD/SelectionPanel")
+		return
+	var worker_entry: Dictionary = GrusBridge.catalogue_snapshot().get("units", {}).get("Worker", {})
+	var worker_max_health := int(worker_entry.get("max_health", 0))
+	var worker_health := clampi(roundi(float(unit_one.call("health_ratio")) * worker_max_health), 0, worker_max_health)
+	if worker_max_health <= 0:
+		_fail("catalogue exposes no Worker max_health for the selection detail")
+		return
+	if not await _wait_until(func():
+			return selection_health.visible \
+				and is_equal_approx(selection_health.max_value, float(worker_max_health)) \
+				and is_equal_approx(selection_health.value, float(worker_health)) \
+				and selection_name.text.to_lower().contains("worker") \
+				and selection_health_label.text.contains("%d / %d" % [worker_health, worker_max_health]) \
+				and carry_bar.max_value == float(GrusBridge.catalogue_snapshot().get("carry_limit", -1)),
+			5.0, "single Worker selection does not render catalogue-backed HP/carry detail"):
+		return
+	if not selection_panel.tooltip_text.contains("HP: %d" % worker_max_health) \
+			or not selection_panel.tooltip_text.contains("Train: %ds" % int(worker_entry.get("seconds", 0))):
+		_fail("Worker selection tooltip is missing its catalogue HP/train stats: %s" % [selection_panel.tooltip_text])
+		return
+
 	# Resource gathering through real input only: at maximum zoom, a
 	# right-click on the farthest-projected art corner of every visible
 	# resource must queue a gather — the pick target scales with the cell,
@@ -1388,6 +1452,12 @@ func _run() -> void:
 	await get_tree().process_frame
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
 		_fail("Shift-click did not add a second friendly unit after camera pan/zoom")
+		return
+	await get_tree().process_frame
+	if selection_health.visible or carry_bar.visible \
+			or not selection_name.text.contains("×2"):
+		_fail("mixed selection invented aggregate HP/carry numbers: name=%s hp=%s carry=%s" % [
+			selection_name.text, selection_health.visible, carry_bar.visible])
 		return
 
 	_modifier_event(KEY_CTRL, true)
@@ -2037,6 +2107,21 @@ func _run() -> void:
 			return int(main.selected_building_id) == 1 \
 				and main.selected_ids.is_empty(),
 			5.0, "left-click on the Research Center view did not select building 1"):
+		return
+	# The same single-selection HP contract applies to a live building: the
+	# view ratio times the catalogue max_health, never a stored duplicate.
+	var rc_entry: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get("ResearchCenter", {})
+	var rc_max_health := int(rc_entry.get("max_health", 0))
+	var rc_health := clampi(roundi(float(rc_view.call("health_ratio")) * rc_max_health), 0, rc_max_health)
+	if not await _wait_until(func():
+			return selection_health.visible \
+				and is_equal_approx(selection_health.max_value, float(rc_max_health)) \
+				and is_equal_approx(selection_health.value, float(rc_health)) \
+				and selection_name.text.to_lower().contains("research") \
+				and selection_health_label.text.contains("%d / %d" % [rc_health, rc_max_health]) \
+				and selection_panel.tooltip_text.contains("HP: %d" % rc_max_health) \
+				and selection_panel.tooltip_text.contains("Heat:"),
+			5.0, "single Research Center selection does not render catalogue-backed HP/heat detail"):
 		return
 	# HPA-291 silhouette picking: a click inside the model's projected art
 	# rect — beyond the old 20 px center-radius — must select the same

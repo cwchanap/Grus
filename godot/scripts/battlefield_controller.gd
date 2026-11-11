@@ -236,9 +236,22 @@ func _refresh_hud() -> void:
 	_hud.refresh_wave(GrusBridge.wave_snapshot())
 	var research: Dictionary = GrusBridge.research_snapshot()
 	var building: Dictionary = {}
+	var building_health := -1.0
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)
-	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds)
+		var building_view := _building_view(selected_building_id)
+		if building_view != null:
+			building_health = float(building_view.call("health_ratio"))
+	var unit_task: Dictionary = {}
+	var unit_health := -1.0
+	if selected_ids.size() == 1:
+		var unit_id := selected_ids[0]
+		unit_task = GrusBridge.unit_task_snapshot(unit_id)
+		var unit_view := _unit_view(unit_id)
+		if unit_view != null:
+			unit_health = float(unit_view.call("health_ratio"))
+	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds,
+		unit_task, unit_health, building_health)
 	_hud.refresh_research_controls(research, building, _playing())
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
