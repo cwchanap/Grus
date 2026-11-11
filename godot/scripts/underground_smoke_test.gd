@@ -451,6 +451,9 @@ func _run() -> void:
 		return
 
 	await _click(_kind("GeothermalTap"))
+	if not _check(str(_status.text) == "GeothermalTap armed — click an eligible slot",
+			"real room-kind arm did not surface the controller hint: \"%s\"" % _status.text):
+		return
 	var before_tap := _stock()
 	if not await _purchase(_slot(3, 1), "Tap queued (L3 slot 2)", room_costs.GeothermalTap):
 		return
