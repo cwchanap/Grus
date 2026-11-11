@@ -13,6 +13,8 @@ extends CanvasLayer
 @onready var research_icon: TextureRect = $ResearchPanel/ResearchIcon
 @onready var analyze_button: Button = $ResearchPanel/AnalyzeButton
 @onready var economy_label: RichTextLabel = $EconomyPanel/EconomyLabel
+@onready var heat_bar: ProgressBar = $EconomyPanel/HeatBar
+@onready var cold_chip: RichTextLabel = $EconomyPanel/ColdChip
 @onready var idle_button: Button = $EconomyPanel/IdleButton
 @onready var selection_label: Label = $SelectionPanel/SelectionLabel
 @onready var session_panel: Panel = $SessionPanel
@@ -110,10 +112,7 @@ func refresh_economy(economy: Dictionary) -> void:
 	# value down to 99 while the sim reports any efficiency shortfall.
 	if surface_percent >= 100 and surface < 1.0:
 		surface_percent = 99
-	var cold_note := ""
-	if surface < 1.0:
-		cold_note = " " + _inline_icon("status", "SurfaceCold", 28)
-	economy_label.text = "%s%d   %s%d   %s%d   %s%d   %s%d / %d   %s%d / %d · surface %d%%%s" % [
+	economy_label.text = "%s%d   %s%d   %s%d   %s%d   %s%d / %d   %s%d / %d · surface %d%%" % [
 		_inline_icon("resources", "Food", 28),
 		int(economy.get("food", 0)),
 		_inline_icon("resources", "Scrap", 28),
@@ -129,8 +128,24 @@ func refresh_economy(economy: Dictionary) -> void:
 		int(economy.get("heat_supply", 0)),
 		int(economy.get("heat_demand", 0)),
 		surface_percent,
-		cold_note,
 	]
+	# The supply-versus-demand bar and cold chip are display-only projections
+	# of the same live snapshot; both are hidden at full surface efficiency.
+	var supply := int(economy.get("heat_supply", 0))
+	var demand := int(economy.get("heat_demand", 0))
+	var deficit := surface < 1.0
+	heat_bar.visible = deficit
+	cold_chip.visible = deficit
+	if deficit:
+		var denominator := maxi(demand, 1)
+		heat_bar.max_value = float(denominator)
+		heat_bar.value = float(mini(supply, denominator))
+		var detail := "Heat supply %d / demand %d · surface %d%%" % [
+			supply, demand, surface_percent]
+		heat_bar.tooltip_text = detail
+		cold_chip.tooltip_text = detail
+		cold_chip.text = "%s %d%%" % [
+			_inline_icon("status", "SurfaceCold", 20).strip_edges(), surface_percent]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	_refresh_affordability(economy)
 

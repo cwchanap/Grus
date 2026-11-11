@@ -16,6 +16,29 @@ resource_local_to_scene = true
 transparency = 1
 albedo_color = Color(0.3, 0.85, 0.3, 0.4)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_heat_fill"]
+bg_color = Color(0.94, 0.58, 0.22, 0.95)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cold_chip"]
+content_margin_left = 6.0
+content_margin_top = 3.0
+content_margin_right = 6.0
+content_margin_bottom = 3.0
+bg_color = Color(0.12, 0.09, 0.06, 0.94)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.93, 0.55, 0.22, 0.9)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
 [node name="Main" type="Node3D"]
 script = ExtResource("2_controller")
 
@@ -134,6 +157,30 @@ theme_override_font_sizes/normal_font_size = 18
 bbcode_enabled = true
 scroll_active = false
 autowrap_mode = 0
+
+[node name="HeatBar" type="ProgressBar" parent="HUD/EconomyPanel"]
+visible = false
+layout_mode = 0
+offset_left = 720.0
+offset_top = 18.0
+offset_right = 900.0
+offset_bottom = 38.0
+tooltip_text = "Heat supply / demand"
+show_percentage = false
+theme_override_styles/fill = SubResource("StyleBoxFlat_heat_fill")
+
+[node name="ColdChip" type="RichTextLabel" parent="HUD/EconomyPanel"]
+visible = false
+layout_mode = 0
+offset_left = 914.0
+offset_top = 12.0
+offset_right = 1002.0
+offset_bottom = 44.0
+tooltip_text = "Surface efficiency below full"
+theme_override_font_sizes/normal_font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_cold_chip")
+bbcode_enabled = true
+scroll_active = false
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
