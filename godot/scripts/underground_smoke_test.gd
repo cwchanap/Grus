@@ -221,6 +221,11 @@ func _run() -> void:
 	var analyze := _main.get_node("HUD/ResearchPanel/AnalyzeButton") as Button
 	var markers := _main.get_node("HUD/ResearchPanel/ResearchMarkers") as Control
 	var drawer_rect := _panel.get_global_rect()
+	var command_card := _main.get_node("HUD/CommandPanel") as Panel
+	if not _check(not drawer_rect.intersects(command_card.get_global_rect()),
+			"open drawer covers the command card: drawer=%s card=%s" % [
+				drawer_rect, command_card.get_global_rect()]):
+		return
 	if not _check(analyze.visible and analyze.is_visible_in_tree() and not analyze.disabled
 			and not drawer_rect.intersects(analyze.get_global_rect()),
 			"open drawer covers or disables Analyze: drawer=%s analyze=%s" % [

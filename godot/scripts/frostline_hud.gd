@@ -188,7 +188,8 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
 		_set_tile_cost(button, entry)
-		button.tooltip_text = _building_tooltip(kind, entry)
+		button.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
+		button.accessibility_name = "Build %s" % kind
 		# The catalogue-derived research threshold rides the button meta; the
 		# per-frame lock refresh compares it against the live point total.
 		var unlock_points := int(entry.get("unlock_points", 0))
@@ -206,7 +207,8 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 		button.set_meta("cost", entry)
 		button.set_meta("producer", str(entry.get("producer", "")))
 		_set_tile_cost(button, entry)
-		button.tooltip_text = _unit_tooltip(entry)
+		button.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
+		button.accessibility_name = "Train %s" % kind
 		_add_counter_icon(button, entry)
 
 ## The HPA-695 action-tile scene draws its catalogue price under the icon;

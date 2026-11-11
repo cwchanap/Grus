@@ -285,6 +285,14 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 			if kind.is_empty() or actual != expected:
 				_fail("%s icon path is %s; expected %s" % [button.name, actual if not actual.is_empty() else "missing", expected])
 				return false
+			# Icon-only tiles still name their catalogue action: the tooltip
+			# leads with the real building/unit and the accessible name repeats
+			# the Build/Train verb, so hovering and assistive tech identify it.
+			if not button.tooltip_text.begins_with("%s\n" % kind) \
+					or button.accessibility_name != "%s %s" % [spec[3], kind]:
+				_fail("%s does not name %s %s: tooltip=%s accessibility=%s" % [
+					button.name, spec[3], kind, button.tooltip_text, button.accessibility_name])
+				return false
 			# HPA-698 readability: the painted icon and its cost must fill the
 			# tile, not sit tiny inside an oversized rim.
 			var cost_label := button.get_node_or_null("Cost") as RichTextLabel
@@ -325,6 +333,24 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 		if count != int(spec[2]):
 			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
 			return false
+	return true
+
+## HPA-698 final review: command feedback (rejected orders, armed targets) is
+## drawn before the bottom selection card, so it must sit wholly above it.
+func _assert_command_status_above_selection() -> bool:
+	var status := get_node_or_null("Main/HUD/CommandStatus") as Label
+	var selection_card := get_node_or_null("Main/HUD/SelectionPanel") as Panel
+	if status == null or selection_card == null:
+		_fail("CommandStatus or SelectionPanel is missing for the layout check")
+		return false
+	var status_rect := status.get_global_rect()
+	var card_rect := selection_card.get_global_rect()
+	if not status.is_visible_in_tree() or status.text.is_empty() \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(status_rect) \
+			or status_rect.intersects(card_rect) or status_rect.end.y > card_rect.position.y:
+		_fail("CommandStatus is not wholly above the selection card: status=%s card=%s" % [
+			status_rect, card_rect])
+		return false
 	return true
 
 ## HPA-698 presentation contract: one project-wide Frostline theme using the
@@ -877,6 +903,8 @@ func _run() -> void:
 	if not _assert_frostline_assets():
 		return
 	if not _assert_action_icon_paths(get_node("Main") as Node3D):
+		return
+	if not _assert_command_status_above_selection():
 		return
 	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
 		return
@@ -1681,6 +1709,24 @@ func _run() -> void:
 	if str(command_status.text) != "Gather command queued" \
 			or str(get_node("Main").get("_armed_order")) != "":
 		_fail("armed Gather did not consume into a gather command: %s" % command_status.text)
+		return
+	# Armed Gather against empty ground rejects: the click still consumes the
+	# arming, dispatches no bridge command, and never falls back to Move.
+	SmokeHelpers.push_mouse_click(get_tree(), gather_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "gather":
+		_fail("Gather tile did not re-arm for the invalid-target regression")
+		return
+	var invalid_gather_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Gather command rejected" \
+			or str(get_node("Main").get("_armed_order")) != "" \
+			or int(GrusBridge.command_feedback_revision()) != invalid_gather_revision:
+		_fail("armed Gather on empty ground did not reject without a command or Move fallback: %s" % command_status.text)
+		return
+	await get_tree().process_frame
+	if gather_button.button_pressed:
+		_fail("rejected armed Gather left its tile lit")
 		return
 	# Cancel clears the armed order without a bridge command or a pause.
 	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
