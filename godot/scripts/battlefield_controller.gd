@@ -26,6 +26,10 @@ const ZOOM_STEP := 6.0
 ## emits the two action intents; Tab/Esc, the Playing gate, dispatch and the
 ## command status stay here.
 @onready var _ug_drawer = $HUD/UndergroundPanel
+## The Excavate button is static scene content, so the controller owns its
+## pressed wiring like every other static Button: it connects straight to the
+## drawer's existing intent signal.
+@onready var _underground_excavate: Button = $HUD/UndergroundPanel/ExcavateButton
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -63,6 +67,7 @@ func _ready() -> void:
 	command_status.text = str(GrusBridge.command_feedback())
 	_ug_drawer.excavate_requested.connect(_on_excavate_requested)
 	_ug_drawer.room_requested.connect(_on_room_requested)
+	_underground_excavate.pressed.connect(_ug_drawer.excavate_requested.emit)
 	# The drawer creates its kind toggles in its own _ready (children ready
 	# before this node), so observe them here for the controller-owned hint —
 	# no third drawer signal and no duplicated armed state.

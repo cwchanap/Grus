@@ -3,8 +3,10 @@ extends Panel
 ## Underground drawer view attached directly to the existing UndergroundPanel.
 ## It is the single owner of the panel's visual arming state and of the
 ## runtime-created room/slot Buttons. The battlefield controller keeps Tab/Esc
-## input, the Playing gate, bridge dispatch and command feedback; this script
-## resolves the armed room kind and emits only the two action intents below.
+## input, the Playing gate, bridge dispatch and command feedback; it also owns
+## the static Excavate button's pressed wiring straight to `excavate_requested`.
+## This script resolves the armed room kind and exposes only the two action
+## intents below.
 
 signal excavate_requested
 signal room_requested(level: int, slot: int, kind: String)
@@ -51,7 +53,6 @@ func _ready() -> void:
 		ug_entry["name"] = str(kind)
 		_rooms.append(ug_entry)
 	_slots_per_level = maxi(int(underground_catalogue.get("slots", 4)), 1)
-	_excavate.pressed.connect(_on_excavate_pressed)
 	# One ordinary toggle Button per room kind, built from the catalogue in
 	# wire-name order: clicking arms the kind (the only selection state);
 	# tooltips carry the full catalogue cost/time/effect.
@@ -256,11 +257,6 @@ func _on_kind_toggled(pressed: bool, index: int) -> void:
 	else:
 		_armed_index = -1
 	refresh(_snapshot, _phase)
-
-## One paid excavation intent — the controller owns the Playing gate, the
-## bridge call and the command feedback.
-func _on_excavate_pressed() -> void:
-	excavate_requested.emit()
 
 ## An eligible empty-slot click resolves the armed kind and emits the intent
 ## with this 1-based level and 0-based slot; disabled Buttons never fire, and
