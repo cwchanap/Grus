@@ -368,7 +368,7 @@ func _research_boundary_leg() -> bool:
 	# it must visibly tick down, and each capture must agree with its own
 	# snapshot's ceil-ed seconds within a rendered frame of skew (the label
 	# mirrors the previous _process frame's read) — ±5 s covers that plus
-	# the controller's ceil() rounding while still catching a frozen label.
+	# the HUD's ceil() rounding while still catching a frozen label.
 	var label_after := research_label.text
 	var label_eta_after := SmokeHelpers.research_label_eta_seconds(label_after)
 	if label_eta_after < 0 or label_eta_after >= label_eta_wait \

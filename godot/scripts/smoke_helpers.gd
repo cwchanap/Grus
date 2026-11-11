@@ -46,11 +46,11 @@ static func push_mouse_click(tree: SceneTree, position: Vector2, button: int) ->
 	tree.root.push_input(release)
 
 ## The research label renders "Research P/T · N% · ETA M:SS" from the live
-## snapshot's ceil-ed eta_seconds (battlefield_controller._refresh_research_
-## controls). Parse that countdown back to whole seconds so smokes compare
-## the displayed value — not just the bridge field — against the snapshot
-## and across an advancing interval. Returns -1 for the "—" placeholder or
-## any malformed component.
+## snapshot's ceil-ed eta_seconds (frostline_hud.refresh_research_controls).
+## Parse that countdown back to whole seconds so smokes compare the displayed
+## value — not just the bridge field — against the snapshot and across an
+## advancing interval. Returns -1 for the "—" placeholder or any malformed
+## component.
 static func research_label_eta_seconds(text: String) -> int:
 	var marker := text.rfind("ETA ")
 	if marker < 0:
