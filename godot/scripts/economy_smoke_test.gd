@@ -596,19 +596,6 @@ func _run() -> void:
 		await _click_view(worker, MOUSE_BUTTON_LEFT)
 		await _click_view(source, MOUSE_BUTTON_RIGHT)
 
-	# The live worker Carry reaches unit_task_snapshot through the same real
-	# gather order: worker 1 heads to the authored salvage source, so its
-	# carried kind reads Scrap and its amount stays inside the catalogue's
-	# Rust CARRY_LIMIT.
-	if not await _wait_until(
-			func():
-				var task: Dictionary = GrusBridge.unit_task_snapshot(1)
-				return str(task.get("carry_kind", "")) == "Scrap" \
-					and int(task.get("carry_amount", 0)) > 0 \
-					and int(task.get("carry_amount", 0)) <= int(catalogue.get("carry_limit", 0)),
-			30.0, "worker 1 never reported a live Scrap carry through unit_task_snapshot"):
-		return
-
 	var before: Dictionary = GrusBridge.economy_snapshot()
 	for _frame in 2:
 		await get_tree().physics_frame
@@ -617,6 +604,20 @@ func _run() -> void:
 			or int(after.get("food", -1)) != int(before.get("food", -1)) \
 			or int(after.get("coal", -1)) != int(before.get("coal", -1)):
 		_fail("stockpile moved before any worker could gather and deposit: %s -> %s" % [before, after])
+		return
+
+	# The live worker Carry reaches unit_task_snapshot through the same real
+	# gather order: worker 1 heads to the authored salvage source, so its
+	# carried kind reads Scrap and its amount stays inside the catalogue's
+	# Rust CARRY_LIMIT. Poll after the stockpile comparison so deposits the
+	# gather orders have already begun can never fail that earlier premise.
+	if not await _wait_until(
+			func():
+				var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+				return str(task.get("carry_kind", "")) == "Scrap" \
+					and int(task.get("carry_amount", 0)) > 0 \
+					and int(task.get("carry_amount", 0)) <= int(catalogue.get("carry_limit", 0)),
+			30.0, "worker 1 never reported a live Scrap carry through unit_task_snapshot"):
 		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
