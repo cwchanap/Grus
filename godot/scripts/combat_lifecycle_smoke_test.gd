@@ -697,7 +697,8 @@ func _run() -> void:
 	if SmokeHelpers.hud_rects(_main.get_node("HUD")).any(func(rect: Rect2) -> bool: return rect.has_point(target_screen)):
 		var minimap := _main.get_node("HUD/Minimap") as Control
 		SmokeHelpers.push_mouse_click(get_tree(),
-			minimap.get_global_rect().position + Vector2(target.global_position.x, target.global_position.z),
+			minimap.get_global_rect().position
+				+ Vector2(target.global_position.x, target.global_position.z) * (minimap.size / Vector2(128.0, 96.0)),
 			MOUSE_BUTTON_LEFT)
 		await get_tree().process_frame
 		await get_tree().process_frame

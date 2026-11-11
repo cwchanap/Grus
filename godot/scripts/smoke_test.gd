@@ -89,6 +89,12 @@ func _find_unit(units: Array[Node], id: int) -> Node3D:
 func _ring(unit: Node3D) -> MeshInstance3D:
 	return unit.get_node("SelectionRing") as MeshInstance3D
 
+## The minimap draws the 128x96 world bitmap across its scaled control rect;
+## tests convert a world cell into the real click point the same way a player
+## clicking the visible map would.
+func _minimap_click_point(minimap: Control, cell: Vector2) -> Vector2:
+	return minimap.get_global_rect().position + cell * (minimap.size / Vector2(128.0, 96.0))
+
 func _art_bounds(root: Node3D) -> AABB:
 	var bounds := AABB()
 	var first := true
@@ -274,6 +280,16 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 			var actual := button.icon.resource_path if button.icon != null else ""
 			if kind.is_empty() or actual != expected:
 				_fail("%s icon path is %s; expected %s" % [button.name, actual if not actual.is_empty() else "missing", expected])
+				return false
+			# HPA-698 readability: the painted icon and its cost must fill the
+			# tile, not sit tiny inside an oversized rim.
+			var cost_label := button.get_node_or_null("Cost") as RichTextLabel
+			if button.size.y < 70.0 or button.get_theme_constant("icon_max_width") < 40 \
+					or cost_label == null \
+					or cost_label.get_theme_font_size("normal_font_size") < 13:
+				_fail("%s action tile does not fill its icon/cost slot: size=%s icon_width=%d cost_font=%d" % [
+					button.name, button.size, button.get_theme_constant("icon_max_width"),
+					cost_label.get_theme_font_size("normal_font_size") if cost_label != null else -1])
 				return false
 		if count != int(spec[2]):
 			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
@@ -1505,6 +1521,13 @@ func _run() -> void:
 		return
 	var main := get_node("Main") as Node3D
 	var minimap := get_node("Main/HUD/Minimap") as Control
+	# Mockup framing: the interactive map fills a readable 4:3 frame at the
+	# bottom left; its normalized click mapping keeps one cell per pixel
+	# semantic (see _minimap_click_point and minimap.gd).
+	if minimap.size.x < 180.0 or minimap.size.y < 135.0 \
+			or absf(minimap.size.x / minimap.size.y - 128.0 / 96.0) > 0.01:
+		_fail("minimap is not the readable 4:3 framed map: %s" % minimap.size)
+		return
 
 	# The expansion target derives from its live view so the choreography
 	# tracks the authored layout instead of a copied coordinate list.
@@ -1598,7 +1621,7 @@ func _run() -> void:
 
 	# Minimap click recenters the camera and never queues a command.
 	var feedback_revision := int(GrusBridge.command_feedback_revision())
-	var click_at := minimap.get_global_rect().position + Vector2(20, 80)
+	var click_at := _minimap_click_point(minimap, Vector2(20, 80))
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.position = click_at
@@ -1631,7 +1654,14 @@ func _run() -> void:
 		return
 
 	# Defense placement runs through the visible build buttons and real world
-	# input. Each successful Wall/Gate click stays armed for the next site.
+	# input. The minimap leg left the camera on the southwest corner where the
+	# re-laid-out bottom cards now cover Worker 1; recenter through the same
+	# real minimap path first, then click the unit at the clear viewport centre.
+	SmokeHelpers.push_mouse_click(get_tree(),
+		_minimap_click_point(minimap, Vector2(unit_one.global_position.x, unit_one.global_position.z)),
+		MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible:
@@ -1946,7 +1976,7 @@ func _run() -> void:
 		return
 	var feedback_before_minimap := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(),
-		minimap.get_global_rect().position + Vector2(rc_view.global_position.x, rc_view.global_position.z),
+		_minimap_click_point(minimap, Vector2(rc_view.global_position.x, rc_view.global_position.z)),
 		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2138,7 +2168,7 @@ func _run() -> void:
 	var bunkhouse_zoom_start := camera.size
 	var bunkhouse_world := roof_bunkhouse.global_position
 	var viewport_center := viewport_size * 0.5
-	var minimap_point := minimap.get_global_rect().position + Vector2(bunkhouse_world.x, bunkhouse_world.z)
+	var minimap_point := _minimap_click_point(minimap, Vector2(bunkhouse_world.x, bunkhouse_world.z))
 	SmokeHelpers.push_mouse_click(get_tree(), minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2167,7 +2197,7 @@ func _run() -> void:
 	# still at minimum zoom: recenter through the real minimap path, click a
 	# live roof triangle beyond the old center radius.
 	var rc_roof_world := rc_view.global_position
-	var rc_minimap_point := minimap.get_global_rect().position + Vector2(rc_roof_world.x, rc_roof_world.z)
+	var rc_minimap_point := _minimap_click_point(minimap, Vector2(rc_roof_world.x, rc_roof_world.z))
 	SmokeHelpers.push_mouse_click(get_tree(), rc_minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2378,7 +2408,7 @@ func _run() -> void:
 		_fail("could not restore sim speed after the radius-steal park")
 		return
 	SmokeHelpers.push_mouse_click(get_tree(),
-		minimap.get_global_rect().position + Vector2(steal_rc.global_position.x, steal_rc.global_position.z),
+		_minimap_click_point(minimap, Vector2(steal_rc.global_position.x, steal_rc.global_position.z)),
 		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame

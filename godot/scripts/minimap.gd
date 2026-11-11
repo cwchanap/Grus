@@ -127,19 +127,30 @@ func _point_of(view: Node3D) -> Vector2:
 
 func _draw() -> void:
 	if _texture != null:
-		draw_texture_rect(_texture, Rect2(Vector2.ZERO, Vector2(MAP_WIDTH, MAP_HEIGHT)), false)
+		draw_texture_rect(_texture, Rect2(Vector2.ZERO, size), false)
+	var unit := maxf(size.x / float(MAP_WIDTH), 0.1)
 	for point in _resource_points:
-		draw_circle(point, 1.5, RESOURCE_COLOR)
+		draw_circle(_cell_to_local(point), 1.5 * unit, RESOURCE_COLOR)
 	for point in _enemy_points:
-		draw_circle(point, 2.0, ENEMY_COLOR)
+		draw_circle(_cell_to_local(point), 2.0 * unit, ENEMY_COLOR)
 	for point in _friendly_points:
-		draw_circle(point, 2.0, FRIENDLY_COLOR)
+		draw_circle(_cell_to_local(point), 2.0 * unit, FRIENDLY_COLOR)
 	for point in incoming_ping_points:
-		draw_circle(point, 1.6, WAVE_PING_COLOR)
-		draw_arc(point, 5.0, 0.0, TAU, 20, WAVE_PING_COLOR, 1.0)
+		var local := _cell_to_local(point)
+		draw_circle(local, 1.6 * unit, WAVE_PING_COLOR)
+		draw_arc(local, 5.0 * unit, 0.0, TAU, 20, WAVE_PING_COLOR, 1.0)
 	var corners := _camera_ground_corners()
 	if corners.size() == 4:
-		draw_polyline(corners + PackedVector2Array([corners[0]]), CAMERA_COLOR, 1.0)
+		var local_corners := PackedVector2Array()
+		for corner in corners:
+			local_corners.append(_cell_to_local(corner))
+		draw_polyline(local_corners + PackedVector2Array([local_corners[0]]), CAMERA_COLOR, 1.0)
+
+## The 128x96 world bitmap is stretched across the whole control; tests and
+## clicks convert cells with the same normalized scale, preserving the
+## original one-bitmap-pixel-per-cell mapping at any framed size.
+func _cell_to_local(point: Vector2) -> Vector2:
+	return Vector2(point.x / MAP_WIDTH * size.x, point.y / MAP_HEIGHT * size.y)
 
 ## The camera frustum's intersection with the ground plane, minimap-space.
 func _camera_ground_corners() -> PackedVector2Array:
@@ -163,9 +174,10 @@ func _gui_input(event: InputEvent) -> void:
 	var click := event as InputEventMouseButton
 	if click == null or click.button_index != MOUSE_BUTTON_LEFT or not click.pressed:
 		return
+	var map_size := size.max(Vector2.ONE)
 	var cell := Vector2i(
-		clampi(int(click.position.x), 0, MAP_WIDTH - 1),
-		clampi(int(click.position.y), 0, MAP_HEIGHT - 1))
+		clampi(int(click.position.x / map_size.x * MAP_WIDTH), 0, MAP_WIDTH - 1),
+		clampi(int(click.position.y / map_size.y * MAP_HEIGHT), 0, MAP_HEIGHT - 1))
 	# The camera is pitched down, so its position is not its viewed ground
 	# point: shift the camera by the difference between the clicked cell and
 	# where the viewport-center ray currently hits the ground. The center
