@@ -665,9 +665,18 @@ func _run() -> void:
 	var defenders_revision := int(GrusBridge.command_feedback_revision())
 	if not await _select_guards(guards, guard_ids):
 		return
+	# Keyboard Attack-move must also leave an active build placement; these are
+	# Guards, so the subsequent real right-click is an accepted command and is
+	# awaited authoritatively below.
+	var bunkhouse_tile := _button("HUD/CommandPanel/BuildGrid/BunkhouseButton")
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(_main._placement_kind) != "Bunkhouse" or str(_main._armed_order) != "":
+		_fail("build tile did not arm placement before the Guard attack-move crossover")
+		return
 	await _key_tap(KEY_A)
-	if str(_main._armed_order) != "attack_move":
-		_fail("controller A-key did not arm Guard attack-move")
+	if str(_main._placement_kind) != "" or str(_main._armed_order) != "attack_move":
+		_fail("controller A-key did not leave placement before arming Guard attack-move")
 		return
 	var defender_screen: Vector2 = _main.camera.unproject_position(Vector3(defender_target.x, 0.0, defender_target.y))
 	# The "queued" text is a synchronous transient written inside the input
