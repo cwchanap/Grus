@@ -816,6 +816,17 @@ func _run() -> void:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
 		return
+	# Wave timer geometry from the Rust constants: wave 1 opens on the
+	# authored preparation interval and the live remaining can never exceed
+	# the snapshot's own total.
+	var opening_wave: Dictionary = GrusBridge.wave_snapshot()
+	if int(opening_wave.get("next_wave", -1)) != 1 \
+			or typeof(opening_wave.get("timer_total_seconds")) != TYPE_FLOAT \
+			or not is_equal_approx(float(opening_wave.get("timer_total_seconds", -1.0)), 300.0) \
+			or float(opening_wave.get("seconds_remaining", -1.0)) <= 0.0 \
+			or float(opening_wave.get("seconds_remaining", 0.0)) > float(opening_wave.get("timer_total_seconds", 0.0)) + 1.0:
+		_fail("Playing wave timer total/remaining geometry is wrong: %s" % [opening_wave])
+		return
 	await get_tree().process_frame
 	if controls_label.is_visible_in_tree():
 		_fail("ControlsLabel stayed visible after the match reached Playing")
@@ -1734,6 +1745,13 @@ func _run() -> void:
 	var analyze_gain := int(research_catalogue.get("analyze_gain_points", 0))
 	if target_points <= 0 or int(analyze_cost.get("crystals", 0)) <= 0 or analyze_gain <= 0:
 		_fail("catalogue research block is incomplete: %s" % [research_catalogue])
+		return
+	# The wave-growth marker is the Rust `unlock_points(75%)` milestone:
+	# 6,750 of the 9,000-point victory target, between the two tower
+	# unlocks.
+	var wave_growth_points := int(research_catalogue.get("wave_growth_points", 0))
+	if wave_growth_points != 6750:
+		_fail("catalogue wave_growth_points is not the Rust wave-boost milestone: %s" % [research_catalogue])
 		return
 	if not analyze_button.text.contains(str(int(analyze_cost.get("crystals", -1)))) \
 			or not analyze_button.text.contains(str(analyze_gain)):

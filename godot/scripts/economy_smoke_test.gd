@@ -183,6 +183,9 @@ func _queue_label(id: int) -> String:
 func _queue_progress(id: int) -> float:
 	return float(GrusBridge.building_snapshot(id).get("queue_progress", 0.0))
 
+func _training_queue(id: int) -> Array:
+	return GrusBridge.building_snapshot(id).get("training_queue", [])
+
 func _blocked_reason(id: int) -> int:
 	return int(GrusBridge.building_snapshot(id).get("blocked_reason", -1))
 
@@ -409,6 +412,52 @@ func _run() -> void:
 		if catalogue_units.has(removed) or catalogue.get("buildings", {}).has(removed):
 			_fail("catalogue still advertises the deleted %s" % removed)
 			return
+	# The training catalogue stays human-only: alien rows would otherwise
+	# contribute an empty producer kind and route ordinary ground
+	# right-clicks to set_rally(-1, ...).
+	if catalogue_units.size() != 3 or catalogue_units.has("Swarmer"):
+		_fail("training catalogue is not the human-only UnitKind::HUMAN loop: %s" % [catalogue_units.keys()])
+		return
+	# HPA-698 combat/health stats ride the same Rust specs: Worker is a
+	# noncombatant with no optional combat keys, Guard and Rifleman carry
+	# their real damage/range/counter values.
+	if int(worker_entry.get("max_health", -1)) != 50 or worker_entry.has("damage"):
+		_fail("Worker catalogue stats are wrong: %s" % [worker_entry])
+		return
+	if int(guard_entry.get("max_health", -1)) != 100 \
+			or int(guard_entry.get("damage", -1)) != 10 \
+			or not is_equal_approx(float(guard_entry.get("range", -1.0)), 1.5) \
+			or str(guard_entry.get("counter_target", "")) != "Swarmer" \
+			or int(guard_entry.get("counter_bonus", -1)) != 5:
+		_fail("Guard catalogue combat stats are wrong: %s" % [guard_entry])
+		return
+	if int(rifleman_entry.get("max_health", -1)) != 70 \
+			or int(rifleman_entry.get("damage", -1)) != 8 \
+			or not is_equal_approx(float(rifleman_entry.get("range", -1.0)), 6.0) \
+			or str(rifleman_entry.get("counter_target", "")) != "Spitter" \
+			or int(rifleman_entry.get("counter_bonus", -1)) != 4:
+		_fail("Rifleman catalogue combat stats are wrong: %s" % [rifleman_entry])
+		return
+	if int(catalogue.get("carry_limit", -1)) != 10:
+		_fail("catalogue carry_limit is not the Rust CARRY_LIMIT: %s" % [catalogue])
+		return
+	var turret_entry: Dictionary = catalogue.get("buildings", {}).get("GunTurret", {})
+	if int(turret_entry.get("max_health", -1)) != 350 \
+			or int(turret_entry.get("heat_supply", -1)) != 0 \
+			or int(turret_entry.get("heat_demand", -1)) != 2 \
+			or int(turret_entry.get("damage", -1)) != 10 \
+			or not is_equal_approx(float(turret_entry.get("range", -1.0)), 8.0) \
+			or str(turret_entry.get("counter_target", "")) != "Spitter" \
+			or int(turret_entry.get("counter_bonus", -1)) != 5:
+		_fail("Gun Turret catalogue stat row is wrong: %s" % [turret_entry])
+		return
+	var research_center_entry: Dictionary = catalogue.get("buildings", {}).get("ResearchCenter", {})
+	if int(research_center_entry.get("max_health", -1)) != 800 \
+			or int(research_center_entry.get("heat_supply", -1)) != 15 \
+			or int(research_center_entry.get("heat_demand", -1)) != 10 \
+			or research_center_entry.has("damage"):
+		_fail("Research Center catalogue stat row is wrong: %s" % [research_center_entry])
+		return
 	# HPA-181: the Coal Furnace build button exists and reads its footprint
 	# and cost/build time from this same catalogue snapshot — no Godot
 	# balance literals.
@@ -430,6 +479,19 @@ func _run() -> void:
 		return
 	if int(boot.get("population_used", -1)) != 4 or int(boot.get("population_cap", -1)) != 10:
 		_fail("starting population is not 4/10: %s" % [boot])
+		return
+	# Invalid ids stay empty snapshots: the new queue/carry keys sit behind
+	# the same missing/fog-hidden guards as the existing payload.
+	for bad_id in [-1, 999999]:
+		if not GrusBridge.building_snapshot(bad_id).is_empty() \
+				or not GrusBridge.unit_task_snapshot(bad_id).is_empty():
+			_fail("invalid id %d leaked a snapshot: %s / %s" % [bad_id,
+				GrusBridge.building_snapshot(bad_id), GrusBridge.unit_task_snapshot(bad_id)])
+			return
+	var idle_task: Dictionary = GrusBridge.unit_task_snapshot(1)
+	if str(idle_task.get("task", "")) != "Idle" or int(idle_task.get("carry_amount", -1)) != 0 \
+			or str(idle_task.get("carry_kind", "?")) != "":
+		_fail("idle worker 1 snapshot does not report an empty Carry: %s" % [idle_task])
 		return
 	if boot.has("age"):
 		_fail("economy snapshot still carries the deleted age field: %s" % [boot])
@@ -533,6 +595,19 @@ func _run() -> void:
 			return
 		await _click_view(worker, MOUSE_BUTTON_LEFT)
 		await _click_view(source, MOUSE_BUTTON_RIGHT)
+
+	# The live worker Carry reaches unit_task_snapshot through the same real
+	# gather order: worker 1 heads to the authored salvage source, so its
+	# carried kind reads Scrap and its amount stays inside the catalogue's
+	# Rust CARRY_LIMIT.
+	if not await _wait_until(
+			func():
+				var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+				return str(task.get("carry_kind", "")) == "Scrap" \
+					and int(task.get("carry_amount", 0)) > 0 \
+					and int(task.get("carry_amount", 0)) <= int(catalogue.get("carry_limit", 0)),
+			30.0, "worker 1 never reported a live Scrap carry through unit_task_snapshot"):
+		return
 
 	var before: Dictionary = GrusBridge.economy_snapshot()
 	for _frame in 2:
@@ -773,8 +848,10 @@ func _run() -> void:
 	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
 	# The ring slot west of the city is probed off the live RC view.
-	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "":
-		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s" % [_blocked_reason(barracks_id), _queue_label(barracks_id)])
+	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "" \
+			or not _training_queue(barracks_id).is_empty():
+		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s queue=%s" % [
+			_blocked_reason(barracks_id), _queue_label(barracks_id), _training_queue(barracks_id)])
 		return
 
 	# HPA-181 heat boundary leg, all through real UI placement paths and
@@ -926,13 +1003,20 @@ func _run() -> void:
 			"Guard queue progress never advanced"):
 		return
 	# Both jobs charged once at enqueue: 60f Guard + 40f/40w Rifleman (the
-	# second click lands on the next command tick, so poll briefly).
+	# second click lands on the next command tick, so poll briefly). The
+	# ordered training_queue must carry both labels before the 20x head
+	# Guard can finish.
 	if not await _wait_until(
 			func():
 				var charged: Dictionary = GrusBridge.economy_snapshot()
-				return int(charged.get("food", -1)) == food_before - 100 \
+				return _training_queue(barracks_id) == ["Guard", "Rifleman"] \
+					and int(charged.get("food", -1)) == food_before - 100 \
 					and int(charged.get("scrap", -1)) == scrap_before - 40,
-			10.0, "Barracks enqueue did not charge Guard+Rifleman exactly once"):
+			10.0, "Barracks enqueue did not charge Guard+Rifleman once into a FIFO training_queue"):
+		return
+	if _training_queue(barracks_id) != ["Guard", "Rifleman"]:
+		_fail("Barracks training_queue lost FIFO order while Guard is the head: %s" % [
+			_training_queue(barracks_id)])
 		return
 	var guard_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Guard", 5, guard_box), 30.0,
@@ -941,12 +1025,20 @@ func _run() -> void:
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "Rifleman", 15.0,
 			"Rifleman never became the FIFO head after the Guard spawned"):
 		return
+	if _training_queue(barracks_id) != ["Rifleman"]:
+		_fail("Barracks training_queue did not transition to the Rifleman head: %s" % [
+			_training_queue(barracks_id)])
+		return
 	var rifleman_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 5, rifleman_box), 35.0,
 			"trained Rifleman view never appeared"):
 		return
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 15.0,
 			"Rifleman job never left the Barracks queue"):
+		return
+	if not _training_queue(barracks_id).is_empty():
+		_fail("Barracks training_queue did not empty after the Rifleman spawned: %s" % [
+			_training_queue(barracks_id)])
 		return
 	# Park both combatants at staging so their live views cannot intercept the
 	# Barracks-origin click below.
@@ -1054,10 +1146,11 @@ func _run() -> void:
 		return
 
 	# The accepted drain jobs must leave the FIFO before the unaffordable
-	# click re-tests it: an empty head label with zero progress is the
-	# authoritative "no jobs" proof — the head label alone cannot see
-	# queued successors (building_snapshot exposes only the front job).
-	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 60.0,
+	# click re-tests it: an empty head label, zero progress and an empty
+	# training_queue together are the authoritative "no jobs" proof.
+	if not await _wait_until(func(): return _queue_label(barracks_id) == "" \
+			and _queue_progress(barracks_id) == 0.0 \
+			and _training_queue(barracks_id).is_empty(), 60.0,
 			"accepted drain jobs never emptied the Barracks queue"):
 		return
 	var reject_revision: int = GrusBridge.command_feedback_revision()
@@ -1084,8 +1177,10 @@ func _run() -> void:
 			or int(unaffordable_after.get("coal", -1)) > unaffordable_before["coal"]:
 		_fail("rejected Guard enqueue still moved the stockpile")
 		return
-	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0:
-		_fail("rejected Guard enqueue still left a Barracks job: %s" % _queue_label(barracks_id))
+	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0 \
+			or not _training_queue(barracks_id).is_empty():
+		_fail("rejected Guard enqueue still left a Barracks job: %s / %s" % [
+			_queue_label(barracks_id), _training_queue(barracks_id)])
 		return
 	if _blocked_reason(barracks_id) != unaffordable_before["blocked"]:
 		_fail("rejected Guard enqueue changed the Barracks blocked state")

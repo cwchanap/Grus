@@ -7,17 +7,18 @@ use godot::prelude::*;
 use godot_bevy::BevyApp;
 use godot_bevy::prelude::*;
 use grus_sim::catalog::{
-    Cost, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, RoomSpec, building_spec,
+    CombatSpec, Cost, ROOM_SLOTS_PER_LEVEL, ResourceKind, RoomKind, RoomSpec, building_spec,
     excavation_cost_and_seconds, room_spec, unit_spec,
 };
 use grus_sim::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BASE_GATHER_RATE, Building, BuildingId, BuildingIndex,
-    BuildingKind, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget, CommandResult,
-    EntryZone, Footprint, GridMap, GridPos, Health, HeatState, LastRouteReject, MapFixture,
-    MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind, ProductionQueue,
-    RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RUINS, RallyPoint, RejectReason, ResourceId,
-    ResourceSource, SIM_STEP_SECONDS, SimPosition, TeamEconomy, TeamId, Underground, Unit,
-    UnitCommand, UnitCommandKind, UnitId, UnitIndex, UnitKind, VisibilityMap, WaveState,
+    BuildingKind, CARRY_LIMIT, Carry, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget,
+    CommandResult, EntryZone, Footprint, GridMap, GridPos, Health, HeatState, LastRouteReject,
+    MapFixture, MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind,
+    ProductionQueue, RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_PERCENT,
+    RUINS, RallyPoint, RejectReason, ResourceId, ResourceSource, SIM_STEP_SECONDS, SimPosition,
+    TeamEconomy, TeamId, Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex,
+    UnitKind, VisibilityMap, WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS, WaveState,
     WorkerTask, active_phase, apply_player_command, benchmark_building_count, clear_match_world,
     explored_by, extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
     population_used, produces, refresh_visibility, research_points, research_rate, resolve_target,
@@ -424,6 +425,9 @@ impl GrusBridgeNode {
     /// Read-only wave state for smoke assertions and the HUD/minimap. Zone
     /// names and fixture anchors are present only during the 30-second
     /// warning; individual alien positions remain behind normal fog views.
+    /// `timer_total_seconds` is the current interval's full Rust duration
+    /// (first preparation, then the regular wave interval) so the HUD ring
+    /// can render `seconds_remaining / timer_total_seconds`.
     #[func]
     fn wave_snapshot(&self) -> VarDictionary {
         with_app(|app| wave_snapshot_dict(app.world())).unwrap_or_default()
@@ -766,10 +770,11 @@ impl GrusBridgeNode {
     }
 
     /// One building's state by stable id: completion, construction and queue
-    /// progress (0..1), queue head label, blocked code (0 = none), and rally
-    /// cell (-1/-1 when unset). Empty dict when the building does not exist
-    /// or is a hidden enemy — fog must not leak health/queue/construction
-    /// through stale ids.
+    /// progress (0..1), queue head label, the full ordered `training_queue`,
+    /// blocked code (0 = none), and rally cell (-1/-1 when unset). A
+    /// producer with no queue reports an empty array. Empty dict when the
+    /// building does not exist or is a hidden enemy — fog must not leak
+    /// health/queue/construction through stale ids.
     #[func]
     fn building_snapshot(&self, building_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -809,6 +814,13 @@ impl GrusBridgeNode {
             );
 
             let queue = world.get::<ProductionQueue>(entity);
+            // The full FIFO in arrival order; a seeded producer has no queue
+            // component until the first accepted enqueue heals it.
+            let mut training_queue: Array<GString> = Array::new();
+            for job in queue.into_iter().flat_map(|queue| queue.jobs.iter()) {
+                training_queue.push(&GString::from(queue_head_label(job).as_str()));
+            }
+            dict.set("training_queue", &training_queue);
             match queue.and_then(|queue| queue.jobs.front()) {
                 Some(job) => {
                     dict.set(
@@ -857,9 +869,10 @@ impl GrusBridgeNode {
 
     /// One unit's `WorkerTask` for command round-trip assertions: the task
     /// variant name plus the resource/building ids it names (-1 when the
-    /// task names none). Empty dict for a missing unit, a unit with no
-    /// worker task, or a fog-hidden enemy — task data must not leak
-    /// through stale ids.
+    /// task names none), and its live `Carry` as `carry_amount` +
+    /// `carry_kind` (0 / "" when empty). Empty dict for a missing unit, a
+    /// unit with no worker task, or a fog-hidden enemy — task/carry data
+    /// must not leak through stale ids.
     #[func]
     fn unit_task_snapshot(&self, unit_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -897,6 +910,12 @@ impl GrusBridgeNode {
             dict.set("task", &GString::from(name));
             dict.set("source", source);
             dict.set("building", building);
+            let (carry_amount, carry_kind) = match world.get::<Carry>(entity) {
+                Some(Carry::Holding { kind, amount }) => (amount.get(), kind_name(*kind)),
+                _ => (0, GString::from("")),
+            };
+            dict.set("carry_amount", i64::from(carry_amount));
+            dict.set("carry_kind", &carry_kind);
             dict
         })
         .unwrap_or_default()
@@ -960,20 +979,28 @@ impl GrusBridgeNode {
     /// Catalogue action data computed from the Rust catalogue, so GDScript
     /// never hardcodes gameplay costs or unlocks. Keys:
     /// - "units": {kind -> {food, scrap, coal, crystals, seconds,
-    ///   producer}} — train cost (all four currencies, always present),
-    ///   train seconds, and the producing building kind name.
+    ///   producer, max_health, damage?, range?, counter_target?,
+    ///   counter_bonus?}} — train cost (all four currencies, always
+    ///   present), train seconds, producing building kind name, max health,
+    ///   and the optional combat stats (absent for noncombatants). Human
+    ///   kinds only: this map is also the training catalogue.
     /// - "buildings": {kind -> {food, scrap, coal, crystals, seconds,
-    ///   width, height, population, unlock_points}} — build cost, build
-    ///   seconds, footprint, population capacity contribution, and the
-    ///   catalogue-derived research point threshold (0 = always available).
-    /// - "research": {target_points, analyze_cost, analyze_gain_points} —
-    ///   the static research tuning; the live state rides the separate
-    ///   dynamic `research_snapshot`.
+    ///   width, height, population, unlock_points, max_health,
+    ///   heat_supply, heat_demand, damage?, range?, counter_target?,
+    ///   counter_bonus?}} — build cost, build seconds, footprint,
+    ///   population capacity contribution, the catalogue-derived research
+    ///   point threshold (0 = always available), heat contribution and
+    ///   optional combat stats.
+    /// - "research": {target_points, base_per_second, analyze_cost,
+    ///   analyze_gain_points, wave_growth_points} — the static research
+    ///   tuning, including the `RESEARCH_WAVE_BOOST_PERCENT` milestone; the
+    ///   live state rides the separate dynamic `research_snapshot`.
     /// - "underground": {slots, room_kinds, rooms} — the slot count per
     ///   level, the wire-name order for menus, and each room's `min_level`,
     ///   typed cost, build seconds and benefit fields straight off the
     ///   catalogue table. The live depth/dig/slot state rides the separate
     ///   dynamic `underground_snapshot`.
+    /// - "carry_limit": the Rust `CARRY_LIMIT` a worker Carry can reach.
     #[func]
     fn catalogue_snapshot(&self) -> VarDictionary {
         catalogue_snapshot_dict()
@@ -991,6 +1018,19 @@ fn cost_dict(cost: grus_sim::catalog::Cost) -> VarDictionary {
     dict
 }
 
+/// One optional-combat serializer shared by the unit and building catalogue
+/// rows: absent for noncombatants, so GDScript can test `has("damage")`
+/// instead of guessing a zero-means-none convention.
+fn set_combat_fields(entry: &mut VarDictionary, combat: Option<CombatSpec>) {
+    let Some(combat) = combat else {
+        return;
+    };
+    entry.set("damage", i64::from(combat.damage));
+    entry.set("range", f64::from(combat.attack_range));
+    entry.set("counter_target", &kind_name(combat.counter_target));
+    entry.set("counter_bonus", i64::from(combat.counter_bonus));
+}
+
 /// Catalogue payload behind `catalogue_snapshot`, extracted so the bridge
 /// method stays a thin `#[func]` wrapper. It builds Godot dictionaries, so
 /// it can only run with the engine loaded — exercised through the GDScript
@@ -1002,6 +1042,8 @@ fn catalogue_snapshot_dict() -> VarDictionary {
         let mut entry = cost_dict(spec.cost);
         entry.set("seconds", i64::from(spec.train_seconds));
         entry.set("producer", &producer_kind_name(kind));
+        entry.set("max_health", i64::from(spec.max_health));
+        set_combat_fields(&mut entry, spec.combat);
         units.set(&kind_name(kind), &entry.to_variant());
     }
     let mut buildings = VarDictionary::new();
@@ -1012,6 +1054,10 @@ fn catalogue_snapshot_dict() -> VarDictionary {
         entry.set("width", i64::from(spec.width));
         entry.set("height", i64::from(spec.height));
         entry.set("population", i64::from(spec.population_capacity));
+        entry.set("max_health", i64::from(spec.max_health));
+        entry.set("heat_supply", i64::from(spec.heat_supply));
+        entry.set("heat_demand", i64::from(spec.heat_demand));
+        set_combat_fields(&mut entry, spec.combat);
         // The research-unlock threshold derives from the catalogue percent
         // through the sim's one `unlock_points` helper — no copied point
         // table lives in the bridge or GDScript.
@@ -1031,6 +1077,12 @@ fn catalogue_snapshot_dict() -> VarDictionary {
     research.set("base_per_second", RESEARCH_BASE_PER_SECOND);
     research.set("analyze_cost", &cost_dict(ANALYZE_COST).to_variant());
     research.set("analyze_gain_points", ANALYZE_RESEARCH_GAIN);
+    // The wave-growth milestone is the same percent helper the sim uses at
+    // launch; two tower milestones ride their per-building rows above.
+    research.set(
+        "wave_growth_points",
+        i64::from(unlock_points(RESEARCH_WAVE_BOOST_PERCENT)),
+    );
     // Static underground tuning, read once at panel init: the slot count
     // per level, the wire-name order for menus, and each room's
     // min_level/cost/build-time/benefit fields straight off the catalogue
@@ -1075,6 +1127,7 @@ fn catalogue_snapshot_dict() -> VarDictionary {
     catalogue.set("buildings", &buildings.to_variant());
     catalogue.set("research", &research.to_variant());
     catalogue.set("underground", &underground.to_variant());
+    catalogue.set("carry_limit", i64::from(CARRY_LIMIT));
     catalogue
 }
 
@@ -2197,6 +2250,15 @@ fn wave_snapshot_dict(world: &World) -> VarDictionary {
         i64::try_from(state.next_wave).unwrap_or(i64::MAX),
     );
     dict.set("seconds_remaining", state.remaining_seconds());
+    // The full duration of the interval currently counting down: the initial
+    // preparation for wave 1, then the regular wave interval. Both come from
+    // the Rust wave constants, never a GDScript copy.
+    let timer_total_seconds = if state.next_wave <= 1 {
+        WAVE_PREPARATION_SECONDS
+    } else {
+        WAVE_INTERVAL_SECONDS
+    };
+    dict.set("timer_total_seconds", f64::from(timer_total_seconds));
     dict.set("incoming_zones", &incoming_zones);
     dict.set(
         "live_aliens",
