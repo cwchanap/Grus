@@ -8,6 +8,9 @@ extends CanvasLayer
 ## read in _ready exists only to render fixed display text and tooltips.
 
 @onready var wave_label: RichTextLabel = $WaveLabel
+@onready var wave_ring: Control = $WaveRing
+@onready var wave_clock: TextureRect = $WaveRing/ClockIcon
+@onready var incoming_glow: Control = $IncomingGlow
 @onready var research_bar: ProgressBar = $ResearchPanel/ResearchBar
 @onready var research_label: Label = $ResearchPanel/ResearchLabel
 @onready var research_icon: TextureRect = $ResearchPanel/ResearchIcon
@@ -75,6 +78,8 @@ func _ready() -> void:
 	_build_common_tiles(buildings, units)
 	_build_order_tiles()
 	_build_queue_sockets()
+	wave_clock.texture = _icon_for_kind("status", "WaveCountdown")
+	_build_glow_textures()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
 	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
 	var analyze_crystals := int(analyze_cost.get("crystals", 0))
@@ -275,6 +280,30 @@ func _build_queue_sockets() -> void:
 	_queue_overflow.add_theme_stylebox_override("normal", chip)
 	queue_sockets.add_child(_queue_overflow)
 
+## One amber gradient per screen edge, faded inward. The four overlays are
+## noninteractive and only the zone names in the live wave snapshot show them.
+func _build_glow_textures() -> void:
+	var directions := {
+		"North": [Vector2(0.5, 0.0), Vector2(0.5, 1.0)],
+		"South": [Vector2(0.5, 1.0), Vector2(0.5, 0.0)],
+		"West": [Vector2(0.0, 0.5), Vector2(1.0, 0.5)],
+		"East": [Vector2(1.0, 0.5), Vector2(0.0, 0.5)],
+	}
+	for direction in directions:
+		var gradient := Gradient.new()
+		gradient.set_color(0, Color(0.96, 0.58, 0.16, 0.45))
+		gradient.set_color(1, Color(0.96, 0.58, 0.16, 0.0))
+		var texture := GradientTexture2D.new()
+		texture.gradient = gradient
+		texture.width = 64
+		texture.height = 64
+		texture.fill = GradientTexture2D.FILL_LINEAR
+		texture.fill_from = directions[direction][0]
+		texture.fill_to = directions[direction][1]
+		var edge := incoming_glow.get_node(direction) as TextureRect
+		edge.texture = texture
+		edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 ## Resource bar plus the idle-worker jump label, straight off the controller's
 ## once-per-frame economy snapshot. One horizontal icon-first row: painted
 ## 28 px resource/population/heat icons with live values, matching the
@@ -340,15 +369,24 @@ func _refresh_affordability(economy: Dictionary) -> void:
 				button.theme_type_variation = variation
 
 ## Wave line and the minimap pings: one controller read per frame feeds both,
-## so HUD text and incoming pings can never disagree.
+## so HUD text and incoming pings can never disagree. The countdown ring is
+## exactly seconds_remaining / timer_total_seconds and its amber state plus
+## the directional edge glows are exactly "incoming_zones is nonempty".
 func refresh_wave(wave: Dictionary) -> void:
 	var remaining := maxi(ceili(float(wave.get("seconds_remaining", 0.0))), 0)
+	var remaining_seconds := maxf(float(wave.get("seconds_remaining", 0.0)), 0.0)
+	var total_seconds := maxf(float(wave.get("timer_total_seconds", 0.0)), 1.0)
 	var incoming_names := PackedStringArray()
 	for zone in wave.get("incoming_zones", []):
 		incoming_names.append(str(zone.get("name", "")))
+	var warning := not incoming_names.is_empty()
+	wave_ring.set_state(remaining_seconds / total_seconds, warning)
+	for direction in ["North", "East", "South", "West"]:
+		(incoming_glow.get_node(direction) as TextureRect).visible = \
+			incoming_names.has(direction)
 	var wave_number := int(wave.get("wave", 0))
 	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
-	wave_label.text = "%s   %sNext wave %d in %d:%02d   Aliens %d" % [
+	wave_label.text = "%s\n%sNext wave %d in %d:%02d\nAliens %d" % [
 		current_label,
 		_inline_icon("status", "WaveCountdown"),
 		int(wave.get("next_wave", 1)),
@@ -356,7 +394,7 @@ func refresh_wave(wave: Dictionary) -> void:
 		remaining % 60,
 		int(wave.get("live_aliens", 0)),
 	]
-	if not incoming_names.is_empty():
+	if warning:
 		wave_label.text += "   %sIncoming: %s" % [
 			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
