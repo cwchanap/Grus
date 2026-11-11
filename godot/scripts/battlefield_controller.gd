@@ -15,6 +15,7 @@ const ZOOM_STEP := 6.0
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
+@onready var _order_grid: Container = $HUD/CommandPanel/OrderGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
 @onready var _fx: Node3D = $CombatFx
 @onready var start_button: Button = $HUD/SessionPanel/StartButton
@@ -45,7 +46,10 @@ var _session_phase := ""
 var _unit_kinds: Dictionary = {}
 var _previous_unit_kinds: Dictionary = {}
 var _building_kinds: Dictionary = {}
-var _attack_move_armed := false
+## One controller-owned modal order: "", "attack_move", "move", "gather",
+## "rally". Build placement stays a separate `_placement_kind` because it has
+## its own preview/queued-placement lifecycle.
+var _armed_order := ""
 ## Producer building kinds come from the Rust catalogue via
 ## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
@@ -77,6 +81,9 @@ func _ready() -> void:
 		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
 	for button in _train_grid.get_children():
 		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
+	for button in _order_grid.get_children():
+		if button is Button:
+			button.pressed.connect(_on_order_pressed.bind(str(button.get_meta("order", ""))))
 	analyze_button.pressed.connect(_on_analyze_pressed)
 	idle_button.pressed.connect(_on_idle_pressed)
 	start_button.pressed.connect(_on_start_pressed)
@@ -143,6 +150,8 @@ func _refresh_session() -> void:
 	var snap: Dictionary = GrusBridge.session_snapshot()
 	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
+	if _session_phase != "Playing":
+		_armed_order = ""
 	_fx.set_wind_phase(_session_phase)
 	_hud.refresh_session(_session_phase, int(snap.get("winner_team", -1)))
 	var result_frame := _session_phase == "Result" and previous_phase != "Result"
@@ -252,6 +261,7 @@ func _refresh_hud() -> void:
 			unit_health = float(unit_view.call("health_ratio"))
 	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds,
 		unit_task, unit_health, building_health)
+	_hud.refresh_orders(_armed_order, _playing())
 	_hud.refresh_research_controls(research, building, _playing())
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
@@ -325,17 +335,21 @@ func _handle_key(event: InputEventKey) -> void:
 	if event.keycode == KEY_ESCAPE:
 		if _placement_kind != "":
 			_cancel_placement()
+		elif _armed_order != "":
+			_armed_order = ""
+			command_status.text = "Order canceled"
 		elif _session_phase == "Playing":
 			GrusBridge.set_paused(true)
 		elif _session_phase == "Paused":
 			GrusBridge.set_paused(false)
 		return
 	if event.keycode == KEY_S:
+		_armed_order = ""
 		_issue_stop()
 		return
 	if event.keycode == KEY_A:
 		if _playing() and not selected_ids.is_empty():
-			_attack_move_armed = true
+			_armed_order = "attack_move"
 			command_status.text = "Attack-move: right-click a ground target"
 		return
 	if event.keycode < KEY_1 or event.keycode > KEY_9:
@@ -409,8 +423,24 @@ func _apply_selection() -> void:
 		if selected:
 			live_selected.append(id)
 	selected_ids = live_selected
-	if selected_ids.is_empty():
-		_attack_move_armed = false
+	_clear_invalid_armed_order()
+
+## One modal order outlives a selection only while its context still exists:
+## units for move/attack-move/gather (workers for Gather), a selected
+## producer for Rally. Lost selection/context clears it, never a hidden fallback.
+func _clear_invalid_armed_order() -> void:
+	match _armed_order:
+		"":
+			return
+		"rally":
+			if not _producer_kinds.has(_selected_producer_kind()):
+				_armed_order = ""
+		"gather":
+			if _selected_worker_ids().is_empty():
+				_armed_order = ""
+		_:
+			if selected_ids.is_empty():
+				_armed_order = ""
 
 func _issue_context_command(screen_position: Vector2) -> void:
 	if not _playing():
@@ -419,16 +449,12 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	if _placement_kind != "":
 		_cancel_placement()
 		return
-	var armed := _attack_move_armed
-	_attack_move_armed = false
-	# An armed attack-move is a modal order: it outranks every contextual
-	# pick (worker gather/construction, enemy attack, rally, move).
-	if armed and not selected_ids.is_empty():
-		var target = _ground_target(screen_position)
-		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
-			command_status.text = "Attack-move queued"
-		else:
-			command_status.text = "Attack-move rejected"
+	# An armed order is modal: it outranks every contextual pick and is
+	# consumed by this one right-click, even when its target is invalid.
+	if _armed_order != "":
+		var armed := _armed_order
+		_armed_order = ""
+		_dispatch_armed_order(armed, screen_position)
 		return
 	var workers := _selected_worker_ids()
 	if not workers.is_empty():
@@ -468,6 +494,43 @@ func _issue_context_command(screen_position: Vector2) -> void:
 				command_status.text = "Rally point rejected"
 			return
 	_issue_move(screen_position)
+
+## The one modal-order dispatch table. Each branch reuses the existing bridge
+## operation and never falls through to a generic contextual pick.
+func _dispatch_armed_order(order: String, screen_position: Vector2) -> void:
+	match order:
+		"attack_move":
+			var target = _ground_target(screen_position)
+			if target == null or selected_ids.is_empty():
+				command_status.text = "Attack-move rejected"
+				return
+			if GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
+				command_status.text = "Attack-move queued"
+			else:
+				command_status.text = "Attack-move rejected"
+		"move":
+			_issue_move(screen_position)
+		"gather":
+			var workers := _selected_worker_ids()
+			var resource_id := _gatherable_resource_id(screen_position)
+			if workers.is_empty() or resource_id <= 0:
+				command_status.text = "Gather command rejected"
+				return
+			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
+				command_status.text = "Gather command queued"
+			else:
+				command_status.text = "Gather command rejected"
+		"rally":
+			var target = _ground_target(screen_position)
+			if target == null or not _producer_kinds.has(_selected_producer_kind()):
+				command_status.text = "Rally point rejected"
+				return
+			if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):
+				command_status.text = "Rally point queued"
+			else:
+				command_status.text = "Rally point rejected"
+		_:
+			command_status.text = "Order canceled"
 
 func _issue_move(screen_position: Vector2) -> void:
 	if not _playing():
@@ -641,7 +704,7 @@ func _restart_match() -> void:
 	selected_building_id = -1
 	_control_groups.clear()
 	_idle_cursor = 0
-	_attack_move_armed = false
+	_armed_order = ""
 	_ug_drawer.reset()
 	_pending_placement_requests.clear()
 	_cancel_placement()
@@ -747,6 +810,45 @@ func _on_build_pressed(kind: String) -> void:
 	_placement_generation += 1
 	_placement_kind = kind
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
+
+## A real order-tile click arms the one modal order after checking its
+## context; Stop runs immediately and Cancel clears placement/order without
+## enqueueing a gameplay command.
+func _on_order_pressed(order: String) -> void:
+	if order == "cancel":
+		if _placement_kind != "":
+			_cancel_placement()
+			command_status.text = "Placement canceled"
+		elif _armed_order != "":
+			_armed_order = ""
+			command_status.text = "Order canceled"
+		return
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
+	if order == "stop":
+		_armed_order = ""
+		_issue_stop()
+		return
+	if order in ["move", "attack_move"] and selected_ids.is_empty():
+		command_status.text = "Select units first"
+		return
+	if order == "gather" and _selected_worker_ids().is_empty():
+		command_status.text = "Select workers to gather"
+		return
+	if order == "rally" and not _producer_kinds.has(_selected_producer_kind()):
+		command_status.text = "Select a production building first"
+		return
+	_armed_order = order
+	match order:
+		"move":
+			command_status.text = "Move: right-click a ground target"
+		"attack_move":
+			command_status.text = "Attack-move: right-click a ground target"
+		"gather":
+			command_status.text = "Gather: right-click a resource"
+		"rally":
+			command_status.text = "Rally: right-click a ground target"
 
 func _cancel_placement() -> void:
 	_placement_generation += 1

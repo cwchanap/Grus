@@ -196,7 +196,7 @@ func _assert_input_gated(where: String) -> bool:
 	if _main.command_status.text != "Match is not playing":
 		_fail("%s: context command was not refused: %s" % [where, _main.command_status.text])
 		return false
-	if bool(_main._attack_move_armed) \
+	if str(_main._armed_order) != "" \
 			or int(GrusBridge.command_feedback_revision()) != revision:
 		_fail("%s: an input handler reached the bridge while not Playing" % where)
 		return false
@@ -637,7 +637,7 @@ func _run() -> void:
 	if not await _select_guards(guards, guard_ids):
 		return
 	await _key_tap(KEY_A)
-	if not bool(_main._attack_move_armed):
+	if str(_main._armed_order) != "attack_move":
 		_fail("controller A-key did not arm Guard attack-move")
 		return
 	var defender_screen: Vector2 = _main.camera.unproject_position(Vector3(defender_target.x, 0.0, defender_target.y))
@@ -726,6 +726,18 @@ func _run() -> void:
 		_fail("one Swarmer kill did not credit exactly one Crystal: %s" % [GrusBridge.economy_snapshot()])
 		return
 
+	# A phase change clears the one modal order: arm Attack-move through its
+	# real tile, pause via the bridge, and require the controller to drop it
+	# before any resumed gameplay click can consume it.
+	var attack_tile := _main.get_node("HUD/CommandPanel/OrderGrid/AttackMoveButton") as Button
+	if attack_tile == null:
+		_fail("Attack-move order tile is missing")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), attack_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(_main._armed_order) != "attack_move":
+		_fail("Attack-move tile did not arm before the pause phase change")
+		return
 	# Pause freezes health and combat-event totals. Resume into a real alien
 	# Defeat; the remaining wave still attacks the sole Research Center.
 	if not GrusBridge.set_paused(true):
@@ -733,6 +745,9 @@ func _run() -> void:
 		return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused", 5.0,
 			"session never reached Paused"):
+		return
+	if not await _wait_until(func(): return str(_main._armed_order) == "", 5.0,
+			"Paused phase did not clear the armed order"):
 		return
 	if not await _wait_until(
 			func(): return _session_panel().visible \
@@ -796,7 +811,7 @@ func _run() -> void:
 	_main.selected_ids = old_ids
 	_main.selected_building_id = barracks_id
 	_main._control_groups[1] = old_ids.duplicate()
-	_main._attack_move_armed = true
+	_main._armed_order = "attack_move"
 	_fx.call("spawn_death", Vector3.ZERO)
 	if int(_fx.call("effect_count")) < 1:
 		_fail("transient effect seed for the restart check did not land")
@@ -843,7 +858,7 @@ func _run() -> void:
 		_fail("restart did not bring the Start overlay back with Quit hidden")
 		return
 	if not _main.selected_ids.is_empty() or not _main._control_groups.is_empty() \
-			or int(_main.selected_building_id) != -1 or bool(_main._attack_move_armed):
+			or int(_main.selected_building_id) != -1 or str(_main._armed_order) != "":
 		_fail("restart left old selection/control-group state behind")
 		return
 	if int(_fx.call("effect_count")) != 0:
