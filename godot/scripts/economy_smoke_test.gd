@@ -833,6 +833,13 @@ func _run() -> void:
 			or not (sockets.get_child(1).get_node("Time") as Label).text.is_empty():
 		_fail("queue sockets do not show the head remaining time only: %s" % [head_time])
 		return
+	if not await _wait_until(func():
+			var head_progress := sockets.get_child(0).get_node("Progress") as ProgressBar
+			var next_progress := sockets.get_child(1).get_node("Progress") as ProgressBar
+			return head_progress.visible and not next_progress.visible \
+				and absf(head_progress.value - _queue_progress(research_center_id) * 100.0) <= 12.0,
+			5.0, "head socket progress does not track the live queue_progress"):
+		return
 	var rally_worker_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
 			"rallied Worker view never appeared"):
@@ -1165,6 +1172,12 @@ func _run() -> void:
 			or int(head_time_value) < 0 or int(head_time_value) > int(ceilf(guard_seconds)):
 		_fail("Guard head socket shows %s, outside the catalogue %ds train time" % [
 			head_time_text, int(guard_seconds)])
+		return
+	if not await _wait_until(func():
+			var progress_bar := sockets.get_child(0).get_node("Progress") as ProgressBar
+			return progress_bar.visible \
+				and absf(progress_bar.value - _queue_progress(barracks_id) * 100.0) <= 12.0,
+			5.0, "Guard head socket progress does not track the live queue_progress"):
 		return
 	var guard_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Guard", 5, guard_box), 30.0,

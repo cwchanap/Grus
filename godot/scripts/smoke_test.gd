@@ -1663,11 +1663,14 @@ func _run() -> void:
 	await get_tree().process_frame
 	var cancel_revision := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["CancelButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	if str(get_node("Main").get("_armed_order")) != "" \
+			or str(command_status.text) != "Order canceled" \
+			or int(GrusBridge.command_feedback_revision()) != cancel_revision:
+		_fail("Cancel did not clear the armed order without dispatching a command")
+		return
 	await get_tree().process_frame
-	if str(get_node("Main").get("_armed_order")) != "" or move_button.button_pressed \
-			or int(GrusBridge.command_feedback_revision()) != cancel_revision \
-			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
-		_fail("Cancel did not clear the armed order without dispatching or pausing")
+	if move_button.button_pressed or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("Cancel left its armed tile lit or paused the session")
 		return
 	# Esc clears the armed order before it can pause the Playing session.
 	SmokeHelpers.push_mouse_click(get_tree(), attack_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)

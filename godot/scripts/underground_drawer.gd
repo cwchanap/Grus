@@ -95,9 +95,9 @@ func _ready() -> void:
 		cost_label.bbcode_enabled = true
 		cost_label.scroll_active = false
 		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cost_label.add_theme_font_size_override("normal_font_size", 10)
+		cost_label.add_theme_font_size_override("normal_font_size", 11)
 		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		cost_label.offset_top = -16.0
+		cost_label.offset_top = -17.0
 		cost_label.offset_bottom = -1.0
 		cost_label.text = "[center]%s[/center]" % _cost_short(ug_entry)
 		kind_button.add_child(cost_label)
@@ -189,17 +189,17 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 	var cost_text := _cost_text(snap.get("next_cost", {}))
 	var dig_line := ""
 	if bool(snap.get("excavating", false)):
-		dig_line = "Digging L%d · %d%% · %ds left" % [
+		dig_line = "L%d dig · %d%% · %ds left" % [
 			target, roundi(float(snap.get("progress", 0.0)) * 100.0),
 			maxi(ceili(float(snap.get("remaining", 0.0))), 0)]
 	else:
-		dig_line = "Dig L%d · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
+		dig_line = "L%d dig · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
 	var lock_line := ""
 	if phase == "Paused":
-		lock_line = "\nPaused — inspection only"
+		lock_line = " · Paused — inspection only"
 	elif not playing:
-		lock_line = "\n%s — inspection only" % phase
-	_header.text = "Underground — depth %d · Esc closes\n%s%s" % [
+		lock_line = " · %s — inspection only" % phase
+	_header.text = "UNDERGROUND · depth %d · Esc closes\n%s%s" % [
 		depth, dig_line, lock_line]
 	if bool(snap.get("excavating", false)):
 		_excavate.disabled = true
@@ -316,20 +316,11 @@ func _cost_text(cost: Dictionary) -> String:
 			parts.append("%d %s" % [amount, resource.capitalize()])
 	return " + ".join(parts)
 
-## Terse painted-resource cost for the kind tile: same catalogue numbers as
-## the full tooltip, with 10 px resource icons so the price fits the tile.
+## Terse catalogue price for the kind tile. Room kinds are Scrap-funded, so
+## the one number fits the tile; the full four-currency line stays in the
+## tooltip and the header Excavate row.
 func _cost_short(cost: Dictionary) -> String:
-	var parts := PackedStringArray()
-	for resource in ["food", "scrap", "coal", "crystals"]:
-		var amount := int(cost.get(resource, 0))
-		if amount <= 0:
-			continue
-		var icon := _icon_for_kind("resources", resource)
-		if icon != null:
-			parts.append("[img=10x10]%s[/img]%d" % [icon.resource_path, amount])
-		else:
-			parts.append("%d" % amount)
-	return " ".join(parts)
+	return "%d" % int(cost.get("scrap", 0))
 
 ## The full kind tooltip: catalogue name, cost, build time and the
 ## Rust-computed effect line — straight off the static catalogue row,
