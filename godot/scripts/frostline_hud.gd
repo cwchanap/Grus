@@ -59,7 +59,7 @@ func _ready() -> void:
 		var building_icon := _icon_for_kind("buildings", kind)
 		if building_icon != null:
 			button.icon = building_icon
-			button.add_theme_constant_override("icon_max_width", 28)
+			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
 		_set_tile_cost(button, entry)
 		var costs := PackedStringArray()
@@ -81,7 +81,7 @@ func _ready() -> void:
 		var unit_icon := _icon_for_kind("units", kind)
 		if unit_icon != null:
 			button.icon = unit_icon
-			button.add_theme_constant_override("icon_max_width", 28)
+			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
 		_set_tile_cost(button, entry)
 
@@ -96,11 +96,13 @@ func _set_tile_cost(button: Button, cost: Dictionary) -> void:
 	for resource in ["food", "scrap", "coal", "crystals"]:
 		var amount := int(cost.get(resource, 0))
 		if amount > 0:
-			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 12).strip_edges(), amount])
+			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 14).strip_edges(), amount])
 	label.text = "[center]%s[/center]" % " ".join(parts)
 
 ## Resource bar plus the idle-worker jump label, straight off the controller's
-## once-per-frame economy snapshot.
+## once-per-frame economy snapshot. One horizontal icon-first row: painted
+## 28 px resource/population/heat icons with live values, matching the
+## approved top bar instead of a compressed text block.
 func refresh_economy(economy: Dictionary) -> void:
 	var surface := float(economy.get("surface_efficiency", 1.0))
 	var surface_percent := roundi(surface * 100.0)
@@ -108,23 +110,26 @@ func refresh_economy(economy: Dictionary) -> void:
 	# value down to 99 while the sim reports any efficiency shortfall.
 	if surface_percent >= 100 and surface < 1.0:
 		surface_percent = 99
-	var cold_icon := _inline_icon("status", "SurfaceCold") if surface < 1.0 else ""
-	economy_label.text = "%s%d   %s%d   %s%d\n%s%d   Population %d/%d\n%s%d / %d · %ssurface %d%%" % [
-		_inline_icon("resources", "Food"),
+	var cold_note := ""
+	if surface < 1.0:
+		cold_note = " " + _inline_icon("status", "SurfaceCold", 28)
+	economy_label.text = "%s%d   %s%d   %s%d   %s%d   %s%d / %d   %s%d / %d · surface %d%%%s" % [
+		_inline_icon("resources", "Food", 28),
 		int(economy.get("food", 0)),
-		_inline_icon("resources", "Scrap"),
+		_inline_icon("resources", "Scrap", 28),
 		int(economy.get("scrap", 0)),
-		_inline_icon("resources", "Coal"),
+		_inline_icon("resources", "Coal", 28),
 		int(economy.get("coal", 0)),
-		_inline_icon("resources", "Crystals"),
+		_inline_icon("resources", "Crystals", 28),
 		int(economy.get("crystals", 0)),
+		_inline_icon("status", "Population", 28),
 		int(economy.get("population_used", 0)),
 		int(economy.get("population_cap", 0)),
-		_inline_icon("resources", "Heat"),
+		_inline_icon("resources", "Heat", 28),
 		int(economy.get("heat_supply", 0)),
 		int(economy.get("heat_demand", 0)),
-		cold_icon,
 		surface_percent,
+		cold_note,
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	_refresh_affordability(economy)

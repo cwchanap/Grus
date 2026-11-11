@@ -225,13 +225,8 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 			or absf(float(economy.get("surface_efficiency", 0.0)) - efficiency) > 0.0001:
 		return false
 	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
-	var lines := _visible_text(label).split("\n")
-	var hud_parts := hud_line.split(" · ")
 	var cold_icon := _rich_text_has_icon(label, "res://assets/ui/icons/status/surface_cold.png")
-	return lines.size() > 2 and hud_parts.size() == 2 \
-			and str(lines[2]).contains(str(hud_parts[0])) \
-			and str(lines[2]).contains(str(hud_parts[1])) \
-			and cold_icon == (efficiency < 1.0)
+	return _visible_text(label).contains(hud_line) and cold_icon == (efficiency < 1.0)
 
 ## Every mesh of a building view's active Model carries the shared
 ## translucent ice material_overlay exactly while its Rust-pushed cold
@@ -500,50 +495,66 @@ func _run() -> void:
 	# boot values — Crystals included — straight off economy_snapshot. The
 	# session is still at Start, so the label cannot have drifted from the
 	# 200/300/150/0 seed; the placeholder's zero stocks differ on Food.
-	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
+	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as RichTextLabel
 	if economy_label == null:
 		_fail("economy HUD label is missing")
+		return
+	# Icon-first readability: the row uses 28 px painted icons and an 18 px
+	# value face — the approved mockup's prominent horizontal resource bar,
+	# not the old compressed three-line block.
+	if economy_label.get_theme_font_size("normal_font_size") < 18:
+		_fail("economy HUD value font is below the 18 px readability floor: %d" % economy_label.get_theme_font_size("normal_font_size"))
 		return
 	for icon_name in ["food", "scrap", "coal", "crystals", "heat"]:
 		var icon_path := "res://assets/ui/icons/resources/%s.png" % icon_name
 		if not _rich_text_has_icon(economy_label, icon_path):
 			_fail("economy HUD is missing required icon %s" % icon_path)
 			return
+	if not _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/population.png"):
+		_fail("economy HUD is missing the population icon")
+		return
 	if _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/surface_cold.png"):
 		_fail("warm economy HUD shows an incorrect surface-cold warning")
 		return
 	var economy_text := _visible_text(economy_label)
-	var hud_lines := economy_text.split("\n")
-	if hud_lines.size() != 3:
-		_fail("economy HUD does not keep three logical lines: \"%s\"" % economy_text)
+	if economy_text.contains("\n"):
+		_fail("economy HUD is not a single horizontal icon/value row: \"%s\"" % economy_text)
 		return
-	var economy_markup := (economy_label as RichTextLabel).text
-	var markup_lines := economy_markup.split("\n")
+	var economy_markup := economy_label.text
 	var previous_pair_end := 0
-	for resource in [["Food", "food", 0], ["Scrap", "scrap", 0], ["Coal", "coal", 0], ["Crystals", "crystals", 1], ["Heat", "heat_supply", 2]]:
+	for resource in [
+		["Food", "food", "food", 0],
+		["Scrap", "scrap", "scrap", 0],
+		["Coal", "coal", "coal", 0],
+		["Crystals", "crystals", "crystals", 0],
+	]:
 		var currency := str(resource[0])
-		var line_index := int(resource[2])
+		var icon_path := "res://assets/ui/icons/resources/%s.png" % str(resource[2])
 		var shown := str(int(boot.get(str(resource[1]), -1)))
-		if currency == "Heat":
-			shown = "%d / %d" % [int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
-		var icon_path := "res://assets/ui/icons/resources/%s.png" % currency.to_lower()
-		var expected_pair := "[img=18x18]%s[/img] %s" % [icon_path, shown]
+		var expected_pair := "[img=28x28]%s[/img] %s" % [icon_path, shown]
 		var pair_position := economy_markup.find(expected_pair, previous_pair_end)
-		if pair_position < 0 or not str(markup_lines[line_index]).contains(expected_pair):
-			_fail("economy HUD does not pair the %s icon with its live value %s in line %d: \"%s\"" % [
-				currency, shown, line_index + 1, economy_text])
+		if pair_position < 0:
+			_fail("economy HUD does not pair the %s icon with its live value %s: \"%s\"" % [
+				currency, shown, economy_text])
 			return
 		previous_pair_end = pair_position + expected_pair.length()
+	var population_pair := "[img=28x28]res://assets/ui/icons/status/population.png[/img] %d / %d" % [
+		int(boot.get("population_used", -1)), int(boot.get("population_cap", -1))]
+	if not economy_markup.contains(population_pair):
+		_fail("economy HUD population pair is not the live used/cap value: %s" % economy_markup)
+		return
+	var heat_pair := "[img=28x28]res://assets/ui/icons/resources/heat.png[/img] %d / %d" % [
+		int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
+	if not economy_markup.contains(heat_pair):
+		_fail("economy HUD heat pair is not the live supply/demand value: %s" % economy_markup)
+		return
 	# Rendered bounds, not just text: after the layout settles, the label's
 	# laid-out extent (rect grown to the minimum text size — wrapping is
 	# off, so a wide line expands past the authored offsets) must stay
 	# inside EconomyPanel and the baseline viewport.
 	await get_tree().process_frame
 	var rendered := economy_label.get_global_rect()
-	var content_size := economy_label.get_minimum_size()
-	if economy_label is RichTextLabel:
-		var rich_label := economy_label as RichTextLabel
-		content_size = content_size.max(Vector2(rich_label.get_content_width(), rich_label.get_content_height()))
+	var content_size := Vector2(economy_label.get_content_width(), economy_label.get_content_height())
 	rendered.size = rendered.size.max(content_size)
 	var panel_rect := (get_node("Main/HUD/EconomyPanel") as Control).get_global_rect()
 	if not panel_rect.encloses(rendered):
@@ -553,17 +564,13 @@ func _run() -> void:
 	if not viewport_rect.encloses(rendered):
 		_fail("economy HUD label rendered bounds %s escape the %s viewport" % [rendered, viewport_rect])
 		return
-	# Crystals rides the Population line so the first currency line stays
-	# narrow enough for the authored rectangle.
-	if hud_lines.size() != 3 or hud_lines[0].contains("Crystals") \
-			or not hud_lines[1].contains("Population"):
-		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_text)
+	if content_size.y > 40.0 or content_size.x > panel_rect.size.x - 20.0:
+		_fail("economy HUD row wraps or overflows instead of one horizontal bar: %s" % content_size)
 		return
-	# HPA-181: the third line is the live heat boundary. The boot is still at
-	# Start, whose ticks recompute supply/demand without burning anything, so
-	# the label must show the warm Research Center baseline exactly.
-	if not hud_lines[2].contains("15 / 10 · surface 100%"):
-		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_text)
+	# HPA-181: the live heat boundary stays in the same row; the boot is
+	# still at Start, so the warm Research Center baseline must be exact.
+	if not economy_text.contains("15 / 10 · surface 100%"):
+		_fail("economy HUD heat readout is not the warm 15/10 baseline: \"%s\"" % economy_text)
 		return
 	var research_center := _building_view(1)
 	if research_center == null:

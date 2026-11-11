@@ -43,19 +43,10 @@ material_override = SubResource("Material_placement")
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("5_hud")
 
-[node name="Title" type="Label" parent="HUD"]
-offset_left = 12.0
-offset_top = 72.0
-offset_right = 340.0
-offset_bottom = 96.0
-mouse_filter = 2
-theme_override_font_sizes/font_size = 12
-text = "GRUS — THE LAST CITY"
-
 [node name="CommandStatus" type="Label" parent="HUD"]
 offset_left = 216.0
 offset_top = 500.0
-offset_right = 1060.0
+offset_right = 720.0
 offset_bottom = 524.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 12
@@ -63,16 +54,16 @@ text = "ECS bridge initializing…"
 
 [node name="WavePanel" type="Panel" parent="HUD"]
 offset_left = 10.0
-offset_top = 100.0
+offset_top = 64.0
 offset_right = 368.0
-offset_bottom = 184.0
+offset_bottom = 148.0
 tooltip_text = "Wave prep, live aliens and the next wave countdown"
 
 [node name="WaveLabel" type="RichTextLabel" parent="HUD"]
 offset_left = 22.0
-offset_top = 128.0
+offset_top = 92.0
 offset_right = 358.0
-offset_bottom = 178.0
+offset_bottom = 142.0
 mouse_filter = 2
 theme_override_font_sizes/normal_font_size = 15
 bbcode_enabled = true
@@ -81,9 +72,9 @@ text = "Wave"
 
 [node name="ResearchPanel" type="Panel" parent="HUD"]
 offset_left = 460.0
-offset_top = 100.0
+offset_top = 64.0
 offset_right = 1048.0
-offset_bottom = 192.0
+offset_bottom = 156.0
 tooltip_text = "Research points toward the 9,000-point victory target"
 
 [node name="ResearchBar" type="ProgressBar" parent="HUD/ResearchPanel"]
@@ -128,27 +119,28 @@ text = "Analyze"
 offset_left = 0.0
 offset_top = 0.0
 offset_right = 1280.0
-offset_bottom = 72.0
+offset_bottom = 56.0
 theme_type_variation = &"TopBar"
 tooltip_text = "Resource icons in order: Food, Scrap, Coal, Crystals, Population, Heat. Heat shows supply / demand."
 
 [node name="EconomyLabel" type="RichTextLabel" parent="HUD/EconomyPanel"]
 layout_mode = 0
 offset_left = 10.0
-offset_top = 16.0
+offset_top = 14.0
 offset_right = 1010.0
-offset_bottom = 70.0
+offset_bottom = 48.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 13
+theme_override_font_sizes/normal_font_size = 18
 bbcode_enabled = true
 scroll_active = false
+autowrap_mode = 0
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
 offset_left = 1014.0
-offset_top = 8.0
+offset_top = 4.0
 offset_right = 1176.0
-offset_bottom = 64.0
+offset_bottom = 52.0
 text = "Idle: 0 — Next"
 
 [node name="SelectionPanel" type="Panel" parent="HUD"]
@@ -168,16 +160,16 @@ text = "Nothing selected"
 
 [node name="CommandPanel" type="Panel" parent="HUD"]
 offset_left = 736.0
-offset_top = 490.0
+offset_top = 460.0
 offset_right = 1272.0
 offset_bottom = 710.0
 
 [node name="BuildGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 12.0
-offset_top = 10.0
+offset_top = 8.0
 offset_right = 524.0
-offset_bottom = 142.0
+offset_bottom = 158.0
 theme_override_constants/h_separation = 6
 theme_override_constants/v_separation = 6
 columns = 5
@@ -221,9 +213,9 @@ metadata/kind = "CrystalLance"
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 12.0
-offset_top = 146.0
+offset_top = 164.0
 offset_right = 524.0
-offset_bottom = 210.0
+offset_bottom = 236.0
 theme_override_constants/h_separation = 6
 columns = 3
 
@@ -241,15 +233,15 @@ metadata/kind = "Rifleman"
 
 [node name="PauseButton" type="Button" parent="HUD"]
 offset_left = 1196.0
-offset_top = 8.0
+offset_top = 4.0
 offset_right = 1258.0
-offset_bottom = 64.0
+offset_bottom = 52.0
 tooltip_text = "Pause (Esc)"
 
 [node name="UndergroundPanel" type="Panel" parent="HUD"]
 visible = false
 offset_left = 848.0
-offset_top = 74.0
+offset_top = 64.0
 offset_right = 1272.0
 offset_bottom = 520.0
 script = ExtResource("6_underground")
@@ -294,10 +286,17 @@ horizontal_scroll_mode = 0
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="MinimapFrame" type="Panel" parent="HUD"]
+offset_left = 2.0
+offset_top = 546.0
+offset_right = 206.0
+offset_bottom = 702.0
+mouse_filter = 2
+
 [node name="Minimap" type="Control" parent="HUD"]
 offset_left = 8.0
-offset_top = 600.0
-offset_right = 136.0
+offset_top = 552.0
+offset_right = 200.0
 offset_bottom = 696.0
 script = ExtResource("4_minimap")
 
