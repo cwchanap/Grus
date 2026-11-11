@@ -7,6 +7,9 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 const EXPANSION_SALVAGE_ID := 14
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+## RejectReason discriminant values (declaration order in
+## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
+const REJECT_NOT_COMBATANT := 14
 
 class RetryBuildingView extends "res://scripts/building_view.gd":
 	var failed_once := false
@@ -1783,10 +1786,24 @@ func _run() -> void:
 		_fail("keyboard A did not leave placement before arming attack-move: placement=%s order=%s" % [
 			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
 		return
-	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	var crossover_attack_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(target), MOUSE_BUTTON_RIGHT)
 	if str(command_status.text) != "Attack-move queued" \
 			or str(crossover_main.get("_armed_order")) != "":
 		_fail("A armed attack-move did not win the placement crossover: %s" % command_status.text)
+		return
+	# The worker is a non-combatant, so the authoritative outcome of this
+	# intentional Attack-move is the typed NotCombatant reject — still a
+	# legitimate command that advances the feedback revision. Settle that
+	# verdict before the panel-leak probes capture their own baseline,
+	# otherwise a fixed tick during either panel check looks exactly like UI
+	# leakage. (An accepted unit attack-move is covered by the Guard journey in
+	# combat_lifecycle_smoke_test.)
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > crossover_attack_revision \
+				and int(GrusBridge.last_reject_code()) == REJECT_NOT_COMBATANT \
+				and str(GrusBridge.command_feedback()).contains("NotCombatant"),
+			10.0, "A armed attack-move crossover feedback did not settle"):
 		return
 
 	# The obsolete InputShield rectangle is gone: the full-width top bar's own
