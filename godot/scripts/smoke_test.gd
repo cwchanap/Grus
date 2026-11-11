@@ -342,6 +342,26 @@ func _assert_frostline_assets() -> bool:
 	if not theme.has_stylebox("normal", "UnaffordableTile"):
 		_fail("project theme is missing the unaffordable-tile Button variation")
 		return false
+	# The round order buttons must scale the complete circular source image.
+	# Nine-slice margins larger than the rendered button collapse the centre
+	# and leave only transparent source corners (the original Task 4 bug).
+	var round_texture := load("res://assets/ui/frostline/ui/round_button.png") as Texture2D
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		if not theme.has_stylebox(state, "OrderButton"):
+			_fail("project theme is missing the OrderButton/%s round style" % state)
+			return false
+		var order_style := theme.get_stylebox(state, "OrderButton") as StyleBoxTexture
+		if order_style == null or order_style.texture != round_texture \
+				or not is_zero_approx(order_style.texture_margin_left) \
+				or not is_zero_approx(order_style.texture_margin_top) \
+				or not is_zero_approx(order_style.texture_margin_right) \
+				or not is_zero_approx(order_style.texture_margin_bottom):
+			_fail("OrderButton/%s does not scale the full round image (margins %s/%s/%s/%s)" % [
+				state, order_style.texture_margin_left if order_style != null else -1,
+				order_style.texture_margin_top if order_style != null else -1,
+				order_style.texture_margin_right if order_style != null else -1,
+				order_style.texture_margin_bottom if order_style != null else -1])
+			return false
 	var license := FileAccess.get_file_as_string("res://assets/fonts/OFL.txt")
 	if not license.contains("SIL Open Font License"):
 		_fail("bundled Barlow OFL license text is missing")
@@ -1584,6 +1604,9 @@ func _run() -> void:
 		if button.tooltip_text.is_empty():
 			_fail("%s has no action tooltip" % spec[0])
 			return
+		if button.size.x < 56.0 or absf(button.size.x - button.size.y) > 0.5:
+			_fail("%s does not render the round order plate square: %s" % [spec[0], button.size])
+			return
 	var fallback_resource := Vector2.INF
 	var fallback_resource_id := -1
 	var hud_surfaces := SmokeHelpers.hud_rects(get_node("Main/HUD"))
@@ -1697,8 +1720,74 @@ func _run() -> void:
 			and str(get_node("Main").get("_armed_order")) == "",
 			5.0, "selection loss left a modal order armed"):
 		return
-	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func(): return _ring(unit_two).visible,
+			5.0, "Worker 2 did not reselect before the placement/order crossover probes"):
+		return
+
+	# HPA-698 targeting modes are mutually exclusive. A build tile and an
+	# armed order may not coexist, in either entry order, and keyboard A must
+	# leave placement before arming Attack-move. The next right-click must
+	# execute the modal order rather than merely canceling placement.
+	var crossover_main := get_node("Main") as Node3D
+	var bunkhouse_tile := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
+	if not _ring(unit_two).visible:
+		_fail("Worker 2 is not selected before the placement/order crossover probes")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" or str(crossover_main.get("_armed_order")) != "":
+		_fail("build tile did not enter placement exclusively: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or str(crossover_main.get("_armed_order")) != "move":
+		_fail("Move after Build left both targeting modes active: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	var crossover_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(crossover_main.get("_placement_kind")) != "" \
+			or str(crossover_main.get("_armed_order")) != "":
+		_fail("Build→Move right-click canceled placement instead of executing Move: %s" % command_status.text)
+		return
+	if not await _wait_until(_accepted_since.bind(crossover_revision), 10.0,
+			"Build→Move crossover was not accepted by the sim"):
+		return
+	# Reverse: arming Move first, then entering placement must clear the order.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" or str(crossover_main.get("_armed_order")) != "":
+		_fail("Build after Move left a latent armed order: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	var placement_cancel_revision := int(GrusBridge.command_feedback_revision())
+	command_status.text = "<placement right-click>"
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "<placement right-click>" \
+			or str(crossover_main.get("_placement_kind")) != "" \
+			or str(crossover_main.get("_armed_order")) != "" \
+			or int(GrusBridge.command_feedback_revision()) != placement_cancel_revision:
+		_fail("placement right-click dispatched a latent order or changed feedback")
+		return
+	# Keyboard A while placement is active must cancel placement first.
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_key_tap(KEY_A)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or str(crossover_main.get("_armed_order")) != "attack_move":
+		_fail("keyboard A did not leave placement before arming attack-move: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Attack-move queued" \
+			or str(crossover_main.get("_armed_order")) != "":
+		_fail("A armed attack-move did not win the placement crossover: %s" % command_status.text)
+		return
 
 	# The obsolete InputShield rectangle is gone: the full-width top bar's own
 	# STOP panel is the shield, and clicking its empty face must never select a
