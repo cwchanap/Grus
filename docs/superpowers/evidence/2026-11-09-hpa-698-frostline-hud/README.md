@@ -14,6 +14,6 @@ manufactured and no approved mockup is committed here.
 | `hpa-698-cold-incoming-warning-1280x720.png` | Temporary real-input driver (deleted before commit): real Start click, worker gather and Barracks/Bunkhouse/GunTurret build-tile placement, then the authored 30 s North wave warning on the 15/16 (94%) cold surface |
 | `hpa-698-barracks-five-sockets-1280x720.png` | `economy_smoke_test` real Barracks Guard + Rifleman FIFO |
 | `hpa-698-fifo-overflow-chip-1280x720.png` | `economy_smoke_test` six real Worker clicks: five sockets + `+1` overflow |
-| `hpa-698-underground-l3-lab-dig-1280x720.png` | `underground_smoke_test` paid L3, completed Lab, three visible level rows, Excavate L4; the reflowed drawer ends above the command card |
+| `hpa-698-underground-l3-lab-dig-1280x720.png` | `underground_smoke_test` paid L3, completed Lab, L3 scrolled fully into view, Excavate L4; the 88 px scroll viewport shows about one and three-quarter level rows at a time, and the command card below is fully visible |
 | `hpa-698-result-defeat-1280x720.png` | `combat_lifecycle_smoke_test` real alien-caused Defeat |
 | `hpa-698-result-victory-presentation-probe-1280x720.png` | **Presentation only.** The existing `combat_lifecycle_smoke_test` both-winner probe calls `HUD.refresh_session("Result", 1)` with the controller paused for the capture; it is not a gameplay victory. A genuine gameplay Victory was not verified during QA; this frame verifies presentation only. |

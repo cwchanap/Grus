@@ -718,7 +718,8 @@ layout_mode = 0
 offset_left = 10.0
 offset_top = 232.0
 offset_right = 414.0
-offset_bottom = 384.0
+offset_bottom = 320.0
+clip_contents = true
 horizontal_scroll_mode = 0
 
 [node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
