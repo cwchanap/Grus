@@ -479,7 +479,10 @@ func _run() -> void:
 		_fail("catalogue snapshot is missing the 2x2 / 80-Scrap / 20 s Coal Furnace: %s" % [furnace_entry])
 		return
 	var furnace_button := get_node_or_null("Main/HUD/CommandPanel/BuildGrid/CoalFurnaceButton") as Button
-	if furnace_button == null or furnace_button.tooltip_text != "Cost: 80 Scrap\nBuild: 20s":
+	if furnace_button == null \
+			or not furnace_button.tooltip_text.begins_with("Cost: 80 Scrap\nBuild: 20s") \
+			or not furnace_button.tooltip_text.contains("HP: %d" % int(furnace_entry.get("max_health", 0))) \
+			or not furnace_button.tooltip_text.contains("Heat: +12 supply"):
 		_fail("Coal Furnace build button does not show the catalogue-derived tooltip: \"%s\"" %
 				(furnace_button.tooltip_text if furnace_button != null else "<missing>"))
 		return
@@ -651,6 +654,25 @@ func _run() -> void:
 					and int(task.get("carry_amount", 0)) <= int(catalogue.get("carry_limit", 0)),
 			30.0, "worker 1 never reported a live Scrap carry through unit_task_snapshot"):
 		return
+	# HPA-698 carry detail: the selected worker's HUD bar and label mirror the
+	# same live carry amount and the Rust CARRY_LIMIT, with the resource icon
+	# only while a kind is held.
+	await _click_view(_unit_view(1), MOUSE_BUTTON_LEFT)
+	var carry_bar := get_node_or_null("Main/HUD/SelectionPanel/CarryBar") as ProgressBar
+	var carry_label := get_node_or_null("Main/HUD/SelectionPanel/CarryLabel") as RichTextLabel
+	if carry_bar == null or carry_label == null:
+		_fail("selection carry detail nodes are missing under HUD/SelectionPanel")
+		return
+	if not await _wait_until(func():
+			var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+			return carry_bar.visible and carry_label.visible \
+				and is_equal_approx(carry_bar.max_value, float(catalogue.get("carry_limit", 0))) \
+				and is_equal_approx(carry_bar.value, float(task.get("carry_amount", -1))) \
+				and carry_label.text.contains("%d / %d" % [
+					int(task.get("carry_amount", 0)), int(catalogue.get("carry_limit", 0))]) \
+				and carry_label.text.contains("resources/%s.png" % str(task.get("carry_kind", "")).to_snake_case()),
+			5.0, "selected worker carry detail does not mirror the live Carry snapshot"):
+		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
 	if not await _wait_until(_stockpiles_at_least.bind(TARGET_SCRAP, TARGET_FOOD, TARGET_COAL), 150.0,
@@ -764,24 +786,62 @@ func _run() -> void:
 
 	# Step 6: a Research Center rally point; the next trained unit walks to it.
 	await _select_building(research_center)
+	# HPA-698 contextual train filtering: the Research Center is the Worker
+	# producer, so only its catalogue-matching tile is visible.
+	var train_grid := get_node("Main/HUD/CommandPanel/TrainGrid") as Container
+	var worker_button := get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button
+	var filter_guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
+	var filter_rifleman_button := get_node("Main/HUD/CommandPanel/TrainGrid/RiflemanButton") as Button
+	if not await _wait_until(func():
+			return train_grid.visible and worker_button.visible \
+				and not filter_guard_button.visible and not filter_rifleman_button.visible,
+			5.0, "Research Center selection did not filter train tiles to Worker"):
+		return
 	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(_rally_stored.bind(research_center_id), 10.0,
 			"Research Center rally point was never stored"):
 		return
-	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button)
+	# HPA-698 five-socket FIFO projection: six real Worker clicks fill all
+	# five sockets and surface the +1 overflow chip. The queue is asserted
+	# before the 20x head job (15 s) can finish.
+	for _job in 6:
+		await _click_button(worker_button)
+	if not await _wait_until(func(): return _training_queue(research_center_id).size() == 6,
+			10.0, "six real Worker enqueues never reached the FIFO queue"):
+		return
+	var sockets := get_node("Main/HUD/SelectionPanel/QueueSockets") as Container
+	var overflow_chip := sockets.get_node_or_null("OverflowChip") as Label
+	if sockets == null or overflow_chip == null or sockets.get_child_count() != 6 \
+			or not overflow_chip.visible or overflow_chip.text != "+1":
+		_fail("five-socket queue does not render its +1 overflow chip: sockets=%s chip=%s" % [
+			sockets.get_child_count() if sockets != null else -1,
+			overflow_chip.text if overflow_chip != null else "missing"])
+		return
+	var worker_icon := "res://assets/ui/icons/units/worker.png"
+	for socket_index in 5:
+		var socket := sockets.get_child(socket_index) as Panel
+		var icon := socket.get_node("Icon") as TextureRect
+		if icon.texture == null or icon.texture.resource_path != worker_icon:
+			_fail("queue socket %d does not carry the Worker FIFO icon" % (socket_index + 1))
+			return
+	var head_time := (sockets.get_child(0).get_node("Time") as Label).text
+	if head_time.is_empty() or not head_time.ends_with("s") \
+			or not (sockets.get_child(1).get_node("Time") as Label).text.is_empty():
+		_fail("queue sockets do not show the head remaining time only: %s" % [head_time])
+		return
 	var rally_worker_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
 			"rallied Worker view never appeared"):
+		return
+	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
+			or int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
+		_fail("first economy leg did not reach population 5 of 20 with the first trained Worker")
 		return
 	var rally_worker: Node3D = rally_worker_box["view"]
 	var rally_target := Vector3(RALLY_CELL.x + 0.5, 0.0, RALLY_CELL.y + 0.5)
 	if not await _wait_until(
 			func(): return rally_worker.global_position.distance_to(rally_target) < 1.5,
 			15.0, "rallied worker never moved toward the rally point"):
-		return
-	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
-			or int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
-		_fail("first economy leg did not finish at population 5 of 20")
 		return
 	# The gather/build/rally leg is complete. Assert the countdown stayed
 	# intact before resetting the fixture, then run military production and
@@ -1021,6 +1081,9 @@ func _run() -> void:
 
 	await _park_at_staging(builder)
 	await _select_building(barracks)
+	if not await _wait_until(func(): return filter_guard_button.visible and filter_rifleman_button.visible,
+			5.0, "Barracks selection did not show its Guard/Rifleman production row"):
+		return
 	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
 	var scrap_before := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button)
@@ -1051,6 +1114,32 @@ func _run() -> void:
 		_fail("Barracks training_queue lost FIFO order while Guard is the head: %s" % [
 			_training_queue(barracks_id)])
 		return
+	# The Barracks is a Guard/Rifleman producer: the Worker tile is hidden and
+	# the two FIFO jobs fill the first two of the five fixed sockets.
+	if not await _wait_until(func():
+			return worker_button.visible == false and filter_guard_button.visible \
+				and filter_rifleman_button.visible,
+			5.0, "Barracks selection did not filter train tiles to Guard/Rifleman"):
+		return
+	if not await _wait_until(func():
+			return (sockets.get_child(0).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(0).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/guard.png" \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/rifleman.png" \
+				and (sockets.get_child(2).get_node("Icon") as TextureRect).texture == null \
+				and not overflow_chip.visible,
+			5.0, "Barracks FIFO sockets do not render Guard then Rifleman with empty overflow"):
+		return
+	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
+	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text
+	var head_time_value := head_time_text.trim_suffix("s")
+	if not head_time_value.is_valid_int() \
+			or int(head_time_value) < 0 or int(head_time_value) > int(ceilf(guard_seconds)):
+		_fail("Guard head socket shows %s, outside the catalogue %ds train time" % [
+			head_time_text, int(guard_seconds)])
+		return
 	var guard_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Guard", 5, guard_box), 30.0,
 			"trained Guard view never appeared"):
@@ -1061,6 +1150,13 @@ func _run() -> void:
 	if _training_queue(barracks_id) != ["Rifleman"]:
 		_fail("Barracks training_queue did not transition to the Rifleman head: %s" % [
 			_training_queue(barracks_id)])
+		return
+	if not await _wait_until(func():
+			return (sockets.get_child(0).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(0).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/rifleman.png" \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture == null,
+			5.0, "queue sockets did not shift to the Rifleman FIFO head"):
 		return
 	var rifleman_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 5, rifleman_box), 35.0,
@@ -1115,6 +1211,9 @@ func _run() -> void:
 			str(main.get("_left_pressed")), str(main.get("_left_press_position")),
 			str(main.get("selected_ids")),
 			_camera.unproject_position(selected_unit.global_position) if selected_unit != null else "missing"])
+		return
+	if not await _wait_until(func(): return filter_guard_button.visible,
+			5.0, "reselecting the Barracks did not restore its Guard tile"):
 		return
 	var guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
 	var insufficient := false

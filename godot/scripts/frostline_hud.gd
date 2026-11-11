@@ -17,6 +17,14 @@ extends CanvasLayer
 @onready var cold_chip: RichTextLabel = $EconomyPanel/ColdChip
 @onready var idle_button: Button = $EconomyPanel/IdleButton
 @onready var selection_label: Label = $SelectionPanel/SelectionLabel
+@onready var selection_name: Label = $SelectionPanel/SelectionName
+@onready var selection_panel: Panel = $SelectionPanel
+@onready var portrait_icon: TextureRect = $SelectionPanel/PortraitIcon
+@onready var health_bar: ProgressBar = $SelectionPanel/HealthBar
+@onready var health_label: Label = $SelectionPanel/HealthLabel
+@onready var carry_bar: ProgressBar = $SelectionPanel/CarryBar
+@onready var carry_label: RichTextLabel = $SelectionPanel/CarryLabel
+@onready var queue_sockets: Container = $SelectionPanel/QueueSockets
 @onready var session_panel: Panel = $SessionPanel
 @onready var session_label: Label = $SessionPanel/SessionLabel
 @onready var start_button: Button = $SessionPanel/StartButton
@@ -32,6 +40,21 @@ extends CanvasLayer
 ## refresh_research_controls — never a mirrored mutable copy.
 var _research_target_points := 0
 var _icon_cache: Dictionary = {}
+## Static catalogue rows (price/time/HP/combat/producer), read once for
+## display text and tooltips; live values keep arriving per frame.
+var _unit_entries: Dictionary = {}
+var _building_entries: Dictionary = {}
+var _carry_limit := 0
+var _producer_kinds: Dictionary = {}
+## Five queue sockets plus one overflow chip, built once and reused; the
+## live FIFO arrives through the selected building's read-only snapshot.
+const QUEUE_SOCKET_COUNT := 5
+var _socket_icons: Array[TextureRect] = []
+var _socket_times: Array[Label] = []
+var _queue_overflow: Label
+## Last producer kind the train grid was filtered for, so visibility only
+## changes when the selection context does.
+var _train_producer_kind := "<unset>"
 
 func _ready() -> void:
 	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
@@ -41,6 +64,15 @@ func _ready() -> void:
 	var buildings: Dictionary = catalogue.get("buildings", {})
 	var units: Dictionary = catalogue.get("units", {})
 	var research_catalogue: Dictionary = catalogue.get("research", {})
+	_building_entries = buildings
+	_unit_entries = units
+	_carry_limit = int(catalogue.get("carry_limit", 0))
+	for kind in units:
+		var producer := str(units[kind].get("producer", ""))
+		if producer != "":
+			_producer_kinds[producer] = true
+	_build_common_tiles(buildings, units)
+	_build_queue_sockets()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
 	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
 	var analyze_crystals := int(analyze_cost.get("crystals", 0))
@@ -55,6 +87,8 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
+
+func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
@@ -64,19 +98,14 @@ func _ready() -> void:
 			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
 		_set_tile_cost(button, entry)
-		var costs := PackedStringArray()
-		for resource in ["food", "scrap", "coal", "crystals"]:
-			var amount := int(entry.get(resource, 0))
-			if amount > 0:
-				costs.append("%d %s" % [amount, resource.capitalize()])
-		button.tooltip_text = "Cost: %s\nBuild: %ds" % [", ".join(costs), int(entry.get("seconds", 0))]
+		button.tooltip_text = _building_tooltip(kind, entry)
 		# The catalogue-derived research threshold rides the button meta; the
-		# per-frame lock refresh compares it against the live point total. No
-		# per-kind conditions.
+		# per-frame lock refresh compares it against the live point total.
 		var unlock_points := int(entry.get("unlock_points", 0))
 		button.set_meta("unlock_points", unlock_points)
 		if unlock_points > 0:
 			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
+		_add_counter_icon(button, entry)
 	for button in _train_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = units.get(kind, {})
@@ -85,7 +114,10 @@ func _ready() -> void:
 			button.icon = unit_icon
 			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
+		button.set_meta("producer", str(entry.get("producer", "")))
 		_set_tile_cost(button, entry)
+		button.tooltip_text = _unit_tooltip(entry)
+		_add_counter_icon(button, entry)
 
 ## The HPA-695 action-tile scene draws its catalogue price under the icon;
 ## the markup keeps the painted resource vocabulary without a second cost
@@ -100,6 +132,122 @@ func _set_tile_cost(button: Button, cost: Dictionary) -> void:
 		if amount > 0:
 			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 14).strip_edges(), amount])
 	label.text = "[center]%s[/center]" % " ".join(parts)
+
+## Full text of the four-currency catalogue price, one spelling for the
+## tooltip and the underground rows.
+func _cost_text(cost: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var amount := int(cost.get(resource, 0))
+		if amount > 0:
+			parts.append("%d %s" % [amount, resource.capitalize()])
+	return ", ".join(parts) if not parts.is_empty() else "free"
+
+## Optional combat/counter row shared by unit and building tooltips.
+func _combat_line(entry: Dictionary) -> String:
+	if not entry.has("damage"):
+		return ""
+	var line := "\nDamage %d · Range %s" % [
+		int(entry.get("damage", 0)), _number(float(entry.get("range", 0.0)))]
+	var target := str(entry.get("counter_target", ""))
+	if target != "":
+		line += " · Strong vs %s (+%d)" % [target, int(entry.get("counter_bonus", 0))]
+	return line
+
+func _number(value: float) -> String:
+	return String.num(value, 1).trim_suffix(".0")
+
+func _unit_tooltip(entry: Dictionary) -> String:
+	return "Cost: %s\nTrain: %ds\nHP: %d%s" % [
+		_cost_text(entry), int(entry.get("seconds", 0)),
+		int(entry.get("max_health", 0)), _combat_line(entry)]
+
+func _building_tooltip(kind: String, entry: Dictionary) -> String:
+	var text := "Cost: %s\nBuild: %ds\nHP: %d" % [
+		_cost_text(entry), int(entry.get("seconds", 0)), int(entry.get("max_health", 0))]
+	var supply := int(entry.get("heat_supply", 0))
+	var demand := int(entry.get("heat_demand", 0))
+	if supply > 0 or demand > 0:
+		text += "\nHeat: +%d supply · %d demand" % [supply, demand]
+	text += _combat_line(entry)
+	return text
+
+## Guard/Rifleman and combat buildings illustrate their catalogue counter
+## with the already-shipped alien icon in the tile corner. Display only.
+func _add_counter_icon(button: Button, entry: Dictionary) -> void:
+	var target := str(entry.get("counter_target", ""))
+	if target == "" or not entry.has("damage"):
+		return
+	var icon := _icon_for_kind("units", target)
+	if icon == null:
+		return
+	var rect := TextureRect.new()
+	rect.name = "CounterIcon"
+	rect.texture = icon
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	rect.tooltip_text = "Strong vs %s (+%d)" % [target, int(entry.get("counter_bonus", 0))]
+	rect.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	rect.offset_left = -26.0
+	rect.offset_top = 2.0
+	rect.offset_right = -4.0
+	rect.offset_bottom = 24.0
+	button.add_child(rect)
+
+## Static queue sockets: five FIFO frames and a "+N" overflow chip built
+## once, never per frame. The live icons/times/progress update on refresh.
+func _build_queue_sockets() -> void:
+	var socket_style := StyleBoxFlat.new()
+	socket_style.bg_color = Color(0.09, 0.13, 0.17, 0.96)
+	socket_style.border_color = Color(0.4, 0.49, 0.56, 0.95)
+	socket_style.set_border_width_all(1)
+	socket_style.set_corner_radius_all(4)
+	for index in QUEUE_SOCKET_COUNT:
+		var socket := Panel.new()
+		socket.name = "Socket%d" % (index + 1)
+		socket.custom_minimum_size = Vector2(62, 44)
+		socket.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		socket.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		socket.add_theme_stylebox_override("panel", socket_style)
+		var icon := TextureRect.new()
+		icon.name = "Icon"
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+		icon.offset_top = 2.0
+		icon.offset_bottom = -12.0
+		icon.offset_left = 6.0
+		icon.offset_right = -6.0
+		socket.add_child(icon)
+		var time := Label.new()
+		time.name = "Time"
+		time.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		time.add_theme_font_size_override("font_size", 10)
+		time.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		time.offset_top = -14.0
+		time.offset_bottom = -1.0
+		socket.add_child(time)
+		queue_sockets.add_child(socket)
+		_socket_icons.append(icon)
+		_socket_times.append(time)
+	_queue_overflow = Label.new()
+	_queue_overflow.name = "OverflowChip"
+	_queue_overflow.custom_minimum_size = Vector2(36, 44)
+	_queue_overflow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_queue_overflow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_queue_overflow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_queue_overflow.add_theme_font_size_override("font_size", 13)
+	_queue_overflow.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
+	var chip := StyleBoxFlat.new()
+	chip.bg_color = Color(0.16, 0.12, 0.07, 0.96)
+	chip.border_color = Color(0.93, 0.55, 0.22, 0.9)
+	chip.set_border_width_all(1)
+	chip.set_corner_radius_all(4)
+	_queue_overflow.add_theme_stylebox_override("normal", chip)
+	queue_sockets.add_child(_queue_overflow)
 
 ## Resource bar plus the idle-worker jump label, straight off the controller's
 ## once-per-frame economy snapshot. One horizontal icon-first row: painted
@@ -223,37 +371,156 @@ func refresh_research_controls(research: Dictionary, building: Dictionary, playi
 		button.disabled = required > 0.0 and points < required
 
 ## Renders the controller-owned selection; unit kinds come from the same
-## per-frame view map the controller uses for command context.
-func refresh_selection(selected_ids: Array[int], selected_building_id: int, building: Dictionary, unit_kinds: Dictionary) -> void:
-	if not selected_ids.is_empty():
-		var labels := PackedStringArray()
+## per-frame view map the controller uses for command context. Health is the
+## live view ratio times the catalogue max_health for exactly one unit or
+## building — a mixed selection renders no aggregate number. The queue is a
+## projection of the real training_queue snapshot, never a second queue.
+func refresh_selection(selected_ids: Array[int], selected_building_id: int, building: Dictionary,
+		unit_kinds: Dictionary, unit_task: Dictionary, unit_health: float,
+		building_health: float) -> void:
+	_clear_selection_detail()
+	if selected_ids.size() == 1:
+		var id := selected_ids[0]
+		var kind := str(unit_kinds.get(id, ""))
+		var entry: Dictionary = _unit_entries.get(kind, {})
+		selection_name.text = "%s #%d" % [kind if kind != "" else "Unit", id]
+		portrait_icon.texture = _icon_for_kind("units", kind)
+		_render_health(unit_health, int(entry.get("max_health", 0)))
+		selection_panel.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
+		var status := _task_text(unit_task)
+		selection_label.text = status if status != "" else "Ready"
+		_set_train_producer("")
+		if kind == "Worker":
+			carry_bar.visible = true
+			carry_label.visible = true
+			var amount := int(unit_task.get("carry_amount", 0))
+			var carried := str(unit_task.get("carry_kind", ""))
+			carry_bar.max_value = maxf(float(_carry_limit), 1.0)
+			carry_bar.value = float(amount)
+			var icon := _inline_icon("resources", carried, 14) if carried != "" else ""
+			carry_label.text = "%s%d / %d" % [icon, amount, _carry_limit]
+		return
+	if selected_ids.size() > 1:
+		var common := str(unit_kinds.get(selected_ids[0], ""))
 		for id in selected_ids:
-			labels.append("%s #%d" % [str(unit_kinds.get(id, "")), id])
-		selection_label.text = "Selected: " + ", ".join(labels)
+			if str(unit_kinds.get(id, "")) != common:
+				common = ""
+				break
+		selection_name.text = "%s ×%d" % [common if common != "" else "Units", selected_ids.size()]
+		selection_label.text = "Multiple units selected"
+		_set_train_producer("")
 		return
 	if selected_building_id > 0 and not building.is_empty():
-		var text := "%s #%d (team %d)" % [
-			str(building.get("kind", "?")),
-			selected_building_id,
-			int(building.get("team_id", 0)),
-		]
+		var kind := str(building.get("kind", "?"))
+		var entry: Dictionary = _building_entries.get(kind, {})
+		_set_train_producer(kind)
+		selection_name.text = "%s #%d" % [kind, selected_building_id]
+		portrait_icon.texture = _icon_for_kind("buildings", kind)
+		_render_health(building_health, int(entry.get("max_health", 0)))
+		selection_panel.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
+		var lines := PackedStringArray()
 		if bool(building.get("complete", false)):
-			text += "\nConstruction complete"
+			lines.append("Construction complete")
 		else:
-			text += "\nConstruction %d%%" % roundi(float(building.get("construction_progress", 0.0)) * 100.0)
-		var queue_label := str(building.get("queue_label", ""))
-		if queue_label != "":
-			text += "\nTraining %s — %d%%" % [queue_label, roundi(float(building.get("queue_progress", 0.0)) * 100.0)]
+			lines.append("Construction %d%%" % roundi(float(building.get("construction_progress", 0.0)) * 100.0))
 		var blocked := int(building.get("blocked_reason", 0))
 		if blocked != 0:
-			text += "\nBlocked (code %d)" % blocked
+			lines.append("Blocked (code %d)" % blocked)
 		if int(building.get("rally_x", -1)) >= 0:
-			text += "\nRally: (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))]
-		else:
-			text += "\nRally: none"
-		selection_label.text = text
+			lines.append("Rally (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))])
+		selection_label.text = "\n".join(lines)
+		if _producer_kinds.has(kind):
+			_render_queue(building)
 		return
-	selection_label.text = "Nothing selected"
+	selection_name.text = "Nothing selected"
+	_set_train_producer("")
+
+## One live unit/building health readout: clampi(round(ratio * max), 0, max),
+## hidden whenever there is no single live view or no catalogue maximum.
+func _render_health(ratio: float, max_health: int) -> void:
+	if ratio < 0.0 or max_health <= 0:
+		return
+	var current := clampi(roundi(ratio * max_health), 0, max_health)
+	health_bar.visible = true
+	health_bar.max_value = float(max_health)
+	health_bar.value = float(current)
+	health_label.visible = true
+	health_label.text = "%d / %d" % [current, max_health]
+
+## Worker task line: the sim's task name plus the id it names; empty for a
+## non-worker, which then reads Ready.
+func _task_text(task: Dictionary) -> String:
+	var name := str(task.get("task", ""))
+	if name == "":
+		return ""
+	var text := name
+	match name:
+		"ToSource":
+			text = "Moving to source"
+		"Gathering":
+			text = "Gathering"
+		"ToDropoff":
+			text = "Returning to depot"
+		"ToConstruction":
+			text = "Moving to build site"
+		"Constructing":
+			text = "Constructing"
+		"Idle":
+			text = "Idle"
+	if int(task.get("source", -1)) > 0:
+		text += " · source #%d" % int(task.get("source", -1))
+	elif int(task.get("building", -1)) > 0:
+		text += " · building #%d" % int(task.get("building", -1))
+	return text
+
+## First five FIFO jobs in sockets, head remaining seconds from the
+## catalogue train seconds and live head progress, and the +N chip for
+## anything beyond the fifth socket.
+func _render_queue(building: Dictionary) -> void:
+	var queue: Array = building.get("training_queue", [])
+	var progress := float(building.get("queue_progress", 0.0))
+	for index in QUEUE_SOCKET_COUNT:
+		var icon := _socket_icons[index]
+		var time := _socket_times[index]
+		if index >= queue.size():
+			icon.texture = null
+			time.text = ""
+			continue
+		var kind := str(queue[index])
+		icon.texture = _icon_for_kind("units", kind)
+		if index == 0:
+			var seconds := float(_unit_entries.get(kind, {}).get("seconds", 0))
+			var remaining := maxi(ceili(seconds * (1.0 - progress)), 0)
+			time.text = "%ds" % remaining
+			icon.modulate = Color(1, 1, 1, 1)
+		else:
+			time.text = ""
+			icon.modulate = Color(0.75, 0.82, 0.88, 0.95)
+	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
+	_queue_overflow.text = "+%d" % (queue.size() - QUEUE_SOCKET_COUNT)
+	queue_sockets.visible = true
+
+func _clear_selection_detail() -> void:
+	health_bar.visible = false
+	health_label.visible = false
+	carry_bar.visible = false
+	carry_label.visible = false
+	queue_sockets.visible = false
+	selection_panel.tooltip_text = ""
+	portrait_icon.texture = null
+
+## Contextual train tiles: visible exactly when the selected building's
+## catalogue producer matches the unit row. No selection hides the whole row.
+func _set_train_producer(producer_kind: String) -> void:
+	if producer_kind == _train_producer_kind:
+		return
+	_train_producer_kind = producer_kind
+	var any := false
+	for button in _train_grid.get_children():
+		var visible := producer_kind != "" and str(button.get_meta("producer", "")) == producer_kind
+		button.visible = visible
+		any = any or visible
+	_train_grid.visible = any
 
 ## Session overlay visibility and wording from the controller's settled phase;
 ## the buttons themselves stay connected and dispatched by the controller.
