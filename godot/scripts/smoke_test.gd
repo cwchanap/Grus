@@ -308,7 +308,10 @@ func _assert_frostline_assets() -> bool:
 			or str(theme.default_font.resource_path) != "res://assets/fonts/Barlow-Regular.ttf":
 		_fail("project gui/theme/custom is not the bundled Barlow theme: \"%s\"" % theme_path)
 		return false
-	if theme.get_stylebox("normal", "UnaffordableTile") == null:
+	# get_stylebox() returns the engine fallback stylebox when the property is
+	# absent, so only has_stylebox() can detect a missing UnaffordableTile
+	# normal style.
+	if not theme.has_stylebox("normal", "UnaffordableTile"):
 		_fail("project theme is missing the unaffordable-tile Button variation")
 		return false
 	var license := FileAccess.get_file_as_string("res://assets/fonts/OFL.txt")
