@@ -928,6 +928,38 @@ func _run() -> void:
 		if not token in control_words:
 			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
 			return
+	# HPA-698 Start key art, emblem and noninteractive atmosphere: the
+	# backdrop is visible outside Playing, every decorative overlay uses
+	# mouse IGNORE, the frost overlay is warm-hidden at 15/10, and the
+	# always-on vignette carries a real generated gradient.
+	var session_backdrop := get_node_or_null("Main/HUD/SessionBackdrop") as Control
+	var start_art := get_node_or_null("Main/HUD/SessionBackdrop/StartArt") as TextureRect
+	var result_banner := get_node_or_null("Main/HUD/SessionBackdrop/ResultBanner") as TextureRect
+	var session_emblem := get_node_or_null("Main/HUD/SessionPanel/SessionEmblem") as TextureRect
+	var vignette := get_node_or_null("Main/HUD/Vignette") as TextureRect
+	var frost_overlay := get_node_or_null("Main/HUD/Atmosphere/FrostOverlay") as TextureRect
+	if session_backdrop == null or start_art == null or result_banner == null \
+			or session_emblem == null or vignette == null or frost_overlay == null:
+		_fail("Start/Result atmosphere nodes are missing")
+		return
+	if not session_backdrop.visible or not start_art.visible \
+			or start_art.texture == null \
+			or not start_art.texture.resource_path.ends_with("screens/start_key_art.png") \
+			or not session_emblem.visible or session_emblem.texture == null \
+			or not session_emblem.texture.resource_path.ends_with("screens/emblem.png"):
+		_fail("Start key art or emblem is missing before Start")
+		return
+	if result_banner.visible or frost_overlay.visible or vignette.texture == null or not vignette.visible:
+		_fail("Result banner/frost/vignette visibility is wrong at the warm Start screen")
+		return
+	for path in ["Main/HUD/SessionBackdrop", "Main/HUD/SessionBackdrop/StartArt",
+			"Main/HUD/SessionBackdrop/Dim", "Main/HUD/SessionBackdrop/ResultBanner",
+			"Main/HUD/Vignette", "Main/HUD/Atmosphere", "Main/HUD/Atmosphere/FrostOverlay",
+			"Main/HUD/IncomingGlow", "Main/HUD/IncomingGlow/North"]:
+		var overlay := get_node_or_null(path) as Control
+		if overlay == null or overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			_fail("decorative overlay %s is missing or intercepts mouse input" % path)
+			return
 	# The Start overlay keeps the first wave timer frozen until the player
 	# starts the one-base survival match.
 	if not GrusBridge.start_match():
@@ -935,6 +967,9 @@ func _run() -> void:
 		return
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
+		return
+	if not await _wait_until(func(): return not session_backdrop.visible and vignette.visible,
+			5.0, "Playing did not hide the Start backdrop or lost the always-on vignette"):
 		return
 	# Wave timer geometry from the Rust constants: wave 1 opens on the
 	# authored preparation interval and the live remaining can never exceed
@@ -1645,11 +1680,11 @@ func _run() -> void:
 		return
 	# Stop tile executes immediately through the existing stop path.
 	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
-	await get_tree().process_frame
 	if str(command_status.text) != "Stop command queued" \
 			or str(get_node("Main").get("_armed_order")) != "":
 		_fail("Stop tile did not execute immediately: %s" % command_status.text)
 		return
+	await get_tree().process_frame
 	# Losing the selection clears a modal order instead of leaving it armed.
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame

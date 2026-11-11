@@ -229,10 +229,14 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
 	var heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
 	var cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as RichTextLabel
-	if label == null or heat_bar == null or cold_chip == null:
+	var frost_overlay := get_node_or_null("Main/HUD/Atmosphere/FrostOverlay") as TextureRect
+	if label == null or heat_bar == null or cold_chip == null or frost_overlay == null:
 		return false
 	var deficit := efficiency < 1.0
-	if heat_bar.visible != deficit or cold_chip.visible != deficit:
+	if heat_bar.visible != deficit or cold_chip.visible != deficit \
+			or frost_overlay.visible != deficit \
+			or frost_overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+			or frost_overlay.texture == null:
 		return false
 	if deficit:
 		var percent := roundi(efficiency * 100.0)
