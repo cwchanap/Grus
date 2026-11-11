@@ -349,6 +349,8 @@ func _handle_key(event: InputEventKey) -> void:
 		return
 	if event.keycode == KEY_A:
 		if _playing() and not selected_ids.is_empty():
+			if _placement_kind != "":
+				_cancel_placement()
 			_armed_order = "attack_move"
 			command_status.text = "Attack-move: right-click a ground target"
 		return
@@ -807,6 +809,8 @@ func _on_build_pressed(kind: String) -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
+	# Placement and a modal order are mutually exclusive targeting modes.
+	_armed_order = ""
 	_placement_generation += 1
 	_placement_kind = kind
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
@@ -839,6 +843,10 @@ func _on_order_pressed(order: String) -> void:
 	if order == "rally" and not _producer_kinds.has(_selected_producer_kind()):
 		command_status.text = "Select a production building first"
 		return
+	# Entering a targeting order leaves placement first; the reverse entry
+	# (`_on_build_pressed`) clears a modal order. The two never coexist.
+	if _placement_kind != "":
+		_cancel_placement()
 	_armed_order = order
 	match order:
 		"move":

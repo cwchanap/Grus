@@ -446,10 +446,11 @@ offset_top = 8.0
 offset_right = 524.0
 offset_bottom = 68.0
 theme_override_constants/separation = 10
+alignment = 1
 
 [node name="MoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "move"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 toggle_mode = true
@@ -473,7 +474,7 @@ horizontal_alignment = 1
 
 [node name="StopButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "stop"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 toggle_mode = true
@@ -497,7 +498,7 @@ horizontal_alignment = 1
 
 [node name="AttackMoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "attack_move"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 toggle_mode = true
@@ -521,7 +522,7 @@ horizontal_alignment = 1
 
 [node name="GatherButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "gather"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 toggle_mode = true
@@ -545,7 +546,7 @@ horizontal_alignment = 1
 
 [node name="RallyButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "rally"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 toggle_mode = true
@@ -569,7 +570,7 @@ horizontal_alignment = 1
 
 [node name="CancelButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
 metadata/order = "cancel"
-custom_minimum_size = Vector2(78, 60)
+custom_minimum_size = Vector2(60, 60)
 layout_mode = 2
 theme_type_variation = &"OrderButton"
 tooltip_text = "Cancel placement or armed order (Esc)"
