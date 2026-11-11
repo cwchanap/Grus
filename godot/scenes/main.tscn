@@ -310,16 +310,167 @@ theme_override_constants/separation = 4
 
 [node name="CommandPanel" type="Panel" parent="HUD"]
 offset_left = 736.0
-offset_top = 460.0
+offset_top = 400.0
 offset_right = 1272.0
 offset_bottom = 710.0
 
-[node name="BuildGrid" type="GridContainer" parent="HUD/CommandPanel"]
+[node name="OrderGrid" type="HBoxContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 12.0
 offset_top = 8.0
 offset_right = 524.0
-offset_bottom = 158.0
+offset_bottom = 68.0
+theme_override_constants/separation = 10
+
+[node name="MoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "move"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Move: arm, then right-click a ground target"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/MoveButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Move"
+horizontal_alignment = 1
+
+[node name="StopButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "stop"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Stop immediately (S)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/StopButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Stop"
+horizontal_alignment = 1
+
+[node name="AttackMoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "attack_move"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Attack-move: arm, then right-click a ground target (A)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/AttackMoveButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "A-Move"
+horizontal_alignment = 1
+
+[node name="GatherButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "gather"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Gather: arm, then right-click a resource"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/GatherButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Gather"
+horizontal_alignment = 1
+
+[node name="RallyButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "rally"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Rally: arm, then right-click a ground point with a producer selected"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/RallyButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Rally"
+horizontal_alignment = 1
+
+[node name="CancelButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "cancel"
+custom_minimum_size = Vector2(78, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+tooltip_text = "Cancel placement or armed order (Esc)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/CancelButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Cancel"
+horizontal_alignment = 1
+
+[node name="BuildGrid" type="GridContainer" parent="HUD/CommandPanel"]
+layout_mode = 0
+offset_left = 12.0
+offset_top = 74.0
+offset_right = 524.0
+offset_bottom = 224.0
 theme_override_constants/h_separation = 6
 theme_override_constants/v_separation = 6
 columns = 5
@@ -363,9 +514,9 @@ metadata/kind = "CrystalLance"
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
 offset_left = 12.0
-offset_top = 164.0
+offset_top = 230.0
 offset_right = 524.0
-offset_bottom = 236.0
+offset_bottom = 302.0
 theme_override_constants/h_separation = 6
 columns = 3
 

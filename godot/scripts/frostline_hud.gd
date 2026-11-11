@@ -34,6 +34,7 @@ extends CanvasLayer
 @onready var pause_button: Button = $PauseButton
 @onready var _build_grid: Container = $CommandPanel/BuildGrid
 @onready var _train_grid: Container = $CommandPanel/TrainGrid
+@onready var _order_grid: Container = $CommandPanel/OrderGrid
 @onready var _minimap: Control = $Minimap
 ## Static research tuning, cached once from the catalogue's "research" block
 ## for the bar's maximum; live points/rate/ETA arrive per frame through
@@ -72,6 +73,7 @@ func _ready() -> void:
 		if producer != "":
 			_producer_kinds[producer] = true
 	_build_common_tiles(buildings, units)
+	_build_order_tiles()
 	_build_queue_sockets()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
 	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
@@ -87,6 +89,30 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
+
+func _build_order_tiles() -> void:
+	for button in _order_grid.get_children():
+		if not button is Button:
+			continue
+		var order := str(button.get_meta("order", ""))
+		if order == "cancel":
+			button.text = "✕"
+			button.add_theme_font_size_override("font_size", 22)
+			continue
+		var icon := _icon_for_kind("actions", order)
+		button.icon = icon
+		button.add_theme_constant_override("icon_max_width", 26)
+
+## The HUD only mirrors the controller's one armed-order string: pressed tile
+## for the modal order, disabled outside Playing. It never stores the state.
+func refresh_orders(armed_order: String, playing: bool) -> void:
+	for button in _order_grid.get_children():
+		if not button is Button:
+			continue
+		var order := str(button.get_meta("order", ""))
+		button.disabled = not playing
+		if button.toggle_mode:
+			button.set_pressed_no_signal(order == armed_order)
 
 func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 	for button in _build_grid.get_children():

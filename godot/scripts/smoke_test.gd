@@ -1505,6 +1505,145 @@ func _run() -> void:
 		_fail("Stop input did not settle the active move order")
 		return
 
+	# HPA-698 modal orders: one controller-owned _armed_order string, armed by
+	# a real order-tile click, dispatched by the next real right-click and
+	# consumed exactly once. An armed Move must outrank the contextual Gather
+	# pick, and Cancel/Esc clear without dispatching or pausing.
+	var order_grid := get_node_or_null("Main/HUD/CommandPanel/OrderGrid") as Container
+	if order_grid == null:
+		_fail("HUD/CommandPanel/OrderGrid is missing")
+		return
+	var order_buttons := {}
+	for order_name in ["MoveButton", "StopButton", "AttackMoveButton", "GatherButton", "RallyButton", "CancelButton"]:
+		var order_button := order_grid.get_node_or_null(order_name) as Button
+		if order_button == null:
+			_fail("order tile %s is missing from OrderGrid" % order_name)
+			return
+		order_buttons[order_name] = order_button
+	for spec in [["MoveButton", "move"], ["StopButton", "stop"], ["AttackMoveButton", "attack_move"],
+			["GatherButton", "gather"], ["RallyButton", "rally"], ["CancelButton", "cancel"]]:
+		var button: Button = order_buttons[spec[0]]
+		var icon_name: String = "cancel" if str(spec[1]) == "cancel" else str(spec[1])
+		if spec[1] != "cancel" \
+				and (button.icon == null or not button.icon.resource_path.ends_with("actions/%s.png" % icon_name)):
+			_fail("%s does not use the painted actions/%s icon" % [spec[0], icon_name])
+			return
+		if button.tooltip_text.is_empty():
+			_fail("%s has no action tooltip" % spec[0])
+			return
+	var fallback_resource := Vector2.INF
+	var fallback_resource_id := -1
+	var hud_surfaces := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	for resource in get_tree().get_nodes_in_group("resource_views"):
+		if not resource.is_visible_in_tree():
+			continue
+		var resource_screen := camera.unproject_position(resource.global_position)
+		if not Rect2(Vector2.ZERO, viewport_size).has_point(resource_screen) \
+				or hud_surfaces.any(func(rect: Rect2) -> bool: return rect.has_point(resource_screen)):
+			continue
+		fallback_resource = resource_screen
+		fallback_resource_id = int(resource.get_meta("resource_id", -1))
+		break
+	if fallback_resource == Vector2.INF:
+		_fail("no HUD-clear visible resource for the armed-order fallback probe")
+		return
+	var move_button: Button = order_buttons["MoveButton"]
+	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "move" or not move_button.button_pressed:
+		_fail("Move tile did not arm the one controller order state or render pressed")
+		return
+	var move_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Move was not consumed by the ground right-click: %s" % command_status.text)
+		return
+	if not await _wait_until(_accepted_since.bind(move_revision), 10.0,
+			"armed Move on open ground was not accepted by the sim"):
+		return
+	# With Move armed against a resource art target the modal order still
+	# wins: the status must be Move, never the contextual Gather fallback.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), fallback_resource, MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Move fell back to Gather or was not consumed by the resource right-click: %s" % command_status.text)
+		return
+	# Attack-move tile: same modal dispatch through the existing bridge path.
+	var attack_button: Button = order_buttons["AttackMoveButton"]
+	SmokeHelpers.push_mouse_click(get_tree(), attack_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "attack_move" or not attack_button.button_pressed \
+			or move_button.button_pressed:
+		_fail("Attack-move tile did not replace the armed order or light only its own tile")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Attack-move queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Attack-move did not consume into the attack-move command: %s" % command_status.text)
+		return
+	# Gather tile: requires selected workers and a real resource target.
+	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not _ring(unit_one).visible:
+		_fail("could not reselect Worker 1 for the armed Gather tile")
+		return
+	var gather_button: Button = order_buttons["GatherButton"]
+	SmokeHelpers.push_mouse_click(get_tree(), gather_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "gather" or not gather_button.button_pressed:
+		_fail("Gather tile did not arm gather")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), fallback_resource, MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Gather command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Gather did not consume into a gather command: %s" % command_status.text)
+		return
+	# Cancel clears the armed order without a bridge command or a pause.
+	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	var cancel_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["CancelButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "" or move_button.button_pressed \
+			or int(GrusBridge.command_feedback_revision()) != cancel_revision \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("Cancel did not clear the armed order without dispatching or pausing")
+		return
+	# Esc clears the armed order before it can pause the Playing session.
+	SmokeHelpers.push_mouse_click(get_tree(), attack_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_key_tap(KEY_ESCAPE)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "" \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("Esc did not clear the armed order before pausing")
+		return
+	# Stop tile executes immediately through the existing stop path.
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(command_status.text) != "Stop command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("Stop tile did not execute immediately: %s" % command_status.text)
+		return
+	# Losing the selection clears a modal order instead of leaving it armed.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func(): return int(get_node("Main").get("selected_building_id")) == -1 \
+			and (get_node("Main").get("selected_ids") as Array).is_empty() \
+			and str(get_node("Main").get("_armed_order")) == "",
+			5.0, "selection loss left a modal order armed"):
+		return
+	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+
 	# The obsolete InputShield rectangle is gone: the full-width top bar's own
 	# STOP panel is the shield, and clicking its empty face must never select a
 	# world object or queue a command.
