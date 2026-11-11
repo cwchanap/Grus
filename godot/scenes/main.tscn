@@ -9,6 +9,11 @@
 [ext_resource type="PackedScene" path="res://scenes/action_tile.tscn" id="7_tile"]
 [ext_resource type="Texture2D" path="res://assets/ui/frostline/ui/portrait_bezel.png" id="8_portrait"]
 [ext_resource type="Script" path="res://scripts/wave_ring.gd" id="9_wave_ring"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/start_key_art.png" id="10_start_art"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/emblem.png" id="11_emblem"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/victory_banner.png" id="12_victory"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/defeat_banner.png" id="13_defeat"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/ui/frost_overlay.png" id="14_frost"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -81,6 +86,38 @@ material_override = SubResource("Material_placement")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = ExtResource("5_hud")
+
+[node name="Atmosphere" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="FrostOverlay" type="TextureRect" parent="HUD/Atmosphere"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("14_frost")
+expand_mode = 1
+stretch_mode = 6
+modulate = Color(0.85, 0.92, 1, 0.55)
+
+[node name="Vignette" type="TextureRect" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
 
 [node name="IncomingGlow" type="Control" parent="HUD"]
 anchors_preset = 15
@@ -701,60 +738,137 @@ offset_right = 200.0
 offset_bottom = 696.0
 script = ExtResource("4_minimap")
 
+[node name="SessionBackdrop" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="StartArt" type="TextureRect" parent="HUD/SessionBackdrop"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("10_start_art")
+expand_mode = 1
+stretch_mode = 6
+modulate = Color(0.82, 0.88, 0.95, 1)
+
+[node name="Dim" type="ColorRect" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.02, 0.03, 0.05, 0.66)
+
+[node name="ResultBanner" type="TextureRect" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 0
+offset_left = 360.0
+offset_top = 70.0
+offset_right = 920.0
+offset_bottom = 443.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
 [node name="SessionPanel" type="Panel" parent="HUD"]
-offset_left = 280.0
-offset_top = 120.0
-offset_right = 1000.0
-offset_bottom = 620.0
+offset_left = 60.0
+offset_top = 64.0
+offset_right = 640.0
+offset_bottom = 656.0
+
+[node name="SessionEmblem" type="TextureRect" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 10.0
+offset_right = 116.0
+offset_bottom = 106.0
+mouse_filter = 2
+texture = ExtResource("11_emblem")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="SessionTitle" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 130.0
+offset_top = 2.0
+offset_right = 600.0
+offset_bottom = 78.0
+mouse_filter = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 60
+text = "GRUS"
+
+[node name="SessionSubtitle" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 132.0
+offset_top = 78.0
+offset_right = 600.0
+offset_bottom = 102.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 16
+text = "THE LAST CITY"
 
 [node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 20.0
-offset_right = 700.0
-offset_bottom = 60.0
+offset_top = 150.0
+offset_right = 600.0
+offset_bottom = 232.0
 mouse_filter = 2
 theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 20
 text = "Survive the alien waves"
+autowrap_mode = 2
 
 [node name="StartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 84.0
-offset_right = 700.0
-offset_bottom = 134.0
+offset_top = 250.0
+offset_right = 340.0
+offset_bottom = 306.0
 text = "Start"
 
 [node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
 visible = false
 layout_mode = 0
 offset_left = 20.0
-offset_top = 84.0
-offset_right = 700.0
-offset_bottom = 134.0
+offset_top = 250.0
+offset_right = 340.0
+offset_bottom = 306.0
 text = "Resume"
 
 [node name="RestartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 20.0
-offset_top = 144.0
-offset_right = 700.0
-offset_bottom = 194.0
+offset_left = 180.0
+offset_top = 430.0
+offset_right = 400.0
+offset_bottom = 486.0
 text = "Restart"
 
 [node name="QuitButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 20.0
-offset_top = 204.0
-offset_right = 700.0
-offset_bottom = 254.0
+offset_left = 420.0
+offset_top = 430.0
+offset_right = 620.0
+offset_bottom = 486.0
 text = "Quit"
 
 [node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 274.0
-offset_right = 700.0
-offset_bottom = 440.0
+offset_top = 320.0
+offset_right = 600.0
+offset_bottom = 560.0
 theme_override_font_sizes/font_size = 13
 text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause: Esc · Underground: Tab\nCamera: wheel / middle-drag\nMinimap: click to recenter"

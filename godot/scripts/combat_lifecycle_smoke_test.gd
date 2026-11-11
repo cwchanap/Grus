@@ -822,6 +822,13 @@ func _run() -> void:
 					and _button("HUD/SessionPanel/QuitButton").visible,
 			5.0, "Result overlay is not showing Defeat with Restart/Quit"):
 		return
+	var result_banner := _main.get_node("HUD/SessionBackdrop/ResultBanner") as TextureRect
+	if result_banner == null or not result_banner.visible \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png") \
+			or result_banner.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		_fail("Result overlay is not showing the noninteractive Defeat banner art")
+		return
 	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
 		_fail("bridge refused to queue the Result-phase probe command")
 		return

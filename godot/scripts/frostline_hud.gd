@@ -31,6 +31,16 @@ extends CanvasLayer
 @onready var queue_sockets: Container = $SelectionPanel/QueueSockets
 @onready var session_panel: Panel = $SessionPanel
 @onready var session_label: Label = $SessionPanel/SessionLabel
+@onready var session_emblem: TextureRect = $SessionPanel/SessionEmblem
+@onready var session_title: Label = $SessionPanel/SessionTitle
+@onready var session_subtitle: Label = $SessionPanel/SessionSubtitle
+@onready var controls_label: Label = $SessionPanel/ControlsLabel
+@onready var session_backdrop: Control = $SessionBackdrop
+@onready var start_art: TextureRect = $SessionBackdrop/StartArt
+@onready var session_dim: ColorRect = $SessionBackdrop/Dim
+@onready var result_banner: TextureRect = $SessionBackdrop/ResultBanner
+@onready var frost_overlay: TextureRect = $Atmosphere/FrostOverlay
+@onready var vignette: TextureRect = $Vignette
 @onready var start_button: Button = $SessionPanel/StartButton
 @onready var resume_button: Button = $SessionPanel/ResumeButton
 @onready var restart_button: Button = $SessionPanel/RestartButton
@@ -64,6 +74,9 @@ var _queue_overflow: Label
 ## Last producer kind the train grid was filtered for, so visibility only
 ## changes when the selection context does.
 var _train_producer_kind := "<unset>"
+## One transparent panel style for the Start/Result art screens; Paused keeps
+## the themed plate.
+var _transparent_panel := StyleBoxEmpty.new()
 
 func _ready() -> void:
 	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
@@ -85,6 +98,7 @@ func _ready() -> void:
 	_build_queue_sockets()
 	wave_clock.texture = _icon_for_kind("status", "WaveCountdown")
 	_build_glow_textures()
+	_build_vignette()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
 	for marker_kind in ["FlameTower", "CrystalLance"]:
 		var marker_entry: Dictionary = buildings.get(marker_kind, {})
@@ -331,6 +345,23 @@ func _build_glow_textures() -> void:
 		edge.texture = texture
 		edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+## Always-on unobtrusive vignette: a radial runtime gradient, not generated
+## raster art. It darkens the screen corners only and never intercepts input.
+func _build_vignette() -> void:
+	var gradient := Gradient.new()
+	gradient.set_color(0, Color(0.01, 0.02, 0.04, 0.0))
+	gradient.set_color(1, Color(0.01, 0.02, 0.04, 0.52))
+	gradient.add_point(0.55, Color(0.01, 0.02, 0.04, 0.0))
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.width = 256
+	texture.height = 144
+	texture.fill = GradientTexture2D.FILL_RADIAL
+	texture.fill_from = Vector2(0.5, 0.5)
+	texture.fill_to = Vector2(1.0, 0.5)
+	vignette.texture = texture
+	vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
 ## Resource bar plus the idle-worker jump label, straight off the controller's
 ## once-per-frame economy snapshot. One horizontal icon-first row: painted
 ## 28 px resource/population/heat icons with live values, matching the
@@ -366,6 +397,7 @@ func refresh_economy(economy: Dictionary) -> void:
 	var deficit := surface < 1.0
 	heat_bar.visible = deficit
 	cold_chip.visible = deficit
+	frost_overlay.visible = deficit
 	if deficit:
 		var denominator := maxi(demand, 1)
 		heat_bar.max_value = float(denominator)
@@ -618,15 +650,37 @@ func _set_train_producer(producer_kind: String) -> void:
 	_train_grid.visible = any
 
 ## Session overlay visibility and wording from the controller's settled phase;
-## the buttons themselves stay connected and dispatched by the controller.
+## the buttons themselves stay connected and dispatched by the controller. The
+## Start key art/emblem and the Result Victory/Defeat banner are driven only
+## by this session snapshot — no extra lifecycle state.
 func refresh_session(phase: String, winner_team: int) -> void:
 	var playing := phase == "Playing"
+	var start := phase == "Start"
+	var paused := phase == "Paused"
+	var result := phase == "Result"
 	session_panel.visible = not playing
+	session_backdrop.visible = not playing
 	pause_button.visible = playing
+	start_art.visible = start
+	session_dim.visible = paused or result
+	session_emblem.visible = start
+	session_title.visible = start
+	session_subtitle.visible = start
+	controls_label.visible = start
+	session_label.visible = not result
+	if start or result:
+		session_panel.add_theme_stylebox_override("panel", _transparent_panel)
+	else:
+		session_panel.remove_theme_stylebox_override("panel")
+	result_banner.visible = result
+	if result:
+		var banner_path := "res://assets/ui/frostline/screens/%s_banner.png" % (
+			"victory" if winner_team == 1 else "defeat")
+		result_banner.texture = load(banner_path) as Texture2D
 	# Restart/Quit belong to Result only.
 	match phase:
 		"Start":
-			session_label.text = "Survive the alien waves"
+			session_label.text = "Survive the alien waves\nProtect the Research Center\nReach 9,000 research"
 			start_button.visible = true
 			resume_button.visible = false
 			restart_button.visible = false
