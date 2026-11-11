@@ -280,11 +280,16 @@ func _all_overlaid(views: Array, cold: bool) -> bool:
 ## the worker stands near the Depot. Its far-tree gather slots sit a few
 ## cells from the Depot origin and ~30 from the Research Center, so only a
 ## real Depot deposit can satisfy this within one physics frame of drift.
-func _scrap_deposited_at_depot(worker: Node3D, depot: Vector3, box: Dictionary) -> bool:
+## The worker is re-resolved from its stable id every poll: a captured view
+## can be freed between frames (the same stale-capture class that already
+## aborted this wait), and a freed bound Node raises instead of failing the
+## predicate.
+func _scrap_deposited_at_depot(worker_id: int, depot: Vector3, box: Dictionary) -> bool:
 	var scrap := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	var increased := scrap > int(box.get("scrap", scrap))
 	box["scrap"] = scrap
-	return increased and worker.global_position.distance_to(depot) < 12.0
+	var worker := _unit_view(worker_id)
+	return increased and worker != null and worker.global_position.distance_to(depot) < 12.0
 
 func _new_building_present(kind: String, box: Dictionary) -> bool:
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -340,12 +345,17 @@ func _stop_unit(view: Node3D) -> void:
 ## Stops a unit and parks it on the staging ground, clear of every later
 ## building-origin click.
 func _park_at_staging(view: Node3D) -> void:
+	var unit_id := int(view.get_meta("unit_id", -1))
 	await _stop_unit(view)
 	await _click_view(view, MOUSE_BUTTON_LEFT)
 	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
 	var staging := Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
+	# Stable id, not the captured view: the same stale-capture abort seen in
+	# _scrap_deposited_at_depot applies to this wait.
 	if not await _wait_until(
-			func(): return view.global_position.distance_to(staging) < 3.0,
+			func():
+				var live := _unit_view(unit_id)
+				return live != null and live.global_position.distance_to(staging) < 3.0,
 			15.0, "retired gatherer never reached the staging ground"):
 		return
 
@@ -767,11 +777,15 @@ func _run() -> void:
 	# The far salvage's view is fog-revealed: it pays the fog settle.
 	await _click_view(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
-	if not await _wait_until(_scrap_deposited_at_depot.bind(scrap_worker, depot.global_position, delivery_box), 45.0,
+	if not await _wait_until(_scrap_deposited_at_depot.bind(1, depot.global_position, delivery_box), 45.0,
 			"no scrap delivery ever reached the Depot"):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
 	# later click target, so parking in place is safe.
+	scrap_worker = _unit_view(1)
+	if scrap_worker == null:
+		_fail("scrap gatherer view went missing before retirement")
+		return
 	await _stop_unit(scrap_worker)
 
 	# Reject-code pin: the read-only placement preview reports the numeric
