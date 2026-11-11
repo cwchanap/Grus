@@ -37,6 +37,7 @@ func _ready() -> void:
 	research_icon.visible = research_progress_icon != null
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var buildings: Dictionary = catalogue.get("buildings", {})
+	var units: Dictionary = catalogue.get("units", {})
 	var research_catalogue: Dictionary = catalogue.get("research", {})
 	_research_target_points = int(research_catalogue.get("target_points", 0))
 	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
@@ -45,13 +46,22 @@ func _ready() -> void:
 	research_bar.max_value = maxf(float(_research_target_points), 1.0)
 	analyze_button.text = "Analyze %d→+%d" % [analyze_crystals, analyze_gain]
 	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
+	analyze_button.icon = _icon_for_kind("status", "ResearchRate")
+	analyze_button.add_theme_constant_override("icon_max_width", 20)
+	pause_button.icon = _icon_for_kind("actions", "Pause")
+	pause_button.add_theme_constant_override("icon_max_width", 30)
+	pause_button.text = ""
+	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
+	idle_button.add_theme_constant_override("icon_max_width", 22)
 	for button in _build_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
 		var building_icon := _icon_for_kind("buildings", kind)
 		if building_icon != null:
 			button.icon = building_icon
-			button.add_theme_constant_override("icon_max_width", 20)
+			button.add_theme_constant_override("icon_max_width", 28)
+		button.set_meta("cost", entry)
+		_set_tile_cost(button, entry)
 		var costs := PackedStringArray()
 		for resource in ["food", "scrap", "coal", "crystals"]:
 			var amount := int(entry.get(resource, 0))
@@ -66,10 +76,28 @@ func _ready() -> void:
 		if unlock_points > 0:
 			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
 	for button in _train_grid.get_children():
-		var unit_icon := _icon_for_kind("units", str(button.get_meta("kind")))
+		var kind := str(button.get_meta("kind"))
+		var entry: Dictionary = units.get(kind, {})
+		var unit_icon := _icon_for_kind("units", kind)
 		if unit_icon != null:
 			button.icon = unit_icon
-			button.add_theme_constant_override("icon_max_width", 20)
+			button.add_theme_constant_override("icon_max_width", 28)
+		button.set_meta("cost", entry)
+		_set_tile_cost(button, entry)
+
+## The HPA-695 action-tile scene draws its catalogue price under the icon;
+## the markup keeps the painted resource vocabulary without a second cost
+## table. The tile stays a plain Button and the tooltip keeps the full text.
+func _set_tile_cost(button: Button, cost: Dictionary) -> void:
+	var label := button.get_node_or_null("Cost") as RichTextLabel
+	if label == null:
+		return
+	var parts := PackedStringArray()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var amount := int(cost.get(resource, 0))
+		if amount > 0:
+			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 12).strip_edges(), amount])
+	label.text = "[center]%s[/center]" % " ".join(parts)
 
 ## Resource bar plus the idle-worker jump label, straight off the controller's
 ## once-per-frame economy snapshot.
@@ -99,6 +127,23 @@ func refresh_economy(economy: Dictionary) -> void:
 		surface_percent,
 	]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
+	_refresh_affordability(economy)
+
+## Display-only affordability hint, derived from the catalogue prices already
+## on each tile and the live economy snapshot. The tile stays enabled: Rust
+## remains the final validator and must surface InsufficientResources.
+func _refresh_affordability(economy: Dictionary) -> void:
+	for grid in [_build_grid, _train_grid]:
+		for button in grid.get_children():
+			var cost: Dictionary = button.get_meta("cost", {})
+			var affordable := true
+			for resource in ["food", "scrap", "coal", "crystals"]:
+				if int(cost.get(resource, 0)) > int(economy.get(resource, 0)):
+					affordable = false
+					break
+			var variation: StringName = &"UnaffordableTile" if not affordable else &"Tile"
+			if button.theme_type_variation != variation:
+				button.theme_type_variation = variation
 
 ## Wave line and the minimap pings: one controller read per frame feeds both,
 ## so HUD text and incoming pings can never disagree.

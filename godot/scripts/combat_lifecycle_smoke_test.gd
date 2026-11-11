@@ -382,9 +382,12 @@ func _research_boundary_leg() -> bool:
 			research_bar.max_value, target_points])
 		return false
 
-	# Leave the building deselected for the production legs: a real click
-	# on open ground clears the pick and disables Analyze again.
-	await _mouse_click(Vector2(TEST_VIEWPORT_SIZE) * Vector2(0.5, 0.85), MOUSE_BUTTON_LEFT)
+	# Leave the building deselected for the production legs: a real click on
+	# open ground right of the new bottom selection/command cards clears the
+	# pick and disables Analyze again. The old viewport-bottom point now sits
+	# on the re-laid-out HUD.
+	var open_ground := Vector2(TEST_VIEWPORT_SIZE.x * 0.7, TEST_VIEWPORT_SIZE.y * 0.42)
+	await _mouse_click(open_ground, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(_main.selected_building_id) == -1 \
 					and _main.selected_ids.is_empty() and analyze_button.disabled,
@@ -626,7 +629,10 @@ func _run() -> void:
 			func(): return scout.global_position.distance_to(Vector3(scout_target.x, 0.0, scout_target.y)) < 2.0,
 			15.0, "scout never reached its warning-derived position"):
 		return
-	var defender_target := Vector2(anchor.x, anchor.y + 22.0)
+	# North-of-the-city staging point, far enough south that its projection
+	# clears the re-laid-out top research card: a click aimed under a HUD
+	# STOP surface would be swallowed rather than exercising the order.
+	var defender_target := Vector2(anchor.x, anchor.y + 32.0)
 	var defenders_revision := int(GrusBridge.command_feedback_revision())
 	if not await _select_guards(guards, guard_ids):
 		return
@@ -683,13 +689,26 @@ func _run() -> void:
 		_fail("no visible live alien target after the scout reveal")
 		return
 	var target: Node3D = target_box["view"]
+	# The approved layout's research card covers the northern approach at the
+	# default framing. Recenter through the minimap's own real click path when
+	# the alien projects under a HUD surface; the click then lands on open
+	# world center where a player could actually attack it.
+	var target_screen: Vector2 = _main.camera.unproject_position(target.global_position)
+	if SmokeHelpers.hud_rects(_main.get_node("HUD")).any(func(rect: Rect2) -> bool: return rect.has_point(target_screen)):
+		var minimap := _main.get_node("HUD/Minimap") as Control
+		SmokeHelpers.push_mouse_click(get_tree(),
+			minimap.get_global_rect().position + Vector2(target.global_position.x, target.global_position.z),
+			MOUSE_BUTTON_LEFT)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		target_screen = _main.camera.unproject_position(target.global_position)
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var attack_revision := int(GrusBridge.command_feedback_revision())
 	# Same synchronous-transient read as the attack-move announcement above:
 	# the verdict mirror in _process may legitimately replace it before any
 	# awaited frame completes under throttled fps.
-	SmokeHelpers.push_mouse_click(get_tree(), _main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), target_screen, MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack command queued":
 		_fail("controller right-click did not queue a direct attack on the visible alien: %s" % [_main.command_status.text])
 		return

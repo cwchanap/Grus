@@ -19,6 +19,10 @@ window/size/viewport_height=720
 window/size/window_width_override=1280
 window/size/window_height_override=720
 
+[gui]
+
+theme/custom="res://assets/ui/frostline/frostline_theme.tres"
+
 [physics]
 
 common/physics_ticks_per_second=20

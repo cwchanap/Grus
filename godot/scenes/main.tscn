@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
@@ -6,6 +6,7 @@
 [ext_resource type="Script" path="res://scripts/minimap.gd" id="4_minimap"]
 [ext_resource type="Script" path="res://scripts/frostline_hud.gd" id="5_hud"]
 [ext_resource type="Script" path="res://scripts/underground_drawer.gd" id="6_underground"]
+[ext_resource type="PackedScene" path="res://scenes/action_tile.tscn" id="7_tile"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -14,16 +15,6 @@ size = Vector3(1, 0.4, 1)
 resource_local_to_scene = true
 transparency = 1
 albedo_color = Color(0.3, 0.85, 0.3, 0.4)
-
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_underground_tooltip"]
-content_margin_left = 8.0
-content_margin_top = 6.0
-content_margin_right = 8.0
-content_margin_bottom = 6.0
-bg_color = Color(0.06, 0.06, 0.06, 1)
-
-[sub_resource type="Theme" id="Theme_underground"]
-TooltipPanel/styles/panel = SubResource("StyleBoxFlat_underground_tooltip")
 
 [node name="Main" type="Node3D"]
 script = ExtResource("2_controller")
@@ -53,340 +44,317 @@ material_override = SubResource("Material_placement")
 script = ExtResource("5_hud")
 
 [node name="Title" type="Label" parent="HUD"]
-offset_left = 18.0
-offset_top = 14.0
-offset_right = 410.0
-offset_bottom = 44.0
-theme_override_font_sizes/font_size = 22
-text = "GRUS — 2.5D Battlefield"
+offset_left = 12.0
+offset_top = 72.0
+offset_right = 340.0
+offset_bottom = 96.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 12
+text = "GRUS — THE LAST CITY"
 
 [node name="CommandStatus" type="Label" parent="HUD"]
-offset_left = 18.0
-offset_top = 48.0
-offset_right = 600.0
-offset_bottom = 76.0
+offset_left = 216.0
+offset_top = 500.0
+offset_right = 1060.0
+offset_bottom = 524.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 12
 text = "ECS bridge initializing…"
 
+[node name="WavePanel" type="Panel" parent="HUD"]
+offset_left = 10.0
+offset_top = 100.0
+offset_right = 368.0
+offset_bottom = 184.0
+tooltip_text = "Wave prep, live aliens and the next wave countdown"
+
 [node name="WaveLabel" type="RichTextLabel" parent="HUD"]
-offset_left = 18.0
-offset_top = 78.0
-offset_right = 850.0
-offset_bottom = 102.0
+offset_left = 22.0
+offset_top = 128.0
+offset_right = 358.0
+offset_bottom = 178.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/normal_font_size = 15
 bbcode_enabled = true
 scroll_active = false
 text = "Wave"
 
 [node name="ResearchPanel" type="Panel" parent="HUD"]
-offset_left = 18.0
-offset_top = 106.0
-offset_right = 296.0
-offset_bottom = 190.0
-mouse_filter = 0
+offset_left = 460.0
+offset_top = 100.0
+offset_right = 1048.0
+offset_bottom = 192.0
+tooltip_text = "Research points toward the 9,000-point victory target"
 
 [node name="ResearchBar" type="ProgressBar" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 270.0
-offset_bottom = 20.0
+offset_left = 42.0
+offset_top = 30.0
+offset_right = 572.0
+offset_bottom = 50.0
 mouse_filter = 2
 show_percentage = false
 
 [node name="ResearchLabel" type="Label" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 30.0
-offset_top = 22.0
-offset_right = 270.0
-offset_bottom = 42.0
+offset_left = 42.0
+offset_top = 54.0
+offset_right = 408.0
+offset_bottom = 78.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 13
 text = "Research"
 
 [node name="ResearchIcon" type="TextureRect" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 23.0
-offset_right = 26.0
-offset_bottom = 41.0
+offset_left = 12.0
+offset_top = 30.0
+offset_right = 30.0
+offset_bottom = 48.0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
 
 [node name="AnalyzeButton" type="Button" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 46.0
-offset_right = 138.0
-offset_bottom = 74.0
+offset_left = 420.0
+offset_top = 30.0
+offset_right = 576.0
+offset_bottom = 82.0
 disabled = true
 text = "Analyze"
 
-[node name="InputShield" type="Control" parent="HUD"]
-layout_mode = 3
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 620.0
-offset_bottom = 88.0
-mouse_filter = 0
-
 [node name="EconomyPanel" type="Panel" parent="HUD"]
-offset_left = 1000.0
-offset_top = 8.0
-offset_right = 1268.0
-offset_bottom = 130.0
-mouse_filter = 0
-tooltip_text = "Resource icons in order: Food, Scrap, Coal, Crystals, Heat. Heat shows supply / demand."
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 1280.0
+offset_bottom = 72.0
+theme_type_variation = &"TopBar"
+tooltip_text = "Resource icons in order: Food, Scrap, Coal, Crystals, Population, Heat. Heat shows supply / demand."
 
 [node name="EconomyLabel" type="RichTextLabel" parent="HUD/EconomyPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 258.0
-offset_bottom = 86.0
+offset_left = 10.0
+offset_top = 16.0
+offset_right = 1010.0
+offset_bottom = 70.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 14
+theme_override_font_sizes/normal_font_size = 13
 bbcode_enabled = true
 scroll_active = false
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 90.0
-offset_right = 258.0
-offset_bottom = 122.0
+offset_left = 1014.0
+offset_top = 8.0
+offset_right = 1176.0
+offset_bottom = 64.0
 text = "Idle: 0 — Next"
 
 [node name="SelectionPanel" type="Panel" parent="HUD"]
-offset_left = 1000.0
-offset_top = 138.0
-offset_right = 1268.0
-offset_bottom = 290.0
-mouse_filter = 0
+offset_left = 216.0
+offset_top = 530.0
+offset_right = 724.0
+offset_bottom = 710.0
 
 [node name="SelectionLabel" type="Label" parent="HUD/SelectionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 252.0
-offset_bottom = 146.0
+offset_left = 16.0
+offset_top = 38.0
+offset_right = 492.0
+offset_bottom = 168.0
 autowrap_mode = 2
 text = "Nothing selected"
 
 [node name="CommandPanel" type="Panel" parent="HUD"]
-offset_left = 8.0
-offset_top = 500.0
-offset_right = 600.0
-offset_bottom = 712.0
-mouse_filter = 0
+offset_left = 736.0
+offset_top = 490.0
+offset_right = 1272.0
+offset_bottom = 710.0
 
 [node name="BuildGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 584.0
-offset_bottom = 120.0
-columns = 3
+offset_left = 12.0
+offset_top = 10.0
+offset_right = 524.0
+offset_bottom = 142.0
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
+columns = 5
 
-[node name="BunkhouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="BunkhouseButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Bunkhouse"
 metadata/kind = "Bunkhouse"
 
-[node name="DepotButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="DepotButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Depot"
 metadata/kind = "Depot"
 
-[node name="BarracksButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="BarracksButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Barracks"
 metadata/kind = "Barracks"
 
-[node name="WallButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="WallButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Wall"
 metadata/kind = "Wall"
 
-[node name="GateButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GateButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Gate"
 metadata/kind = "Gate"
 
-[node name="GunTurretButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GunTurretButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Gun Turret"
 metadata/kind = "GunTurret"
 
-[node name="CoalFurnaceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="CoalFurnaceButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Coal Furnace"
 metadata/kind = "CoalFurnace"
 
-[node name="FlameTowerButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="FlameTowerButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Flame Tower"
 metadata/kind = "FlameTower"
 
-[node name="CrystalLanceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="CrystalLanceButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Crystal Lance"
 metadata/kind = "CrystalLance"
 
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 128.0
-offset_right = 584.0
-offset_bottom = 204.0
+offset_left = 12.0
+offset_top = 146.0
+offset_right = 524.0
+offset_bottom = 210.0
+theme_override_constants/h_separation = 6
 columns = 3
 
-[node name="WorkerButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="WorkerButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Worker"
 metadata/kind = "Worker"
 
-[node name="GuardButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GuardButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Guard"
 metadata/kind = "Guard"
 
-[node name="RiflemanButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="RiflemanButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Rifleman"
 metadata/kind = "Rifleman"
 
 [node name="PauseButton" type="Button" parent="HUD"]
-offset_left = 930.0
+offset_left = 1196.0
 offset_top = 8.0
-offset_right = 990.0
-offset_bottom = 40.0
-text = "Pause"
+offset_right = 1258.0
+offset_bottom = 64.0
+tooltip_text = "Pause (Esc)"
 
 [node name="UndergroundPanel" type="Panel" parent="HUD"]
 visible = false
 offset_left = 848.0
-offset_top = 298.0
-offset_right = 1268.0
-offset_bottom = 584.0
-mouse_filter = 0
-theme = SubResource("Theme_underground")
+offset_top = 74.0
+offset_right = 1272.0
+offset_bottom = 520.0
 script = ExtResource("6_underground")
 
 [node name="HeaderLabel" type="Label" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 412.0
+offset_left = 14.0
+offset_top = 28.0
+offset_right = 410.0
 offset_bottom = 64.0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 14
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
 text = "Underground"
-
-[node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
-layout_mode = 0
-offset_left = 8.0
-offset_top = 68.0
-offset_right = 412.0
-offset_bottom = 94.0
-disabled = true
-theme_override_font_sizes/font_size = 14
-text = "Excavate"
 
 [node name="KindsBox" type="HBoxContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 98.0
-offset_right = 412.0
-offset_bottom = 163.0
-theme_override_constants/separation = 2
+offset_left = 10.0
+offset_top = 70.0
+offset_right = 414.0
+offset_bottom = 142.0
+theme_override_constants/separation = 4
+
+[node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 148.0
+offset_right = 414.0
+offset_bottom = 182.0
+disabled = true
+text = "Excavate"
 
 [node name="ScrollContainer" type="ScrollContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 166.0
-offset_right = 412.0
-offset_bottom = 278.0
+offset_left = 10.0
+offset_top = 190.0
+offset_right = 414.0
+offset_bottom = 440.0
 horizontal_scroll_mode = 0
 
 [node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="Minimap" type="Control" parent="HUD"]
+offset_left = 8.0
+offset_top = 600.0
+offset_right = 136.0
+offset_bottom = 696.0
+script = ExtResource("4_minimap")
+
 [node name="SessionPanel" type="Panel" parent="HUD"]
-offset_left = 440.0
-offset_top = 250.0
-offset_right = 840.0
+offset_left = 280.0
+offset_top = 120.0
+offset_right = 1000.0
 offset_bottom = 620.0
-mouse_filter = 0
 
 [node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 392.0
-offset_bottom = 56.0
-theme_override_font_sizes/font_size = 20
+offset_left = 20.0
+offset_top = 20.0
+offset_right = 700.0
+offset_bottom = 60.0
+mouse_filter = 2
+theme_type_variation = &"Header"
 text = "Survive the alien waves"
 
 [node name="StartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 70.0
-offset_right = 392.0
-offset_bottom = 110.0
+offset_left = 20.0
+offset_top = 84.0
+offset_right = 700.0
+offset_bottom = 134.0
 text = "Start"
 
 [node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
 visible = false
 layout_mode = 0
-offset_left = 8.0
-offset_top = 70.0
-offset_right = 392.0
-offset_bottom = 110.0
+offset_left = 20.0
+offset_top = 84.0
+offset_right = 700.0
+offset_bottom = 134.0
 text = "Resume"
 
 [node name="RestartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 120.0
-offset_right = 392.0
-offset_bottom = 160.0
+offset_left = 20.0
+offset_top = 144.0
+offset_right = 700.0
+offset_bottom = 194.0
 text = "Restart"
 
 [node name="QuitButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 170.0
-offset_right = 392.0
-offset_bottom = 210.0
+offset_left = 20.0
+offset_top = 204.0
+offset_right = 700.0
+offset_bottom = 254.0
 text = "Quit"
 
 [node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 220.0
-offset_right = 392.0
-offset_bottom = 360.0
+offset_left = 20.0
+offset_top = 274.0
+offset_right = 700.0
+offset_bottom = 440.0
 theme_override_font_sizes/font_size = 13
 text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause: Esc · Underground: Tab\nCamera: wheel / middle-drag\nMinimap: click to recenter"
-
-[node name="Minimap" type="Control" parent="HUD"]
-offset_left = 1120.0
-offset_top = 592.0
-offset_right = 1248.0
-offset_bottom = 688.0
-script = ExtResource("4_minimap")
