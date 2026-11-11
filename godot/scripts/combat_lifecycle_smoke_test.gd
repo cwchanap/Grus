@@ -458,11 +458,16 @@ func _restart_settled() -> bool:
 	return ids.size() == 4 and ids.has(1) and ids.has(2) and ids.has(3) and ids.has(4)
 
 func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
-	if snapshot.size() != 5:
+	if snapshot.size() != 6:
 		return false
-	for key in ["wave", "next_wave", "seconds_remaining", "incoming_zones", "live_aliens"]:
+	for key in ["wave", "next_wave", "seconds_remaining", "incoming_zones", "live_aliens", "timer_total_seconds"]:
 		if not snapshot.has(key):
 			return false
+	var total: Variant = snapshot.get("timer_total_seconds")
+	if typeof(total) != TYPE_FLOAT and typeof(total) != TYPE_INT:
+		return false
+	if float(total) <= 0.0:
+		return false
 	var zones: Array = snapshot.get("incoming_zones", [])
 	for zone in zones:
 		if zone.size() != 3 or not zone.has("name") \
