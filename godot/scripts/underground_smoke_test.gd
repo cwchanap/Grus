@@ -222,9 +222,20 @@ func _run() -> void:
 	var markers := _main.get_node("HUD/ResearchPanel/ResearchMarkers") as Control
 	var drawer_rect := _panel.get_global_rect()
 	var command_card := _main.get_node("HUD/CommandPanel") as Panel
-	if not _check(not drawer_rect.intersects(command_card.get_global_rect()),
+	var command_rect := command_card.get_global_rect()
+	if not _check(not drawer_rect.intersects(command_rect),
 			"open drawer covers the command card: drawer=%s card=%s" % [
-				drawer_rect, command_card.get_global_rect()]):
+				drawer_rect, command_rect]):
+		return
+	# The slot rows live inside the ScrollContainer; its own rect must end
+	# above the card and its children must be clipped to it, otherwise rows
+	# draw over and intercept the round order buttons below.
+	var scroll_box := _panel.get_node("ScrollContainer") as ScrollContainer
+	var scroll_rect := scroll_box.get_global_rect()
+	if not _check(scroll_box.clip_contents and not scroll_rect.intersects(command_rect) \
+			and scroll_rect.end.y <= command_rect.position.y,
+			"drawer scroll viewport can draw over or intercept the command card: viewport=%s clip=%s card=%s" % [
+				scroll_rect, scroll_box.clip_contents, command_rect]):
 		return
 	if not _check(analyze.visible and analyze.is_visible_in_tree() and not analyze.disabled
 			and not drawer_rect.intersects(analyze.get_global_rect()),
@@ -254,6 +265,31 @@ func _run() -> void:
 	if not _check(GrusBridge.set_sim_speed(20.0), "could not restore the underground 20x clock"):
 		return
 	await _settle()
+	# A real click on the command card while the drawer is open proves no
+	# overflowing slot row intercepts it. Move's top edge is the strip the
+	# old overflowing L3 row covered; Cancel then clears the probe.
+	var order_worker: Node3D = get_tree().get_nodes_in_group("unit_views")[0]
+	await _click_view(order_worker, MOUSE_BUTTON_LEFT)
+	if not _check(_main.selected_ids == [int(order_worker.get_meta("unit_id"))],
+			"real worker selection behind the open drawer failed"):
+		return
+	var move_button := _main.get_node("HUD/CommandPanel/OrderGrid/MoveButton") as Button
+	var cancel_button := _main.get_node("HUD/CommandPanel/OrderGrid/CancelButton") as Button
+	var order_revision: int = GrusBridge.command_feedback_revision()
+	SmokeHelpers.push_mouse_click(get_tree(),
+		move_button.get_global_rect().position + Vector2(move_button.size.x * 0.5, 6.0),
+		MOUSE_BUTTON_LEFT)
+	await _settle()
+	if not _check(str(_main.get("_armed_order")) == "move" \
+			and _status.text == "Move: right-click a ground target",
+			"open drawer intercepted the Move order control: armed=%s status=%s" % [
+				str(_main.get("_armed_order")), _status.text]):
+		return
+	await _click(cancel_button)
+	if not _check(str(_main.get("_armed_order")) == "" and _status.text == "Order canceled" \
+			and int(GrusBridge.command_feedback_revision()) == order_revision,
+			"drawer-open order probe did not clear without a command"):
+		return
 	var l1_before := _stock()
 	var l1_cost: Dictionary = GrusBridge.underground_snapshot().next_cost
 	if not await _purchase(_excavate, "Excavate queued", l1_cost):
@@ -460,14 +496,28 @@ func _run() -> void:
 				return
 	if not _check(not _slot(3, 0).disabled, "L3 did not enable Lab target"):
 		return
-	var scroll := _panel.get_node("ScrollContainer") as ScrollContainer
-	for _attempt in 3:
-		if scroll.get_global_rect().has_point(_slot(3, 0).get_global_rect().get_center()):
+	var scroll := scroll_box
+	for _attempt in 10:
+		if scroll.get_global_rect().encloses(_slot(3, 0).get_global_rect()):
 			break
 		SmokeHelpers.push_mouse_click(get_tree(), scroll.get_global_rect().get_center(), MOUSE_BUTTON_WHEEL_DOWN)
 		await _settle()
-	if not _check(scroll.get_global_rect().has_point(_slot(3, 0).get_global_rect().get_center()),
-			"L3 slot did not scroll into the visible underground area"):
+	if not _check(scroll.get_global_rect().encloses(_slot(3, 0).get_global_rect()),
+			"L3 slot did not scroll fully into the visible underground area: scroll=%s max=%s page=%s viewport=%s target=%s" % [
+				scroll.get_v_scroll_bar().value, scroll.get_v_scroll_bar().max_value,
+				scroll.get_v_scroll_bar().page, scroll.get_global_rect(),
+				_slot(3, 0).get_global_rect()]):
+		return
+	if not _check(scroll.get_v_scroll_bar().value > 0.0 \
+			and scroll.get_v_scroll_bar().max_value > scroll.get_v_scroll_bar().page,
+			"level list is not a real scroll viewport: value=%s max=%s page=%s" % [
+				scroll.get_v_scroll_bar().value, scroll.get_v_scroll_bar().max_value,
+				scroll.get_v_scroll_bar().page]):
+		return
+	if not _check(_slot(3, 0).get_global_rect().intersection(scroll.get_global_rect()).end.y \
+			<= command_rect.position.y,
+			"visible L3 slot row extends into the command card: slot=%s viewport=%s card=%s" % [
+				_slot(3, 0).get_global_rect(), scroll.get_global_rect(), command_rect]):
 		return
 	var before_lab := _stock()
 	if not await _purchase(_slot(3, 0), "Lab queued (L3 slot 1)", room_costs.Lab):
