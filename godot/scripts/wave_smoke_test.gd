@@ -68,6 +68,13 @@ func _run() -> void:
 	if _incoming_glow.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 		_stage5_fail("incoming edge glow is interactive instead of mouse IGNORE")
 		return
+	var wave_panel := main.get_node_or_null("HUD/WavePanel") as Control
+	if wave_panel == null or not wave_panel.get_global_rect().encloses(wave_label.get_global_rect()) \
+			or not wave_panel.get_global_rect().encloses(_wave_ring.get_global_rect()):
+		_stage5_fail("wave ring/label escape their panel: panel=%s ring=%s label=%s" % [
+			wave_panel.get_global_rect() if wave_panel != null else "missing",
+			_wave_ring.get_global_rect(), wave_label.get_global_rect()])
+		return
 	# The countdown must be rendered from a live bridge read, not the
 	# scene's placeholder text: poll until the label shows the snapshot's
 	# next_wave, then require the snapshot's own remaining time on screen.

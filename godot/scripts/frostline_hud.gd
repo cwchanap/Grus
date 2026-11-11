@@ -70,6 +70,7 @@ var _producer_kinds: Dictionary = {}
 const QUEUE_SOCKET_COUNT := 5
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
+var _socket_progress: Array[ProgressBar] = []
 var _queue_overflow: Label
 ## Last producer kind the train grid was filtered for, so visibility only
 ## changes when the selection context does.
@@ -135,6 +136,17 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
+	# The Start key-art screen's primary action reads as the mockup's cyan
+	# call to action instead of the neutral steel button.
+	var start_style := StyleBoxFlat.new()
+	start_style.bg_color = Color(0.07, 0.36, 0.42, 0.96)
+	start_style.border_color = Color(0.42, 0.9, 0.96, 1.0)
+	start_style.set_border_width_all(2)
+	start_style.set_corner_radius_all(4)
+	for state in ["normal", "hover", "pressed"]:
+		start_button.add_theme_stylebox_override(state, start_style)
+	start_button.add_theme_font_size_override("font_size", 22)
+	start_button.text = "START"
 
 func _build_order_tiles() -> void:
 	for button in _order_grid.get_children():
@@ -299,12 +311,27 @@ func _build_queue_sockets() -> void:
 		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		time.add_theme_font_size_override("font_size", 10)
 		time.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-		time.offset_top = -14.0
-		time.offset_bottom = -1.0
+		time.offset_top = -17.0
+		time.offset_bottom = -5.0
 		socket.add_child(time)
+		var progress := ProgressBar.new()
+		progress.name = "Progress"
+		progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		progress.show_percentage = false
+		progress.visible = false
+		progress.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		progress.offset_top = -4.0
+		progress.offset_bottom = -1.0
+		var fill := StyleBoxFlat.new()
+		fill.bg_color = Color(0.35, 0.86, 0.94, 0.95)
+		fill.set_corner_radius_all(1)
+		progress.add_theme_stylebox_override("fill", fill)
+		progress.add_theme_stylebox_override("background", StyleBoxEmpty.new())
+		socket.add_child(progress)
 		queue_sockets.add_child(socket)
 		_socket_icons.append(icon)
 		_socket_times.append(time)
+		_socket_progress.append(progress)
 	_queue_overflow = Label.new()
 	_queue_overflow.name = "OverflowChip"
 	_queue_overflow.custom_minimum_size = Vector2(36, 44)
@@ -609,9 +636,11 @@ func _render_queue(building: Dictionary) -> void:
 	for index in QUEUE_SOCKET_COUNT:
 		var icon := _socket_icons[index]
 		var time := _socket_times[index]
+		var progress_bar := _socket_progress[index]
 		if index >= queue.size():
 			icon.texture = null
 			time.text = ""
+			progress_bar.visible = false
 			continue
 		var kind := str(queue[index])
 		icon.texture = _icon_for_kind("units", kind)
@@ -620,9 +649,13 @@ func _render_queue(building: Dictionary) -> void:
 			var remaining := maxi(ceili(seconds * (1.0 - progress)), 0)
 			time.text = "%ds" % remaining
 			icon.modulate = Color(1, 1, 1, 1)
+			progress_bar.max_value = 100.0
+			progress_bar.value = clampf(progress * 100.0, 0.0, 100.0)
+			progress_bar.visible = true
 		else:
 			time.text = ""
 			icon.modulate = Color(0.75, 0.82, 0.88, 0.95)
+			progress_bar.visible = false
 	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
 	_queue_overflow.text = "+%d" % (queue.size() - QUEUE_SOCKET_COUNT)
 	queue_sockets.visible = true
@@ -635,6 +668,7 @@ func _clear_selection_detail() -> void:
 	queue_sockets.visible = false
 	selection_panel.tooltip_text = ""
 	portrait_icon.texture = null
+	selection_label.text = ""
 
 ## Contextual train tiles: visible exactly when the selected building's
 ## catalogue producer matches the unit row. No selection hides the whole row.
