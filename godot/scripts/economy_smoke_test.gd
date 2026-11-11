@@ -1088,6 +1088,28 @@ func _run() -> void:
 	if not await _wait_until(func(): return filter_guard_button.visible and filter_rifleman_button.visible,
 			5.0, "Barracks selection did not show its Guard/Rifleman production row"):
 		return
+	# HPA-698 modal Rally: the tile arms rally, the next real right-click
+	# dispatches set_rally and consumes the order once.
+	var barracks_main := get_node("Main") as Node3D
+	var barracks_status := barracks_main.get_node("HUD/CommandStatus") as Label
+	var rally_tile := barracks_main.get_node("HUD/CommandPanel/OrderGrid/RallyButton") as Button
+	await _click_button(rally_tile)
+	if str(barracks_main.get("_armed_order")) != "rally" or not rally_tile.button_pressed:
+		_fail("Rally tile did not arm the modal rally on the selected Barracks")
+		return
+	var rally_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), _camera.unproject_position(
+		Vector3(RALLY_CELL.x + 0.25, 0.0, RALLY_CELL.y + 0.25)), MOUSE_BUTTON_RIGHT)
+	if str(barracks_status.text) != "Rally point queued" \
+			or str(barracks_main.get("_armed_order")) != "":
+		_fail("armed Rally did not consume into set_rally: %s" % barracks_status.text)
+		return
+	if not await _wait_until(_rally_stored.bind(barracks_id), 10.0,
+			"armed Rally did not store the Barracks rally point"):
+		return
+	if not await _wait_until(func(): return int(GrusBridge.command_feedback_revision()) > rally_revision,
+			10.0, "armed Rally produced no sim verdict"):
+		return
 	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
 	var scrap_before := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button)
