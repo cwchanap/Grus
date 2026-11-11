@@ -25,6 +25,7 @@ const DISPLAY_NAMES := {
 @onready var _header: Label = $HeaderLabel
 @onready var _excavate: Button = $ExcavateButton
 @onready var _kinds: Container = $KindsBox
+@onready var _armed_detail: RichTextLabel = $ArmedDetail
 @onready var _levels: Container = $ScrollContainer/LevelsBox
 ## Static underground catalogue rows (name/min_level/cost/seconds), cached
 ## once from the catalogue's "underground" block. Every dynamic value (depth,
@@ -62,7 +63,7 @@ func _ready() -> void:
 		kind_button.toggle_mode = true
 		kind_button.add_theme_font_size_override("font_size", 14)
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		kind_button.custom_minimum_size = Vector2(52, 65)
+		kind_button.custom_minimum_size = Vector2(52, 78)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
 		kind_button.set_meta("kind", kind)
@@ -71,7 +72,7 @@ func _ready() -> void:
 		var room_icon := _icon_for_kind("underground", kind)
 		if room_icon != null:
 			kind_button.icon = room_icon
-			kind_button.add_theme_constant_override("icon_max_width", 22)
+			kind_button.add_theme_constant_override("icon_max_width", 24)
 			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
@@ -84,9 +85,34 @@ func _ready() -> void:
 			name_label.add_theme_font_size_override("font_size", 11)
 			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-			name_label.offset_top = -22
-			name_label.offset_bottom = -2
+			name_label.offset_top = -31.0
+			name_label.offset_bottom = -17.0
 			kind_button.add_child(name_label)
+		# Catalogue price and min-level badge: the mockup's readable kind
+		# tiles without a second price table.
+		var cost_label := RichTextLabel.new()
+		cost_label.name = "KindCostLabel"
+		cost_label.bbcode_enabled = true
+		cost_label.scroll_active = false
+		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cost_label.add_theme_font_size_override("normal_font_size", 10)
+		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		cost_label.offset_top = -16.0
+		cost_label.offset_bottom = -1.0
+		cost_label.text = "[center]%s[/center]" % _cost_short(ug_entry)
+		kind_button.add_child(cost_label)
+		var level_label := Label.new()
+		level_label.name = "KindLevelLabel"
+		level_label.text = "L%d" % int(ug_entry.get("min_level", 1))
+		level_label.add_theme_font_size_override("font_size", 10)
+		level_label.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
+		level_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		level_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		level_label.offset_left = -22.0
+		level_label.offset_right = -3.0
+		level_label.offset_top = 2.0
+		level_label.offset_bottom = 16.0
+		kind_button.add_child(level_label)
 		kind_button.tooltip_text = _kind_tooltip(ug_entry)
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
 		_kinds.add_child(kind_button)
@@ -109,6 +135,7 @@ func refresh(snap: Dictionary, phase: String) -> void:
 	_sync_rows(snap)
 	_refresh_header(snap, phase)
 	_refresh_kinds(snap)
+	_refresh_armed_detail()
 	_refresh_slots(snap, phase)
 
 ## Restart clears the transient armed room kind; the controller's open-panel
@@ -266,6 +293,19 @@ func _on_slot_pressed(level: int, slot: int) -> void:
 		return
 	room_requested.emit(level, slot, str(_rooms[_armed_index].get("name", "")))
 
+## Armed kind effect line: the same Rust-computed effect/tooltip text as the
+## tile, rendered in the drawer's one static status row. Restart/reset leaves
+## only the "arm a kind" hint.
+func _refresh_armed_detail() -> void:
+	var armed := _armed_index >= 0 and _armed_index < _rooms.size()
+	if not armed:
+		_armed_detail.text = "Arm a room kind — hover a tile for cost and effect"
+		return
+	var entry: Dictionary = _rooms[_armed_index]
+	_armed_detail.text = "[color=#8fd18f]%s[/color] · %s · %ds" % [
+		display_name(str(entry.get("name", ""))), str(entry.get("effect", "")),
+		int(entry.get("seconds", 0))]
+
 ## Formats a cost dictionary carried by a snapshot or catalogue entry;
 ## GDScript renders, Rust computes.
 func _cost_text(cost: Dictionary) -> String:
@@ -275,6 +315,21 @@ func _cost_text(cost: Dictionary) -> String:
 		if amount > 0:
 			parts.append("%d %s" % [amount, resource.capitalize()])
 	return " + ".join(parts)
+
+## Terse painted-resource cost for the kind tile: same catalogue numbers as
+## the full tooltip, with 10 px resource icons so the price fits the tile.
+func _cost_short(cost: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var amount := int(cost.get(resource, 0))
+		if amount <= 0:
+			continue
+		var icon := _icon_for_kind("resources", resource)
+		if icon != null:
+			parts.append("[img=10x10]%s[/img]%d" % [icon.resource_path, amount])
+		else:
+			parts.append("%d" % amount)
+	return " ".join(parts)
 
 ## The full kind tooltip: catalogue name, cost, build time and the
 ## Rust-computed effect line — straight off the static catalogue row,

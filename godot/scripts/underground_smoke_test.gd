@@ -182,6 +182,17 @@ func _run() -> void:
 		if not _check(_icon_path(kind_button) == expected_icon,
 				"%s room-kind Button icon is %s; expected %s" % [room_kind, _icon_path(kind_button), expected_icon]):
 			return
+		# HPA-698 drawer readability: every kind tile shows its catalogue
+		# price and min-level badge next to the painted icon/name.
+		var room_entry: Dictionary = _catalogue["underground"]["rooms"][room_kind]
+		var kind_cost := kind_button.get_node_or_null("KindCostLabel") as RichTextLabel
+		var kind_level := kind_button.get_node_or_null("KindLevelLabel") as Label
+		if not _check(kind_cost != null and kind_level != null \
+				and kind_cost.get_parsed_text().contains(str(int(room_entry["scrap"]))) \
+				and kind_level.text == "L%d" % int(room_entry["min_level"]) \
+				and kind_cost.get_theme_font_size("normal_font_size") >= 10,
+				"%s room-kind tile is missing its catalogue cost/level badge" % room_kind):
+			return
 	if not _check(_icon_path(_excavate) == "res://assets/ui/icons/underground/excavate.png",
 			"Excavate Button is missing underground/excavate.png"):
 		return
@@ -377,6 +388,12 @@ func _run() -> void:
 	await _key(KEY_TAB)
 	await _click(_kind("Lab"))
 	if not _check(_kind("Lab").button_pressed, "Lab did not arm"):
+		return
+	var armed_detail := _panel.get_node_or_null("ArmedDetail") as RichTextLabel
+	if not _check(armed_detail != null and armed_detail.visible \
+			and armed_detail.get_parsed_text().contains("Lab") \
+			and armed_detail.get_parsed_text().contains(str(_catalogue["underground"]["rooms"]["Lab"]["effect"])),
+			"armed Lab does not show its catalogue effect line"):
 		return
 	var disabled_before := _stock()
 	var disabled_revision: int = GrusBridge.command_feedback_revision()
