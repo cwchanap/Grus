@@ -829,6 +829,39 @@ func _run() -> void:
 			or result_banner.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 		_fail("Result overlay is not showing the noninteractive Defeat banner art")
 		return
+	# The source banners carry no text, so the actual session-driven outcome
+	# title must be visibly rendered over them with the two Result actions.
+	var result_title := _main.get_node("HUD/SessionBackdrop/ResultTitle") as Label
+	if result_title == null or not result_title.visible \
+			or result_title.text != "Defeat" \
+			or result_title.get_theme_font_size("font_size") < 40 \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(result_title.get_global_rect()) \
+			or not result_title.get_global_rect().intersects(result_banner.get_global_rect()) \
+			or _button("HUD/SessionPanel/RestartButton").disabled \
+			or _button("HUD/SessionPanel/QuitButton").disabled:
+		_fail("Result overlay does not show the readable session Defeat title over its banner")
+		return
+	# Presentation-only variant probe: call the HUD render directly with both
+	# winner values and restore the actual session immediately. This is not a
+	# gameplay victory journey; it proves the banner/title pair reacts to the
+	# same session field without manufacturing sim state.
+	var hud := _main.get_node("HUD")
+	hud.call("refresh_session", "Result", 1)
+	if not result_title.visible or result_title.text != "Victory" \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/victory_banner.png") \
+			or _button("HUD/SessionPanel/RestartButton").disabled \
+			or _button("HUD/SessionPanel/QuitButton").disabled:
+		_fail("presentation probe did not render the Victory title over the Victory art")
+		return
+	hud.call("refresh_session", "Result", 2)
+	if not result_title.visible or result_title.text != "Defeat" \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png"):
+		_fail("presentation probe did not restore the Defeat title/art")
+		return
+	var actual_result: Dictionary = GrusBridge.session_snapshot()
+	hud.call("refresh_session", str(actual_result.get("phase", "")), int(actual_result.get("winner_team", -1)))
 	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
 		_fail("bridge refused to queue the Result-phase probe command")
 		return
