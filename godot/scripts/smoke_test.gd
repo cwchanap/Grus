@@ -146,11 +146,17 @@ func _accepted_since(revision: int) -> bool:
 	return int(GrusBridge.command_feedback_revision()) > revision \
 		and str(GrusBridge.command_feedback()).begins_with("Command accepted")
 
+## A clickable world probe site: the candidate must be a valid placement
+## preview, clear of reserved footprints, AND its real click point must not
+## land under a HUD STOP surface — the full-width top bar owns the viewport
+## top, so a world point projected there can never receive the click.
 func _defense_placement_anchor(
 		builder_id: int, kind: String, reserved_footprints: Array[Rect2i] = []) -> Vector2i:
 	var worker := _unit_view(builder_id)
 	if worker == null:
 		return Vector2i(-1, -1)
+	var camera := get_node("Main/Camera3D") as Camera3D
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	var origin := Vector2i(floori(worker.global_position.x), floori(worker.global_position.z))
 	for radius in range(1, 17):
 		for y in range(-radius, radius + 1):
@@ -169,8 +175,12 @@ func _defense_placement_anchor(
 					if footprint.intersects(reserved):
 						overlaps_reserved = true
 						break
-				if not overlaps_reserved:
-					return candidate
+				if overlaps_reserved:
+					continue
+				var screen := camera.unproject_position(Vector3(candidate.x + 0.25, 0.0, candidate.y + 0.25))
+				if hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(screen)):
+					continue
+				return candidate
 	return Vector2i(-1, -1)
 
 func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
@@ -267,6 +277,67 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 				return false
 		if count != int(spec[2]):
 			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
+			return false
+	return true
+
+## HPA-698 presentation contract: one project-wide Frostline theme using the
+## bundled Barlow faces (never a system-font assumption), the 15 HPA-695 icons
+## imported at 128 px into the existing icon tree, and the UI-kit/screen
+## plates the HUD styles with. Asset presence alone is not a rendering check;
+## the checkpoint's rendered-frame review covers that separately.
+func _assert_frostline_assets() -> bool:
+	var theme_path := str(ProjectSettings.get_setting("gui/theme/custom", ""))
+	var theme := load(theme_path) as Theme if not theme_path.is_empty() else null
+	if theme == null or theme.default_font == null \
+			or str(theme.default_font.resource_path) != "res://assets/fonts/Barlow-Regular.ttf":
+		_fail("project gui/theme/custom is not the bundled Barlow theme: \"%s\"" % theme_path)
+		return false
+	if theme.get_stylebox("normal", "UnaffordableTile") == null:
+		_fail("project theme is missing the unaffordable-tile Button variation")
+		return false
+	var license := FileAccess.get_file_as_string("res://assets/fonts/OFL.txt")
+	if not license.contains("SIL Open Font License"):
+		_fail("bundled Barlow OFL license text is missing")
+		return false
+	for icon_path in [
+		"res://assets/ui/icons/actions/attack_move.png",
+		"res://assets/ui/icons/actions/gather.png",
+		"res://assets/ui/icons/actions/move.png",
+		"res://assets/ui/icons/actions/pause.png",
+		"res://assets/ui/icons/actions/rally.png",
+		"res://assets/ui/icons/actions/stop.png",
+		"res://assets/ui/icons/status/health.png",
+		"res://assets/ui/icons/status/idle_workers.png",
+		"res://assets/ui/icons/status/locked.png",
+		"res://assets/ui/icons/status/mouse_left.png",
+		"res://assets/ui/icons/status/mouse_right.png",
+		"res://assets/ui/icons/status/mouse_wheel.png",
+		"res://assets/ui/icons/status/population.png",
+		"res://assets/ui/icons/status/research_rate.png",
+		"res://assets/ui/icons/status/time.png",
+	]:
+		var icon := load(icon_path) as Texture2D
+		if icon == null or icon.get_width() != 128 or icon.get_height() != 128:
+			_fail("HPA-695 icon is missing or not the 128 px import size: %s" % icon_path)
+			return false
+	for plate_path in [
+		"res://assets/ui/frostline/ui/bar_frame.png",
+		"res://assets/ui/frostline/ui/frost_overlay.png",
+		"res://assets/ui/frostline/ui/plate.png",
+		"res://assets/ui/frostline/ui/portrait_bezel.png",
+		"res://assets/ui/frostline/ui/round_button.png",
+		"res://assets/ui/frostline/ui/socket.png",
+		"res://assets/ui/frostline/ui/tile_locked.png",
+		"res://assets/ui/frostline/ui/tile_normal.png",
+		"res://assets/ui/frostline/ui/tile_selected.png",
+		"res://assets/ui/frostline/ui/tile_unaffordable.png",
+		"res://assets/ui/frostline/screens/defeat_banner.png",
+		"res://assets/ui/frostline/screens/emblem.png",
+		"res://assets/ui/frostline/screens/start_key_art.png",
+		"res://assets/ui/frostline/screens/victory_banner.png",
+	]:
+		if load(plate_path) as Texture2D == null:
+			_fail("Frostline UI-kit texture is missing: %s" % plate_path)
 			return false
 	return true
 
@@ -733,6 +804,8 @@ func _run() -> void:
 	if viewport_size != Vector2(TEST_VIEWPORT_SIZE):
 		_fail("smoke viewport did not resize to project baseline: %s" % viewport_size)
 		return
+	if not _assert_frostline_assets():
+		return
 	if not _assert_action_icon_paths(get_node("Main") as Node3D):
 		return
 	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
@@ -833,7 +906,9 @@ func _run() -> void:
 		return
 
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
-	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
+	# Empty ground outside every re-laid-out HUD zone: the old viewport-bottom
+	# point now sits under the bottom selection card.
+	var clear_screen := Vector2(viewport_size.x * 0.5 + 260.0, viewport_size.y * 0.5 - 60.0)
 
 	# Camera framing contract, before any pan/zoom/minimap interaction: the
 	# live Team-1 Research Center view (stable BuildingId 1) must project
@@ -880,11 +955,11 @@ func _run() -> void:
 	if not _has_visible_icon(get_node("Main/HUD"), "res://assets/ui/icons/status/research_progress.png"):
 		_fail("research HUD is missing status/research_progress.png")
 		return
-	# The compact panel hugs the left edge below the InputShield band,
-	# inside the 1280x720 viewport, and fully contains its Analyze button —
-	# never over the northwest corridor's or expansion salvage's projected
-	# cells, which must stay clickable under the default framing. The salvage
-	# point derives from its live view so the probe tracks the authored layout.
+	# The compact top-centre research card sits fully inside the viewport and
+	# contains its Analyze button — never over the northwest corridor's or
+	# expansion salvage's projected cells, which must stay clickable under the
+	# default framing. The salvage point derives from its live view so the
+	# probe tracks the authored layout.
 	var research_rect := research_panel.get_global_rect()
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
@@ -1198,7 +1273,7 @@ func _run() -> void:
 	# the wrong neighbour can no longer pass on a stale status label.
 	var gathered := {}
 	# Click points must reach _unhandled_input: skip any spot a HUD Control
-	# would consume (shield, minimap, panels, buttons).
+	# would consume (top bar, minimap, panels, buttons).
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for resource in get_tree().get_nodes_in_group("resource_views"):
 		if not resource.is_visible_in_tree():
@@ -1341,19 +1416,27 @@ func _run() -> void:
 		_fail("Stop input did not settle the active move order")
 		return
 
-	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
-	if input_shield == null:
-		_fail("HUD input shield is missing")
+	# The obsolete InputShield rectangle is gone: the full-width top bar's own
+	# STOP panel is the shield, and clicking its empty face must never select a
+	# world object or queue a command.
+	if get_node_or_null("Main/HUD/InputShield") != null:
+		_fail("obsolete HUD InputShield still exists beside the full-width top bar")
+		return
+	var top_bar := get_node_or_null("Main/HUD/EconomyPanel") as Control
+	if top_bar == null or not top_bar.is_visible_in_tree() \
+			or not is_equal_approx(top_bar.get_global_rect().size.x, viewport_size.x):
+		_fail("HUD top bar is missing or not the full-width STOP surface")
 		return
 	var feedback_before_ui := int(GrusBridge.command_feedback_revision())
-	_mouse_click(input_shield.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	_mouse_click(top_bar.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if not _ring(unit_two).visible or int(GrusBridge.command_feedback_revision()) != feedback_before_ui:
-		_fail("HUD click leaked into world controls")
+		_fail("top-bar click leaked into world controls")
 		return
 
-	# ResearchPanel sits below InputShield's band; its STOP filter must
-	# likewise keep panel clicks from clearing selection or queuing orders.
+	# ResearchPanel shares the upper band with the full-width top bar; its
+	# STOP filter must likewise keep panel clicks from clearing selection or
+	# queuing orders.
 	var research_panel_leak := get_node_or_null("Main/HUD/ResearchPanel") as Panel
 	if research_panel_leak == null:
 		_fail("research HUD panel is missing")
@@ -1758,11 +1841,11 @@ func _run() -> void:
 		_fail("Analyze button does not render the catalogue cost/gain: %s" % [analyze_button.text])
 		return
 
-	# The two advanced towers fill the last cells of the 3x3 BuildGrid and
+	# The two advanced towers fill the last cells of the 5x2 BuildGrid and
 	# bind their catalogue unlock thresholds; every other kind binds zero.
 	var build_grid := get_node("Main/HUD/CommandPanel/BuildGrid") as GridContainer
-	if build_grid.columns != 3 or build_grid.get_child_count() != 9:
-		_fail("BuildGrid is not the 3x3 layout with the two advanced towers: cols=%d children=%d" % [build_grid.columns, build_grid.get_child_count()])
+	if build_grid.columns != 5 or build_grid.get_child_count() != 9:
+		_fail("BuildGrid is not the 5x2 layout with the two advanced towers: cols=%d children=%d" % [build_grid.columns, build_grid.get_child_count()])
 		return
 	for tower_kind in ["FlameTower", "CrystalLance"]:
 		var tower_button := get_node("Main/HUD/CommandPanel/BuildGrid/%sButton" % tower_kind) as Button
