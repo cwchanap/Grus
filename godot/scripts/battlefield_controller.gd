@@ -63,6 +63,11 @@ func _ready() -> void:
 	command_status.text = str(GrusBridge.command_feedback())
 	_ug_drawer.excavate_requested.connect(_on_excavate_requested)
 	_ug_drawer.room_requested.connect(_on_room_requested)
+	# The drawer creates its kind toggles in its own _ready (children ready
+	# before this node), so observe them here for the controller-owned hint —
+	# no third drawer signal and no duplicated armed state.
+	for button in _ug_drawer.get_node("KindsBox").get_children():
+		button.toggled.connect(_on_underground_kind_toggled.bind(str(button.get_meta("kind"))))
 	for button in _build_grid.get_children():
 		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
 	for button in _train_grid.get_children():
@@ -860,6 +865,12 @@ func _refresh_underground_panel() -> void:
 	_ug_last_tick = int(GrusBridge.sim_tick())
 	_ug_last_phase = _session_phase
 	_ug_drawer.refresh(GrusBridge.underground_snapshot(), _session_phase)
+
+## The drawer owns arming and emits no arm signal; the controller observes
+## the already-created room-kind toggles only to keep its own status hint.
+func _on_underground_kind_toggled(pressed: bool, kind: String) -> void:
+	if pressed:
+		command_status.text = "%s armed — click an eligible slot" % kind
 
 ## One paid excavation intent from the drawer — the same queued-command/
 ## feedback path as every other order; the sim owns the single-dig rule and

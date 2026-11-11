@@ -64,6 +64,7 @@ func _ready() -> void:
 		kind_button.custom_minimum_size = Vector2(52, 65)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
+		kind_button.set_meta("kind", kind)
 		var short_name := display_name(kind)
 		kind_button.text = short_name
 		var room_icon := _icon_for_kind("underground", kind)
