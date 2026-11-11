@@ -994,10 +994,28 @@ func _run() -> void:
 	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
 	var research_icon := get_node_or_null("Main/HUD/ResearchPanel/ResearchIcon") as TextureRect
 	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
+	var research_markers := get_node_or_null("Main/HUD/ResearchPanel/ResearchMarkers") as RichTextLabel
 	var wave_hud := get_node("Main/HUD/WaveLabel") as Control
 	if research_panel == null or research_bar == null or research_label == null or research_icon == null \
-			or analyze_button == null or wave_hud == null:
+			or analyze_button == null or research_markers == null or wave_hud == null:
 		_fail("research HUD nodes are missing under HUD/ResearchPanel")
+		return
+	# HPA-698 research markers are catalogue-derived: both tower unlock
+	# thresholds and the wave-growth milestone, with their planted icons.
+	var marker_catalogue: Dictionary = GrusBridge.catalogue_snapshot()
+	var marker_buildings: Dictionary = marker_catalogue.get("buildings", {})
+	var flame_points := int(marker_buildings.get("FlameTower", {}).get("unlock_points", 0))
+	var lance_points := int(marker_buildings.get("CrystalLance", {}).get("unlock_points", 0))
+	var wave_points := int(marker_catalogue.get("research", {}).get("wave_growth_points", 0))
+	var marker_text := research_markers.get_parsed_text()
+	if flame_points <= 0 or lance_points <= 0 or wave_points <= 0 \
+			or not marker_text.contains(str(flame_points)) \
+			or not marker_text.contains(str(lance_points)) \
+			or not marker_text.contains(str(wave_points)) \
+			or not research_markers.text.contains("res://assets/ui/icons/buildings/flame_tower.png") \
+			or not research_markers.text.contains("res://assets/ui/icons/buildings/crystal_lance.png") \
+			or not research_markers.text.contains("res://assets/ui/icons/status/incoming_zone.png"):
+		_fail("research markers do not project the catalogue tower/wave thresholds: %s" % [research_markers.text])
 		return
 	if not _has_visible_icon(get_node("Main/HUD"), "res://assets/ui/icons/status/research_progress.png"):
 		_fail("research HUD is missing status/research_progress.png")
@@ -2333,20 +2351,38 @@ func _run() -> void:
 		if points_after - points_before_click < float(analyze_gain):
 			_fail("accepted Analyze did not bank the +%d reward: before=%f now=%f" % [analyze_gain, points_before_click, points_after])
 			return
-	# Deselect on open ground: Analyze disables again and a click on the
-	# disabled button dispatches nothing to the bridge.
+	# Deselect on open ground: Analyze intentionally remains enabled while
+	# Playing with a living Research Center, and a real click still queues the
+	# command for the controller-resolved live core. With zero Crystals the
+	# sim's typed InsufficientResources verdict is the only honest outcome.
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(main.selected_building_id) == -1 \
-				and analyze_button.disabled,
-			5.0, "Analyze did not disable after the Research Center was deselected"):
+				and main.selected_ids.is_empty() and not analyze_button.disabled,
+			5.0, "Analyze disabled after deselection while Playing with a live Research Center"):
 		return
-	var revision_before_disabled := int(GrusBridge.command_feedback_revision())
+	var crystals_before_deselected := int(GrusBridge.economy_snapshot().get("crystals", -1))
+	var points_before_deselected := float(GrusBridge.research_snapshot().get("points", -1.0))
+	var revision_before_deselected := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
-	for _frame in 6:
-		await get_tree().process_frame
-	if int(GrusBridge.command_feedback_revision()) != revision_before_disabled:
-		_fail("a click on the disabled Analyze button reached the bridge")
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > revision_before_deselected,
+			10.0, "selection-free Analyze press produced no sim verdict"):
+		return
+	if crystals_before_deselected < analyze_price:
+		if int(GrusBridge.last_reject_code()) != 8 \
+				or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
+			_fail("selection-free zero-Crystal Analyze did not surface code 8: code=%d feedback=%s" % [
+				int(GrusBridge.last_reject_code()), GrusBridge.command_feedback()])
+			return
+		if int(GrusBridge.economy_snapshot().get("crystals", -1)) != crystals_before_deselected:
+			_fail("selection-free rejected Analyze changed the Crystal ledger")
+			return
+		if float(GrusBridge.research_snapshot().get("points", -1.0)) - points_before_deselected >= float(analyze_gain):
+			_fail("selection-free rejected Analyze banked the point reward")
+			return
+	elif not str(GrusBridge.command_feedback()).begins_with("Command accepted"):
+		_fail("selection-free affordable Analyze was not accepted: %s" % GrusBridge.command_feedback())
 		return
 
 	var roof_bunkhouse: Node3D = null

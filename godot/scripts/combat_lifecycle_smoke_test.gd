@@ -200,6 +200,10 @@ func _assert_input_gated(where: String) -> bool:
 			or int(GrusBridge.command_feedback_revision()) != revision:
 		_fail("%s: an input handler reached the bridge while not Playing" % where)
 		return false
+	var analyze := _main.get_node("HUD/ResearchPanel/AnalyzeButton") as Button
+	if analyze == null or not analyze.disabled:
+		_fail("%s: Analyze is not disabled outside Playing" % where)
+		return false
 	return true
 
 ## HPA-188 fresh-match research boundary, exercised in the zero-Crystal
@@ -384,14 +388,39 @@ func _research_boundary_leg() -> bool:
 
 	# Leave the building deselected for the production legs: a real click on
 	# open ground right of the new bottom selection/command cards clears the
-	# pick and disables Analyze again. The old viewport-bottom point now sits
-	# on the re-laid-out HUD.
+	# pick. Analyze intentionally stays enabled while Playing with a living
+	# Research Center, and the same real button click now resolves that live
+	# core and queues Analyze without a selected building — the authoritative
+	# zero-Crystal reject remains the only honest verdict.
 	var open_ground := Vector2(TEST_VIEWPORT_SIZE.x * 0.7, TEST_VIEWPORT_SIZE.y * 0.42)
 	await _mouse_click(open_ground, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(_main.selected_building_id) == -1 \
-					and _main.selected_ids.is_empty() and analyze_button.disabled,
-			5.0, "open-ground click did not deselect the Research Center and disable Analyze"):
+					and _main.selected_ids.is_empty() and not analyze_button.disabled,
+			5.0, "open-ground click did not deselect the Research Center while Analyze stayed enabled"):
+		return false
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != 0:
+		_fail("selection-free Analyze leg is not the zero-Crystal window: %s" % [GrusBridge.economy_snapshot()])
+		return false
+	var crystals_before_deselected := int(GrusBridge.economy_snapshot().get("crystals", -1))
+	var points_before_deselected := float(GrusBridge.research_snapshot().get("points", -1.0))
+	var feedback_before_deselected := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > feedback_before_deselected \
+					and str(_main.command_status.text) == "Command rejected (InsufficientResources)",
+			10.0, "selection-free Analyze press produced neither the sim verdict nor its reject text"):
+		return false
+	if int(GrusBridge.last_reject_code()) != REJECT_INSUFFICIENT_RESOURCES \
+			or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
+		_fail("selection-free zero-Crystal Analyze did not surface the typed InsufficientResources reject: code=%d feedback=%s" % [
+			int(GrusBridge.last_reject_code()), GrusBridge.command_feedback()])
+		return false
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != crystals_before_deselected:
+		_fail("selection-free rejected Analyze changed the zero-Crystal stockpile")
+		return false
+	if float(GrusBridge.research_snapshot().get("points", -1.0)) - points_before_deselected >= analyze_gain:
+		_fail("selection-free rejected Analyze banked the +%d reward" % int(analyze_gain))
 		return false
 	return true
 

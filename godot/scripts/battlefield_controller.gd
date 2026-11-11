@@ -262,7 +262,7 @@ func _refresh_hud() -> void:
 	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds,
 		unit_task, unit_health, building_health)
 	_hud.refresh_orders(_armed_order, _playing())
-	_hud.refresh_research_controls(research, building, _playing())
+	_hud.refresh_research_controls(research, _playing(), _research_center_id() > 0)
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
 ## and mark the event handled: `ui_focus_next` would otherwise consume Tab
@@ -923,18 +923,34 @@ func _on_train_pressed(kind: String) -> void:
 	else:
 		command_status.text = "Training rejected"
 
-## One Analyze conversion on the selected Research Center — the same
-## queued-command/feedback path as every other order. The button's enabled
-## state already encodes the session+selection context; the sim stays the
-## final validator for ownership, kind and Crystals.
+## The live friendly Research Center view id, resolved from the existing
+## building_views metadata (kind/team/id) — never a hardcoded building id.
+func _research_center_id() -> int:
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var view := node as Node3D
+		if view == null or not view.is_visible_in_tree():
+			continue
+		if int(view.get_meta("team_id", -1)) != 1 \
+				or str(view.get_meta("building_kind", "")) != "ResearchCenter":
+			continue
+		var id := int(view.get_meta("building_id", -1))
+		if id > 0:
+			return id
+	return -1
+
+## One Analyze conversion on the live Team-1 Research Center, independent of
+## the current selection — the same queued-command/feedback path as every
+## other order. The button's enabled state encodes Playing + core presence;
+## the sim stays the final validator for ownership, completion and Crystals.
 func _on_analyze_pressed() -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
-	if selected_building_id <= 0:
-		command_status.text = "Select the Research Center first"
+	var core_id := _research_center_id()
+	if core_id <= 0:
+		command_status.text = "Research Center unavailable"
 		return
-	if GrusBridge.analyze(selected_building_id):
+	if GrusBridge.analyze(core_id):
 		command_status.text = "Analyze queued"
 	else:
 		command_status.text = "Analyze rejected"
