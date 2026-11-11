@@ -13,6 +13,7 @@ extends CanvasLayer
 @onready var incoming_glow: Control = $IncomingGlow
 @onready var research_bar: ProgressBar = $ResearchPanel/ResearchBar
 @onready var research_label: Label = $ResearchPanel/ResearchLabel
+@onready var research_markers: RichTextLabel = $ResearchPanel/ResearchMarkers
 @onready var research_icon: TextureRect = $ResearchPanel/ResearchIcon
 @onready var analyze_button: Button = $ResearchPanel/AnalyzeButton
 @onready var economy_label: RichTextLabel = $EconomyPanel/EconomyLabel
@@ -44,6 +45,10 @@ extends CanvasLayer
 ## refresh_research_controls — never a mirrored mutable copy.
 var _research_target_points := 0
 var _icon_cache: Dictionary = {}
+## Static catalogue milestones: the two tower unlock thresholds plus the
+## `RESEARCH_WAVE_BOOST_PERCENT` wave-growth point total. Live reached state
+## is a per-frame comparison, never a stored flag.
+var _research_marker_entries: Array[Dictionary] = []
 ## Static catalogue rows (price/time/HP/combat/producer), read once for
 ## display text and tooltips; live values keep arriving per frame.
 var _unit_entries: Dictionary = {}
@@ -81,6 +86,28 @@ func _ready() -> void:
 	wave_clock.texture = _icon_for_kind("status", "WaveCountdown")
 	_build_glow_textures()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
+	for marker_kind in ["FlameTower", "CrystalLance"]:
+		var marker_entry: Dictionary = buildings.get(marker_kind, {})
+		var points := int(marker_entry.get("unlock_points", 0))
+		var icon := _icon_for_kind("buildings", marker_kind)
+		if points > 0 and icon != null:
+			_research_marker_entries.append({
+				"label": marker_kind,
+				"points": points,
+				"icon": icon.resource_path,
+			})
+	var wave_growth_points := int(research_catalogue.get("wave_growth_points", 0))
+	var wave_icon := _icon_for_kind("status", "IncomingZone")
+	if wave_growth_points > 0 and wave_icon != null:
+		_research_marker_entries.append({
+			"label": "Wave growth",
+			"points": wave_growth_points,
+			"icon": wave_icon.resource_path,
+		})
+	var marker_tooltip := PackedStringArray()
+	for marker in _research_marker_entries:
+		marker_tooltip.append("%s at %d research" % [marker["label"], marker["points"]])
+	research_markers.tooltip_text = " · ".join(marker_tooltip)
 	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
 	var analyze_crystals := int(analyze_cost.get("crystals", 0))
 	var analyze_gain := int(research_catalogue.get("analyze_gain_points", 0))
@@ -404,7 +431,7 @@ func refresh_wave(wave: Dictionary) -> void:
 ## label track live points/rate/ETA, and every catalogue-bound lock state
 ## (build buttons, Analyze) re-derives here — never a one-time _ready read.
 ## The controller owns the session phase and passes its Playing verdict.
-func refresh_research_controls(research: Dictionary, building: Dictionary, playing: bool) -> void:
+func refresh_research_controls(research: Dictionary, playing: bool, core_available: bool) -> void:
 	var points := float(research.get("points", 0.0))
 	var target := maxf(float(_research_target_points), 1.0)
 	research_bar.value = clampf(points, 0.0, target)
@@ -419,14 +446,18 @@ func refresh_research_controls(research: Dictionary, building: Dictionary, playi
 	research_label.text = "Research %d/%d · %d%% · ETA %s" % [
 		floori(points), _research_target_points, percent, eta_text,
 	]
-	# Analyze is enabled while Playing with the owned, completed Research
-	# Center selected — affordability is deliberately NOT checked here:
-	# the sim reports InsufficientResources through normal feedback.
-	var analyze_context := playing and not building.is_empty() \
-		and str(building.get("kind", "")) == "ResearchCenter" \
-		and int(building.get("team_id", -1)) == 1 \
-		and bool(building.get("complete", false))
-	analyze_button.disabled = not analyze_context
+	var marker_parts := PackedStringArray()
+	for marker in _research_marker_entries:
+		var reached := points >= float(marker["points"])
+		marker_parts.append("[color=%s][img=14x14]%s[/img] %s %d[/color]" % [
+			"#8fd18f" if reached else "#aab7c2",
+			marker["icon"], marker["label"], int(marker["points"])])
+	research_markers.text = "  ".join(marker_parts)
+	# Analyze is enabled while Playing whenever the live Team-1 Research
+	# Center view exists — selection-independent; affordability is
+	# deliberately NOT checked here, because Rust reports
+	# InsufficientResources through the normal feedback path.
+	analyze_button.disabled = not (playing and core_available)
 	# Locked buttons unlock mid-match: the live point total vs each button's
 	# catalogue-derived threshold, every frame. Rust still rejects a stale
 	# click through the authoritative Locked gate.
