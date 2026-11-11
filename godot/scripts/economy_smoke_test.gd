@@ -494,7 +494,7 @@ func _run() -> void:
 		return
 	var furnace_button := get_node_or_null("Main/HUD/CommandPanel/BuildGrid/CoalFurnaceButton") as Button
 	if furnace_button == null \
-			or not furnace_button.tooltip_text.begins_with("Cost: 80 Scrap\nBuild: 20s") \
+			or not furnace_button.tooltip_text.begins_with("CoalFurnace\nCost: 80 Scrap\nBuild: 20s") \
 			or not furnace_button.tooltip_text.contains("HP: %d" % int(furnace_entry.get("max_health", 0))) \
 			or not furnace_button.tooltip_text.contains("Heat: +12 supply"):
 		_fail("Coal Furnace build button does not show the catalogue-derived tooltip: \"%s\"" %

@@ -176,9 +176,9 @@ stretch_mode = 0
 
 [node name="CommandStatus" type="Label" parent="HUD"]
 offset_left = 216.0
-offset_top = 500.0
+offset_top = 478.0
 offset_right = 720.0
-offset_bottom = 524.0
+offset_bottom = 502.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 12
 text = "ECS bridge initializing…"
@@ -670,7 +670,7 @@ visible = false
 offset_left = 848.0
 offset_top = 64.0
 offset_right = 1272.0
-offset_bottom = 520.0
+offset_bottom = 392.0
 script = ExtResource("6_underground")
 
 [node name="HeaderLabel" type="Label" parent="HUD/UndergroundPanel"]
@@ -718,7 +718,7 @@ layout_mode = 0
 offset_left = 10.0
 offset_top = 232.0
 offset_right = 414.0
-offset_bottom = 448.0
+offset_bottom = 384.0
 horizontal_scroll_mode = 0
 
 [node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
