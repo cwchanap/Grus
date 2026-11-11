@@ -777,12 +777,16 @@ func _run() -> void:
 		_fail("Attack-move tile did not arm before the pause phase change")
 		return
 	# Pause freezes health and combat-event totals. Resume into a real alien
-	# Defeat; the remaining wave still attacks the sole Research Center.
-	if not GrusBridge.set_paused(true):
-		_fail("set_paused(true) was refused after the alien kill")
+	# Defeat; the remaining wave still attacks the sole Research Center. Both
+	# transitions take the visible Button path (hit test, pressed signal and
+	# handler), not a direct bridge call.
+	var pause_button := _button("HUD/PauseButton")
+	if not pause_button.visible or pause_button.disabled:
+		_fail("Pause button is not visible and enabled while Playing")
 		return
+	SmokeHelpers.push_mouse_click(get_tree(), pause_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused", 5.0,
-			"session never reached Paused"):
+			"real Pause button click never reached Paused"):
 		return
 	if not await _wait_until(func(): return str(_main._armed_order) == "", 5.0,
 			"Paused phase did not clear the armed order"):
@@ -812,11 +816,13 @@ func _run() -> void:
 		return
 	if not _assert_input_gated("Paused"):
 		return
-	if not GrusBridge.set_paused(false):
-		_fail("set_paused(false) was refused")
+	var resume_button := _button("HUD/SessionPanel/ResumeButton")
+	if not resume_button.visible or resume_button.disabled:
+		_fail("Resume button is not visible and enabled while Paused")
 		return
+	SmokeHelpers.push_mouse_click(get_tree(), resume_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,
-			"session never resumed to Playing"):
+			"real Resume button click never resumed to Playing"):
 		return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
