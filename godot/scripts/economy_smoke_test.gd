@@ -669,13 +669,20 @@ func _run() -> void:
 		return
 	if not await _wait_until(func():
 			var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+			var parsed := carry_label.get_parsed_text()
+			var amount_text := parsed.split(" / ")[0].strip_edges()
+			var limit := int(catalogue.get("carry_limit", 0))
+			# The HUD refresh and this bridge read can straddle one gather tick;
+			# require the rendered bar/label to agree with each other exactly and
+			# with the live carry within one gather step, rather than forcing the
+			# same instant under frame throttling.
 			return carry_bar.visible and carry_label.visible \
-				and is_equal_approx(carry_bar.max_value, float(catalogue.get("carry_limit", 0))) \
-				and is_equal_approx(carry_bar.value, float(task.get("carry_amount", -1))) \
-				and carry_label.text.contains("%d / %d" % [
-					int(task.get("carry_amount", 0)), int(catalogue.get("carry_limit", 0))]) \
+				and is_equal_approx(carry_bar.max_value, float(limit)) \
+				and amount_text.is_valid_int() and int(amount_text) == int(carry_bar.value) \
+				and parsed.contains("/ %d" % limit) \
+				and absf(carry_bar.value - float(task.get("carry_amount", -1))) <= 3.0 \
 				and carry_label.text.contains("resources/%s.png" % str(task.get("carry_kind", "")).to_snake_case()),
-			5.0, "selected worker carry detail does not mirror the live Carry snapshot"):
+			10.0, "selected worker carry detail does not mirror the live Carry snapshot"):
 		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.

@@ -215,6 +215,40 @@ func _run() -> void:
 	await _key(KEY_TAB)
 	if not _check(_panel.visible, "Tab did not open panel"):
 		return
+	# HPA-698 drawer reflow: the open drawer must leave the research card's
+	# Analyze button and milestone row visible and outside its rect, and a
+	# real click must still reach the authoritative zero-Crystal reject.
+	var analyze := _main.get_node("HUD/ResearchPanel/AnalyzeButton") as Button
+	var markers := _main.get_node("HUD/ResearchPanel/ResearchMarkers") as Control
+	var drawer_rect := _panel.get_global_rect()
+	if not _check(analyze.visible and analyze.is_visible_in_tree() and not analyze.disabled
+			and not drawer_rect.intersects(analyze.get_global_rect()),
+			"open drawer covers or disables Analyze: drawer=%s analyze=%s" % [
+				drawer_rect, analyze.get_global_rect()]):
+		return
+	if not _check(markers.visible and markers.is_visible_in_tree()
+			and not drawer_rect.intersects(markers.get_global_rect()),
+			"open drawer covers the research milestone row: drawer=%s markers=%s" % [
+				drawer_rect, markers.get_global_rect()]):
+		return
+	if not _check(not markers.get_global_rect().intersects(analyze.get_global_rect()),
+			"Analyze overlaps the research milestone row: analyze=%s markers=%s" % [
+				analyze.get_global_rect(), markers.get_global_rect()]):
+		return
+	if not _check(markers.get_content_width() <= markers.size.x - 20.0,
+			"research milestone row clips while the drawer is open: content=%.1f width=%.1f" % [
+				markers.get_content_width(), markers.size.x]):
+		return
+	# The Analyze probe is presentation/feedback only; run it on the 1× clock
+	# so its few frames cannot consume the journey's 20× prep budget.
+	if not _check(GrusBridge.set_sim_speed(1.0), "could not slow the Analyze probe"):
+		return
+	await _settle()
+	if not await _purchase(analyze, "Analyze queued", {}, false):
+		return
+	if not _check(GrusBridge.set_sim_speed(20.0), "could not restore the underground 20x clock"):
+		return
+	await _settle()
 	var l1_before := _stock()
 	var l1_cost: Dictionary = GrusBridge.underground_snapshot().next_cost
 	if not await _purchase(_excavate, "Excavate queued", l1_cost):

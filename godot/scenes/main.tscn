@@ -223,15 +223,15 @@ text = "Wave"
 [node name="ResearchPanel" type="Panel" parent="HUD"]
 offset_left = 460.0
 offset_top = 64.0
-offset_right = 1048.0
-offset_bottom = 164.0
+offset_right = 840.0
+offset_bottom = 176.0
 tooltip_text = "Research points toward the 9,000-point victory target"
 
 [node name="ResearchBar" type="ProgressBar" parent="HUD/ResearchPanel"]
 layout_mode = 0
 offset_left = 42.0
 offset_top = 22.0
-offset_right = 572.0
+offset_right = 244.0
 offset_bottom = 42.0
 mouse_filter = 2
 show_percentage = false
@@ -240,7 +240,7 @@ show_percentage = false
 layout_mode = 0
 offset_left = 42.0
 offset_top = 44.0
-offset_right = 408.0
+offset_right = 368.0
 offset_bottom = 66.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 13
@@ -249,11 +249,11 @@ text = "Research"
 [node name="ResearchMarkers" type="RichTextLabel" parent="HUD/ResearchPanel"]
 layout_mode = 0
 offset_left = 42.0
-offset_top = 68.0
-offset_right = 576.0
-offset_bottom = 92.0
+offset_top = 80.0
+offset_right = 368.0
+offset_bottom = 104.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 12
+theme_override_font_sizes/normal_font_size = 11
 bbcode_enabled = true
 scroll_active = false
 autowrap_mode = 0
@@ -271,9 +271,9 @@ stretch_mode = 5
 
 [node name="AnalyzeButton" type="Button" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 420.0
+offset_left = 252.0
 offset_top = 22.0
-offset_right = 576.0
+offset_right = 368.0
 offset_bottom = 78.0
 disabled = true
 text = "Analyze"
@@ -780,6 +780,26 @@ offset_bottom = 443.0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
+
+[node name="ResultTitle" type="Label" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 0
+offset_left = 360.0
+offset_top = 170.0
+offset_right = 920.0
+offset_bottom = 286.0
+mouse_filter = 2
+theme_type_variation = &"Header"
+theme_override_colors/font_color = Color(1, 0.97, 0.9, 1)
+theme_override_colors/font_outline_color = Color(0.08, 0.05, 0.03, 0.95)
+theme_override_colors/font_shadow_color = Color(0.03, 0.02, 0.01, 0.9)
+theme_override_constants/outline_size = 6
+theme_override_constants/shadow_offset_x = 3
+theme_override_constants/shadow_offset_y = 3
+theme_override_font_sizes/font_size = 64
+text = "Defeat"
+horizontal_alignment = 1
+vertical_alignment = 1
 
 [node name="SessionPanel" type="Panel" parent="HUD"]
 offset_left = 60.0

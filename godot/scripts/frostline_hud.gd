@@ -39,6 +39,7 @@ extends CanvasLayer
 @onready var start_art: TextureRect = $SessionBackdrop/StartArt
 @onready var session_dim: ColorRect = $SessionBackdrop/Dim
 @onready var result_banner: TextureRect = $SessionBackdrop/ResultBanner
+@onready var result_title: Label = $SessionBackdrop/ResultTitle
 @onready var frost_overlay: TextureRect = $Atmosphere/FrostOverlay
 @onready var vignette: TextureRect = $Vignette
 @onready var start_button: Button = $SessionPanel/StartButton
@@ -108,6 +109,7 @@ func _ready() -> void:
 		if points > 0 and icon != null:
 			_research_marker_entries.append({
 				"label": marker_kind,
+				"short": String(marker_kind).replace("Tower", "").replace("CrystalLance", "Lance"),
 				"points": points,
 				"icon": icon.resource_path,
 			})
@@ -116,6 +118,7 @@ func _ready() -> void:
 	if wave_growth_points > 0 and wave_icon != null:
 		_research_marker_entries.append({
 			"label": "Wave growth",
+			"short": "Wave",
 			"points": wave_growth_points,
 			"icon": wave_icon.resource_path,
 		})
@@ -127,7 +130,10 @@ func _ready() -> void:
 	var analyze_crystals := int(analyze_cost.get("crystals", 0))
 	var analyze_gain := int(research_catalogue.get("analyze_gain_points", 0))
 	research_bar.max_value = maxf(float(_research_target_points), 1.0)
-	analyze_button.text = "Analyze %d→+%d" % [analyze_crystals, analyze_gain]
+	# The reflowed card keeps Analyze inside the research card while the Tab
+	# drawer is open; a two-line label preserves the catalogue price/gain.
+	analyze_button.text = "Analyze\n%d→+%d" % [analyze_crystals, analyze_gain]
+	analyze_button.add_theme_font_size_override("font_size", 12)
 	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
 	analyze_button.icon = _icon_for_kind("status", "ResearchRate")
 	analyze_button.add_theme_constant_override("icon_max_width", 20)
@@ -510,7 +516,7 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 		var reached := points >= float(marker["points"])
 		marker_parts.append("[color=%s][img=14x14]%s[/img] %s %d[/color]" % [
 			"#8fd18f" if reached else "#aab7c2",
-			marker["icon"], marker["label"], int(marker["points"])])
+			marker["icon"], marker["short"], int(marker["points"])])
 	research_markers.text = "  ".join(marker_parts)
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is
@@ -707,10 +713,14 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	else:
 		session_panel.remove_theme_stylebox_override("panel")
 	result_banner.visible = result
+	result_title.visible = result
 	if result:
 		var banner_path := "res://assets/ui/frostline/screens/%s_banner.png" % (
 			"victory" if winner_team == 1 else "defeat")
 		result_banner.texture = load(banner_path) as Texture2D
+		# The shipped banner art is intentionally textless: the readable
+		# outcome title is drawn from the same session winner field.
+		result_title.text = "Victory" if winner_team == 1 else "Defeat"
 	# Restart/Quit belong to Result only.
 	match phase:
 		"Start":
@@ -726,7 +736,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 			restart_button.visible = false
 			quit_button.visible = false
 		"Result":
-			session_label.text = "Victory!" if winner_team == 1 else "Defeat"
+			session_label.text = "Victory" if winner_team == 1 else "Defeat"
 			start_button.visible = false
 			resume_button.visible = false
 			restart_button.visible = true
