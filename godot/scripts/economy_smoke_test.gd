@@ -217,7 +217,9 @@ func _building_complete_at(id: int) -> bool:
 
 ## Heat boundary stage: the Rust snapshot's supply/demand/efficiency and the
 ## rendered HUD third line must both report the expected stage — the HUD
-## text is the acceptance surface, the snapshot pins the exact fraction.
+## text is the acceptance surface, the snapshot pins the exact fraction. The
+## top-bar heat bar and cold chip are display-only projections of that same
+## snapshot and must appear exactly while the surface is below full efficiency.
 func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: String) -> bool:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	if int(economy.get("heat_supply", -1)) != supply \
@@ -225,8 +227,23 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 			or absf(float(economy.get("surface_efficiency", 0.0)) - efficiency) > 0.0001:
 		return false
 	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
-	var cold_icon := _rich_text_has_icon(label, "res://assets/ui/icons/status/surface_cold.png")
-	return _visible_text(label).contains(hud_line) and cold_icon == (efficiency < 1.0)
+	var heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
+	var cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as RichTextLabel
+	if label == null or heat_bar == null or cold_chip == null:
+		return false
+	var deficit := efficiency < 1.0
+	if heat_bar.visible != deficit or cold_chip.visible != deficit:
+		return false
+	if deficit:
+		var percent := roundi(efficiency * 100.0)
+		if percent >= 100:
+			percent = 99
+		if not is_equal_approx(heat_bar.max_value, float(maxi(demand, 1))) \
+				or not is_equal_approx(heat_bar.value, float(mini(supply, demand))) \
+				or not _visible_text(cold_chip).contains("%d%%" % percent) \
+				or not _rich_text_has_icon(cold_chip, "res://assets/ui/icons/status/surface_cold.png"):
+			return false
+	return _visible_text(label).contains(hud_line)
 
 ## Every mesh of a building view's active Model carries the shared
 ## translucent ice material_overlay exactly while its Rust-pushed cold
@@ -512,6 +529,14 @@ func _run() -> void:
 			return
 	if not _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/population.png"):
 		_fail("economy HUD is missing the population icon")
+		return
+	var heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
+	var cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as RichTextLabel
+	if heat_bar == null or cold_chip == null:
+		_fail("economy HUD is missing the heat supply/demand bar or cold chip")
+		return
+	if heat_bar.visible or cold_chip.visible:
+		_fail("warm economy HUD shows the cold bar/chip at full efficiency")
 		return
 	if _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/surface_cold.png"):
 		_fail("warm economy HUD shows an incorrect surface-cold warning")
