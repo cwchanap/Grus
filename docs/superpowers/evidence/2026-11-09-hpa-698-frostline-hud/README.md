@@ -1,8 +1,8 @@
 # HPA-698 Frostline HUD — final-head evidence
 
 Real 1280 × 720 frames captured from the final Frostline visual-fidelity
-head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e` plus
-the underground legibility/benefit fix round).
+head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e`;
+underground legibility/benefit fix round `ac1114e`).
 Every frame comes from an existing real-input smoke journey unless the row
 says otherwise. Captures are opt-in (`GRUS_CAPTURE_DIR`), use the reusable
 `SmokeHelpers.capture_frame` helper, and wait for
