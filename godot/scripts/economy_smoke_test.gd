@@ -144,7 +144,8 @@ func _click_button(button: Button) -> void:
 
 ## Polls a condition every physics frame until it holds or the frame budget
 ## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
-func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
+## `details` is called only on timeout so the log carries live diagnostics.
+func _wait_until(condition: Callable, timeout_s: float, message: String, details := Callable()) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	var gather_wait := message.begins_with("gatherers never stockpiled")
 	var gather_started_ms := Time.get_ticks_msec()
@@ -152,11 +153,13 @@ func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool
 		if condition.call():
 			return true
 		await get_tree().physics_frame
-	var details := ""
+	var suffix := ""
 	if gather_wait:
 		var elapsed := float(Time.get_ticks_msec() - gather_started_ms) / 1000.0
-		details = ": %s" % _gather_wait_details(elapsed)
-	_fail("%s (waited %.0fs)%s" % [message, timeout_s, details])
+		suffix = ": %s" % _gather_wait_details(elapsed)
+	elif details.is_valid():
+		suffix = ": %s" % details.call()
+	_fail("%s (waited %.0fs)%s" % [message, timeout_s, suffix])
 	return false
 
 func _find_view(group: String, meta: String, id: int) -> Node3D:
@@ -401,6 +404,7 @@ func _unit_of_kind_present(kind: String, min_id: int, box: Dictionary) -> bool:
 		var id := int(node.get_meta("unit_id", -1))
 		if id >= min_id and str(node.get_meta("unit_kind", "")) == kind:
 			box["view"] = node
+			box["id"] = id
 			return true
 	return false
 
@@ -431,22 +435,85 @@ func _stop_unit(view: Node3D) -> void:
 	_key_tap(KEY_S)
 	await get_tree().process_frame
 
+## A diagnosis string for one stable unit id; used when staging fails so the
+## log records identity, live position, selection, task, session and wave
+## phase and the last command verdict instead of a bare timeout.
+func _staging_details(unit_id: int) -> String:
+	var view := _unit_view(unit_id)
+	var economy: Dictionary = GrusBridge.economy_snapshot()
+	var session: Dictionary = GrusBridge.session_snapshot()
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	var idle: PackedInt32Array = economy.get("idle_worker_ids", PackedInt32Array())
+	var main := get_node_or_null("Main")
+	var selected: Variant = main.get("selected_ids") if main != null else null
+	var position := "missing" if view == null else "(%.2f,%.2f)" % [
+		view.global_position.x, view.global_position.z]
+	return "unit=%d view=%s position=%s idle=%s selection=%s task=%s phase=%s wave=%s countdown=%s revision=%d feedback=%s last_reject=%d" % [
+		unit_id, "live" if view != null else "missing", position, idle.has(unit_id),
+		selected if selected is Array else [], GrusBridge.unit_task_snapshot(unit_id),
+		str(session.get("phase", "unknown")), str(wave.get("wave", "unknown")),
+		str(wave.get("seconds_remaining", "unknown")),
+		GrusBridge.command_feedback_revision(), GrusBridge.command_feedback(),
+		GrusBridge.last_reject_code()]
+
+## Stable-id preflight for staging: "" only while the id resolves to a live
+## unit view. Callers pass ids, never captured views — a view can be freed
+## between frames, and a typed freed argument aborts before any check.
+func _staging_target_error(unit_id: int) -> String:
+	if _unit_view(unit_id) != null:
+		return ""
+	return "staging target %d is not a live unit view: %s" % [unit_id, _staging_details(unit_id)]
+
 ## Stops a unit and parks it on the staging ground, clear of every later
-## building-origin click.
-func _park_at_staging(view: Node3D) -> void:
-	var unit_id := int(view.get_meta("unit_id", -1))
+## building-origin click. Takes the stable id and re-resolves the view after
+## every await; returns false with the diagnosis already logged so callers
+## stop immediately instead of driving a freed or absent worker further.
+func _park_at_staging(unit_id: int) -> bool:
+	var target_error := _staging_target_error(unit_id)
+	if not target_error.is_empty():
+		_fail(target_error)
+		return false
+	var view := _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed before Stop: %s" % [unit_id, _staging_details(unit_id)])
+		return false
 	await _stop_unit(view)
+	view = _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed after Stop: %s" % [unit_id, _staging_details(unit_id)])
+		return false
 	await _click_view(view, MOUSE_BUTTON_LEFT)
+	# The real click must have selected this id before the Move is dispatched;
+	# otherwise the order would park whichever unit the picker did select.
+	if not await _wait_until(
+			func():
+				var main := get_node("Main")
+				var selected: Variant = main.get("selected_ids")
+				return selected is Array and (selected as Array).has(unit_id),
+			3.0, "staging click did not select unit %d" % unit_id,
+			func(): return _staging_details(unit_id)):
+		return false
+	var move_revision := int(GrusBridge.command_feedback_revision())
 	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
+	if not await _wait_until(
+			func(): return int(GrusBridge.command_feedback_revision()) > move_revision,
+			5.0, "staging Move for unit %d was never dispatched" % unit_id,
+			func(): return _staging_details(unit_id)):
+		return false
+	var reject := int(GrusBridge.last_reject_code())
+	if reject != -1:
+		_fail("staging Move for unit %d was rejected (%d): %s" % [
+			unit_id, reject, _staging_details(unit_id)])
+		return false
 	var staging := Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
-	# Stable id, not the captured view: the same stale-capture abort seen in
-	# _scrap_deposited_at_depot applies to this wait.
 	if not await _wait_until(
 			func():
 				var live := _unit_view(unit_id)
 				return live != null and live.global_position.distance_to(staging) < 3.0,
-			15.0, "retired gatherer never reached the staging ground"):
-		return
+			15.0, "retired gatherer never reached the staging ground",
+			func(): return _staging_details(unit_id)):
+		return false
+	return true
 
 ## Full UI placement: select builder, press the build button, sweep the
 ## placement preview over the anchor, assert it rendered, then place.
@@ -499,6 +566,19 @@ func _run() -> void:
 
 	if not await _wait_until(_fixture_views_settled, 20.0,
 			"skirmish startup never settled to 4 units / 1 building / 18 resources"):
+		return
+
+	# Stable-id regressions for the staging helper. A missing id must be
+	# diagnosed, and the caller pattern must stop the journey instead of
+	# driving real input at a freed/absent worker. The failure probe exits
+	# nonzero on purpose; run it with GRUS_SMOKE_STAGING_FAILURE_PROBE=1.
+	var missing_stage := _staging_target_error(999)
+	if missing_stage.is_empty() or not missing_stage.contains("999"):
+		_fail("staging preflight did not diagnose a missing stable id: %s" % missing_stage)
+		return
+	if OS.get_environment("GRUS_SMOKE_STAGING_FAILURE_PROBE") == "1":
+		if not await _park_at_staging(999):
+			print("GRUS_ECONOMY_STAGING_FAILURE_PROPAGATED")
 		return
 
 	var boot: Dictionary = GrusBridge.economy_snapshot()
@@ -889,14 +969,10 @@ func _run() -> void:
 
 	# Retire the food and coal gatherers: the finite sources deplete at 20x
 	# virtual time and would otherwise idle a worker inside the Research Center
-	# click zone. Park both on the staging ground.
-	var food_worker := _unit_view(2)
-	var coal_worker := _unit_view(3)
-	if food_worker == null or coal_worker == null:
-		_fail("workers 2/3 views are missing")
+	# click zone. Park both on the staging ground. Stable ids only — a view can
+	# be freed while another staging wait is in flight.
+	if not await _park_at_staging(2) or not await _park_at_staging(3):
 		return
-	await _park_at_staging(food_worker)
-	await _park_at_staging(coal_worker)
 
 	# Step 6: a Research Center rally point; the next trained unit walks to it.
 	await _select_building(research_center)
@@ -1094,11 +1170,8 @@ func _run() -> void:
 	# stockpile-unchanged assertions (queue charge, enqueue rejects) need a
 	# quiet Scrap flow to stay exact.
 	for worker_id in [1, 2, 3]:
-		var gatherer := _unit_view(worker_id)
-		if gatherer == null:
-			_fail("heat-leg gatherer %d view went missing before retirement" % worker_id)
+		if not await _park_at_staging(worker_id):
 			return
-		await _park_at_staging(gatherer)
 
 	# Cold demand: Depot (+1) and Gun Turret (+2) push demand past supply —
 	# 15/16 ≈ 93.75%, reported as 94% (a deficit never rounds up to 100%) —
@@ -1212,7 +1285,8 @@ func _run() -> void:
 			_fail("completed %s fails the catalogue geometry contract: %s" % [kind, art_error])
 			return
 
-	await _park_at_staging(builder)
+	if not await _park_at_staging(4):
+		return
 	await _select_building(barracks)
 	if not await _wait_until(func(): return filter_guard_button.visible and filter_rifleman_button.visible,
 			5.0, "Barracks selection did not show its Guard/Rifleman production row"):
@@ -1343,9 +1417,10 @@ func _run() -> void:
 			_training_queue(barracks_id)])
 		return
 	# Park both combatants at staging so their live views cannot intercept the
-	# Barracks-origin click below.
-	for unit in [guard_box["view"], rifleman_box["view"]]:
-		await _park_at_staging(unit as Node3D)
+	# Barracks-origin click below. Stable ids, never the captured view.
+	for unit_box in [guard_box, rifleman_box]:
+		if not await _park_at_staging(int(unit_box.get("id", -1))):
+			return
 
 	# Step 8 recap: construction ramp (Bunkhouse), queue ramps (Guard/Rifleman),
 	# the Occupied reject code, and the blocked fields were all asserted at
