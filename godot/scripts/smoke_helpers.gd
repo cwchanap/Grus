@@ -110,17 +110,23 @@ static func hud_rects(hud_root: Node) -> Array[Rect2]:
 			rects.append(control.get_global_rect())
 	return rects
 
+## Whether this run is an opt-in real-render capture. Journey points that only
+## exist to produce a frame (the map-edge camera pan) must gate on this, so a
+## headless or uncaptured smoke never mutates presentation for a frame nobody
+## asked for.
+static func capture_enabled() -> bool:
+	return not OS.get_environment("GRUS_CAPTURE_DIR").is_empty() \
+			and DisplayServer.get_name() != "headless"
+
 ## Opt-in real-render capture at an existing smoke journey point. Nothing is
 ## written unless GRUS_CAPTURE_DIR names a directory; the headless dummy
 ## renderer returns before waiting on any render signal. Returns "" on success
 ## (or when disabled) and an explicit error string the caller can fail with.
 ## Presentation only: it reads the current frame and never touches gameplay.
 static func capture_frame(tree: SceneTree, file_name: String) -> String:
+	if not capture_enabled():
+		return ""
 	var directory := OS.get_environment("GRUS_CAPTURE_DIR")
-	if directory.is_empty():
-		return ""
-	if DisplayServer.get_name() == "headless":
-		return ""
 	var directory_error := DirAccess.make_dir_recursive_absolute(directory)
 	if directory_error != OK:
 		return "cannot create GRUS_CAPTURE_DIR %s: %s" % [directory, error_string(directory_error)]

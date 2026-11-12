@@ -9,8 +9,10 @@ extends Node3D
 const FOG_Y := 0.15
 
 ## One shared dark color for unexplored cells and the empty world behind the
-## map edge. The default clear color is set from it so the boundary never
-## shows a seam through the opaque fog or the Result dim.
+## map edge. The default clear color is set from it to narrow the boundary to
+## the unexplored fog and the Result dim; real-render gameplay captures still
+## show a faint residual step, so this value alone does not prove a seamless
+## edge.
 const UNEXPLORED_COLOR := Color(0.02, 0.03, 0.05, 1.0)
 const EXPLORED_ALPHA := 0.45
 

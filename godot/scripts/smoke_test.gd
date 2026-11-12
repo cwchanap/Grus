@@ -120,13 +120,14 @@ func _foreign_nodes(root: Node) -> PackedStringArray:
 			found.append("%s (%s)" % [node.name, node.get_class()])
 	return found
 
-func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
+func _wait_until(condition: Callable, timeout_s: float, message: String, details := Callable()) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	for _frame in frame_budget:
 		if condition.call():
 			return true
 		await get_tree().physics_frame
-	_fail("%s (waited %.0fs)" % [message, timeout_s])
+	var suffix := "" if not details.is_valid() else ": %s" % details.call()
+	_fail("%s (waited %.0fs)%s" % [message, timeout_s, suffix])
 	return false
 
 func _find_view(group: String, meta: String, id: int) -> Node3D:
@@ -1120,23 +1121,44 @@ func _run() -> void:
 	if controls_label.is_visible_in_tree():
 		_fail("ControlsLabel stayed visible after the match reached Playing")
 		return
-	# HPA-698 map-edge provenance: with the match playing, pan west past the
-	# authored ground edge through the real middle-drag path and capture the
-	# fog boundary beside the default clear color; then restore the exact
-	# camera framing the rest of the journey relies on. Camera state is
-	# presentation only.
+	# HPA-698 map-edge provenance: only an opt-in real-render capture pans
+	# west past the authored ground edge, through the real middle-drag path,
+	# and restores the exact framing the rest of the journey projects through.
+	# A headless or uncaptured run must not move the camera at all. Restoring
+	# the logical position is not enough: the renderer reads the physics-
+	# interpolated camera transform, so without reset_physics_interpolation
+	# later projections stay on the panned frame (minimap.gd does the same
+	# after a jump). unit_one stands still here, so its projected point is a
+	# stable pixel-level probe of the rendered framing.
 	var edge_camera_position := camera.position
-	_mouse_drag(Vector2(200.0, 300.0), Vector2(800.0, 300.0), MOUSE_BUTTON_MIDDLE)
-	await get_tree().process_frame
-	if camera.position.is_equal_approx(edge_camera_position):
-		_fail("map-edge capture pan did not move the camera")
+	var edge_probe_point := unit_one.global_position
+	var edge_probe_screen := camera.unproject_position(edge_probe_point)
+	if SmokeHelpers.capture_enabled():
+		_mouse_drag(Vector2(200.0, 300.0), Vector2(800.0, 300.0), MOUSE_BUTTON_MIDDLE)
+		await get_tree().process_frame
+		if camera.position.is_equal_approx(edge_camera_position):
+			_fail("map-edge capture pan did not move the camera")
+			return
+		var edge_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-map-edge")
+		if not edge_capture.is_empty():
+			_fail(edge_capture)
+			return
+		camera.position = edge_camera_position
+		camera.reset_physics_interpolation()
+		await get_tree().process_frame
+	if not camera.global_transform.is_equal_approx(default_camera_transform) \
+			or not camera.position.is_equal_approx(edge_camera_position):
+		_fail("map-edge capture did not restore the logical camera framing: %s" % camera.position)
 		return
-	var edge_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-map-edge")
-	if not edge_capture.is_empty():
-		_fail(edge_capture)
+	if not await _wait_until(func():
+			return camera.get_global_transform_interpolated().is_equal_approx(default_camera_transform) \
+				and camera.unproject_position(edge_probe_point).distance_to(edge_probe_screen) < 0.5,
+			2.0, "map-edge capture left the rendered camera projection stale",
+			func():
+				return "logical=%s interpolated=%s projection=%s expected=%s" % [
+					camera.global_transform, camera.get_global_transform_interpolated(),
+					camera.unproject_position(edge_probe_point), edge_probe_screen]):
 		return
-	camera.position = edge_camera_position
-	await get_tree().process_frame
 
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	# Empty ground outside every re-laid-out HUD zone: the old viewport-bottom
@@ -1249,8 +1271,9 @@ func _run() -> void:
 		return
 	var salvage_screen := camera.unproject_position(salvage_view.global_position)
 	if research_rect.has_point(salvage_screen):
-		_fail("research panel covers the expansion salvage at %s: %s" % [
-			salvage_screen, research_rect])
+		_fail("research panel covers the expansion salvage at %s: %s (camera logical=%s interpolated=%s default=%s)" % [
+			salvage_screen, research_rect, camera.global_transform,
+			camera.get_global_transform_interpolated(), default_camera_transform])
 		return
 	for corridor_cell in [Vector2(38, 24), Vector2(40, 20)]:
 		var corridor_screen := camera.unproject_position(
