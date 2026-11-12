@@ -74,6 +74,7 @@ var _building_ids := {}
 var _staging_click_miss_remaining := 0
 var _staging_click_miss_all := false
 var _staging_miss_selection_cleared := false
+var _staging_vanish_probe := false
 var _staging_reject_interleave_remaining := 0
 
 func _ready() -> void:
@@ -500,15 +501,26 @@ func _select_unit(unit_id: int) -> bool:
 			_fail("staging target %d vanished during selection: %s" % [
 				unit_id, _staging_details(unit_id)])
 			return false
+		var view_position := view.global_position
 		var screen := _staging_click_point(
-			unit_id, attempt, _camera.unproject_position(view.global_position))
+			unit_id, attempt, _camera.unproject_position(view_position))
 		_mouse_click(screen, MOUSE_BUTTON_LEFT)
 		await get_tree().process_frame
+		# Test-only vanish probe: free the isolated island UnitView between the
+		# click await and the result check. No real gameplay unit is touched.
+		if _staging_vanish_probe and unit_id == 99901:
+			var doomed := _unit_view(unit_id)
+			if doomed != null:
+				doomed.free()
 		await get_tree().process_frame
 		var selected := _selected_ids()
 		attempts.append("%d@%s view=%s%s=>%s" % [
-			attempt + 1, screen, view.global_position,
+			attempt + 1, screen, view_position,
 			" (injected miss)" if injected else "", selected])
+		if _unit_view(unit_id) == null:
+			_fail("staging target %d vanished after the selection await: %s" % [
+				unit_id, _staging_details(unit_id)])
+			return false
 		if injected:
 			injected_misses += 1
 			if selected.size() == 1 and int(selected[0]) == unit_id:
@@ -696,6 +708,7 @@ func _run() -> void:
 	_staging_click_miss_remaining = OS.get_environment(
 		"GRUS_ECONOMY_STAGING_MISS_CLICKS").to_int()
 	_staging_click_miss_all = OS.get_environment("GRUS_ECONOMY_STAGING_MISS_ALL") == "1"
+	_staging_vanish_probe = OS.get_environment("GRUS_ECONOMY_STAGING_VANISH_PROBE") == "1"
 	_staging_reject_interleave_remaining = OS.get_environment(
 		"GRUS_ECONOMY_STAGING_REJECT_INTERLEAVE").to_int()
 	var window := get_window()
@@ -715,6 +728,25 @@ func _run() -> void:
 
 	if not await _wait_until(_fixture_views_settled, 20.0,
 			"skirmish startup never settled to 4 units / 1 building / 18 resources"):
+		return
+
+	# Isolated presentation-only regression: one synthetic UnitView in
+	# `unit_views` is selected by a real click and freed between the selection
+	# click's awaits. No gameplay unit, command or selection is written
+	# directly; the helper must diagnose the vanished stable id and fail.
+	if _staging_vanish_probe:
+		var probe := (load("res://scenes/unit_view.tscn") as PackedScene).instantiate() as Node3D
+		probe.set_meta("unit_id", 99901)
+		probe.set_meta("team_id", 1)
+		probe.visible = true
+		add_child(probe)
+		probe.global_position = Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
+		if not await _select_unit(99901):
+			print("GRUS_ECONOMY_STAGING_VANISH_DIAGNOSED")
+		else:
+			_fail("vanish probe unexpectedly treated a freed unit as selected")
+		if is_instance_valid(probe):
+			probe.queue_free()
 		return
 
 	# Stable-id regressions for the staging helper. A missing id must be
