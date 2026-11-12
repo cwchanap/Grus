@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
@@ -14,6 +14,9 @@
 [ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/victory_banner.png" id="12_victory"]
 [ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/defeat_banner.png" id="13_defeat"]
 [ext_resource type="Texture2D" path="res://assets/ui/frostline/ui/frost_overlay.png" id="14_frost"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/status/wave_countdown.png" id="15_survive"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/buildings/research_center.png" id="16_protect"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/status/research_progress.png" id="17_research"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -861,6 +864,95 @@ mouse_filter = 2
 theme_override_font_sizes/font_size = 18
 text = "THE LAST CITY"
 
+[node name="Objectives" type="VBoxContainer" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 166.0
+offset_right = 600.0
+offset_bottom = 318.0
+theme_override_constants/separation = 8
+
+[node name="Survive" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Survive"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("15_survive")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Survive"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Survive/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "SURVIVE"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Survive/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "First wave in —"
+
+[node name="Protect" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Protect"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("16_protect")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Protect"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Protect/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "PROTECT"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Protect/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Protect the Research Center"
+
+[node name="Research" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Research"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("17_research")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Research"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Research/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "RESEARCH"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Research/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "— to win"
+
 [node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 20.0
@@ -876,9 +968,9 @@ autowrap_mode = 2
 [node name="StartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 20.0
-offset_top = 286.0
-offset_right = 360.0
-offset_bottom = 348.0
+offset_top = 326.0
+offset_right = 380.0
+offset_bottom = 390.0
 text = "Start"
 
 [node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
@@ -908,9 +1000,11 @@ text = "Quit"
 
 [node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 20.0
-offset_top = 368.0
-offset_right = 600.0
-offset_bottom = 608.0
-theme_override_font_sizes/font_size = 13
-text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause: Esc · Underground: Tab\nCamera: wheel / middle-drag\nMinimap: click to recenter"
+offset_left = 60.0
+offset_top = 536.0
+offset_right = 1100.0
+offset_bottom = 578.0
+theme_override_font_sizes/font_size = 12
+text = "Select: left click / drag / Shift   ·   Command: right click   ·   Attack-move: A then right click   ·   Stop: S   ·   Pause: Esc   ·   Underground: Tab   ·   Camera: wheel / middle-drag   ·   Minimap: click to recenter"
+horizontal_alignment = 1
+vertical_alignment = 1
