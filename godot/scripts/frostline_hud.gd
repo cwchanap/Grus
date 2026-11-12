@@ -203,8 +203,19 @@ func refresh_orders(armed_order: String, playing: bool) -> void:
 		if button.toggle_mode:
 			button.set_pressed_no_signal(order == armed_order)
 
+## Build tiles mirror the controller's one placement kind so the armed tile
+## stays lit independently of focus; cancel, acceptance and phase transitions
+## only ever change that controller state.
+func refresh_build_placement(placement_kind: String) -> void:
+	for button in _build_grid.get_children():
+		if button is Button:
+			button.set_pressed_no_signal(str(button.get_meta("kind", "")) == placement_kind)
+
 func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 	for button in _build_grid.get_children():
+		# A build tile renders the controller's persistent placement kind, so
+		# its pressed plate is not just transient click focus.
+		button.toggle_mode = true
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
 		var building_icon := _icon_for_kind("buildings", kind)

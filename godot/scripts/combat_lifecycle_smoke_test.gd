@@ -181,6 +181,9 @@ func _session_panel() -> Panel:
 func _result_bar() -> Panel:
 	return _main.get_node_or_null("HUD/ResultBar") as Panel
 
+func _ug_drawer() -> Panel:
+	return _main.get_node("HUD/UndergroundPanel") as Panel
+
 func _session_label() -> Label:
 	return _main.get_node("HUD/SessionPanel/SessionLabel") as Label
 
@@ -824,6 +827,15 @@ func _run() -> void:
 		return
 	if not _assert_input_gated("Paused"):
 		return
+	# Paused inspection stays available: a real Tab opens the drawer without
+	# resuming, and the drawer survives Resume so the Result transition below
+	# is the one that must close it.
+	var ug_drawer := _ug_drawer()
+	await _key_tap(KEY_TAB)
+	if not ug_drawer.visible \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Paused":
+		_fail("real Tab during Paused did not open the inspection drawer")
+		return
 	var resume_button := _button("HUD/SessionPanel/ResumeButton")
 	if not resume_button.visible or resume_button.disabled:
 		_fail("Resume button is not visible and enabled while Paused")
@@ -832,8 +844,21 @@ func _run() -> void:
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,
 			"real Resume button click never resumed to Playing"):
 		return
+	if not ug_drawer.visible:
+		_fail("Paused inspection drawer did not survive Resume into Playing")
+		return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
+		return
+	# Entering Result closes the drawer even though it was open before the
+	# outcome, and Tab cannot reopen it there.
+	if ug_drawer.visible:
+		_fail("Result phase still exposes the UndergroundPanel drawer")
+		return
+	await _key_tap(KEY_TAB)
+	if ug_drawer.visible \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Result":
+		_fail("Tab reopened or leaked through the Result phase")
 		return
 	var result: Dictionary = GrusBridge.session_snapshot()
 	if int(result.get("winner_team", -1)) != 2:
@@ -905,7 +930,8 @@ func _run() -> void:
 	# control may sit exposed behind or beside the Result bar.
 	for path in ["HUD/EconomyPanel", "HUD/ResearchPanel", "HUD/SelectionPanel",
 			"HUD/CommandPanel", "HUD/WavePanel", "HUD/WaveRing", "HUD/WaveLabel",
-			"HUD/MinimapFrame", "HUD/Minimap", "HUD/CommandStatus"]:
+			"HUD/MinimapFrame", "HUD/Minimap", "HUD/CommandStatus",
+			"HUD/UndergroundPanel"]:
 		if (_main.get_node(path) as CanvasItem).visible:
 			_fail("Result phase still exposes in-match HUD %s" % path)
 			return
