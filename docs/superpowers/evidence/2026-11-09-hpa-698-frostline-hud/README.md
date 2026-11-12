@@ -1,7 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
 Real 1280 × 720 frames captured from the final Frostline visual-fidelity
-head on branch `hpa-698-frostline-hud` (Task 3 commit `HASH_PLACEHOLDER`).
+head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e`).
 Every frame comes from an existing real-input smoke journey unless the row
 says otherwise. Captures are opt-in (`GRUS_CAPTURE_DIR`), use the reusable
 `SmokeHelpers.capture_frame` helper, and wait for
@@ -19,8 +19,8 @@ gameplay state. No approved mockup is committed here.
 | `hpa-698-underground-l3-lab-dig-1280x720.png` | `underground_smoke_test` paid L3 with completed Lab and Tap, Tap kind armed: locked L1/L2 slots (locked plate + padlock + `L3`), occupied L3 rooms (normal painted plate + room icon), and armed-eligible empty L3 slots (selected plate). Three complete rows stay inside the 152 px clipped viewport; Analyze and the command card stay clear. | 2026-11-12 12:23:46 | `bd4509eadd0dfb582e8e6970bf54d0c2f7931a990b16394111c3ceeea0993853` |
 | `hpa-698-underground-dig-progress-1280x720.png` | `underground_smoke_test` real L1 dig in progress: themed ProgressBar fill from the snapshot `progress`, amber `27s left` readout from the snapshot `remaining`, outside the level viewport; the header repeats the same values. | 2026-11-12 12:23:46 | `f32bbe39e1d3d6e238c28ce3783096a1b6e03ae06e3f7566818b379ac699eab0` |
 | `hpa-698-underground-unarmed-slots-1280x720.png` | `underground_smoke_test` after disarming the Tap: every empty slot is the flat recessed square; completed Lab/Tap keep their normal painted plates and room icons. This is the fourth slot appearance. | 2026-11-12 12:23:46 | `5dea375bd05a36f998792bc22d32fdca3c783197bfe1806c2b8e98d7fe0abe27` |
-| `hpa-698-warm-match-1280x720.png` | **Retained from `6523529`**: warm in-match worker selection and build grid. Its visible HUD regions were not changed by the later Start/Result, queue or drawer passes; the drawer is closed and no production queue is shown. | 2025-11-09 capture | `3c690ceb7a6c83fde817c30027e463866d749a20273c2d3aec9074d91a009f16` |
-| `hpa-698-cold-incoming-warning-1280x720.png` | **Retained from `6523529`**: temporary real-input driver (deleted before commit) produced the authored 30 s North warning on the 15/16 (94%) cold surface. Same retention caveat as the warm frame. | 2025-11-09 capture | `df60fbe399458c1af90d72e906cc192cdb11f337726be18db5b237eb6b51de3f` |
+| `hpa-698-warm-match-1280x720.png` | **Retained from `6523529`**: warm in-match worker selection and build grid. Its visible HUD regions were not changed by the later Start/Result, queue or drawer passes; the drawer is closed and no production queue is shown. | retained | `3c690ceb7a6c83fde817c30027e463866d749a20273c2d3aec9074d91a009f16` |
+| `hpa-698-cold-incoming-warning-1280x720.png` | **Retained from `6523529`**: temporary real-input driver (deleted before commit) produced the authored 30 s North warning on the 15/16 (94%) cold surface. Same retention caveat as the warm frame. | retained | `df60fbe399458c1af90d72e906cc192cdb11f337726be18db5b237eb6b51de3f` |
 
 ## Mockup comparison
 
