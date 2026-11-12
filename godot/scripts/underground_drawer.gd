@@ -27,6 +27,10 @@ const DISPLAY_NAMES := {
 @onready var _kinds: Container = $KindsBox
 @onready var _armed_detail: RichTextLabel = $ArmedDetail
 @onready var _levels: Container = $ScrollContainer/LevelsBox
+## Themed dig bar and snapshot-derived remaining-time readout, below the
+## Excavate control and outside the clipped 152 px level viewport.
+@onready var _dig_progress: ProgressBar = $DigProgress
+@onready var _dig_time: Label = $DigTime
 ## Static underground catalogue rows (name/min_level/cost/seconds), cached
 ## once from the catalogue's "underground" block. Every dynamic value (depth,
 ## dig, slots) arrives through the controller's per-tick refresh.
@@ -42,11 +46,26 @@ var _kind_buttons: Array[Button] = []
 var _snapshot: Dictionary = {}
 var _phase := ""
 var _icon_cache: Dictionary = {}
+## Painted plates are the active theme's Tile styles, so kind buttons and
+## every slot branch reuse the approved mockup art. `_recessed` is the one
+## hand-built flat square for an unarmed empty slot (the same recess the
+## production queue keeps for its empties).
+var _tile_normal: StyleBox
+var _tile_selected: StyleBox
+var _tile_locked: StyleBox
+var _recessed := StyleBoxFlat.new()
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var underground_catalogue: Dictionary = catalogue.get("underground", {})
 	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
+	_tile_normal = get_theme_stylebox("normal", "Tile")
+	_tile_selected = get_theme_stylebox("pressed", "Tile")
+	_tile_locked = get_theme_stylebox("disabled", "Tile")
+	_recessed.bg_color = Color(0.05, 0.07, 0.09, 0.92)
+	_recessed.border_color = Color(0.24, 0.3, 0.35, 0.8)
+	_recessed.set_border_width_all(1)
+	_recessed.set_corner_radius_all(5)
 	for kind in underground_catalogue.get("room_kinds", []):
 		var ug_entry: Dictionary = ug_rooms.get(str(kind), {})
 		if ug_entry.is_empty():
@@ -67,6 +86,9 @@ func _ready() -> void:
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
 		kind_button.set_meta("kind", kind)
+		# Available kinds paint the normal steel Tile, armed the cyan pressed
+		# Tile and not-yet-unlocked kinds the locked Tile (mockup-4 states).
+		kind_button.theme_type_variation = &"Tile"
 		var short_name := display_name(kind)
 		kind_button.text = short_name
 		var room_icon := _icon_for_kind("underground", kind)
@@ -187,11 +209,12 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 	var depth := int(snap.get("depth", 0))
 	var target := int(snap.get("target", 1))
 	var cost_text := _cost_text(snap.get("next_cost", {}))
+	var excavating := bool(snap.get("excavating", false))
+	var remaining_seconds := maxi(ceili(float(snap.get("remaining", 0.0))), 0)
 	var dig_line := ""
-	if bool(snap.get("excavating", false)):
+	if excavating:
 		dig_line = "L%d dig · %d%% · %ds left" % [
-			target, roundi(float(snap.get("progress", 0.0)) * 100.0),
-			maxi(ceili(float(snap.get("remaining", 0.0))), 0)]
+			target, roundi(float(snap.get("progress", 0.0)) * 100.0), remaining_seconds]
 	else:
 		dig_line = "L%d dig · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
 	var lock_line := ""
@@ -201,7 +224,13 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 		lock_line = " · %s — inspection only" % phase
 	_header.text = "UNDERGROUND · depth %d · Esc closes\n%s%s" % [
 		depth, dig_line, lock_line]
-	if bool(snap.get("excavating", false)):
+	# The themed bar mirrors the snapshot's single active dig, never a timer
+	# of its own; it sits outside the clipped level rows and hides when idle.
+	_dig_progress.visible = excavating
+	_dig_time.visible = excavating
+	if excavating:
+		_dig_progress.value = float(snap.get("progress", 0.0))
+		_dig_time.text = "%ds left" % remaining_seconds
 		_excavate.disabled = true
 		_excavate.text = "Digging L%d · %d%%" % [
 			target, roundi(float(snap.get("progress", 0.0)) * 100.0)]
@@ -227,7 +256,9 @@ func _refresh_kinds(snap: Dictionary) -> void:
 ## Per-refresh slot update against the live snapshot and the armed kind:
 ## empty slots act only with a kind armed, only on rows at or above its
 ## min_level, and only while Playing; shallower rows stay disabled and say
-## why. Occupied/constructing slots are never actionable.
+## why. Occupied/constructing slots are never actionable. Every branch sets
+## its own Tile plate so a disabled completed room never inherits the theme's
+## locked disabled tile.
 func _refresh_slots(snap: Dictionary, phase: String) -> void:
 	var playing := phase == "Playing"
 	var levels: Array = snap.get("levels", [])
@@ -245,33 +276,57 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 			if kind == "":
 				button.icon = null
 				if armed and level_number < armed_min:
-					button.text = "Requires\nL%d" % armed_min
+					button.text = "L%d" % armed_min
 					button.tooltip_text = "%s requires L%d" % [
 						str(armed_entry.get("name", "")), armed_min]
+					button.accessibility_name = "%s requires L%d" % [
+						display_name(str(armed_entry.get("name", ""))), armed_min]
 					button.disabled = true
+					button.icon = _icon_for_kind("status", "Locked")
+					if button.icon != null:
+						button.add_theme_constant_override("icon_max_width", 16)
+						button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.9))
+					_set_slot_plate(button, _tile_locked, "locked")
 				elif armed:
 					button.text = "Empty"
 					button.tooltip_text = _kind_tooltip(armed_entry)
+					button.accessibility_name = "Empty slot"
 					button.disabled = not playing
+					_set_slot_plate(button, _tile_selected, "armed")
 				else:
 					button.text = "Empty"
 					button.tooltip_text = "Arm a room kind above"
+					button.accessibility_name = "Empty slot"
 					button.disabled = true
+					_set_slot_plate(button, _recessed, "recessed")
 				continue
 			var display := display_name(kind)
+			button.accessibility_name = display
 			button.icon = _icon_for_kind("underground", kind)
 			if button.icon != null:
 				button.add_theme_constant_override("icon_max_width", 20)
 				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
 			if bool(slot.get("complete", false)):
-				button.text = "%s\n%s" % [display, str(slot.get("benefit", ""))]
+				button.text = display
 				button.tooltip_text = "%s — complete: %s" % [kind, str(slot.get("benefit", ""))]
 			else:
 				var progress := roundi(float(slot.get("progress", 0.0)) * 100.0)
-				button.text = "%s\n%d%%" % [display, progress]
+				button.text = "%s %d%%" % [display, progress]
 				button.tooltip_text = "%s — building, %ds left" % [
 					kind, maxi(ceili(float(slot.get("remaining", 0.0))), 0)]
 			button.disabled = true
+			_set_slot_plate(button, _tile_normal, "occupied")
+
+## Explicit per-branch plate. A disabled Button paints its `disabled` style,
+## so all four states are set: an occupied room keeps the normal steel tile
+## instead of the theme's locked disabled tile. The meta cache avoids
+## re-notifying every slot's theme on each 20 Hz refresh.
+func _set_slot_plate(button: Button, plate: StyleBox, plate_name: String) -> void:
+	if str(button.get_meta("plate", "")) == plate_name:
+		return
+	button.set_meta("plate", plate_name)
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		button.add_theme_stylebox_override(state, plate)
 
 ## Arming is the panel's only selection state: pressing a kind button arms
 ## it (exclusively), pressing the armed one again disarms; slot eligibility

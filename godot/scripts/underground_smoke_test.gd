@@ -107,6 +107,69 @@ func _slot_state(level: int, slot: int) -> Dictionary:
 func _icon_path(button: Button) -> String:
 	return button.icon.resource_path if button.icon != null else ""
 
+## The plate a Button paints for a state, read from the live control (slot
+## plates are explicit overrides) or the active theme (kinds). Textures give
+## their resource path; a flat recess gives "". No style table is copied.
+func _plate_path(button: Button, state: String) -> String:
+	var plate := button.get_theme_stylebox(state)
+	return (plate as StyleBoxTexture).texture.resource_path if plate is StyleBoxTexture else ""
+
+func _tile_path(state: String) -> String:
+	var plate := _panel.get_theme_stylebox(state, "Tile")
+	return (plate as StyleBoxTexture).texture.resource_path if plate is StyleBoxTexture else ""
+
+## Excavation presentation: the themed bar and remaining-time label sit below
+## Excavate and outside the clipped 152 px level viewport, and their values
+## follow the same read-only snapshot as the header. `tolerance`/`slack`
+## absorb the one-refresh lag possible while the 20x sim advances; the paused
+## call uses exact values because the snapshot is frozen.
+func _dig_view_error(where: String, tolerance := 0.001, slack := 0) -> String:
+	var snap: Dictionary = GrusBridge.underground_snapshot()
+	var bar := _panel.get_node_or_null("DigProgress") as ProgressBar
+	var time_label := _panel.get_node_or_null("DigTime") as Label
+	if bar == null or time_label == null:
+		return "%s dig progress bar/label are missing" % where
+	var excavating := bool(snap.get("excavating", false))
+	if bar.visible != excavating or time_label.visible != excavating:
+		return "%s dig progress visibility %s/%s does not match excavating=%s" % [
+			where, bar.visible, time_label.visible, excavating]
+	if not excavating:
+		return ""
+	if absf(bar.value - float(snap.get("progress", 0.0))) > tolerance:
+		return "%s dig bar value %.3f does not match snapshot progress %.3f" % [
+			where, bar.value, float(snap.get("progress", 0.0))]
+	if not time_label.text.ends_with("s left") or not time_label.text.trim_suffix("s left").is_valid_int():
+		return "%s dig label \"%s\" is not a remaining-time readout" % [where, time_label.text]
+	var seconds := maxi(ceili(float(snap.get("remaining", 0.0))), 0)
+	if absi(int(time_label.text.trim_suffix("s left")) - seconds) > slack:
+		return "%s dig label \"%s\" does not match snapshot remaining %ds" % [
+			where, time_label.text, seconds]
+	if not (_panel.get_node("HeaderLabel") as Label).text.contains(time_label.text):
+		return "%s header does not repeat the dig label %s" % [where, time_label.text]
+	return ""
+
+## The 152 px level viewport keeps showing three complete rows; the dig bar
+## and its readout live below Excavate, never inside the clipped rows.
+func _dig_layout_error(scroll: ScrollContainer) -> String:
+	var bar := _panel.get_node_or_null("DigProgress") as ProgressBar
+	var time_label := _panel.get_node_or_null("DigTime") as Label
+	if bar == null or time_label == null:
+		return "dig progress bar/label are missing"
+	var view := scroll.get_global_rect()
+	var bar_rect := bar.get_global_rect()
+	var time_rect := time_label.get_global_rect()
+	if view.size.y < 152.0:
+		return "level viewport shrank to %.1f px; three rows need 152" % view.size.y
+	if bar_rect.intersects(view) or time_rect.intersects(view):
+		return "dig progress draws inside the level viewport: bar=%s time=%s view=%s" % [
+			bar_rect, time_rect, view]
+	if bar_rect.position.y < _excavate.get_global_rect().end.y:
+		return "dig progress sits above the Excavate control"
+	if not _panel.get_global_rect().encloses(bar_rect) \
+			or not _panel.get_global_rect().encloses(time_rect):
+		return "dig progress leaves the drawer: bar=%s time=%s" % [bar_rect, time_rect]
+	return ""
+
 func _stock() -> Dictionary:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	return {"food": int(economy.food), "scrap": int(economy.scrap),
@@ -299,6 +362,35 @@ func _run() -> void:
 			and _stock().coal == int(l1_before.coal) - int(l1_cost.coal),
 			"L1 must charge its snapshot price exactly once"):
 		return
+	# Active dig: the themed bar is visible outside the level viewport and its
+	# fill/readout follow the snapshot. At 20x one refresh can lag a tick, so
+	# the live calls allow a small tolerance; the paused call below is exact.
+	var early_dig: Dictionary = GrusBridge.underground_snapshot()
+	if not _check(bool(early_dig.excavating) and float(early_dig.progress) >= 0.0 \
+			and float(early_dig.progress) < 1.0,
+			"L1 dig is not active with partial progress: %s" % early_dig):
+		return
+	var dig_error := _dig_view_error("L1 early dig", 0.1, 2)
+	if not _check(dig_error.is_empty(), dig_error):
+		return
+	await _settle()
+	var early_bar := (_panel.get_node("DigProgress") as ProgressBar).value
+	if not await _wait(func(): return float(GrusBridge.underground_snapshot().progress) \
+			> float(early_dig.progress) + 0.05, 3.0, "L1 dig progress did not advance"):
+		return
+	await _settle()
+	var partial_dig: Dictionary = GrusBridge.underground_snapshot()
+	if not _check(float(partial_dig.remaining) < float(early_dig.remaining) \
+			and (_panel.get_node("DigProgress") as ProgressBar).value > early_bar,
+			"L1 dig bar did not advance with its snapshot progress/remaining"):
+		return
+	dig_error = _dig_view_error("L1 partial dig", 0.1, 2)
+	if not _check(dig_error.is_empty(), dig_error):
+		return
+	# Opt-in real-render evidence of the active dig bar; presentation only.
+	var dig_capture := await SmokeHelpers.capture_frame(get_tree(), "underground-dig-progress")
+	if not _check(dig_capture.is_empty(), dig_capture):
+		return
 	if not _check(get_viewport().gui_get_focus_owner() == _excavate, "real Excavate click did not focus button"):
 		return
 	await _key(KEY_TAB)
@@ -318,12 +410,18 @@ func _run() -> void:
 			and paused.excavating and float(paused.progress) > 0.0 and int(paused.depth) == 0,
 			"L1 was not paid and in progress when paused"):
 		return
+	# Frozen snapshot: the bar must match progress/remaining exactly, not a
+	# timer copy of its own.
+	var paused_dig_error := _dig_view_error("paused L1 dig")
+	if not _check(paused_dig_error.is_empty(), paused_dig_error):
+		return
 	var paused_stock := _stock()
 	var paused_revision: int = GrusBridge.command_feedback_revision()
 	for _frame in 12:
 		await get_tree().physics_frame
 	if not _check(GrusBridge.underground_snapshot() == paused and _stock() == paused_stock \
-			and _excavate.disabled and _panel.get_node("HeaderLabel").text.contains("inspection only"),
+			and _excavate.disabled and _panel.get_node("HeaderLabel").text.contains("inspection only") \
+			and absf((_panel.get_node("DigProgress") as ProgressBar).value - float(paused.progress)) < 0.001,
 			"pause failed to freeze dig or inspection controls"):
 		return
 	await _click(_excavate)
@@ -372,6 +470,36 @@ func _run() -> void:
 	if not await _wait(func(): return int(GrusBridge.underground_snapshot().depth) == 1, 5.0, "L1 never resumed"):
 		return
 	await _settle()
+	var l1_idle_error := _dig_view_error("completed L1 dig")
+	if not _check(l1_idle_error.is_empty() \
+			and not (_panel.get_node("DigProgress") as ProgressBar).visible \
+			and _excavate.text == "Excavate L2",
+			"completed L1 dig did not clear the bar or restore Excavate L2: %s" % l1_idle_error):
+		return
+	# Four painted Tile appearances (mockup-4 token sheet): an available kind
+	# paints the normal steel tile, a not-yet-unlocked kind paints the locked
+	# tile. Slots derived from the same read-only theme plates are asserted at
+	# L3 below.
+	var tile_normal_path := _tile_path("normal")
+	var tile_selected_path := _tile_path("pressed")
+	var tile_locked_path := _tile_path("disabled")
+	if not _check(not tile_normal_path.is_empty() and not tile_selected_path.is_empty() \
+			and not tile_locked_path.is_empty() and tile_normal_path != tile_selected_path \
+			and tile_normal_path != tile_locked_path,
+			"theme Tile normal/selected/locked plates are missing or not distinct: %s %s %s" % [
+				tile_normal_path, tile_selected_path, tile_locked_path]):
+		return
+	if not _check(not _kind("Shelter").disabled \
+			and _plate_path(_kind("Shelter"), "normal") == tile_normal_path,
+			"available Shelter kind is not the painted normal tile: %s" % _plate_path(_kind("Shelter"), "normal")):
+		return
+	if not _check(_kind("Lab").disabled \
+			and _plate_path(_kind("Lab"), "disabled") == tile_locked_path,
+			"locked Lab kind is not the painted locked tile: %s" % _plate_path(_kind("Lab"), "disabled")):
+		return
+	var dig_layout := _dig_layout_error(scroll_box)
+	if not _check(dig_layout.is_empty(), dig_layout):
+		return
 	if not _check(_slot(1, 0).disabled, "unarmed empty slot must be disabled"):
 		return
 	if not await _dig(2):
@@ -410,6 +538,11 @@ func _run() -> void:
 			if not _check(_icon_path(_slot(index + 1, slot)).is_empty(),
 					"empty L%d slot %d shows an icon" % [index + 1, slot]):
 				return
+	if not _check(not bool(snapshot.excavating) \
+			and not (_panel.get_node("DigProgress") as ProgressBar).visible \
+			and _excavate.text == "Excavate L4",
+			"L3 completion did not leave the drawer idle on Excavate L4"):
+		return
 	# HPA-698 mockup alignment: at 1280 × 720 the drawer must show at least
 	# three complete level rows at once. Complete means the row and every
 	# slot Button inside it are fully enclosed by the clipped scroll
@@ -486,6 +619,9 @@ func _run() -> void:
 			and armed_detail.get_parsed_text().contains(str(_catalogue["underground"]["rooms"]["Lab"]["effect"])),
 			"armed Lab does not show its catalogue effect line"):
 		return
+	if not _check(_plate_path(_kind("Lab"), "pressed") == tile_selected_path,
+			"armed Lab kind is not the painted selected tile: %s" % _plate_path(_kind("Lab"), "pressed")):
+		return
 	var disabled_before := _stock()
 	var disabled_revision: int = GrusBridge.command_feedback_revision()
 	var selected_before: Array = _main.selected_ids.duplicate()
@@ -496,10 +632,13 @@ func _run() -> void:
 	for level in [1, 2]:
 		for slot in 4:
 			var button := _slot(level, slot)
-			if not _check(button.disabled and button.text.contains("L3") and button.tooltip_text.contains("requires L3"),
-					"Lab armed did not disable/explain shallow target"):
-				return
-			if not _check(_icon_path(button).is_empty(), "Requires L3 slot shows an icon"):
+			if not _check(button.disabled and button.text.contains("L3") \
+					and button.tooltip_text.contains("requires L3") \
+					and button.accessibility_name.contains("L3") \
+					and _icon_path(button) == "res://assets/ui/icons/status/locked.png" \
+					and _plate_path(button, "disabled") == tile_locked_path,
+					"Lab armed shallow target is not the locked tile/icon/explanation: icon=%s plate=%s name=%s" % [
+						_icon_path(button), _plate_path(button, "disabled"), button.accessibility_name]):
 				return
 			SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await _settle()
@@ -510,6 +649,27 @@ func _run() -> void:
 		for slot in 4:
 			if not _check(str(_slot_state(level, slot).kind) == "", "disabled shallow target built a room"):
 				return
+	# Armed eligible empty at L3: the selected plate while the disabled
+	# occupied/locked branches keep their own plate. Then discharge the kind
+	# to prove an unarmed empty is the flat recess, never a locked tile.
+	var armed_empty := _slot(3, 2)
+	if not _check(not armed_empty.disabled and armed_empty.text == "Empty" \
+			and armed_empty.icon == null \
+			and _plate_path(armed_empty, "normal") == tile_selected_path,
+			"armed eligible L3 slot is not the selected tile: %s" % _plate_path(armed_empty, "normal")):
+		return
+	await _click(_kind("Lab"))
+	if not _check(not _kind("Lab").button_pressed, "Lab did not discharge for the unarmed-slot check"):
+		return
+	var unarmed_empty := _slot(3, 2)
+	var unarmed_plate := unarmed_empty.get_theme_stylebox("disabled")
+	if not _check(unarmed_empty.disabled and unarmed_empty.text == "Empty" \
+			and unarmed_empty.icon == null and unarmed_plate is StyleBoxFlat,
+			"unarmed empty L3 slot is not the flat recessed tile"):
+		return
+	await _click(_kind("Lab"))
+	if not _check(_kind("Lab").button_pressed, "Lab did not re-arm after the unarmed-slot check"):
+		return
 	if not _check(not _slot(3, 0).disabled, "L3 did not enable Lab target"):
 		return
 	var scroll := scroll_box
@@ -544,11 +704,14 @@ func _run() -> void:
 			and str(_slot_state(3, 0).kind) == "Lab" and not bool(_slot_state(3, 0).complete),
 			"Lab did not charge once at L3/slot0 and start construction"):
 		return
-	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png",
-			"building Lab slot is missing its room icon"):
+	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png" \
+			and _plate_path(_slot(3, 0), "disabled") == tile_normal_path,
+			"building Lab slot is missing its normal painted tile or room icon"):
 		return
 	await _click(_kind("Shelter"))
-	if not _check(not _slot(1, 0).disabled and _slot(3, 0).disabled, "Shelter failed to re-enable L1 or occupied slot actionable"):
+	if not _check(not _slot(1, 0).disabled and _slot(3, 0).disabled \
+			and _plate_path(_slot(3, 0), "disabled") == tile_normal_path,
+			"Shelter failed to re-enable L1 or the disabled occupied Lab lost its normal tile"):
 		return
 	# Panel blank-space shielding: clicks must neither deselect nor issue
 	# contextual orders even with a selected worker behind the panel.
@@ -563,8 +726,9 @@ func _run() -> void:
 			and int(GrusBridge.economy_snapshot().heat_demand) == 16, 8.0, "Lab/Barracks never completed"):
 		return
 	await _settle()
-	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png",
-			"completed Lab slot lost its room icon"):
+	if not _check(_icon_path(_slot(3, 0)) == "res://assets/ui/icons/underground/lab.png" \
+			and _plate_path(_slot(3, 0), "disabled") == tile_normal_path,
+			"completed Lab slot is not the normal painted tile with its room icon"):
 		return
 	var cold: Dictionary = GrusBridge.economy_snapshot()
 	var cold_rate := float(GrusBridge.research_snapshot().rate_per_second)
@@ -585,20 +749,27 @@ func _run() -> void:
 			and str(_slot_state(3, 1).kind) == "GeothermalTap" and not bool(_slot_state(3, 1).complete),
 			"Tap did not charge exactly once at L3/slot1"):
 		return
-	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png",
-			"building Geothermal Tap slot is missing its room icon"):
+	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png" \
+			and _plate_path(_slot(3, 1), "disabled") == tile_normal_path,
+			"building Geothermal Tap slot is not the normal painted tile with its room icon"):
 		return
 	if not await _wait(func(): return bool(_slot_state(3, 1).complete), 6.0, "Tap did not complete"):
 		return
 	await _settle()
-	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png",
-			"completed Geothermal Tap slot lost its room icon"):
+	if not _check(_icon_path(_slot(3, 1)) == "res://assets/ui/icons/underground/geothermal_tap.png" \
+			and _plate_path(_slot(3, 1), "disabled") == tile_normal_path,
+			"completed Geothermal Tap slot is not the normal painted tile with its room icon"):
 		return
 	var warm: Dictionary = GrusBridge.economy_snapshot()
 	if not _check(int(warm.heat_supply) == int(cold.heat_supply) + tap_heat and int(warm.heat_demand) == 16 \
 			and is_equal_approx(float(warm.surface_efficiency), 1.0) \
 			and is_equal_approx(float(GrusBridge.research_snapshot().rate_per_second), base_rate + lab_rate),
 			"L3 Tap did not add its catalogue supply or warm Lab rate lost its additive share"):
+		return
+	# Opt-in final-head evidence: the paid L3 drawer with Lab/Tap complete and
+	# the Tap kind armed — locked, occupied and armed-eligible states together.
+	var drawer_capture := await SmokeHelpers.capture_frame(get_tree(), "underground-l3")
+	if not _check(drawer_capture.is_empty(), drawer_capture):
 		return
 	# Presentation-only deeper-row probe. The paid journey stops at L3 — the
 	# unchanged first-wave guard leaves no time to fund L4 — so the drawer is
@@ -613,6 +784,11 @@ func _run() -> void:
 	await _click(_kind("GeothermalTap"))
 	if not _check(not _kind("GeothermalTap").button_pressed,
 			"deeper-row probe could not disarm the live Tap kind"):
+		return
+	# Opt-in evidence of the fourth appearance: with no kind armed, every
+	# empty slot is the flat recess while the completed rooms stay painted.
+	var unarmed_capture := await SmokeHelpers.capture_frame(get_tree(), "underground-unarmed")
+	if not _check(unarmed_capture.is_empty(), unarmed_capture):
 		return
 	var phase := str(GrusBridge.session_snapshot().phase)
 	var probe: Dictionary = GrusBridge.underground_snapshot().duplicate(true)
@@ -700,6 +876,7 @@ func _run() -> void:
 	if not await _purchase(_excavate, "Excavate queued", {}, false):
 		return
 	if not _check(_stock() == final_stock and not bool(GrusBridge.underground_snapshot().excavating) \
+			and not (_panel.get_node("DigProgress") as ProgressBar).visible \
 			and int(GrusBridge.economy_snapshot().last_reject_code) == 8,
 			"rejected deeper dig spent, started or lost typed InsufficientResources (8)"):
 		return
