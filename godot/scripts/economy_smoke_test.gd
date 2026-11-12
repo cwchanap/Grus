@@ -48,6 +48,13 @@ const DEPOT_ANCHOR := Vector2i(40, 20)
 const STAGING_CELL := Vector2i(5, 47)
 ## Research Center rally cell for the rally-point proof.
 const RALLY_CELL := Vector2i(20, 58)
+## Selection is a real click whose projected point goes stale while the
+## buffered input waits at 20x. Each attempt re-projects from the live view;
+## the attempt count is a small fixed bound, not an extended timeout.
+const STAGING_SELECT_ATTEMPTS := 4
+## Far outside the controller's 20 px pick radius: an injected miss cannot
+## accidentally select the intended unit.
+const STAGING_MISS_OFFSET := Vector2(120.0, 0.0)
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
@@ -62,6 +69,11 @@ func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
 var _camera: Camera3D
 var _start_ms := 0
 var _building_ids := {}
+## Test-only failure injection for the staging interaction. Production paths
+## never set these; the smoke still sends every click/key through real input.
+var _staging_click_miss_remaining := 0
+var _staging_click_miss_all := false
+var _staging_reject_interleave_remaining := 0
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -426,14 +438,75 @@ func _select_building(view: Node3D) -> void:
 		return
 	await _click_view(view, MOUSE_BUTTON_LEFT)
 
-## Retires a gatherer through the UI (select + Stop). Finite sources deplete
-## at 20x virtual time, and a depleted source leaves the worker idled at its
-## drop-off slot — sometimes inside a building click zone — so the scenario
-## stops its gatherers once the banked thresholds are met.
-func _stop_unit(view: Node3D) -> void:
-	await _click_view(view, MOUSE_BUTTON_LEFT)
+## The controller's current selection, read from the live test surface.
+func _selected_ids() -> Array:
+	var main := get_node_or_null("Main")
+	var selected: Variant = main.get("selected_ids") if main != null else null
+	return selected as Array if selected is Array else []
+
+## Applies a test-only off-target offset when the miss counters are armed.
+func _staging_click_point(unit_id: int, attempt: int, screen: Vector2) -> Vector2:
+	if not _staging_click_miss_all and _staging_click_miss_remaining <= 0:
+		return screen
+	if not _staging_click_miss_all:
+		_staging_click_miss_remaining -= 1
+	print("GRUS_ECONOMY_STAGING_MISS_INJECTED unit=%d attempt=%d at=%s" % [
+		unit_id, attempt + 1, screen])
+	return screen + STAGING_MISS_OFFSET
+
+## Selects exactly one stable id through real left clicks. A buffered click
+## projected before a 20x frame can land behind a moving worker, so each
+## bounded attempt re-resolves the live view and re-projects immediately
+## before sending; no stale coordinate is retried.
+func _select_unit(unit_id: int) -> bool:
+	var attempts := PackedStringArray()
+	for attempt in STAGING_SELECT_ATTEMPTS:
+		var view := _unit_view(unit_id)
+		if view == null:
+			_fail("staging target %d vanished during selection: %s" % [
+				unit_id, _staging_details(unit_id)])
+			return false
+		var screen := _staging_click_point(
+			unit_id, attempt, _camera.unproject_position(view.global_position))
+		_mouse_click(screen, MOUSE_BUTTON_LEFT)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var selected := _selected_ids()
+		attempts.append("%d@%s=>%s" % [attempt + 1, screen, selected])
+		if selected.size() == 1 and int(selected[0]) == unit_id:
+			return true
+	_fail("staging click did not select unit %d after %d fresh-coordinate attempts: %s; %s" % [
+		unit_id, STAGING_SELECT_ATTEMPTS, "; ".join(attempts), _staging_details(unit_id)])
+	return false
+
+## Retires a gatherer through the UI (select + Stop) for the intended stable
+## id. Finite sources deplete at 20x virtual time, and a depleted source
+## leaves the worker idled at its drop-off slot — sometimes inside a building
+## click zone — so the scenario stops its gatherers once the banked
+## thresholds are met. Selection must resolve to exactly this id before S;
+## otherwise a missed click would Stop whatever was selected instead.
+func _stop_unit(unit_id: int) -> bool:
+	if not await _select_unit(unit_id):
+		return false
+	var selected := _selected_ids()
+	if selected.size() != 1 or int(selected[0]) != unit_id:
+		_fail("Stop would target %s instead of unit %d: %s" % [
+			selected, unit_id, _staging_details(unit_id)])
+		return false
 	_key_tap(KEY_S)
 	await get_tree().process_frame
+	# Correlated Stop result: a worker (non-empty task snapshot) must be Idle,
+	# proving the accepted Stop cancelled this id's gather/route rather than a
+	# different selection. Combatants carry no WorkerTask; their later Move
+	# arrival proves the same for the physical order.
+	var stop_task := str(GrusBridge.unit_task_snapshot(unit_id).get("task", ""))
+	if not stop_task.is_empty() and stop_task != "Idle":
+		if not await _wait_until(
+				func(): return str(GrusBridge.unit_task_snapshot(unit_id).get("task", "")) == "Idle",
+				2.0, "Stop did not cancel unit %d's worker task" % unit_id,
+				func(): return _staging_details(unit_id)):
+			return false
+	return true
 
 ## A diagnosis string for one stable unit id; used when staging fails so the
 ## log records identity, live position, selection, task, session and wave
@@ -477,43 +550,67 @@ func _park_at_staging(unit_id: int) -> bool:
 	if view == null:
 		_fail("staging target %d was freed before Stop: %s" % [unit_id, _staging_details(unit_id)])
 		return false
-	await _stop_unit(view)
+	if not await _stop_unit(unit_id):
+		return false
 	view = _unit_view(unit_id)
 	if view == null:
 		_fail("staging target %d was freed after Stop: %s" % [unit_id, _staging_details(unit_id)])
 		return false
-	await _click_view(view, MOUSE_BUTTON_LEFT)
-	# The real click must have selected this id before the Move is dispatched;
-	# otherwise the order would park whichever unit the picker did select.
-	if not await _wait_until(
-			func():
-				var main := get_node("Main")
-				var selected: Variant = main.get("selected_ids")
-				return selected is Array and (selected as Array).has(unit_id),
-			3.0, "staging click did not select unit %d" % unit_id,
-			func(): return _staging_details(unit_id)):
+	if not await _select_unit(unit_id):
 		return false
-	var move_revision := int(GrusBridge.command_feedback_revision())
-	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
-	if not await _wait_until(
-			func(): return int(GrusBridge.command_feedback_revision()) > move_revision,
-			5.0, "staging Move for unit %d was never dispatched" % unit_id,
-			func(): return _staging_details(unit_id)):
+	view = _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed before the Move: %s" % [unit_id, _staging_details(unit_id)])
 		return false
-	var reject := int(GrusBridge.last_reject_code())
-	if reject != -1:
-		_fail("staging Move for unit %d was rejected (%d): %s" % [
-			unit_id, reject, _staging_details(unit_id)])
-		return false
+	var start_position := view.global_position
 	var staging := Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
+	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
+	# Test-only interleave: after the staging Move is dispatched and before its
+	# result is read, issue a real rejected Move for another stable unit (the
+	# builder) into a bridge-reported ruin. Its route rejection overwrites the
+	# global feedback/reject and must never decide the staging Move's result;
+	# the intended unit's arrival does.
+	if _staging_reject_interleave_remaining > 0:
+		_staging_reject_interleave_remaining -= 1
+		var rects: PackedInt32Array = GrusBridge.obstacle_rects()
+		if rects.size() < 20:
+			_fail("unrelated rejection injection has no ruin quad 4: %s" % [rects])
+			return false
+		var ruin_min := Vector2i(rects[16], rects[17])
+		var ruin_max := Vector2i(rects[18], rects[19])
+		var ruin_cells := ruin_max - ruin_min + Vector2i.ONE
+		var blocked := Vector2(
+			ruin_min.x + ruin_cells.x * 0.5, ruin_min.y + ruin_cells.y * 0.5)
+		if not await _select_unit(4):
+			return false
+		await _click_world(blocked, MOUSE_BUTTON_RIGHT)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var injected_reject := int(GrusBridge.last_reject_code())
+		print("GRUS_ECONOMY_STAGING_REJECT_INTERLEAVED reject=%d feedback=%s selection=%s" % [
+			injected_reject, GrusBridge.command_feedback(), _selected_ids()])
+		if injected_reject == -1:
+			_fail("unrelated rejection injection did not land: feedback=%s selection=%s" % [
+				GrusBridge.command_feedback(), _selected_ids()])
+			return false
+	# The global feedback/reject is diagnostic only: an unrelated route failure
+	# can overwrite it after this Move. Arrival by the intended stable id is the
+	# correlated result that proves the Move reached this unit.
 	if not await _wait_until(
 			func():
 				var live := _unit_view(unit_id)
 				return live != null and live.global_position.distance_to(staging) < 3.0,
 			15.0, "retired gatherer never reached the staging ground",
-			func(): return _staging_details(unit_id)):
+			func(): return _staging_arrival_details(unit_id, start_position)):
 		return false
 	return true
+
+## Timeout diagnosis for a staging Move: how far the intended unit travelled
+## from where the order was issued, plus the live identity/phase snapshot.
+func _staging_arrival_details(unit_id: int, start: Vector3) -> String:
+	var live := _unit_view(unit_id)
+	var moved := -1.0 if live == null else start.distance_to(live.global_position)
+	return "from=%s moved=%.2f; %s" % [start, moved, _staging_details(unit_id)]
 
 ## Full UI placement: select builder, press the build button, sweep the
 ## placement preview over the anchor, assert it rendered, then place.
@@ -549,6 +646,13 @@ func _single_ringed_idle_worker() -> bool:
 
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
+	# Test-only injection knobs. They alter only real-input coordinates or add
+	# a real rejected UI command; they never write selection or gameplay.
+	_staging_click_miss_remaining = OS.get_environment(
+		"GRUS_ECONOMY_STAGING_MISS_CLICKS").to_int()
+	_staging_click_miss_all = OS.get_environment("GRUS_ECONOMY_STAGING_MISS_ALL") == "1"
+	_staging_reject_interleave_remaining = OS.get_environment(
+		"GRUS_ECONOMY_STAGING_REJECT_INTERLEAVE").to_int()
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
 	window.size = TEST_VIEWPORT_SIZE
@@ -570,15 +674,22 @@ func _run() -> void:
 
 	# Stable-id regressions for the staging helper. A missing id must be
 	# diagnosed, and the caller pattern must stop the journey instead of
-	# driving real input at a freed/absent worker. The failure probe exits
-	# nonzero on purpose; run it with GRUS_SMOKE_STAGING_FAILURE_PROBE=1.
+	# driving real input at a freed/absent worker. The failure probes exit
+	# nonzero on purpose: GRUS_SMOKE_STAGING_FAILURE_PROBE=1 (missing id) or
+	# =missed-click (every real selection click deliberately misses).
 	var missing_stage := _staging_target_error(999)
 	if missing_stage.is_empty() or not missing_stage.contains("999"):
 		_fail("staging preflight did not diagnose a missing stable id: %s" % missing_stage)
 		return
-	if OS.get_environment("GRUS_SMOKE_STAGING_FAILURE_PROBE") == "1":
+	var staging_probe := OS.get_environment("GRUS_SMOKE_STAGING_FAILURE_PROBE")
+	if staging_probe == "1":
 		if not await _park_at_staging(999):
 			print("GRUS_ECONOMY_STAGING_FAILURE_PROPAGATED")
+		return
+	if staging_probe == "missed-click":
+		_staging_click_miss_all = true
+		if not await _park_at_staging(2):
+			print("GRUS_ECONOMY_STAGING_MISSED_CLICK_PROPAGATED")
 		return
 
 	var boot: Dictionary = GrusBridge.economy_snapshot()
@@ -950,12 +1061,9 @@ func _run() -> void:
 			"no scrap delivery ever reached the Depot"):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
-	# later click target, so parking in place is safe.
-	scrap_worker = _unit_view(1)
-	if scrap_worker == null:
-		_fail("scrap gatherer view went missing before retirement")
+	# later click target, so parking in place is safe. Stable id only.
+	if not await _stop_unit(1):
 		return
-	await _stop_unit(scrap_worker)
 
 	# Reject-code pin: the read-only placement preview reports the numeric
 	# Occupied code for a footprint inside the seeded Research Center — the same
