@@ -198,8 +198,11 @@ func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if int(GrusBridge.command_feedback_revision()) != revision \
-			or str(main.get("_placement_kind")) != kind:
-		_fail("%s build button leaked a command or did not arm placement" % kind)
+			or str(main.get("_placement_kind")) != kind \
+			or not button.button_pressed:
+		_fail("%s build button leaked a command, did not arm placement, or lost its lit tile: placement=%s pressed=%s revision=%d->%d feedback=%s" % [
+			kind, main.get("_placement_kind"), button.button_pressed,
+			revision, int(GrusBridge.command_feedback_revision()), GrusBridge.command_feedback()])
 		return false
 	return true
 
@@ -1116,6 +1119,24 @@ func _run() -> void:
 			or not research_markers.text.contains("res://assets/ui/icons/status/incoming_zone.png"):
 		_fail("research markers do not project the catalogue tower/wave thresholds: %s" % [research_markers.text])
 		return
+	# The milestone row's hover explanation must be reachable from the real
+	# pointer, not hidden behind a mouse-ignoring child of the research card.
+	var expected_marker_tooltip := "FlameTower at %d research · CrystalLance at %d research · Wave growth at %d research" % [
+		flame_points, lance_points, wave_points]
+	var marker_tooltip := research_markers.get_tooltip(
+		research_markers.get_global_rect().get_center() - research_markers.global_position)
+	if research_markers.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+			or marker_tooltip != expected_marker_tooltip:
+		_fail("research milestone row tooltip is unreachable or incomplete: %s" % marker_tooltip)
+		return
+	var marker_hover := InputEventMouseMotion.new()
+	marker_hover.position = research_markers.get_global_rect().get_center()
+	get_tree().root.push_input(marker_hover)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if get_viewport().gui_get_hovered_control() != research_markers:
+		_fail("research milestone row is not the real hover target")
+		return
 	if not _has_visible_icon(get_node("Main/HUD"), "res://assets/ui/icons/status/research_progress.png"):
 		_fail("research HUD is missing status/research_progress.png")
 		return
@@ -1767,12 +1788,15 @@ func _run() -> void:
 		_fail("Esc did not clear the armed order before pausing")
 		return
 	# Stop tile executes immediately through the existing stop path.
+	var stop_revision := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if str(command_status.text) != "Stop command queued" \
 			or str(get_node("Main").get("_armed_order")) != "":
 		_fail("Stop tile did not execute immediately: %s" % command_status.text)
 		return
-	await get_tree().process_frame
+	if not await _wait_until(func(): return int(GrusBridge.command_feedback_revision()) > stop_revision,
+			5.0, "Stop command never settled its authoritative feedback"):
+		return
 	# Losing the selection clears a modal order instead of leaving it armed.
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -1787,12 +1811,50 @@ func _run() -> void:
 			5.0, "Worker 2 did not reselect before the placement/order crossover probes"):
 		return
 
+	# HPA-698 build tiles mirror the controller-owned placement kind, not
+	# transient focus: the armed tile stays lit through focus and selection
+	# changes, moves to a newly armed kind, and clears on Cancel without a
+	# command.
+	var crossover_main := get_node("Main") as Node3D
+	var bunkhouse_tile := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
+	var wall_tile := get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button
+	if not await _arm_defense(crossover_main, bunkhouse_tile, "Bunkhouse"):
+		return
+	move_button.grab_focus()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
+		_fail("armed Bunkhouse tile lost or shared its placement state after focus moved")
+		return
+	_key_tap(KEY_1)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" \
+			or not bunkhouse_tile.button_pressed or not _ring(unit_one).visible:
+		_fail("real selection transition cleared the armed build tile or its placement")
+		return
+	var tile_transition_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), wall_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Wall" \
+			or not wall_tile.button_pressed or bunkhouse_tile.button_pressed \
+			or int(GrusBridge.command_feedback_revision()) != tile_transition_revision:
+		_fail("build-tile transition left the previous tile lit or dispatched a command")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["CancelButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or wall_tile.button_pressed \
+			or bunkhouse_tile.button_pressed or command_status.text != "Placement canceled" \
+			or int(GrusBridge.command_feedback_revision()) != tile_transition_revision:
+		_fail("Cancel left an armed build tile lit or dispatched a command")
+		return
+
 	# HPA-698 targeting modes are mutually exclusive. A build tile and an
 	# armed order may not coexist, in either entry order, and keyboard A must
 	# leave placement before arming Attack-move. The next right-click must
 	# execute the modal order rather than merely canceling placement.
-	var crossover_main := get_node("Main") as Node3D
-	var bunkhouse_tile := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
 	if not _ring(unit_two).visible:
 		_fail("Worker 2 is not selected before the placement/order crossover probes")
 		return

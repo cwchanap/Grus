@@ -150,6 +150,10 @@ func _refresh_session() -> void:
 	var snap: Dictionary = GrusBridge.session_snapshot()
 	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
+	if _session_phase == "Result":
+		# Result owns the screen; the drawer is inspection-only and must not
+		# sit behind the mouse-ignoring outcome composition.
+		_close_underground_panel()
 	if _session_phase != "Playing":
 		_armed_order = ""
 	_fx.set_wind_phase(_session_phase)
@@ -262,6 +266,7 @@ func _refresh_hud() -> void:
 	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds,
 		unit_task, unit_health, building_health)
 	_hud.refresh_orders(_armed_order, _playing())
+	_hud.refresh_build_placement(_placement_kind)
 	_hud.refresh_research_controls(research, _playing(), _research_center_id() > 0)
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
@@ -988,8 +993,11 @@ func _on_idle_pressed() -> void:
 
 ## Tab toggles the underground panel; the panel itself consumes mouse input
 ## (Control STOP filter) so clicks never leak into ground selection,
-## placement or unit commands.
+## placement or unit commands. Result never reopens it: the outcome screen
+## owns the frame.
 func _toggle_underground_panel() -> void:
+	if _session_phase == "Result":
+		return
 	if _ug_drawer.visible:
 		_close_underground_panel()
 	else:
