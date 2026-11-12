@@ -279,6 +279,16 @@ func _kind_layout_error(button: Button, room_entry: Dictionary, where: String) -
 		return "%s kind name has no readable outline" % where
 	return ""
 
+## The exact snapshot the drawer last rendered. Comparing the readouts to this
+## avoids a one-tick 20x race between a fresh bridge read and the labels.
+func _drawer_slot(level: int, slot: int) -> Dictionary:
+	var snap: Dictionary = _panel.get("_snapshot")
+	var levels: Array = snap.get("levels", [])
+	if level < 1 or level > levels.size():
+		return {}
+	var slots: Array = levels[level - 1].get("slots", [])
+	return slots[slot] if slot >= 0 and slot < slots.size() else {}
+
 func _stock() -> Dictionary:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	return {"food": int(economy.food), "scrap": int(economy.scrap),
@@ -828,7 +838,7 @@ func _run() -> void:
 		return
 	# The construction percentage is a compact top-right badge; the room name
 	# keeps the centre and must not ellipsize under the painted frame.
-	var building_readout := _slot_readout_error(_slot(3, 0), _slot_state(3, 0), "building Lab")
+	var building_readout := _slot_readout_error(_slot(3, 0), _drawer_slot(3, 0), "building Lab")
 	if not _check(building_readout.is_empty(), building_readout):
 		return
 	# Real construction evidence. At 20x the 30 s Lab build has ~25 s left
@@ -862,7 +872,7 @@ func _run() -> void:
 			and _plate_path(_slot(3, 0), "disabled") == tile_normal_path,
 			"completed Lab slot is not the normal painted tile with its room icon"):
 		return
-	var lab_benefit := _slot_readout_error(_slot(3, 0), _slot_state(3, 0), "completed Lab")
+	var lab_benefit := _slot_readout_error(_slot(3, 0), _drawer_slot(3, 0), "completed Lab")
 	if not _check(lab_benefit.is_empty(), lab_benefit):
 		return
 	var cold: Dictionary = GrusBridge.economy_snapshot()
@@ -888,7 +898,7 @@ func _run() -> void:
 			and _plate_path(_slot(3, 1), "disabled") == tile_normal_path,
 			"building Geothermal Tap slot is not the normal painted tile with its room icon"):
 		return
-	var tap_building := _slot_readout_error(_slot(3, 1), _slot_state(3, 1), "building Tap")
+	var tap_building := _slot_readout_error(_slot(3, 1), _drawer_slot(3, 1), "building Tap")
 	if not _check(tap_building.is_empty(), tap_building):
 		return
 	if not await _wait(func(): return bool(_slot_state(3, 1).complete), 6.0, "Tap did not complete"):
@@ -898,7 +908,7 @@ func _run() -> void:
 			and _plate_path(_slot(3, 1), "disabled") == tile_normal_path,
 			"completed Geothermal Tap slot is not the normal painted tile with its room icon"):
 		return
-	var tap_benefit := _slot_readout_error(_slot(3, 1), _slot_state(3, 1), "completed Tap")
+	var tap_benefit := _slot_readout_error(_slot(3, 1), _drawer_slot(3, 1), "completed Tap")
 	if not _check(tap_benefit.is_empty(), tap_benefit):
 		return
 	var warm: Dictionary = GrusBridge.economy_snapshot()
@@ -930,7 +940,7 @@ func _run() -> void:
 	# snapshot benefit readout — the reviewer's unarmed-frame regression.
 	for slot_index in 2:
 		var unarmed_benefit := _slot_readout_error(_slot(3, slot_index),
-				_slot_state(3, slot_index), "unarmed L3 slot %d" % slot_index)
+				_drawer_slot(3, slot_index), "unarmed L3 slot %d" % slot_index)
 		if not _check(unarmed_benefit.is_empty(), unarmed_benefit):
 			return
 	# Opt-in evidence of the fourth appearance: with no kind armed, every
