@@ -110,6 +110,43 @@ static func hud_rects(hud_root: Node) -> Array[Rect2]:
 			rects.append(control.get_global_rect())
 	return rects
 
+## Opt-in real-render capture at an existing smoke journey point. Nothing is
+## written unless GRUS_CAPTURE_DIR names a directory; the headless dummy
+## renderer returns before waiting on any render signal. Returns "" on success
+## (or when disabled) and an explicit error string the caller can fail with.
+## Presentation only: it reads the current frame and never touches gameplay.
+static func capture_frame(tree: SceneTree, file_name: String) -> String:
+	var directory := OS.get_environment("GRUS_CAPTURE_DIR")
+	if directory.is_empty():
+		return ""
+	if DisplayServer.get_name() == "headless":
+		return ""
+	var directory_error := DirAccess.make_dir_recursive_absolute(directory)
+	if directory_error != OK:
+		return "cannot create GRUS_CAPTURE_DIR %s: %s" % [directory, error_string(directory_error)]
+	await RenderingServer.frame_post_draw
+	var image := tree.root.get_texture().get_image()
+	var path := directory.path_join("%s.png" % file_name)
+	var save_error := image.save_png(path)
+	if save_error != OK:
+		return "cannot save capture %s: %s" % [path, error_string(save_error)]
+	print("GRUS_CAPTURE %s %dx%d" % [path, image.get_width(), image.get_height()])
+	return ""
+
+## The map-edge seam contract: the 3D default clear color behind the ground
+## must equal the opaque unexplored fog color the overlay paints on the map.
+## A value check only — the opt-in captured frames prove the pixels.
+static func fog_clear_color_error(fog: Node) -> String:
+	if fog == null or not fog.has_method("unexplored_color"):
+		return "fog overlay does not expose its unexplored color"
+	var fog_color: Color = fog.call("unexplored_color")
+	if fog_color.a < 1.0:
+		return "unexplored fog color %s is not opaque" % fog_color
+	var clear_color := RenderingServer.get_default_clear_color()
+	if not fog_color.is_equal_approx(clear_color):
+		return "default clear color %s does not match the unexplored fog color %s" % [clear_color, fog_color]
+	return ""
+
 ## The live-view geometry contract behind `building_view_transform`: the
 ## bridge scales the view to the catalogue footprint and centers it, and
 ## the attached Model — construction site or finished GLB — must sit inside

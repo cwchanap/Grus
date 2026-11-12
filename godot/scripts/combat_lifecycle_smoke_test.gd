@@ -565,6 +565,10 @@ func _run() -> void:
 		return
 	if not _assert_input_gated("Start"):
 		return
+	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-start")
+	if not start_capture.is_empty():
+		_fail(start_capture)
+		return
 
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
@@ -889,6 +893,27 @@ func _run() -> void:
 			or _button("HUD/SessionPanel/QuitButton").disabled:
 		_fail("Result overlay does not show the readable session Defeat title over its banner")
 		return
+	# HPA-698 visual fidelity Result: the existing backdrop still covers the
+	# whole viewport, the fog and the renderer's default clear color agree
+	# (the opt-in captured frame is what proves the pixels), and each winner's
+	# title sits on its own cloth instead of the same fixed box.
+	var session_backdrop := _main.get_node("HUD/SessionBackdrop") as Control
+	if not session_backdrop.visible \
+			or session_backdrop.get_global_rect() != Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)):
+		_fail("Result backdrop does not cover the viewport: %s" % session_backdrop.get_global_rect())
+		return
+	var fog_error := SmokeHelpers.fog_clear_color_error(_main.get_node("Battlefield/FogOfWar"))
+	if not fog_error.is_empty():
+		_fail(fog_error)
+		return
+	if not result_banner.get_global_rect().encloses(result_title.get_global_rect()):
+		_fail("Defeat title is not placed inside its banner cloth")
+		return
+	var defeat_title_center := result_title.get_global_rect().get_center()
+	var defeat_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-defeat")
+	if not defeat_capture.is_empty():
+		_fail(defeat_capture)
+		return
 	# Result actions sit in a bottom bar matching the mockup composition. The
 	# bar is decorative (mouse IGNORE); the two named buttons stay distinct and
 	# reachable, and every printed figure comes from a live read-only snapshot.
@@ -940,14 +965,27 @@ func _run() -> void:
 	# gameplay victory journey; it proves the banner/title pair reacts to the
 	# same session field without manufacturing sim state.
 	var hud := _main.get_node("HUD")
+	# Hold the controller's per-frame refresh for the probe only: the awaited
+	# capture needs a rendered frame, and leaving _process running would
+	# overwrite the presentation-only winner before that frame draws.
+	_main.set_process(false)
 	hud.call("refresh_session", "Result", 1)
+	var victory_title_center := result_title.get_global_rect().get_center()
 	if not result_title.visible or result_title.text != "Victory" \
 			or result_banner.texture == null \
 			or not result_banner.texture.resource_path.ends_with("screens/victory_banner.png") \
 			or not result_bar.visible or not result_stats.is_visible_in_tree() \
 			or _button("HUD/SessionPanel/RestartButton").disabled \
-			or _button("HUD/SessionPanel/QuitButton").disabled:
-		_fail("presentation probe did not render the Victory title over the Victory art")
+			or _button("HUD/SessionPanel/QuitButton").disabled \
+			or not result_banner.get_global_rect().encloses(result_title.get_global_rect()) \
+			or is_equal_approx(victory_title_center.y, defeat_title_center.y):
+		_main.set_process(true)
+		_fail("presentation probe did not render the Victory title on its own banner cloth height")
+		return
+	var victory_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-victory-probe")
+	_main.set_process(true)
+	if not victory_capture.is_empty():
+		_fail(victory_capture)
 		return
 	hud.call("refresh_session", "Result", 2)
 	if not result_title.visible or result_title.text != "Defeat" \

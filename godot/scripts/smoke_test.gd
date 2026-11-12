@@ -1016,6 +1016,73 @@ func _run() -> void:
 		_fail("Start title/emblem are not large and visible: emblem=%s title_size=%d" % [
 			session_emblem.get_global_rect().size, session_title.get_theme_font_size("font_size")])
 		return
+	# HPA-698 visual fidelity Start layout: three painted-icon objectives, a
+	# compact horizontal controls strip and the bright shared Start/Restart
+	# action, all fully on screen and non-overlapping.
+	var session_panel := get_node_or_null("Main/HUD/SessionPanel") as Panel
+	var objectives := get_node_or_null("Main/HUD/SessionPanel/Objectives") as VBoxContainer
+	var start_button := get_node_or_null("Main/HUD/SessionPanel/StartButton") as Button
+	var resume_button := get_node_or_null("Main/HUD/SessionPanel/ResumeButton") as Button
+	var restart_button := get_node_or_null("Main/HUD/SessionPanel/RestartButton") as Button
+	if session_panel == null or objectives == null or start_button == null \
+			or resume_button == null or restart_button == null:
+		_fail("Start objectives or session action controls are missing")
+		return
+	if not objectives.is_visible_in_tree() or objectives.get_child_count() != 3:
+		_fail("Start does not show exactly three objectives")
+		return
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE))
+	for row in objectives.get_children():
+		var objective_icon := row.get_node_or_null("Icon") as TextureRect
+		var objective_title := row.get_node_or_null("Text/Title") as Label
+		var objective_detail := row.get_node_or_null("Text/Detail") as Label
+		if objective_icon == null or objective_icon.texture == null \
+				or not objective_icon.is_visible_in_tree() \
+				or objective_title == null or objective_title.text.strip_edges().is_empty() \
+				or objective_detail == null or objective_detail.text.strip_edges().is_empty():
+			_fail("Start objective row is not icon-led with title/detail: %s" % row.name)
+			return
+	var catalogue_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
+	var opening_prep := int(roundf(float(GrusBridge.wave_snapshot().get("timer_total_seconds", 0.0))))
+	var research_detail := objectives.get_child(2).get_node("Text/Detail") as Label
+	var survive_detail := objectives.get_child(0).get_node("Text/Detail") as Label
+	if catalogue_target <= 0 or not research_detail.text.replace(",", "").contains(str(catalogue_target)):
+		_fail("Research objective does not derive its target from the catalogue: %s" % research_detail.text)
+		return
+	if opening_prep <= 0 or not survive_detail.text.contains("%d:%02d" % [opening_prep / 60, opening_prep % 60]):
+		_fail("Survive objective does not derive the initial preparation from the wave snapshot: %s" % survive_detail.text)
+		return
+	if controls_label.get_global_rect().size.y > 44.0 \
+			or controls_label.get_global_rect().size.x < 800.0:
+		_fail("ControlsLabel is not a horizontal strip: %s" % controls_label.get_global_rect())
+		return
+	for control in [objectives, start_button, controls_label]:
+		if not viewport_rect.encloses(control.get_global_rect()):
+			_fail("Start control %s is offscreen: %s" % [control.name, control.get_global_rect()])
+			return
+	if objectives.get_global_rect().intersects(start_button.get_global_rect()) \
+			or objectives.get_global_rect().intersects(controls_label.get_global_rect()) \
+			or start_button.get_global_rect().intersects(controls_label.get_global_rect()):
+		_fail("Start objectives/action/controls strip overlap")
+		return
+	var start_button_rect := start_button.get_global_rect()
+	if start_button_rect.size.x < 280.0 or start_button_rect.size.y < 56.0 \
+			or not start_button.is_visible_in_tree() or start_button.disabled:
+		_fail("Start action is not a visible, reachable call to action: %s" % start_button_rect)
+		return
+	var start_style := start_button.get_theme_stylebox("normal") as StyleBoxFlat
+	var restart_style := restart_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if start_style == null or start_style.bg_color.v < 0.5 \
+			or restart_style == null or restart_style.bg_color != start_style.bg_color:
+		_fail("Start does not carry the shared bright Frostline action style")
+		return
+	if is_same(resume_button.get_theme_stylebox("normal"), start_style):
+		_fail("Resume inherited the Start-only bright action style")
+		return
+	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-start")
+	if not start_capture.is_empty():
+		_fail(start_capture)
+		return
 	if result_banner.visible or frost_overlay.visible or vignette.texture == null or not vignette.visible:
 		_fail("Result banner/frost/vignette visibility is wrong at the warm Start screen")
 		return
@@ -1053,6 +1120,23 @@ func _run() -> void:
 	if controls_label.is_visible_in_tree():
 		_fail("ControlsLabel stayed visible after the match reached Playing")
 		return
+	# HPA-698 map-edge provenance: with the match playing, pan west past the
+	# authored ground edge through the real middle-drag path and capture the
+	# fog boundary beside the default clear color; then restore the exact
+	# camera framing the rest of the journey relies on. Camera state is
+	# presentation only.
+	var edge_camera_position := camera.position
+	_mouse_drag(Vector2(200.0, 300.0), Vector2(800.0, 300.0), MOUSE_BUTTON_MIDDLE)
+	await get_tree().process_frame
+	if camera.position.is_equal_approx(edge_camera_position):
+		_fail("map-edge capture pan did not move the camera")
+		return
+	var edge_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-map-edge")
+	if not edge_capture.is_empty():
+		_fail(edge_capture)
+		return
+	camera.position = edge_camera_position
+	await get_tree().process_frame
 
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
 	# Empty ground outside every re-laid-out HUD zone: the old viewport-bottom

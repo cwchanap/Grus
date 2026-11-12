@@ -40,6 +40,9 @@ extends CanvasLayer
 @onready var session_title: Label = $SessionPanel/SessionTitle
 @onready var session_subtitle: Label = $SessionPanel/SessionSubtitle
 @onready var controls_label: Label = $SessionPanel/ControlsLabel
+@onready var objectives: VBoxContainer = $SessionPanel/Objectives
+@onready var survive_detail: Label = $SessionPanel/Objectives/Survive/Text/Detail
+@onready var research_detail: Label = $SessionPanel/Objectives/Research/Text/Detail
 @onready var session_backdrop: Control = $SessionBackdrop
 @onready var start_art: TextureRect = $SessionBackdrop/StartArt
 @onready var session_dim: ColorRect = $SessionBackdrop/Dim
@@ -77,6 +80,13 @@ var _producer_kinds: Dictionary = {}
 ## Five queue sockets plus one overflow chip, built once and reused; the
 ## live FIFO arrives through the selected building's read-only snapshot.
 const QUEUE_SOCKET_COUNT := 5
+## Normalized centers of the two shipped banners' painted cloth, measured
+## from the PNGs themselves: the readable title must sit on each cloth, not
+## on the shared TextureRect box (the cloths sit at different heights).
+const RESULT_TITLE_ANCHORS := {
+	"victory": Vector2(0.5, 0.575),
+	"defeat": Vector2(0.5, 0.525),
+}
 var _socket_panels: Array[Panel] = []
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
@@ -122,6 +132,7 @@ func _ready() -> void:
 	_build_glow_textures()
 	_build_vignette()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
+	research_detail.text = "%s to win" % _grouped_thousands(_research_target_points)
 	for marker_kind in ["FlameTower", "CrystalLance"]:
 		var marker_entry: Dictionary = buildings.get(marker_kind, {})
 		var points := int(marker_entry.get("unlock_points", 0))
@@ -162,16 +173,31 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
-	# The Start and Result primary actions read as the mockup's cyan call to
-	# action instead of the neutral steel button.
+	# The Start and Result primary actions read as the mockup's bright cyan
+	# call to action instead of the neutral steel button.
 	var start_style := StyleBoxFlat.new()
-	start_style.bg_color = Color(0.07, 0.36, 0.42, 0.96)
-	start_style.border_color = Color(0.42, 0.9, 0.96, 1.0)
+	start_style.bg_color = Color(0.09, 0.62, 0.72, 1.0)
+	start_style.border_color = Color(0.68, 0.98, 1.0, 1.0)
 	start_style.set_border_width_all(2)
 	start_style.set_corner_radius_all(4)
+	start_style.shadow_color = Color(0.01, 0.03, 0.05, 0.9)
+	start_style.shadow_size = 3
+	start_style.shadow_offset = Vector2(0.0, 3.0)
 	for button in [start_button, restart_button]:
 		for state in ["normal", "hover", "pressed"]:
 			button.add_theme_stylebox_override(state, start_style)
+	# One painted band behind the documented key instructions; the label stays
+	# the single text source and only its Start-phase visibility applies.
+	var controls_strip := StyleBoxFlat.new()
+	controls_strip.bg_color = Color(0.04, 0.06, 0.08, 0.86)
+	controls_strip.border_color = Color(0.3, 0.4, 0.47, 0.85)
+	controls_strip.set_border_width_all(1)
+	controls_strip.set_corner_radius_all(3)
+	controls_strip.content_margin_left = 12.0
+	controls_strip.content_margin_right = 12.0
+	controls_strip.content_margin_top = 6.0
+	controls_strip.content_margin_bottom = 6.0
+	controls_label.add_theme_stylebox_override("normal", controls_strip)
 	start_button.add_theme_font_size_override("font_size", 22)
 	start_button.text = "START"
 	restart_button.add_theme_font_size_override("font_size", 20)
@@ -284,6 +310,16 @@ func _combat_line(entry: Dictionary) -> String:
 
 func _number(value: float) -> String:
 	return String.num(value, 1).trim_suffix(".0")
+
+## Display-only grouping for the catalogue research target (9000 -> 9,000).
+func _grouped_thousands(value: int) -> String:
+	var digits := str(value)
+	var grouped := ""
+	for index in digits.length():
+		if index > 0 and (digits.length() - index) % 3 == 0:
+			grouped += ","
+		grouped += digits[index]
+	return grouped
 
 func _unit_tooltip(entry: Dictionary) -> String:
 	return "Cost: %s\nTrain: %ds\nHP: %d%s" % [
@@ -533,6 +569,11 @@ func refresh_wave(wave: Dictionary) -> void:
 	var remaining := maxi(ceili(float(wave.get("seconds_remaining", 0.0))), 0)
 	var remaining_seconds := maxf(float(wave.get("seconds_remaining", 0.0)), 0.0)
 	var total_seconds := maxf(float(wave.get("timer_total_seconds", 0.0)), 1.0)
+	# Start's SURVIVE objective repeats the frozen opening preparation from
+	# the snapshot's own total; the regular-wave interval is not projected.
+	var prep_seconds := int(roundf(float(wave.get("timer_total_seconds", 0.0))))
+	if prep_seconds > 0 and int(wave.get("wave", 0)) == 0:
+		survive_detail.text = "First wave in %d:%02d" % [prep_seconds / 60, prep_seconds % 60]
 	var incoming_names := PackedStringArray()
 	for zone in wave.get("incoming_zones", []):
 		incoming_names.append(str(zone.get("name", "")))
@@ -782,6 +823,13 @@ func _render_result_stats() -> void:
 			parts.append(text)
 	result_stats.text = "   ".join(parts)
 
+## Each winner's banner cloth sits at a different place in its PNG, so the
+## title follows the measured normalized cloth center instead of a shared box.
+func _place_result_title(winner_team: int) -> void:
+	var anchor: Vector2 = RESULT_TITLE_ANCHORS["victory" if winner_team == 1 else "defeat"]
+	result_title.position = (
+		result_banner.position + result_banner.size * anchor - result_title.size * 0.5)
+
 ## Session overlay visibility and wording from the controller's settled phase;
 ## the buttons themselves stay connected and dispatched by the controller. The
 ## Start key art/emblem and the Result Victory/Defeat banner are driven only
@@ -805,8 +853,11 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	session_emblem.visible = start
 	session_title.visible = start
 	session_subtitle.visible = start
+	objectives.visible = start
 	controls_label.visible = start
-	session_label.visible = not result
+	# The old free-form Start instruction label survives only as the Paused
+	# wording; Start's objectives carry the three lines.
+	session_label.visible = paused
 	if start or result:
 		session_panel.add_theme_stylebox_override("panel", _transparent_panel)
 	else:
@@ -821,8 +872,10 @@ func refresh_session(phase: String, winner_team: int) -> void:
 			"victory" if winner_team == 1 else "defeat")
 		result_banner.texture = load(banner_path) as Texture2D
 		# The shipped banner art is intentionally textless: the readable
-		# outcome title is drawn from the same session winner field.
+		# outcome title is drawn from the same session winner field, centered
+		# on that winner's painted cloth.
 		result_title.text = "Victory" if winner_team == 1 else "Defeat"
+		_place_result_title(winner_team)
 		_render_result_stats()
 	# Restart/Quit belong to Result only.
 	match phase:
