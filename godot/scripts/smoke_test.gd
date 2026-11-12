@@ -987,10 +987,12 @@ func _run() -> void:
 	var start_art := get_node_or_null("Main/HUD/SessionBackdrop/StartArt") as TextureRect
 	var result_banner := get_node_or_null("Main/HUD/SessionBackdrop/ResultBanner") as TextureRect
 	var session_emblem := get_node_or_null("Main/HUD/SessionPanel/SessionEmblem") as TextureRect
+	var session_title := get_node_or_null("Main/HUD/SessionPanel/SessionTitle") as Label
 	var vignette := get_node_or_null("Main/HUD/Vignette") as TextureRect
 	var frost_overlay := get_node_or_null("Main/HUD/Atmosphere/FrostOverlay") as TextureRect
 	if session_backdrop == null or start_art == null or result_banner == null \
-			or session_emblem == null or vignette == null or frost_overlay == null:
+			or session_emblem == null or session_title == null \
+			or vignette == null or frost_overlay == null:
 		_fail("Start/Result atmosphere nodes are missing")
 		return
 	if not session_backdrop.visible or not start_art.visible \
@@ -999,6 +1001,17 @@ func _run() -> void:
 			or not session_emblem.visible or session_emblem.texture == null \
 			or not session_emblem.texture.resource_path.ends_with("screens/emblem.png"):
 		_fail("Start key art or emblem is missing before Start")
+		return
+	# The mockup Start lockup is emblem-and-wordmark led: both must be larger
+	# than the former 96 px emblem / 60 px title while staying on screen.
+	if session_emblem.get_global_rect().size.x < 128.0 \
+			or session_emblem.get_global_rect().size.y < 128.0 \
+			or not session_title.visible \
+			or session_title.get_theme_font_size("font_size") < 72 \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(
+				session_title.get_global_rect()):
+		_fail("Start title/emblem are not large and visible: emblem=%s title_size=%d" % [
+			session_emblem.get_global_rect().size, session_title.get_theme_font_size("font_size")])
 		return
 	if result_banner.visible or frost_overlay.visible or vignette.texture == null or not vignette.visible:
 		_fail("Result banner/frost/vignette visibility is wrong at the warm Start screen")

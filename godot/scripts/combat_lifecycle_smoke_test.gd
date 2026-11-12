@@ -178,6 +178,9 @@ func _building_complete(id: int) -> bool:
 func _session_panel() -> Panel:
 	return _main.get_node("HUD/SessionPanel") as Panel
 
+func _result_bar() -> Panel:
+	return _main.get_node_or_null("HUD/ResultBar") as Panel
+
 func _session_label() -> Label:
 	return _main.get_node("HUD/SessionPanel/SessionLabel") as Label
 
@@ -542,6 +545,10 @@ func _run() -> void:
 	if str(session.get("phase", "")) != "Start":
 		_fail("fixture boot session is not Start: %s" % [session])
 		return
+	var result_bar := _main.get_node_or_null("HUD/ResultBar") as Panel
+	if result_bar == null or result_bar.visible:
+		_fail("Result bar is missing or visible during the Start phase")
+		return
 	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible \
 				and not _button("HUD/SessionPanel/QuitButton").visible):
 		_fail("Start overlay is not up during the Start phase")
@@ -796,6 +803,7 @@ func _run() -> void:
 					and _button("HUD/SessionPanel/ResumeButton").visible \
 					and not _button("HUD/PauseButton").visible \
 					and not _button("HUD/SessionPanel/QuitButton").visible \
+					and not _result_bar().visible \
 					and _session_label().text == "Paused",
 			5.0, "Paused overlay is not showing Resume with Pause/Quit hidden"):
 		return
@@ -856,6 +864,51 @@ func _run() -> void:
 			or _button("HUD/SessionPanel/QuitButton").disabled:
 		_fail("Result overlay does not show the readable session Defeat title over its banner")
 		return
+	# Result actions sit in a bottom bar matching the mockup composition. The
+	# bar is decorative (mouse IGNORE); the two named buttons stay distinct and
+	# reachable, and every printed figure comes from a live read-only snapshot.
+	var result_stats := _main.get_node_or_null("HUD/ResultBar/ResultStats") as RichTextLabel
+	var restart_button := _button("HUD/SessionPanel/RestartButton")
+	var quit_button := _button("HUD/SessionPanel/QuitButton")
+	if result_bar == null or not result_bar.visible \
+			or result_bar.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+			or result_stats == null or not result_stats.is_visible_in_tree():
+		_fail("Result bar is missing, not visible, or intercepts mouse input")
+		return
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE))
+	var bar_rect := result_bar.get_global_rect()
+	if bar_rect.position.y < TEST_VIEWPORT_SIZE.y * 0.75 or not viewport_rect.encloses(bar_rect):
+		_fail("Result bar is not a visible bottom bar at 1280x720: %s" % [bar_rect])
+		return
+	var restart_rect := restart_button.get_global_rect()
+	var quit_rect := quit_button.get_global_rect()
+	if not bar_rect.encloses(restart_rect) or not bar_rect.encloses(quit_rect) \
+			or restart_rect.intersects(quit_rect) \
+			or not viewport_rect.encloses(restart_rect) or not viewport_rect.encloses(quit_rect) \
+			or restart_button.disabled or quit_button.disabled \
+			or not restart_button.is_visible_in_tree() or not quit_button.is_visible_in_tree():
+		_fail("Result bar Restart/Quit are not distinct, reachable controls")
+		return
+	var result_research: Dictionary = GrusBridge.research_snapshot()
+	var result_economy: Dictionary = GrusBridge.economy_snapshot()
+	var result_wave: Dictionary = GrusBridge.wave_snapshot()
+	var result_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
+	for expected in [
+			"Wave %d" % int(result_wave.get("wave", 0)),
+			"Research %d/%d" % [floori(float(result_research.get("points", 0.0))), result_target],
+			"Pop %d" % int(result_economy.get("population_used", 0)),
+			"Crystals %d" % int(result_economy.get("crystals", 0))]:
+		if not result_stats.text.contains(expected):
+			_fail("Result bar statistics are not snapshot-derived (missing %s): %s" % [expected, result_stats.text])
+			return
+	# The outcome composition replaces the in-match HUD; no live gameplay
+	# control may sit exposed behind or beside the Result bar.
+	for path in ["HUD/EconomyPanel", "HUD/ResearchPanel", "HUD/SelectionPanel",
+			"HUD/CommandPanel", "HUD/WavePanel", "HUD/WaveRing", "HUD/WaveLabel",
+			"HUD/MinimapFrame", "HUD/Minimap", "HUD/CommandStatus"]:
+		if (_main.get_node(path) as CanvasItem).visible:
+			_fail("Result phase still exposes in-match HUD %s" % path)
+			return
 	# Presentation-only variant probe: call the HUD render directly with both
 	# winner values and restore the actual session immediately. This is not a
 	# gameplay victory journey; it proves the banner/title pair reacts to the
@@ -865,6 +918,7 @@ func _run() -> void:
 	if not result_title.visible or result_title.text != "Victory" \
 			or result_banner.texture == null \
 			or not result_banner.texture.resource_path.ends_with("screens/victory_banner.png") \
+			or not result_bar.visible or not result_stats.is_visible_in_tree() \
 			or _button("HUD/SessionPanel/RestartButton").disabled \
 			or _button("HUD/SessionPanel/QuitButton").disabled:
 		_fail("presentation probe did not render the Victory title over the Victory art")
@@ -872,7 +926,8 @@ func _run() -> void:
 	hud.call("refresh_session", "Result", 2)
 	if not result_title.visible or result_title.text != "Defeat" \
 			or result_banner.texture == null \
-			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png"):
+			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png") \
+			or not result_bar.visible:
 		_fail("presentation probe did not restore the Defeat title/art")
 		return
 	var actual_result: Dictionary = GrusBridge.session_snapshot()
@@ -928,6 +983,13 @@ func _run() -> void:
 			return
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Start":
 		_fail("restart did not return to Start")
+		return
+	for path in ["HUD/EconomyPanel", "HUD/SelectionPanel", "HUD/CommandPanel", "HUD/Minimap"]:
+		if not (_main.get_node(path) as CanvasItem).visible:
+			_fail("restart did not restore in-match HUD %s" % path)
+			return
+	if _button("HUD/SessionPanel/RestartButton").visible:
+		_fail("restart left the Result bar actions visible during Start")
 		return
 	var reset_wave: Dictionary = GrusBridge.wave_snapshot()
 	if not _snapshot_has_safe_surface(reset_wave) \
