@@ -21,6 +21,11 @@ const DISPLAY_NAMES := {
 	"Lab": "Lab",
 	"DeepMine": "Mine",
 }
+## Text painted over the Frostline frames gets a dark outline and, for the
+## kind tiles, a translucent strip: the existing art stays, but names, prices
+## and construction readouts no longer compete with the frame detail.
+const TEXT_OUTLINE := Color(0.02, 0.03, 0.05, 0.95)
+const TEXT_OUTLINE_SIZE := 2
 
 @onready var _header: Label = $HeaderLabel
 @onready var _excavate: Button = $ExcavateButton
@@ -100,11 +105,23 @@ func _ready() -> void:
 			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
 			kind_button.text = ""
 			kind_button.accessibility_name = short_name
+			# Clear label area over the painted bottom bevel; the icon above it
+			# stays on the untouched tile art.
+			var label_backing := ColorRect.new()
+			label_backing.name = "KindLabelBacking"
+			label_backing.color = Color(0.03, 0.05, 0.07, 0.62)
+			label_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			label_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+			label_backing.offset_top = -30.0
+			label_backing.offset_bottom = 0.0
+			kind_button.add_child(label_backing)
 			var name_label := Label.new()
 			name_label.name = "KindLabel"
 			name_label.text = short_name
 			name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			name_label.add_theme_font_size_override("font_size", 11)
+			name_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+			name_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 			name_label.offset_top = -27.0
@@ -118,6 +135,8 @@ func _ready() -> void:
 		cost_label.scroll_active = false
 		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		cost_label.add_theme_font_size_override("normal_font_size", 10)
+		cost_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+		cost_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 		cost_label.offset_top = -14.0
 		cost_label.offset_bottom = -1.0
@@ -128,6 +147,8 @@ func _ready() -> void:
 		level_label.text = "L%d" % int(ug_entry.get("min_level", 1))
 		level_label.add_theme_font_size_override("font_size", 10)
 		level_label.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
+		level_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+		level_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		level_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		level_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
 		level_label.offset_left = -22.0
@@ -195,12 +216,64 @@ func _add_row(level_number: int) -> void:
 	row.add_child(level_label)
 	for slot_index in _slots_per_level:
 		var button := Button.new()
-		button.add_theme_font_size_override("font_size", 13)
-		button.add_theme_color_override("font_disabled_color", Color(0.8, 0.8, 0.8))
+		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_color_override("font_disabled_color", Color(0.92, 0.94, 0.96))
+		button.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+		button.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		button.custom_minimum_size = Vector2(84, 48)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		button.pressed.connect(_on_slot_pressed.bind(level_number, slot_index))
+		# Construction percent sits in the tile's top-right corner like the
+		# mockup's timer, so the room name keeps the centre and never shares a
+		# line with a percentage that could ellipsize.
+		var percent := Label.new()
+		percent.name = "SlotPercent"
+		percent.visible = false
+		percent.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		percent.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		percent.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+		percent.add_theme_font_size_override("font_size", 10)
+		percent.add_theme_color_override("font_color", Color(0.98, 0.86, 0.62))
+		percent.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+		percent.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
+		percent.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		percent.offset_left = -40.0
+		percent.offset_top = 1.0
+		percent.offset_right = -3.0
+		percent.offset_bottom = 15.0
+		button.add_child(percent)
+		# Completed rooms keep their snapshot benefit always visible at the
+		# bottom of the plate; it is the same Rust-computed effect string the
+		# tooltip carries, never copied here. A compact dark band right of the
+		# room icon keeps it clear of the painted bottom bevel.
+		var benefit_backing := ColorRect.new()
+		benefit_backing.name = "SlotBenefitBacking"
+		benefit_backing.visible = false
+		benefit_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		benefit_backing.color = Color(0.03, 0.05, 0.07, 0.58)
+		benefit_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		benefit_backing.offset_left = 26.0
+		benefit_backing.offset_top = -17.0
+		benefit_backing.offset_right = -2.0
+		benefit_backing.offset_bottom = -1.0
+		button.add_child(benefit_backing)
+		var benefit := Label.new()
+		benefit.name = "SlotBenefit"
+		benefit.visible = false
+		benefit.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		benefit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		benefit.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		benefit.add_theme_font_size_override("font_size", 10)
+		benefit.add_theme_color_override("font_color", Color(0.78, 0.96, 0.8))
+		benefit.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
+		benefit.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
+		benefit.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		benefit.offset_left = 26.0
+		benefit.offset_top = -16.0
+		benefit.offset_right = -2.0
+		benefit.offset_bottom = -2.0
+		button.add_child(benefit)
 		row.add_child(button)
 	_levels.add_child(row)
 
@@ -273,8 +346,14 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 			var button := row.get_child(slot_index + 1) as Button
 			var slot: Dictionary = slots[slot_index]
 			var kind := str(slot.get("kind", ""))
+			var percent := button.get_node("SlotPercent") as Label
+			var benefit := button.get_node("SlotBenefit") as Label
+			var benefit_backing := button.get_node("SlotBenefitBacking") as ColorRect
 			if kind == "":
 				button.icon = null
+				percent.visible = false
+				benefit.visible = false
+				benefit_backing.visible = false
 				if armed and level_number < armed_min:
 					button.text = "L%d" % armed_min
 					button.tooltip_text = "%s requires L%d" % [
@@ -284,8 +363,8 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 					button.disabled = true
 					button.icon = _icon_for_kind("status", "Locked")
 					if button.icon != null:
-						button.add_theme_constant_override("icon_max_width", 16)
-						button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.9))
+						button.add_theme_constant_override("icon_max_width", 22)
+						button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.95))
 					_set_slot_plate(button, _tile_locked, "locked")
 				elif armed:
 					button.text = "Empty"
@@ -308,10 +387,17 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
 			if bool(slot.get("complete", false)):
 				button.text = display
+				benefit.text = str(slot.get("benefit", ""))
+				benefit.visible = not benefit.text.is_empty()
+				benefit_backing.visible = benefit.visible
+				percent.visible = false
 				button.tooltip_text = "%s — complete: %s" % [kind, str(slot.get("benefit", ""))]
 			else:
-				var progress := roundi(float(slot.get("progress", 0.0)) * 100.0)
-				button.text = "%s %d%%" % [display, progress]
+				button.text = display
+				percent.text = "%d%%" % roundi(float(slot.get("progress", 0.0)) * 100.0)
+				percent.visible = true
+				benefit.visible = false
+				benefit_backing.visible = false
 				button.tooltip_text = "%s — building, %ds left" % [
 					kind, maxi(ceili(float(slot.get("remaining", 0.0))), 0)]
 			button.disabled = true

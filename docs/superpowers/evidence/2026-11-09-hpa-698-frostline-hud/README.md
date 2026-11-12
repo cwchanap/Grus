@@ -1,7 +1,8 @@
 # HPA-698 Frostline HUD — final-head evidence
 
 Real 1280 × 720 frames captured from the final Frostline visual-fidelity
-head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e`).
+head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e` plus
+the underground legibility/benefit fix round).
 Every frame comes from an existing real-input smoke journey unless the row
 says otherwise. Captures are opt-in (`GRUS_CAPTURE_DIR`), use the reusable
 `SmokeHelpers.capture_frame` helper, and wait for
@@ -16,9 +17,11 @@ gameplay state. No approved mockup is committed here.
 | `hpa-698-result-victory-presentation-probe-1280x720.png` | **Presentation only.** `combat_lifecycle_smoke_test` calls `HUD.refresh_session("Result", 1)` with the controller's per-frame session render suspended for the capture; the Victory title is centered on its own white cloth. This is not a gameplay Victory. | 2026-11-12 12:12:28 | `b64f869380d707efda2b884c0ed62f2d0425a85f3db370d7499932632978e130` |
 | `hpa-698-barracks-five-sockets-1280x720.png` | `economy_smoke_test` real Barracks Guard→Rifleman FIFO: pressed head socket (portrait, `17s`, progress) and painted queued socket, recessed empties. Pixel-identical to the Task 2 capture. | 2026-11-12 12:12:55 | `31c91cf279944b29d7cefe894a8daf9f44e95e0ff1d5ad1af4962a4b398d982e` |
 | `hpa-698-fifo-overflow-chip-1280x720.png` | `economy_smoke_test` Research Center after six real Worker clicks: five painted sockets plus the amber `+1` overflow chip. | 2026-11-12 12:12:44 | `0aeb4762cf44e2173bd3d8a096f62277419f6d6636a52dc576830e7d094969a9` |
-| `hpa-698-underground-l3-lab-dig-1280x720.png` | `underground_smoke_test` paid L3 with completed Lab and Tap, Tap kind armed: locked L1/L2 slots (locked plate + padlock + `L3`), occupied L3 rooms (normal painted plate + room icon), and armed-eligible empty L3 slots (selected plate). Three complete rows stay inside the 152 px clipped viewport; Analyze and the command card stay clear. | 2026-11-12 12:23:46 | `bd4509eadd0dfb582e8e6970bf54d0c2f7931a990b16394111c3ceeea0993853` |
-| `hpa-698-underground-dig-progress-1280x720.png` | `underground_smoke_test` real L1 dig in progress: themed ProgressBar fill from the snapshot `progress`, amber `27s left` readout from the snapshot `remaining`, outside the level viewport; the header repeats the same values. | 2026-11-12 12:23:46 | `f32bbe39e1d3d6e238c28ce3783096a1b6e03ae06e3f7566818b379ac699eab0` |
-| `hpa-698-underground-unarmed-slots-1280x720.png` | `underground_smoke_test` after disarming the Tap: every empty slot is the flat recessed square; completed Lab/Tap keep their normal painted plates and room icons. This is the fourth slot appearance. | 2026-11-12 12:23:46 | `5dea375bd05a36f998792bc22d32fdca3c783197bfe1806c2b8e98d7fe0abe27` |
+| `hpa-698-underground-l3-lab-dig-1280x720.png` | `underground_smoke_test` paid L3 with completed Lab and Tap, Tap kind armed: kind tiles show readable name/price bands; locked L1/L2 slots show the locked plate, padlock and `L3`; occupied L3 rooms keep the normal painted plate, room icon, name and an always-visible benefit band; armed-eligible empty L3 slots use the selected plate. Three complete rows stay inside the 152 px clipped viewport; Analyze and the command card stay clear. | 2026-11-12 12:56:01 | `226eca6cff3e3d00582a5564bd8bdcb5cd87a1c7c8a96e515b0fcecd3c78d2c9` |
+| `hpa-698-underground-unarmed-slots-1280x720.png` | `underground_smoke_test` after disarming the Tap: every empty slot is the flat recessed square; completed Lab/Tap keep their normal painted plates, names and the always-visible `+1 rp/s` / `+15 heat` benefit bands. This is the fourth slot appearance and the disarmed-benefit check. | 2026-11-12 12:56:01 | `08521f6d9f7329c8ede2472676a827587b4c076cfe4031e96fe6a53d458f3ec2` |
+| `hpa-698-underground-construction-1280x720.png` | `underground_smoke_test` real Lab construction: the room name stays centred and the snapshot percentage is a compact top-right badge (`3%` in this frame), so no `name 99%` line can ellipsize. | 2026-11-12 12:56:01 | `e2df5f506cfc20b953180ad3ba51ceb8418de9d608aa44b3597583d366adba14` |
+| `hpa-698-underground-long-name-probe-1280x720.png` | **Synthetic presentation probe.** The existing four-row deeper-level probe (no command, spend or sim state) sets the copied L4 slot 2 to `Shelter` at 99% and scrolls it into view. Shows the longest displayed name plus a percentage badge without ellipsis; this is not a paid L4 room and L4 is never funded in the real journey. | 2026-11-12 12:56:01 | `794d6a2811c595c4a8cb51a1c29b56915e8ce2791204657f9902c0d7dda3c3df` |
+| `hpa-698-underground-dig-progress-1280x720.png` | `underground_smoke_test` real L1 dig in progress: themed ProgressBar fill from the snapshot `progress`, amber `27s left` readout from the snapshot `remaining`, outside the level viewport; the header repeats the same values. | 2026-11-12 12:56:01 | `0d56a46450f0fecfb4c5f0a9d0b2b5590079681c3aab133f07f6c025f0b5ec62` |
 | `hpa-698-warm-match-1280x720.png` | **Retained from `6523529`**: warm in-match worker selection and build grid. Its visible HUD regions were not changed by the later Start/Result, queue or drawer passes; the drawer is closed and no production queue is shown. | retained | `3c690ceb7a6c83fde817c30027e463866d749a20273c2d3aec9074d91a009f16` |
 | `hpa-698-cold-incoming-warning-1280x720.png` | **Retained from `6523529`**: temporary real-input driver (deleted before commit) produced the authored 30 s North warning on the 15/16 (94%) cold surface. Same retention caveat as the warm frame. | retained | `df60fbe399458c1af90d72e906cc192cdb11f337726be18db5b237eb6b51de3f` |
 
@@ -34,15 +37,19 @@ gameplay state. No approved mockup is committed here.
   legible. The mockup's larger head tile and painted arrow are not reproduced
   because the game keeps five equal reusable sockets.
 - **`mockup-3.png` (Underground):** kind tiles reuse the same normal/pressed/
-  locked Tile states as the mockup; armed-eligible slots are cyan, locked
-  slots carry the padlock and their required level, occupied rooms keep the
-  normal painted plate and room icon, and unarmed empty slots are flat recesses.
-  The three visible rows and the digging readout follow the mockup's structure.
-  Remaining differences: the square Tile art is stretched into the game's wider
-  84 × 48 slot plates, the armed empty slots say `Empty` instead of the mockup's
-  `+` glyph, the game has no hazard-stripe digging row by design and uses the
-  existing theme ProgressBar instead, and the mockup's bottom benefit chips are
-  not implemented.
+  locked Tile states as the mockup; their names and prices sit on a clear dark
+  band so the painted frame no longer competes with them. Armed-eligible slots
+  are cyan, locked slots carry a 22 px padlock and their required level,
+  occupied rooms keep the normal painted plate, room icon and name, and an
+  always-visible snapshot benefit band (`+1 rp/s`, `+15 heat`, …). The room name
+  stays centred while construction progress is a compact top-right badge, so a
+  long name never shares a line with a percentage. Unarmed empty slots are flat
+  recesses. The three visible rows and the digging readout follow the mockup's
+  structure. Remaining differences: the square Tile art is stretched into the
+  game's wider 84 × 48 slot plates; the armed empty slots say `Empty` instead
+  of the mockup's `+` glyph; the game has no hazard-stripe digging row by
+  design and uses the existing theme ProgressBar instead; and the mockup's
+  separate bottom benefit-chip row is replaced by the per-room benefit bands.
 - **`mockup-4.png` (Start, Result and design tokens):** Start's three
   icon-led objectives, one controls strip and bright START match the approved
   treatment; Victory and Defeat titles sit on their own cloths and the Result
@@ -53,11 +60,12 @@ gameplay state. No approved mockup is committed here.
 ## Limits
 
 - Victory is a presentation-only `refresh_session` probe, not a gameplay win.
-- The **only** synthetic presentation probe in this task is the deeper
-  L4 four-row scroll check in `underground_smoke_test`; it is not captured in
-  these frames. The real journey stops at L3 because the unchanged first-wave
-  guard leaves no time to fund L4. The deeper-row frame/behaviour is therefore
-  widget-only evidence from the smoke assertions.
+- The synthetic presentation probes are the deeper L4 four-row
+  scroll/command-click check and its `Shelter` 99% long-name capture in
+  `underground_smoke_test`. The real journey stops at L3 because the unchanged
+  first-wave guard leaves no time to fund L4. Both are widget/showcase evidence
+  from the smoke assertions and the `hpa-698-underground-long-name-probe`
+  frame is labelled synthetic; no command, spend or sim state changes.
 - The map-edge clear-colour change from Task 1 is not re-litigated here: its
   before/after captures used different camera framing, so there is no
   controlled pixel comparison. The grey band is substantially improved but a
