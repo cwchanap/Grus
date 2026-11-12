@@ -236,6 +236,48 @@ func _queue_layout_error(sockets: Container, where: String) -> String:
 			return "%s queue row has an unexpected visible child %s" % [where, control.name]
 	return ""
 
+## Painted queue treatment: queued sockets reuse the theme's square Tile
+## normal plate and the head its pressed plate, read from the active theme so
+## the expected texture paths are never copied here. Empty sockets keep the
+## recessed flat square (the round socket.png is not a queue bezel). The
+## painted plate must not resize the sockets: their 64x64 floor and the
+## queue row's bounds stay the ones the test last validated.
+func _queue_painted_treatment_error(sockets: Container, filled: int, where: String) -> String:
+	if sockets == null:
+		return "%s queue sockets are missing" % where
+	var hud := get_node("Main/HUD/SelectionPanel") as Control
+	var tile_normal := hud.get_theme_stylebox("normal", "Tile")
+	var tile_pressed := hud.get_theme_stylebox("pressed", "Tile")
+	if not tile_normal is StyleBoxTexture or not tile_pressed is StyleBoxTexture:
+		return "%s theme Tile normal/pressed styles are not textures" % where
+	var normal_path := (tile_normal as StyleBoxTexture).texture.resource_path
+	var pressed_path := (tile_pressed as StyleBoxTexture).texture.resource_path
+	if normal_path.is_empty() or pressed_path.is_empty() or normal_path == pressed_path:
+		return "%s theme Tile normal/pressed styles have no distinct texture paths: %s %s" % [
+			where, normal_path, pressed_path]
+	var row := sockets.get_global_rect()
+	for index in 5:
+		var panel := sockets.get_child(index) as Panel
+		if panel == null:
+			return "%s socket %d is not a Panel" % [where, index + 1]
+		if not row.encloses(panel.get_global_rect()):
+			return "%s socket %d bounds %s leave the queue row %s" % [
+				where, index + 1, panel.get_global_rect(), row]
+		if not panel.get_combined_minimum_size().is_equal_approx(panel.custom_minimum_size):
+			return "%s socket %d bounds grew with its plate: min %s, floor %s" % [
+				where, index + 1, panel.get_combined_minimum_size(), panel.custom_minimum_size]
+		var style := panel.get_theme_stylebox("panel")
+		if index < filled:
+			var expected := pressed_path if index == 0 else normal_path
+			if not style is StyleBoxTexture \
+					or (style as StyleBoxTexture).texture.resource_path != expected:
+				return "%s socket %d does not carry the theme Tile %s plate %s" % [
+					where, index + 1, "pressed" if index == 0 else "normal", expected]
+		elif style is StyleBoxTexture:
+			return "%s empty socket %d carries a painted plate instead of the recessed square" % [
+				where, index + 1]
+	return ""
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -893,6 +935,14 @@ func _run() -> void:
 	if not queue_layout_error.is_empty():
 		_fail(queue_layout_error)
 		return
+	var painted_error := _queue_painted_treatment_error(sockets, 5, "Research Center overflow")
+	if not painted_error.is_empty():
+		_fail(painted_error)
+		return
+	var capture_error := await SmokeHelpers.capture_frame(get_tree(), "economy-queue-overflow")
+	if not capture_error.is_empty():
+		_fail(capture_error)
+		return
 	var worker_icon := "res://assets/ui/icons/units/worker.png"
 	for socket_index in 5:
 		var socket := sockets.get_child(socket_index) as Panel
@@ -1240,6 +1290,14 @@ func _run() -> void:
 	queue_layout_error = _queue_layout_error(sockets, "Barracks FIFO")
 	if not queue_layout_error.is_empty():
 		_fail(queue_layout_error)
+		return
+	painted_error = _queue_painted_treatment_error(sockets, 2, "Barracks FIFO")
+	if not painted_error.is_empty():
+		_fail(painted_error)
+		return
+	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-barracks")
+	if not capture_error.is_empty():
+		_fail(capture_error)
 		return
 	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
 	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text

@@ -92,11 +92,12 @@ var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
 var _socket_progress: Array[ProgressBar] = []
 var _queue_overflow: Label
-## Three socket plates built once: empty (recessed), queued (steel), and the
-## FIFO head (cyan, matching the mockup's highlighted next unit).
+## Socket plates: empties keep a hand-built recessed square; queued jobs and
+## the FIFO head reuse the theme's painted square Tile normal/pressed styles
+## (the round socket.png is not a square queue bezel).
 var _socket_empty_style := StyleBoxFlat.new()
-var _socket_queued_style := StyleBoxFlat.new()
-var _socket_head_style := StyleBoxFlat.new()
+var _socket_queued_style: StyleBox
+var _socket_head_style: StyleBox
 ## Last producer kind the train grid was filtered for, so visibility only
 ## changes when the selection context does.
 var _train_producer_kind := "<unset>"
@@ -368,16 +369,8 @@ func _build_queue_sockets() -> void:
 	_socket_empty_style.border_color = Color(0.24, 0.3, 0.35, 0.8)
 	_socket_empty_style.set_border_width_all(1)
 	_socket_empty_style.set_corner_radius_all(5)
-	_socket_queued_style.bg_color = Color(0.11, 0.15, 0.19, 0.96)
-	_socket_queued_style.border_color = Color(0.42, 0.5, 0.57, 0.95)
-	_socket_queued_style.set_border_width_all(1)
-	_socket_queued_style.set_corner_radius_all(5)
-	_socket_head_style.bg_color = Color(0.08, 0.19, 0.23, 0.98)
-	_socket_head_style.border_color = Color(0.35, 0.86, 0.94, 1.0)
-	_socket_head_style.set_border_width_all(2)
-	_socket_head_style.set_corner_radius_all(5)
-	_socket_head_style.shadow_color = Color(0.35, 0.86, 0.94, 0.3)
-	_socket_head_style.shadow_size = 3
+	_socket_queued_style = selection_panel.get_theme_stylebox("normal", "Tile")
+	_socket_head_style = selection_panel.get_theme_stylebox("pressed", "Tile")
 	for index in QUEUE_SOCKET_COUNT:
 		var socket := Panel.new()
 		socket.name = "Socket%d" % (index + 1)
