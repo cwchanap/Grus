@@ -11,12 +11,17 @@ extends CanvasLayer
 @onready var wave_ring: Control = $WaveRing
 @onready var wave_clock: TextureRect = $WaveRing/ClockIcon
 @onready var incoming_glow: Control = $IncomingGlow
+@onready var research_panel: Panel = $ResearchPanel
 @onready var research_bar: ProgressBar = $ResearchPanel/ResearchBar
 @onready var research_label: Label = $ResearchPanel/ResearchLabel
 @onready var research_markers: RichTextLabel = $ResearchPanel/ResearchMarkers
 @onready var research_icon: TextureRect = $ResearchPanel/ResearchIcon
 @onready var analyze_button: Button = $ResearchPanel/AnalyzeButton
 @onready var economy_label: RichTextLabel = $EconomyPanel/EconomyLabel
+@onready var economy_panel: Panel = $EconomyPanel
+@onready var command_panel: Panel = $CommandPanel
+@onready var command_status: Label = $CommandStatus
+@onready var wave_panel: Panel = $WavePanel
 @onready var heat_bar: ProgressBar = $EconomyPanel/HeatBar
 @onready var cold_chip: RichTextLabel = $EconomyPanel/ColdChip
 @onready var idle_button: Button = $EconomyPanel/IdleButton
@@ -40,6 +45,8 @@ extends CanvasLayer
 @onready var session_dim: ColorRect = $SessionBackdrop/Dim
 @onready var result_banner: TextureRect = $SessionBackdrop/ResultBanner
 @onready var result_title: Label = $SessionBackdrop/ResultTitle
+@onready var result_bar: Panel = $ResultBar
+@onready var result_stats: RichTextLabel = $ResultBar/ResultStats
 @onready var frost_overlay: TextureRect = $Atmosphere/FrostOverlay
 @onready var vignette: TextureRect = $Vignette
 @onready var start_button: Button = $SessionPanel/StartButton
@@ -50,6 +57,7 @@ extends CanvasLayer
 @onready var _build_grid: Container = $CommandPanel/BuildGrid
 @onready var _train_grid: Container = $CommandPanel/TrainGrid
 @onready var _order_grid: Container = $CommandPanel/OrderGrid
+@onready var minimap_frame: Panel = $MinimapFrame
 @onready var _minimap: Control = $Minimap
 ## Static research tuning, cached once from the catalogue's "research" block
 ## for the bar's maximum; live points/rate/ETA arrive per frame through
@@ -79,6 +87,12 @@ var _train_producer_kind := "<unset>"
 ## One transparent panel style for the Start/Result art screens; Paused keeps
 ## the themed plate.
 var _transparent_panel := StyleBoxEmpty.new()
+## Result-bar values are copied only from the per-frame read-only snapshots
+## that already drive the live HUD; no derived or invented match statistics.
+var _result_wave_text := ""
+var _result_research_text := ""
+var _result_population_text := ""
+var _result_crystals_text := ""
 
 func _ready() -> void:
 	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
@@ -142,17 +156,22 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
-	# The Start key-art screen's primary action reads as the mockup's cyan
-	# call to action instead of the neutral steel button.
+	# The Start and Result primary actions read as the mockup's cyan call to
+	# action instead of the neutral steel button.
 	var start_style := StyleBoxFlat.new()
 	start_style.bg_color = Color(0.07, 0.36, 0.42, 0.96)
 	start_style.border_color = Color(0.42, 0.9, 0.96, 1.0)
 	start_style.set_border_width_all(2)
 	start_style.set_corner_radius_all(4)
-	for state in ["normal", "hover", "pressed"]:
-		start_button.add_theme_stylebox_override(state, start_style)
+	for button in [start_button, restart_button]:
+		for state in ["normal", "hover", "pressed"]:
+			button.add_theme_stylebox_override(state, start_style)
 	start_button.add_theme_font_size_override("font_size", 22)
 	start_button.text = "START"
+	restart_button.add_theme_font_size_override("font_size", 20)
+	restart_button.text = "RESTART"
+	quit_button.add_theme_font_size_override("font_size", 18)
+	quit_button.text = "QUIT"
 
 func _build_order_tiles() -> void:
 	for button in _order_grid.get_children():
@@ -444,6 +463,15 @@ func refresh_economy(economy: Dictionary) -> void:
 		cold_chip.text = "%s %d%%" % [
 			_inline_icon("status", "SurfaceCold", 20).strip_edges(), surface_percent]
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
+	_result_population_text = "%sPop %d" % [
+		_inline_icon("status", "Population", 26),
+		int(economy.get("population_used", 0)),
+	]
+	_result_crystals_text = "%sCrystals %d" % [
+		_inline_icon("resources", "Crystals", 26),
+		int(economy.get("crystals", 0)),
+	]
+	_render_result_stats()
 	_refresh_affordability(economy)
 
 ## Display-only affordability hint, derived from the catalogue prices already
@@ -493,6 +521,11 @@ func refresh_wave(wave: Dictionary) -> void:
 			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
 		_minimap.set_wave_snapshot(wave)
+	_result_wave_text = "%sWave %d" % [
+		_inline_icon("status", "WaveCountdown", 26),
+		wave_number,
+	]
+	_render_result_stats()
 
 ## Per-frame research refresh behind the one dynamic snapshot: the bar and
 ## label track live points/rate/ETA, and every catalogue-bound lock state
@@ -531,6 +564,12 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	for button in _build_grid.get_children():
 		var required := float(button.get_meta("unlock_points", 0))
 		button.disabled = required > 0.0 and points < required
+	_result_research_text = "%sResearch %d/%d" % [
+		_inline_icon("status", "ResearchProgress", 26),
+		floori(points),
+		_research_target_points,
+	]
+	_render_result_stats()
 
 ## Renders the controller-owned selection; unit kinds come from the same
 ## per-frame view map the controller uses for command context. Health is the
@@ -691,6 +730,19 @@ func _set_train_producer(producer_kind: String) -> void:
 		any = any or visible
 	_train_grid.visible = any
 
+## Composes the Result bar from the same live fields already printed by the
+## top bar, wave and research cards. Every figure is a snapshot value; the
+## bar adds no post-match derivation or invented outcome statistic.
+func _render_result_stats() -> void:
+	if not result_bar.visible:
+		return
+	var parts := PackedStringArray()
+	for text in [_result_wave_text, _result_research_text,
+			_result_population_text, _result_crystals_text]:
+		if text != "":
+			parts.append(text)
+	result_stats.text = "   ".join(parts)
+
 ## Session overlay visibility and wording from the controller's settled phase;
 ## the buttons themselves stay connected and dispatched by the controller. The
 ## Start key art/emblem and the Result Victory/Defeat banner are driven only
@@ -702,6 +754,12 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	var result := phase == "Result"
 	session_panel.visible = not playing
 	session_backdrop.visible = not playing
+	# Result is a full-screen outcome composition: hide the in-match HUD so the
+	# bottom bar never obscures or exposes live controls behind the art.
+	for node in [wave_panel, wave_ring, wave_label, incoming_glow, research_panel,
+			economy_panel, selection_panel, command_panel, command_status,
+			minimap_frame, _minimap]:
+		node.visible = not result
 	pause_button.visible = playing
 	start_art.visible = start
 	session_dim.visible = paused or result
@@ -716,6 +774,9 @@ func refresh_session(phase: String, winner_team: int) -> void:
 		session_panel.remove_theme_stylebox_override("panel")
 	result_banner.visible = result
 	result_title.visible = result
+	# Restart/Quit belong to Result only; the bottom bar carries their primary
+	# and secondary action styling plus the snapshot-derived match figures.
+	result_bar.visible = result
 	if result:
 		var banner_path := "res://assets/ui/frostline/screens/%s_banner.png" % (
 			"victory" if winner_team == 1 else "defeat")
@@ -723,6 +784,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 		# The shipped banner art is intentionally textless: the readable
 		# outcome title is drawn from the same session winner field.
 		result_title.text = "Victory" if winner_team == 1 else "Defeat"
+		_render_result_stats()
 	# Restart/Quit belong to Result only.
 	match phase:
 		"Start":
