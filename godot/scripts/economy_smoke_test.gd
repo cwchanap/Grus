@@ -73,6 +73,7 @@ var _building_ids := {}
 ## never set these; the smoke still sends every click/key through real input.
 var _staging_click_miss_remaining := 0
 var _staging_click_miss_all := false
+var _staging_miss_selection_cleared := false
 var _staging_reject_interleave_remaining := 0
 
 func _ready() -> void:
@@ -454,13 +455,46 @@ func _staging_click_point(unit_id: int, attempt: int, screen: Vector2) -> Vector
 		unit_id, attempt + 1, screen])
 	return screen + STAGING_MISS_OFFSET
 
+## Clears selection through a real left click on the open staging cell before
+## a deliberately missed probe click. A pre-existing selection must never make
+## an injected miss look like a successful selection.
+func _clear_selection_for_miss_probe(unit_id: int) -> bool:
+	var screen := _camera.unproject_position(
+		Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5))
+	var main := get_node("Main")
+	if (main.call("_nearest_view", "unit_views", screen, 0) as Node3D) != null \
+			or (main.call("_building_at", screen, 0) as Node3D) != null:
+		_fail("miss probe clear point %s is not open ground for unit %d" % [
+			screen, unit_id])
+		return false
+	for rect in SmokeHelpers.hud_rects(get_node("Main/HUD")):
+		if rect.has_point(screen):
+			_fail("miss probe clear point %s is under HUD %s" % [screen, rect])
+			return false
+	_mouse_click(screen, MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var selected := _selected_ids()
+	if not selected.is_empty():
+		_fail("miss probe could not clear selection before unit %d: %s; %s" % [
+			unit_id, selected, _staging_details(unit_id)])
+		return false
+	print("GRUS_ECONOMY_STAGING_MISS_SELECTION_CLEARED unit=%d at=%s" % [unit_id, screen])
+	return true
+
 ## Selects exactly one stable id through real left clicks. A buffered click
 ## projected before a 20x frame can land behind a moving worker, so each
 ## bounded attempt re-resolves the live view and re-projects immediately
 ## before sending; no stale coordinate is retried.
 func _select_unit(unit_id: int) -> bool:
 	var attempts := PackedStringArray()
+	var injected_misses := 0
 	for attempt in STAGING_SELECT_ATTEMPTS:
+		var injected := _staging_click_miss_all or _staging_click_miss_remaining > 0
+		if injected and not _staging_miss_selection_cleared:
+			if not await _clear_selection_for_miss_probe(unit_id):
+				return false
+			_staging_miss_selection_cleared = true
 		var view := _unit_view(unit_id)
 		if view == null:
 			_fail("staging target %d vanished during selection: %s" % [
@@ -472,8 +506,19 @@ func _select_unit(unit_id: int) -> bool:
 		await get_tree().process_frame
 		await get_tree().process_frame
 		var selected := _selected_ids()
-		attempts.append("%d@%s=>%s" % [attempt + 1, screen, selected])
-		if selected.size() == 1 and int(selected[0]) == unit_id:
+		attempts.append("%d@%s view=%s%s=>%s" % [
+			attempt + 1, screen, view.global_position,
+			" (injected miss)" if injected else "", selected])
+		if injected:
+			injected_misses += 1
+			if selected.size() == 1 and int(selected[0]) == unit_id:
+				_fail("injected miss falsely reports unit %d selected at %s; probe invalid: %s" % [
+					unit_id, screen, _staging_details(unit_id)])
+				return false
+		elif selected.size() == 1 and int(selected[0]) == unit_id:
+			if injected_misses > 0:
+				print("GRUS_ECONOMY_STAGING_SELECT_RECOVERED unit=%d attempt=%d attempts=%s" % [
+					unit_id, attempt + 1, "; ".join(attempts)])
 			return true
 	_fail("staging click did not select unit %d after %d fresh-coordinate attempts: %s; %s" % [
 		unit_id, STAGING_SELECT_ATTEMPTS, "; ".join(attempts), _staging_details(unit_id)])
