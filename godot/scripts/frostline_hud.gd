@@ -77,10 +77,16 @@ var _producer_kinds: Dictionary = {}
 ## Five queue sockets plus one overflow chip, built once and reused; the
 ## live FIFO arrives through the selected building's read-only snapshot.
 const QUEUE_SOCKET_COUNT := 5
+var _socket_panels: Array[Panel] = []
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
 var _socket_progress: Array[ProgressBar] = []
 var _queue_overflow: Label
+## Three socket plates built once: empty (recessed), queued (steel), and the
+## FIFO head (cyan, matching the mockup's highlighted next unit).
+var _socket_empty_style := StyleBoxFlat.new()
+var _socket_queued_style := StyleBoxFlat.new()
+var _socket_head_style := StyleBoxFlat.new()
 ## Last producer kind the train grid was filtered for, so visibility only
 ## changes when the selection context does.
 var _train_producer_kind := "<unset>"
@@ -308,38 +314,53 @@ func _add_counter_icon(button: Button, entry: Dictionary) -> void:
 
 ## Static queue sockets: five FIFO frames and a "+N" overflow chip built
 ## once, never per frame. The live icons/times/progress update on refresh.
+## Sockets are laid out at the mockup's prominent size (64 px minimum, the
+## head carrying a cyan glow) inside the selection panel's bottom strip.
 func _build_queue_sockets() -> void:
-	var socket_style := StyleBoxFlat.new()
-	socket_style.bg_color = Color(0.09, 0.13, 0.17, 0.96)
-	socket_style.border_color = Color(0.4, 0.49, 0.56, 0.95)
-	socket_style.set_border_width_all(1)
-	socket_style.set_corner_radius_all(4)
+	_socket_empty_style.bg_color = Color(0.05, 0.07, 0.09, 0.92)
+	_socket_empty_style.border_color = Color(0.24, 0.3, 0.35, 0.8)
+	_socket_empty_style.set_border_width_all(1)
+	_socket_empty_style.set_corner_radius_all(5)
+	_socket_queued_style.bg_color = Color(0.11, 0.15, 0.19, 0.96)
+	_socket_queued_style.border_color = Color(0.42, 0.5, 0.57, 0.95)
+	_socket_queued_style.set_border_width_all(1)
+	_socket_queued_style.set_corner_radius_all(5)
+	_socket_head_style.bg_color = Color(0.08, 0.19, 0.23, 0.98)
+	_socket_head_style.border_color = Color(0.35, 0.86, 0.94, 1.0)
+	_socket_head_style.set_border_width_all(2)
+	_socket_head_style.set_corner_radius_all(5)
+	_socket_head_style.shadow_color = Color(0.35, 0.86, 0.94, 0.3)
+	_socket_head_style.shadow_size = 3
 	for index in QUEUE_SOCKET_COUNT:
 		var socket := Panel.new()
 		socket.name = "Socket%d" % (index + 1)
-		socket.custom_minimum_size = Vector2(62, 44)
+		socket.custom_minimum_size = Vector2(64, 64)
 		socket.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		socket.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		socket.add_theme_stylebox_override("panel", socket_style)
+		socket.add_theme_stylebox_override("panel", _socket_empty_style)
 		var icon := TextureRect.new()
 		icon.name = "Icon"
 		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-		icon.offset_top = 2.0
-		icon.offset_bottom = -12.0
-		icon.offset_left = 6.0
-		icon.offset_right = -6.0
+		icon.offset_left = 4.0
+		icon.offset_top = 4.0
+		icon.offset_right = -4.0
+		icon.offset_bottom = -4.0
 		socket.add_child(icon)
 		var time := Label.new()
 		time.name = "Time"
 		time.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		time.add_theme_font_size_override("font_size", 10)
-		time.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-		time.offset_top = -17.0
-		time.offset_bottom = -5.0
+		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		time.add_theme_font_size_override("font_size", 12)
+		time.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.05, 0.95))
+		time.add_theme_constant_override("outline_size", 3)
+		time.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+		time.offset_left = -44.0
+		time.offset_top = 2.0
+		time.offset_right = -4.0
+		time.offset_bottom = 20.0
 		socket.add_child(time)
 		var progress := ProgressBar.new()
 		progress.name = "Progress"
@@ -347,31 +368,34 @@ func _build_queue_sockets() -> void:
 		progress.show_percentage = false
 		progress.visible = false
 		progress.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-		progress.offset_top = -4.0
-		progress.offset_bottom = -1.0
+		progress.offset_left = 4.0
+		progress.offset_top = -7.0
+		progress.offset_right = -4.0
+		progress.offset_bottom = -3.0
 		var fill := StyleBoxFlat.new()
 		fill.bg_color = Color(0.35, 0.86, 0.94, 0.95)
-		fill.set_corner_radius_all(1)
+		fill.set_corner_radius_all(2)
 		progress.add_theme_stylebox_override("fill", fill)
 		progress.add_theme_stylebox_override("background", StyleBoxEmpty.new())
 		socket.add_child(progress)
 		queue_sockets.add_child(socket)
+		_socket_panels.append(socket)
 		_socket_icons.append(icon)
 		_socket_times.append(time)
 		_socket_progress.append(progress)
 	_queue_overflow = Label.new()
 	_queue_overflow.name = "OverflowChip"
-	_queue_overflow.custom_minimum_size = Vector2(36, 44)
+	_queue_overflow.custom_minimum_size = Vector2(36, 64)
 	_queue_overflow.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_queue_overflow.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_queue_overflow.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_queue_overflow.add_theme_font_size_override("font_size", 13)
+	_queue_overflow.add_theme_font_size_override("font_size", 14)
 	_queue_overflow.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
 	var chip := StyleBoxFlat.new()
 	chip.bg_color = Color(0.16, 0.12, 0.07, 0.96)
 	chip.border_color = Color(0.93, 0.55, 0.22, 0.9)
 	chip.set_border_width_all(1)
-	chip.set_corner_radius_all(4)
+	chip.set_corner_radius_all(5)
 	_queue_overflow.add_theme_stylebox_override("normal", chip)
 	queue_sockets.add_child(_queue_overflow)
 
@@ -681,15 +705,19 @@ func _render_queue(building: Dictionary) -> void:
 	var queue: Array = building.get("training_queue", [])
 	var progress := float(building.get("queue_progress", 0.0))
 	for index in QUEUE_SOCKET_COUNT:
+		var panel := _socket_panels[index]
 		var icon := _socket_icons[index]
 		var time := _socket_times[index]
 		var progress_bar := _socket_progress[index]
 		if index >= queue.size():
+			panel.add_theme_stylebox_override("panel", _socket_empty_style)
 			icon.texture = null
 			time.text = ""
 			progress_bar.visible = false
 			continue
 		var kind := str(queue[index])
+		panel.add_theme_stylebox_override("panel",
+			_socket_head_style if index == 0 else _socket_queued_style)
 		icon.texture = _icon_for_kind("units", kind)
 		if index == 0:
 			var seconds := float(_unit_entries.get(kind, {}).get("seconds", 0))
