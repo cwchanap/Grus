@@ -472,6 +472,30 @@ func _run() -> void:
 			and int(GrusBridge.command_feedback_revision()) == order_revision,
 			"drawer-open order probe did not clear without a command"):
 		return
+	# Widget-only zero boundary: a real dig is never observed at exactly 0 on a
+	# refreshed frame. Feed the drawer a copy of the live idle snapshot with
+	# excavating=true and progress=0.0 — presentation only, no command, spend
+	# or sim state — then restore from the controller's next refresh before
+	# the real paid dig starts.
+	var zero_snap: Dictionary = GrusBridge.underground_snapshot().duplicate(true)
+	zero_snap["excavating"] = true
+	zero_snap["progress"] = 0.0
+	zero_snap["remaining"] = float(zero_snap.get("next_seconds", 0.0))
+	_panel.call("refresh", zero_snap, "Playing")
+	var zero_bar := _panel.get_node("DigProgress") as ProgressBar
+	var zero_label := _panel.get_node("DigTime") as Label
+	var zero_header := _panel.get_node("HeaderLabel") as Label
+	if not _check(zero_bar.visible and is_zero_approx(zero_bar.value) \
+			and zero_label.visible and zero_label.text == "%ds left" % ceili(float(zero_snap["remaining"])) \
+			and zero_header.text.contains("· 0% ·") and _excavate.text == "Digging L1 · 0%" \
+			and _excavate.disabled,
+			"zero-progress widget boundary did not render exactly 0%%: bar=%s label=%s header=%s excavate=%s" % [
+				zero_bar.value, zero_label.text, zero_header.text, _excavate.text]):
+		return
+	if not await _wait(func(): return not zero_bar.visible, 2.0,
+			"zero-progress widget probe did not restore the live idle drawer"):
+		return
+
 	var l1_before := _stock()
 	var l1_cost: Dictionary = GrusBridge.underground_snapshot().next_cost
 	if not await _purchase(_excavate, "Excavate queued", l1_cost):
