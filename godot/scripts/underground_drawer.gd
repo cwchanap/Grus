@@ -63,7 +63,7 @@ func _ready() -> void:
 		kind_button.toggle_mode = true
 		kind_button.add_theme_font_size_override("font_size", 14)
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		kind_button.custom_minimum_size = Vector2(52, 78)
+		kind_button.custom_minimum_size = Vector2(52, 56)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
 		kind_button.set_meta("kind", kind)
@@ -72,7 +72,7 @@ func _ready() -> void:
 		var room_icon := _icon_for_kind("underground", kind)
 		if room_icon != null:
 			kind_button.icon = room_icon
-			kind_button.add_theme_constant_override("icon_max_width", 24)
+			kind_button.add_theme_constant_override("icon_max_width", 20)
 			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
@@ -85,8 +85,8 @@ func _ready() -> void:
 			name_label.add_theme_font_size_override("font_size", 11)
 			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-			name_label.offset_top = -31.0
-			name_label.offset_bottom = -17.0
+			name_label.offset_top = -27.0
+			name_label.offset_bottom = -14.0
 			kind_button.add_child(name_label)
 		# Catalogue price and min-level badge: the mockup's readable kind
 		# tiles without a second price table.
@@ -95,9 +95,9 @@ func _ready() -> void:
 		cost_label.bbcode_enabled = true
 		cost_label.scroll_active = false
 		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cost_label.add_theme_font_size_override("normal_font_size", 11)
+		cost_label.add_theme_font_size_override("normal_font_size", 10)
 		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		cost_label.offset_top = -17.0
+		cost_label.offset_top = -14.0
 		cost_label.offset_bottom = -1.0
 		cost_label.text = "[center]%s[/center]" % _cost_short(ug_entry)
 		kind_button.add_child(cost_label)

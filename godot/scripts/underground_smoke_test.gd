@@ -410,6 +410,22 @@ func _run() -> void:
 			if not _check(_icon_path(_slot(index + 1, slot)).is_empty(),
 					"empty L%d slot %d shows an icon" % [index + 1, slot]):
 				return
+	# HPA-698 mockup alignment: at 1280 × 720 the drawer must show at least
+	# three complete level rows at once. Complete means the row and every
+	# slot Button inside it are fully enclosed by the clipped scroll
+	# viewport, not merely overlapping it.
+	var row_view := scroll_box.get_global_rect()
+	var complete_rows := 0
+	for row in _levels.get_children():
+		var enclosed: bool = row_view.encloses(row.get_global_rect())
+		for child in row.get_children():
+			enclosed = enclosed and row_view.encloses(child.get_global_rect())
+		if enclosed:
+			complete_rows += 1
+	if not _check(complete_rows >= 3,
+			"drawer shows %d complete level rows; expected at least three at 1280x720 (viewport=%s rows=%d)" % [
+				complete_rows, row_view, _levels.get_child_count()]):
+		return
 
 	# Fund Lab+Tap and two ordinary Barracks. Retire gatherers before exact
 	# debit/no-spend checks so no real deposit can disguise a broken charge.
@@ -508,16 +524,17 @@ func _run() -> void:
 				scroll.get_v_scroll_bar().page, scroll.get_global_rect(),
 				_slot(3, 0).get_global_rect()]):
 		return
-	if not _check(scroll.get_v_scroll_bar().value > 0.0 \
-			and scroll.get_v_scroll_bar().max_value > scroll.get_v_scroll_bar().page,
-			"level list is not a real scroll viewport: value=%s max=%s page=%s" % [
-				scroll.get_v_scroll_bar().value, scroll.get_v_scroll_bar().max_value,
-				scroll.get_v_scroll_bar().page]):
-		return
 	if not _check(_slot(3, 0).get_global_rect().intersection(scroll.get_global_rect()).end.y \
 			<= command_rect.position.y,
 			"visible L3 slot row extends into the command card: slot=%s viewport=%s card=%s" % [
 				_slot(3, 0).get_global_rect(), scroll.get_global_rect(), command_rect]):
+		return
+	# Three rows now fit without overflow; the real wheel-input reachability
+	# of deeper rows is exercised by the four-row presentation probe below.
+	var level_bar := scroll.get_v_scroll_bar()
+	if level_bar.max_value > level_bar.page and not _check(level_bar.value > 0.0,
+			"level list overflows but real wheel input never scrolled it: value=%s max=%s page=%s" % [
+				level_bar.value, level_bar.max_value, level_bar.page]):
 		return
 	var before_lab := _stock()
 	if not await _purchase(_slot(3, 0), "Lab queued (L3 slot 1)", room_costs.Lab):
@@ -582,6 +599,82 @@ func _run() -> void:
 			and is_equal_approx(float(warm.surface_efficiency), 1.0) \
 			and is_equal_approx(float(GrusBridge.research_snapshot().rate_per_second), base_rate + lab_rate),
 			"L3 Tap did not add its catalogue supply or warm Lab rate lost its additive share"):
+		return
+	# Presentation-only deeper-row probe. The paid journey stops at L3 — the
+	# unchanged first-wave guard leaves no time to fund L4 — so the drawer is
+	# handed a temporary four-level read: the real populated L3 row copied to
+	# L4. No command, spend, sim tick or gameplay state changes; this only
+	# exercises the existing row builder and scroll container. With four rows
+	# the fourth row's geometry falls across the command card, the exact
+	# overlap the clipped viewport must prevent.
+	# Disarm the live Tap kind first so the synthetic row could never
+	# dispatch a room command even if a future regression leaves it
+	# unclipped; the journey's armed state is restored below.
+	await _click(_kind("GeothermalTap"))
+	if not _check(not _kind("GeothermalTap").button_pressed,
+			"deeper-row probe could not disarm the live Tap kind"):
+		return
+	var phase := str(GrusBridge.session_snapshot().phase)
+	var probe: Dictionary = GrusBridge.underground_snapshot().duplicate(true)
+	var probe_row: Dictionary = probe.levels[2].duplicate(true)
+	probe_row.level = 4
+	probe.levels.append(probe_row)
+	_main.set_process(false)
+	_panel.refresh(probe, phase)
+	await _settle()
+	var deeper_row := _levels.get_child(3)
+	if not _check(_levels.get_child_count() == 4,
+			"deeper-row probe did not build a fourth row"):
+		return
+	if not _check(not scroll.get_global_rect().encloses(deeper_row.get_global_rect()) \
+			and deeper_row.get_global_rect().intersects(command_rect),
+			"fourth row does not sit clipped across the command-card strip: row=%s viewport=%s card=%s" % [
+				deeper_row.get_global_rect(), scroll.get_global_rect(), command_rect]):
+		return
+	# Real command click on the strip the unclipped fourth row would cover:
+	# arm Move, then press Cancel's covered top edge. A row Button stealing
+	# that press leaves `_armed_order` set.
+	var probe_worker: Node3D = get_tree().get_nodes_in_group("unit_views")[0]
+	await _click_view(probe_worker, MOUSE_BUTTON_LEFT)
+	var probe_move := _main.get_node("HUD/CommandPanel/OrderGrid/MoveButton") as Button
+	var probe_cancel := _main.get_node("HUD/CommandPanel/OrderGrid/CancelButton") as Button
+	await _click(probe_move)
+	if not _check(str(_main.get("_armed_order")) == "move",
+			"deeper-row probe could not arm Move: %s" % str(_main.get("_armed_order"))):
+		return
+	var probe_revision: int = GrusBridge.command_feedback_revision()
+	SmokeHelpers.push_mouse_click(get_tree(),
+		probe_cancel.get_global_rect().position + Vector2(probe_cancel.size.x * 0.5, 6.0),
+		MOUSE_BUTTON_LEFT)
+	await _settle()
+	if not _check(str(_main.get("_armed_order")) == "" and _status.text == "Order canceled" \
+			and int(GrusBridge.command_feedback_revision()) == probe_revision,
+			"deeper row intercepted the command-card Cancel click: armed=%s status=%s" % [
+				str(_main.get("_armed_order")), _status.text]):
+		return
+	# Real wheel input must reach the deeper row, not just the visible three.
+	for _attempt in 10:
+		if scroll.get_global_rect().encloses(deeper_row.get_global_rect()):
+			break
+		SmokeHelpers.push_mouse_click(get_tree(), scroll.get_global_rect().get_center(), MOUSE_BUTTON_WHEEL_DOWN)
+		await _settle()
+	var probe_bar := scroll.get_v_scroll_bar()
+	if not _check(scroll.get_global_rect().encloses(deeper_row.get_global_rect()) \
+			and probe_bar.value > 0.0 and probe_bar.max_value > probe_bar.page,
+			"real wheel input did not scroll to the deeper row: row=%s viewport=%s value=%s max=%s page=%s" % [
+				deeper_row.get_global_rect(), scroll.get_global_rect(), probe_bar.value,
+				probe_bar.max_value, probe_bar.page]):
+		return
+	_main.set_process(true)
+	_panel.refresh(GrusBridge.underground_snapshot(), phase)
+	await _settle()
+	if not _check(_levels.get_child_count() == 3 \
+			and str(_slot_state(3, 0).kind) == "Lab" and str(_slot_state(3, 1).kind) == "GeothermalTap",
+			"deeper-row probe did not restore the real three-row drawer"):
+		return
+	await _click(_kind("GeothermalTap"))
+	if not _check(_kind("GeothermalTap").button_pressed,
+			"deeper-row probe did not restore the armed Tap kind"):
 		return
 	var final_stock := _stock()
 	# Expected totals rebuild from the recorded dig debits plus catalogue
