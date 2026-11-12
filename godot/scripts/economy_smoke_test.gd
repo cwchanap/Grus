@@ -189,6 +189,53 @@ func _training_queue(id: int) -> Array:
 func _blocked_reason(id: int) -> int:
 	return int(GrusBridge.building_snapshot(id).get("blocked_reason", -1))
 
+## HPA-698 queue presentation floor: every visible socket and its unit icon
+## must be visibly larger than the old 44 px / 30 px strip, sit inside the
+## selection panel's padded plate, and never overlap the status rows, the
+## portrait or each other. Returns "" only when the whole row holds.
+func _queue_layout_error(sockets: Container, where: String) -> String:
+	var panel := get_node("Main/HUD/SelectionPanel") as Control
+	var status := get_node("Main/HUD/SelectionPanel/SelectionLabel") as Control
+	var portrait := get_node("Main/HUD/SelectionPanel/PortraitBezel") as Control
+	if sockets == null or panel == null or status == null or portrait == null:
+		return "%s queue layout controls are missing" % where
+	var overflow := sockets.get_node_or_null("OverflowChip") as Control
+	if overflow == null:
+		return "%s queue overflow chip is missing" % where
+	var padded := panel.get_global_rect().grow(-8.0)
+	var row := sockets.get_global_rect()
+	if not padded.encloses(row):
+		return "%s queue row %s leaves the padded selection panel %s" % [where, row, padded]
+	if row.intersects(status.get_global_rect()) or row.intersects(portrait.get_global_rect()):
+		return "%s queue row %s overlaps the status/portrait content" % [where, row]
+	var previous := Rect2()
+	var seen := false
+	for child in sockets.get_children():
+		var control := child as Control
+		if control == null or not control.visible:
+			continue
+		var rect := control.get_global_rect()
+		if not padded.encloses(rect):
+			return "%s queue control %s leaves the padded selection panel %s" % [
+				where, control.name, padded]
+		if seen and rect.intersects(previous):
+			return "%s queue controls overlap: %s intersects %s" % [where, control.name, previous]
+		previous = rect
+		seen = true
+		if control is Panel:
+			if rect.size.x < 64.0 or rect.size.y < 60.0:
+				return "%s socket %s is %s, below the 64x60 presentation floor" % [
+					where, control.name, rect.size]
+			var icon := control.get_node_or_null("Icon") as TextureRect
+			if icon == null or icon.size.x < 44.0 or icon.size.y < 44.0:
+				return "%s socket %s icon is %s, below the 44 px presentation floor" % [
+					where, control.name, icon.size if icon != null else Vector2.ZERO]
+			if not rect.encloses(icon.get_global_rect()):
+				return "%s socket %s icon escapes its socket" % [where, control.name]
+		elif control != overflow:
+			return "%s queue row has an unexpected visible child %s" % [where, control.name]
+	return ""
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -842,6 +889,10 @@ func _run() -> void:
 			sockets.get_child_count() if sockets != null else -1,
 			overflow_chip.text if overflow_chip != null else "missing"])
 		return
+	var queue_layout_error := _queue_layout_error(sockets, "Research Center overflow")
+	if not queue_layout_error.is_empty():
+		_fail(queue_layout_error)
+		return
 	var worker_icon := "res://assets/ui/icons/units/worker.png"
 	for socket_index in 5:
 		var socket := sockets.get_child(socket_index) as Panel
@@ -1185,6 +1236,10 @@ func _run() -> void:
 				and (sockets.get_child(2).get_node("Icon") as TextureRect).texture == null \
 				and not overflow_chip.visible,
 			5.0, "Barracks FIFO sockets do not render Guard then Rifleman with empty overflow"):
+		return
+	queue_layout_error = _queue_layout_error(sockets, "Barracks FIFO")
+	if not queue_layout_error.is_empty():
+		_fail(queue_layout_error)
 		return
 	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
 	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text

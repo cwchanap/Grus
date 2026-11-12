@@ -426,10 +426,10 @@ scroll_active = false
 
 [node name="QueueSockets" type="HBoxContainer" parent="HUD/SelectionPanel"]
 layout_mode = 0
-offset_left = 110.0
+offset_left = 112.0
 offset_top = 126.0
-offset_right = 492.0
-offset_bottom = 174.0
+offset_right = 496.0
+offset_bottom = 190.0
 mouse_filter = 2
 theme_override_constants/separation = 4
 
