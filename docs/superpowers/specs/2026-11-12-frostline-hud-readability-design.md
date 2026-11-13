@@ -12,7 +12,7 @@ Address the remaining differences identified in the latest 1280 × 720 mockup re
 ## Design
 
 - **Underground:** make room names, costs, lock requirements and benefits easier to read by reducing visual competition from ornate slot frames, increasing type size where space permits and strengthening contrast. Emphasize excavation progress without hiding its snapshot-derived values. Preserve distinct room states and understandable requirements.
-- **Start:** improve the legibility and visual hierarchy of the controls strip, using existing key and mouse cues where available. Keep all documented controls and the existing Start action.
+- **Start:** improve the legibility and visual hierarchy of the existing text controls strip. Keep all documented controls and the existing Start action; separate key and mouse glyphs remain an accepted mockup difference.
 - **Result:** improve the prominence of the banner, frost treatment and replay controls, and review the backdrop against the mockup. Preserve the real battlefield and snapshot-derived information; do not manufacture a victory.
 - **Queue:** make the active item, timer and progress easier to distinguish from the queued and empty sockets. Keep all five sockets, overflow and existing queue behavior.
 
