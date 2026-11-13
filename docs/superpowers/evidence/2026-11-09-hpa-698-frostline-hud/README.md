@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+**Later readability pass:** see [the 2026-11-13 captures and comparison](readability-2026-11-13/README.md). The material below records the preceding visual-fidelity pass, not the later head.
+
 Real 1280 × 720 frames captured from the final Frostline visual-fidelity
 head on branch `hpa-698-frostline-hud` (Task 3 code commit `f22d60e`;
 underground legibility/benefit fix `ac1114e`; test-only readout-source
