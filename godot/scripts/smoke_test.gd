@@ -27,6 +27,16 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
+## The shaped bounds of a Label's text with its mandatory line breaks — the
+## same TextParagraph the renderer draws with, not the control's grown size.
+func _shaped_label_size(label: Label) -> Vector2:
+	var paragraph := TextParagraph.new()
+	paragraph.set_break_flags(TextServer.BREAK_MANDATORY)
+	paragraph.set_direction(TextServer.DIRECTION_LTR)
+	paragraph.add_string(label.text, label.get_theme_font("font"),
+		label.get_theme_font_size("font_size"), "")
+	return paragraph.get_size()
+
 func _modifier_event(keycode: int, pressed: bool) -> void:
 	var event := InputEventKey.new()
 	event.keycode = keycode
@@ -1053,9 +1063,28 @@ func _run() -> void:
 	if opening_prep <= 0 or not survive_detail.text.contains("%d:%02d" % [opening_prep / 60, opening_prep % 60]):
 		_fail("Survive objective does not derive the initial preparation from the wave snapshot: %s" % survive_detail.text)
 		return
-	if controls_label.get_global_rect().size.y > 44.0 \
+	if controls_label.get_global_rect().size.y > 56.0 \
 			or controls_label.get_global_rect().size.x < 800.0:
 		_fail("ControlsLabel is not a horizontal strip: %s" % controls_label.get_global_rect())
+		return
+	# The documented instructions must stay legible and fully inside their
+	# painted strip: a 13 px floor plus the shaped text (mandatory breaks)
+	# against the strip's own content area.
+	if controls_label.get_theme_font_size("font_size") < 13:
+		_fail("ControlsLabel font is below the 13 px legibility floor: %d" % [
+			controls_label.get_theme_font_size("font_size")])
+		return
+	var controls_style := controls_label.get_theme_stylebox("normal") as StyleBox
+	if controls_style == null:
+		_fail("ControlsLabel has no painted strip stylebox")
+		return
+	var controls_text_size := _shaped_label_size(controls_label)
+	var controls_region := controls_label.get_global_rect().size - Vector2(
+		controls_style.get_content_margin(SIDE_LEFT) + controls_style.get_content_margin(SIDE_RIGHT),
+		controls_style.get_content_margin(SIDE_TOP) + controls_style.get_content_margin(SIDE_BOTTOM))
+	if controls_text_size.x > controls_region.x + 0.5 or controls_text_size.y > controls_region.y + 0.5:
+		_fail("ControlsLabel text does not fit its allocated region: text=%s region=%s" % [
+			controls_text_size, controls_region])
 		return
 	for control in [objectives, start_button, controls_label]:
 		if not viewport_rect.encloses(control.get_global_rect()):

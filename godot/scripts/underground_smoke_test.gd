@@ -651,6 +651,11 @@ func _run() -> void:
 
 	# Closed-panel Esc pauses. Inspection remains available but cannot mutate.
 	await _key(KEY_ESCAPE)
+	# Opt-in real-render evidence of the real Paused overlay before the drawer
+	# opens; presentation only.
+	var pause_capture := await SmokeHelpers.capture_frame(get_tree(), "pause")
+	if not _check(pause_capture.is_empty(), pause_capture):
+		return
 	await _key(KEY_TAB)
 	var paused: Dictionary = GrusBridge.underground_snapshot()
 	if not _check(str(GrusBridge.session_snapshot().phase) == "Paused" \
