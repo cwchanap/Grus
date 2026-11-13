@@ -165,6 +165,8 @@ func _dig_layout_error(scroll: ScrollContainer) -> String:
 			bar_rect, time_rect, view]
 	if bar_rect.position.y < _excavate.get_global_rect().end.y:
 		return "dig progress sits above the Excavate control"
+	if time_label.get_theme_font_size("font_size") < 12:
+		return "dig remaining-time readout is smaller than 12 px"
 	if not _panel.get_global_rect().encloses(bar_rect) \
 			or not _panel.get_global_rect().encloses(time_rect):
 		return "dig progress leaves the drawer: bar=%s time=%s" % [bar_rect, time_rect]
@@ -191,6 +193,53 @@ func _button_content_error(button: Button) -> String:
 		return "icon+text need %.1f px but only %.1f px fit" % [needed, available]
 	return ""
 
+## The Button's own rendered text box: font metrics, the centring the Button
+## applies to its icon+text group, and the live style's content margins. The
+## whole Button rectangle says nothing about where its text actually lands.
+func _button_text_rect(button: Button) -> Rect2:
+	var plate := button.get_theme_stylebox("disabled" if button.disabled else "normal")
+	var font := button.get_theme_font("font")
+	var font_size := button.get_theme_font_size("font_size")
+	var text_size := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	var text_height := font.get_height(font_size)
+	var content := Rect2(
+		button.get_global_rect().position + Vector2(
+			plate.get_content_margin(SIDE_LEFT), plate.get_content_margin(SIDE_TOP)),
+		button.size - Vector2(
+			plate.get_content_margin(SIDE_LEFT) + plate.get_content_margin(SIDE_RIGHT),
+			plate.get_content_margin(SIDE_TOP) + plate.get_content_margin(SIDE_BOTTOM)))
+	var icon_width := 0.0
+	if button.icon != null:
+		icon_width = button.icon.get_width()
+		var icon_max := float(button.get_theme_constant("icon_max_width"))
+		if icon_max > 0.0:
+			icon_width = minf(icon_width, icon_max)
+	var separation := float(button.get_theme_constant("h_separation")) if icon_width > 0.0 else 0.0
+	var group_width := icon_width + separation + text_size.x
+	var text_position := Vector2(
+		content.position.x + (content.size.x - group_width) * 0.5 + icon_width + separation,
+		content.position.y + (content.size.y - text_height) * 0.5)
+	return Rect2(text_position, Vector2(text_size.x, text_height))
+
+## A Label's painted text box from its font metrics and alignment.
+func _label_text_rect(label: Label) -> Rect2:
+	var font := label.get_theme_font("font")
+	var font_size := label.get_theme_font_size("font_size")
+	var text_size := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	var text_height := font.get_height(font_size)
+	var rect := label.get_global_rect()
+	var x := rect.position.x
+	if label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER:
+		x += (rect.size.x - text_size.x) * 0.5
+	elif label.horizontal_alignment == HORIZONTAL_ALIGNMENT_RIGHT:
+		x += rect.size.x - text_size.x
+	var y := rect.position.y
+	if label.vertical_alignment == VERTICAL_ALIGNMENT_CENTER:
+		y += (rect.size.y - text_height) * 0.5
+	elif label.vertical_alignment == VERTICAL_ALIGNMENT_BOTTOM:
+		y += rect.size.y - text_height
+	return Rect2(Vector2(x, y), Vector2(text_size.x, text_height))
+
 ## The occupied-slot presentation contract: the room name alone keeps the
 ## centre clear, the construction percentage lives in its top-right badge and
 ## a completed room keeps its snapshot benefit visible at the bottom. This is
@@ -199,6 +248,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 	var content_error := _button_content_error(button)
 	if not content_error.is_empty():
 		return "%s: %s" % [where, content_error]
+	if button.get_theme_font_size("font_size") < 12:
+		return "%s room name is smaller than 12 px" % where
 	if button.text.contains("%"):
 		return "%s still puts the percentage in the room label: %s" % [where, button.text]
 	var percent := button.get_node_or_null("SlotPercent") as Label
@@ -207,6 +258,9 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 	if percent == null or benefit == null or benefit_backing == null:
 		return "%s is missing its percent/benefit readouts" % where
 	var tile_rect := button.get_global_rect()
+	var name_text := _button_text_rect(button)
+	if not tile_rect.encloses(name_text):
+		return "%s room name text leaves its tile" % where
 	if bool(slot.get("complete", false)):
 		var effect := str(slot.get("benefit", ""))
 		if percent.visible:
@@ -217,8 +271,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 		if not benefit_backing.visible \
 				or not benefit_backing.get_global_rect().encloses(benefit.get_global_rect()):
 			return "%s benefit readout has no clear band" % where
-		if benefit.get_theme_font_size("font_size") < 10:
-			return "%s benefit readout is smaller than 10 px" % where
+		if benefit.get_theme_font_size("font_size") < 11:
+			return "%s benefit readout is smaller than 11 px" % where
 		var benefit_font := benefit.get_theme_font("font")
 		var benefit_width := benefit_font.get_string_size(benefit.text,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, benefit.get_theme_font_size("font_size")).x
@@ -226,6 +280,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 			return "%s benefit text is wider than its clear band" % where
 		if not tile_rect.encloses(benefit.get_global_rect()):
 			return "%s benefit readout leaves its tile" % where
+		if name_text.intersects(_label_text_rect(benefit)):
+			return "%s room name and benefit text overlap" % where
 	else:
 		if benefit.visible or benefit_backing.visible:
 			return "%s constructing room shows a benefit before completion" % where
@@ -234,8 +290,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 		var expected := "%d%%" % roundi(float(slot.get("progress", 0.0)) * 100.0)
 		if percent.text != expected:
 			return "%s percent badge is %s; expected %s" % [where, percent.text, expected]
-		if percent.get_theme_font_size("font_size") < 10:
-			return "%s percent badge is smaller than 10 px" % where
+		if percent.get_theme_font_size("font_size") < 11:
+			return "%s percent badge is smaller than 11 px" % where
 		var percent_font := percent.get_theme_font("font")
 		var percent_width := percent_font.get_string_size(percent.text,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, percent.get_theme_font_size("font_size")).x
@@ -243,6 +299,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 			return "%s percent text is wider than its badge" % where
 		if not tile_rect.encloses(percent.get_global_rect()):
 			return "%s percent badge leaves its tile" % where
+		if name_text.intersects(_label_text_rect(percent)):
+			return "%s room name and percent text overlap" % where
 	return ""
 
 ## Kind tiles keep a clear name/price strip over the painted frame: the band
@@ -270,10 +328,18 @@ func _kind_layout_error(button: Button, room_entry: Dictionary, where: String) -
 		return "%s kind price is wider than its clear band" % where
 	if not tile_rect.encloses(level_label.get_global_rect()):
 		return "%s kind level badge leaves the tile" % where
-	if name_label.get_theme_font_size("font_size") < 11:
-		return "%s kind name is smaller than 11 px" % where
-	if cost_label.get_theme_font_size("normal_font_size") < 10:
-		return "%s kind price is smaller than 10 px" % where
+	if name_label.get_theme_font_size("font_size") < 12:
+		return "%s kind name is smaller than 12 px" % where
+	if cost_label.get_theme_font_size("normal_font_size") < 11:
+		return "%s kind price is smaller than 11 px" % where
+	if name_label.get_global_rect().intersects(cost_label.get_global_rect()):
+		return "%s kind name and price rectangles overlap" % where
+	if name_label.size.y < name_label.get_theme_font("font").get_height(
+			name_label.get_theme_font_size("font_size")):
+		return "%s kind name has less height than its font needs" % where
+	if cost_label.get_content_height() > cost_label.size.y:
+		return "%s kind price content (%s px) is taller than its area" % [
+			where, cost_label.get_content_height()]
 	if not name_label.has_theme_constant_override("outline_size") \
 			or name_label.get_theme_constant("outline_size") < 2:
 		return "%s kind name has no readable outline" % where
@@ -785,11 +851,13 @@ func _run() -> void:
 			if not _check(button.disabled and button.text.contains("L3") \
 					and button.tooltip_text.contains("requires L3") \
 					and button.accessibility_name.contains("L3") \
+					and button.get_theme_font_size("font_size") >= 12 \
 					and _icon_path(button) == "res://assets/ui/icons/status/locked.png" \
 					and button.get_theme_constant("icon_max_width") >= 22 \
 					and _plate_path(button, "disabled") == tile_locked_path,
-					"Lab armed shallow target is not the locked tile/lock icon/explanation: icon=%s size=%d plate=%s name=%s" % [
+					"Lab armed shallow target is not the locked tile/lock icon/explanation: icon=%s size=%d font=%d plate=%s name=%s" % [
 						_icon_path(button), button.get_theme_constant("icon_max_width"),
+						button.get_theme_font_size("font_size"),
 						_plate_path(button, "disabled"), button.accessibility_name]):
 				return
 			SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
@@ -976,13 +1044,17 @@ func _run() -> void:
 	var probe: Dictionary = GrusBridge.underground_snapshot().duplicate(true)
 	var probe_row: Dictionary = probe.levels[2].duplicate(true)
 	probe_row.level = 4
-	# Longest displayed kind name at 99%: the construction percentage must be
-	# a compact badge, not appended to the name. Presentation-only probe; no
+	# First refresh: four completed L4 rooms, one per catalogue kind whose
+	# benefit format matches a completed snapshot. Benefits come from the
+	# catalogue effect, never copied here. Presentation-only probe; no
 	# command, spend or sim state changes and the real snapshot is restored.
-	probe_row.slots[2] = {
-		"kind": "Shelter", "complete": false, "progress": 0.99,
-		"remaining": 1.0, "benefit": "",
-	}
+	var completed_kinds := ["Shelter", "Greenhouse", "CoalVein", "DeepMine"]
+	for slot_index in completed_kinds.size():
+		var kind: String = completed_kinds[slot_index]
+		probe_row.slots[slot_index] = {
+			"kind": kind, "complete": true, "progress": 1.0, "remaining": 0.0,
+			"benefit": str(_catalogue["underground"]["rooms"][kind]["effect"]),
+		}
 	probe.levels.append(probe_row)
 	_main.set_process(false)
 	_panel.refresh(probe, phase)
@@ -990,13 +1062,6 @@ func _run() -> void:
 	var deeper_row := _levels.get_child(3)
 	if not _check(_levels.get_child_count() == 4,
 			"deeper-row probe did not build a fourth row"):
-		return
-	var long_name_slot := deeper_row.get_child(3) as Button
-	if not _check(long_name_slot.text == "Shelter",
-			"long-name construction changed the room label: \"%s\"" % long_name_slot.text):
-		return
-	var long_name_error := _slot_readout_error(long_name_slot, probe_row.slots[2], "synthetic Shelter 99%")
-	if not _check(long_name_error.is_empty(), long_name_error):
 		return
 	if not _check(not scroll.get_global_rect().encloses(deeper_row.get_global_rect()) \
 			and deeper_row.get_global_rect().intersects(command_rect),
@@ -1036,6 +1101,34 @@ func _run() -> void:
 			"real wheel input did not scroll to the deeper row: row=%s viewport=%s value=%s max=%s page=%s" % [
 				deeper_row.get_global_rect(), scroll.get_global_rect(), probe_bar.value,
 				probe_bar.max_value, probe_bar.page]):
+		return
+	# After the scrollbar exists and layout has settled, every completed L4
+	# plate must render the same readout contract as a paid room.
+	for slot_index in completed_kinds.size():
+		var synthetic_slot := _drawer_slot(4, slot_index)
+		var synthetic_error := _slot_readout_error(_slot(4, slot_index), synthetic_slot,
+				"synthetic L4 %s" % str(synthetic_slot.get("kind", "")))
+		if not _check(synthetic_error.is_empty(), synthetic_error):
+			return
+	# Synthetic presentation-only evidence of the four completed L4 rooms; the
+	# real paid journey never funds L4. No command, spend or sim state change.
+	var l4_capture := await SmokeHelpers.capture_frame(get_tree(), "underground-synthetic-l4-benefits")
+	if not _check(l4_capture.is_empty(), l4_capture):
+		return
+	# Second refresh: the existing longest-name construction case. The L4 row
+	# is already built, so no Button is rebuilt under this refresh.
+	probe_row.slots[2] = {
+		"kind": "Shelter", "complete": false, "progress": 0.99,
+		"remaining": 1.0, "benefit": "",
+	}
+	_panel.refresh(probe, phase)
+	await _settle()
+	var long_name_slot := deeper_row.get_child(3) as Button
+	if not _check(long_name_slot.text == "Shelter",
+			"long-name construction changed the room label: \"%s\"" % long_name_slot.text):
+		return
+	var long_name_error := _slot_readout_error(long_name_slot, _drawer_slot(4, 2), "synthetic Shelter 99%")
+	if not _check(long_name_error.is_empty(), long_name_error):
 		return
 	# Synthetic presentation-only evidence for the longest name at 99%; the
 	# real paid journey never funds L4. No command, spend or sim state change.

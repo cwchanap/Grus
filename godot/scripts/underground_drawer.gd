@@ -51,10 +51,12 @@ var _kind_buttons: Array[Button] = []
 var _snapshot: Dictionary = {}
 var _phase := ""
 var _icon_cache: Dictionary = {}
-## Painted plates are the active theme's Tile styles, so kind buttons and
-## every slot branch reuse the approved mockup art. `_recessed` is the one
-## hand-built flat square for an unarmed empty slot (the same recess the
-## production queue keeps for its empties).
+## Kind buttons paint the active theme's Tile styles; slot branches paint
+## dimmed, slim-edged copies of those same textures (see `_slot_plate`), so
+## every state reuses the approved mockup art without the wide square frame
+## competing with the room text. `_recessed` is the one hand-built flat square
+## for an unarmed empty slot (the same recess the production queue keeps for
+## its empties).
 var _tile_normal: StyleBox
 var _tile_selected: StyleBox
 var _tile_locked: StyleBox
@@ -64,9 +66,9 @@ func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var underground_catalogue: Dictionary = catalogue.get("underground", {})
 	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
-	_tile_normal = get_theme_stylebox("normal", "Tile")
-	_tile_selected = get_theme_stylebox("pressed", "Tile")
-	_tile_locked = get_theme_stylebox("disabled", "Tile")
+	_tile_normal = _slot_plate(get_theme_stylebox("normal", "Tile"), Color(0.72, 0.76, 0.8))
+	_tile_selected = _slot_plate(get_theme_stylebox("pressed", "Tile"))
+	_tile_locked = _slot_plate(get_theme_stylebox("disabled", "Tile"), Color(0.8, 0.8, 0.84))
 	_recessed.bg_color = Color(0.05, 0.07, 0.09, 0.92)
 	_recessed.border_color = Color(0.24, 0.3, 0.35, 0.8)
 	_recessed.set_border_width_all(1)
@@ -109,23 +111,23 @@ func _ready() -> void:
 			# stays on the untouched tile art.
 			var label_backing := ColorRect.new()
 			label_backing.name = "KindLabelBacking"
-			label_backing.color = Color(0.03, 0.05, 0.07, 0.62)
+			label_backing.color = Color(0.03, 0.05, 0.07, 0.7)
 			label_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			label_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-			label_backing.offset_top = -30.0
+			label_backing.offset_top = -32.0
 			label_backing.offset_bottom = 0.0
 			kind_button.add_child(label_backing)
 			var name_label := Label.new()
 			name_label.name = "KindLabel"
 			name_label.text = short_name
 			name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			name_label.add_theme_font_size_override("font_size", 11)
+			name_label.add_theme_font_size_override("font_size", 12)
 			name_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 			name_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-			name_label.offset_top = -27.0
-			name_label.offset_bottom = -14.0
+			name_label.offset_top = -32.0
+			name_label.offset_bottom = -17.0
 			kind_button.add_child(name_label)
 		# Catalogue price and min-level badge: the mockup's readable kind
 		# tiles without a second price table.
@@ -134,11 +136,11 @@ func _ready() -> void:
 		cost_label.bbcode_enabled = true
 		cost_label.scroll_active = false
 		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cost_label.add_theme_font_size_override("normal_font_size", 10)
+		cost_label.add_theme_font_size_override("normal_font_size", 11)
 		cost_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		cost_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		cost_label.offset_top = -14.0
+		cost_label.offset_top = -16.0
 		cost_label.offset_bottom = -1.0
 		cost_label.text = "[center]%s[/center]" % _cost_short(ug_entry)
 		kind_button.add_child(cost_label)
@@ -164,6 +166,19 @@ func _ready() -> void:
 	if excavate_icon != null:
 		_excavate.icon = excavate_icon
 		_excavate.add_theme_constant_override("icon_max_width", 20)
+
+## Wide-slot copies of the active theme's Tile plates: the same texture path
+## and 9-slice frame, but a slimmer edge and a dimmed modulation so the square
+## artwork stretched across an 84 × 48 slot no longer competes with the room
+## name and benefit. Kind tiles keep the untouched theme plates.
+func _slot_plate(source: StyleBox, tint := Color.WHITE) -> StyleBox:
+	var plate := source.duplicate() as StyleBoxTexture
+	if plate == null:
+		return source
+	plate.modulate_color = tint
+	plate.texture_margin_left = 10.0
+	plate.texture_margin_right = 10.0
+	return plate
 
 ## Dynamic refresh driven by the controller's existing visibility/tick gate.
 ## Level rows mirror the snapshot's level count — appended when a dig
@@ -216,7 +231,7 @@ func _add_row(level_number: int) -> void:
 	row.add_child(level_label)
 	for slot_index in _slots_per_level:
 		var button := Button.new()
-		button.add_theme_font_size_override("font_size", 11)
+		button.add_theme_font_size_override("font_size", 12)
 		button.add_theme_color_override("font_disabled_color", Color(0.92, 0.94, 0.96))
 		button.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		button.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
@@ -233,7 +248,7 @@ func _add_row(level_number: int) -> void:
 		percent.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		percent.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		percent.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-		percent.add_theme_font_size_override("font_size", 10)
+		percent.add_theme_font_size_override("font_size", 11)
 		percent.add_theme_color_override("font_color", Color(0.98, 0.86, 0.62))
 		percent.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		percent.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
@@ -251,7 +266,7 @@ func _add_row(level_number: int) -> void:
 		benefit_backing.name = "SlotBenefitBacking"
 		benefit_backing.visible = false
 		benefit_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		benefit_backing.color = Color(0.03, 0.05, 0.07, 0.58)
+		benefit_backing.color = Color(0.03, 0.05, 0.07, 0.7)
 		benefit_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 		benefit_backing.offset_left = 26.0
 		benefit_backing.offset_top = -17.0
@@ -264,7 +279,7 @@ func _add_row(level_number: int) -> void:
 		benefit.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		benefit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		benefit.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-		benefit.add_theme_font_size_override("font_size", 10)
+		benefit.add_theme_font_size_override("font_size", 11)
 		benefit.add_theme_color_override("font_color", Color(0.78, 0.96, 0.8))
 		benefit.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		benefit.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
