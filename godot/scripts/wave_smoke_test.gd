@@ -8,6 +8,8 @@ const UNIT_MODEL_KINDS := ["Worker", "Guard", "Rifleman"] + STAGE5_ALIEN_KINDS
 const UNIT_VIEW_SCENE := preload("res://scenes/unit_view.tscn")
 
 var _stage5_passed := false
+var _wave_ring: Control
+var _incoming_glow: Control
 
 func _visible_text(control: Control) -> String:
 	if control is RichTextLabel:
@@ -16,6 +18,19 @@ func _visible_text(control: Control) -> String:
 
 func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
 	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
+
+func _ring_matches(snapshot: Dictionary) -> bool:
+	var total := float(snapshot.get("timer_total_seconds", 0.0))
+	if total <= 0.0:
+		return false
+	var expected := clampf(float(snapshot.get("seconds_remaining", 0.0)) / total, 0.0, 1.0)
+	return absf(float(_wave_ring.ring_ratio) - expected) <= 0.05
+
+func _glow_visibility() -> Dictionary:
+	var result := {}
+	for direction in ["North", "East", "South", "West"]:
+		result[direction] = (_incoming_glow.get_node(direction) as Control).visible
+	return result
 
 func _wave_hud_fits(control: Control) -> bool:
 	var rect := control.get_global_rect()
@@ -45,6 +60,21 @@ func _run() -> void:
 	if wave_label == null:
 		_stage5_fail("wave HUD label is missing")
 		return
+	_wave_ring = main.get_node_or_null("HUD/WaveRing")
+	_incoming_glow = main.get_node_or_null("HUD/IncomingGlow")
+	if _wave_ring == null or _incoming_glow == null:
+		_stage5_fail("wave countdown ring or incoming edge glow is missing")
+		return
+	if _incoming_glow.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		_stage5_fail("incoming edge glow is interactive instead of mouse IGNORE")
+		return
+	var wave_panel := main.get_node_or_null("HUD/WavePanel") as Control
+	if wave_panel == null or not wave_panel.get_global_rect().encloses(wave_label.get_global_rect()) \
+			or not wave_panel.get_global_rect().encloses(_wave_ring.get_global_rect()):
+		_stage5_fail("wave ring/label escape their panel: panel=%s ring=%s label=%s" % [
+			wave_panel.get_global_rect() if wave_panel != null else "missing",
+			_wave_ring.get_global_rect(), wave_label.get_global_rect()])
+		return
 	# The countdown must be rendered from a live bridge read, not the
 	# scene's placeholder text: poll until the label shows the snapshot's
 	# next_wave, then require the snapshot's own remaining time on screen.
@@ -68,6 +98,14 @@ func _run() -> void:
 			or not start_text.contains(expected_time) or not _wave_hud_fits(wave_label):
 		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, start_text])
 		return
+	if not _ring_matches(live_wave) or bool(_wave_ring.warning):
+		_stage5_fail("idle wave ring does not render seconds_remaining/timer_total_seconds: ring=%s snapshot=%s" % [
+			_wave_ring.ring_ratio, live_wave])
+		return
+	for direction in _glow_visibility():
+		if bool(_glow_visibility()[direction]):
+			_stage5_fail("incoming edge glow %s is visible before any warning zone" % direction)
+			return
 	if not await _probe_alien_roles():
 		return
 
@@ -157,6 +195,14 @@ func _verify_warning_presentation(main: Node3D) -> void:
 			or zones.size() != 1 or str(zones[0].get("name", "")) != "North":
 		_stage5_fail("warning snapshot is not the first authored zone: %s" % [warning])
 		return
+	if not _ring_matches(warning) or not bool(_wave_ring.warning):
+		_stage5_fail("warning ring is not the amber snapshot ratio: ring=%s snapshot=%s" % [
+			_wave_ring.ring_ratio, warning])
+		return
+	var glow := _glow_visibility()
+	if not bool(glow["North"]) or bool(glow["East"]) or bool(glow["South"]) or bool(glow["West"]):
+		_stage5_fail("directional edge glow does not match the North warning zone: %s" % [glow])
+		return
 	var warning_text := _visible_text(wave_label)
 	if not warning_text.contains("Prep") or not warning_text.contains("Next wave 1") \
 			or not warning_text.contains("Incoming: North") \
@@ -192,6 +238,10 @@ func _verify_warning_presentation(main: Node3D) -> void:
 			or not _visible_text(wave_label).contains("Incoming: North") \
 			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
 		_stage5_fail("short-lived border ping did not expire while the authoritative HUD warning remained")
+		return
+	var still_warning: Dictionary = GrusBridge.wave_snapshot()
+	if not bool(_wave_ring.warning) or not _ring_matches(still_warning) or not bool(_glow_visibility()["North"]):
+		_stage5_fail("amber ring/edge glow dropped while incoming_zones still announced North: %s" % [still_warning])
 		return
 	_stage5_passed = true
 

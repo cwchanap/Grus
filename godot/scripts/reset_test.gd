@@ -266,6 +266,14 @@ func _run() -> void:
 		if not _rich_text_has_icon(reset_economy_label, "res://assets/ui/icons/resources/%s.png" % icon_name):
 			_fail("reset HUD is missing resource icon %s" % icon_name)
 			return
+	var reset_heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
+	var reset_cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as Control
+	if reset_heat_bar == null or reset_cold_chip == null:
+		_fail("reset HUD is missing the heat bar/cold chip")
+		return
+	if reset_heat_bar.visible or reset_cold_chip.visible:
+		_fail("reset HUD shows the cold bar/chip at full efficiency")
+		return
 	if _rich_text_has_icon(reset_economy_label, "res://assets/ui/icons/status/surface_cold.png"):
 		_fail("reset HUD shows an incorrect cold warning at 100% efficiency")
 		return

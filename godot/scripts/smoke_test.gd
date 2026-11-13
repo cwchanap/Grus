@@ -7,6 +7,9 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 const EXPANSION_SALVAGE_ID := 14
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+## RejectReason discriminant values (declaration order in
+## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
+const REJECT_NOT_COMBATANT := 14
 
 class RetryBuildingView extends "res://scripts/building_view.gd":
 	var failed_once := false
@@ -23,6 +26,16 @@ func _ready() -> void:
 func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
+
+## The shaped bounds of a Label's text with its mandatory line breaks — the
+## same TextParagraph the renderer draws with, not the control's grown size.
+func _shaped_label_size(label: Label) -> Vector2:
+	var paragraph := TextParagraph.new()
+	paragraph.set_break_flags(TextServer.BREAK_MANDATORY)
+	paragraph.set_direction(TextServer.DIRECTION_LTR)
+	paragraph.add_string(label.text, label.get_theme_font("font"),
+		label.get_theme_font_size("font_size"), "")
+	return paragraph.get_size()
 
 func _modifier_event(keycode: int, pressed: bool) -> void:
 	var event := InputEventKey.new()
@@ -89,6 +102,12 @@ func _find_unit(units: Array[Node], id: int) -> Node3D:
 func _ring(unit: Node3D) -> MeshInstance3D:
 	return unit.get_node("SelectionRing") as MeshInstance3D
 
+## The minimap draws the 128x96 world bitmap across its scaled control rect;
+## tests convert a world cell into the real click point the same way a player
+## clicking the visible map would.
+func _minimap_click_point(minimap: Control, cell: Vector2) -> Vector2:
+	return minimap.get_global_rect().position + cell * (minimap.size / Vector2(128.0, 96.0))
+
 func _art_bounds(root: Node3D) -> AABB:
 	var bounds := AABB()
 	var first := true
@@ -111,13 +130,14 @@ func _foreign_nodes(root: Node) -> PackedStringArray:
 			found.append("%s (%s)" % [node.name, node.get_class()])
 	return found
 
-func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
+func _wait_until(condition: Callable, timeout_s: float, message: String, details := Callable()) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	for _frame in frame_budget:
 		if condition.call():
 			return true
 		await get_tree().physics_frame
-	_fail("%s (waited %.0fs)" % [message, timeout_s])
+	var suffix := "" if not details.is_valid() else ": %s" % details.call()
+	_fail("%s (waited %.0fs)%s" % [message, timeout_s, suffix])
 	return false
 
 func _find_view(group: String, meta: String, id: int) -> Node3D:
@@ -146,11 +166,17 @@ func _accepted_since(revision: int) -> bool:
 	return int(GrusBridge.command_feedback_revision()) > revision \
 		and str(GrusBridge.command_feedback()).begins_with("Command accepted")
 
+## A clickable world probe site: the candidate must be a valid placement
+## preview, clear of reserved footprints, AND its real click point must not
+## land under a HUD STOP surface — the full-width top bar owns the viewport
+## top, so a world point projected there can never receive the click.
 func _defense_placement_anchor(
 		builder_id: int, kind: String, reserved_footprints: Array[Rect2i] = []) -> Vector2i:
 	var worker := _unit_view(builder_id)
 	if worker == null:
 		return Vector2i(-1, -1)
+	var camera := get_node("Main/Camera3D") as Camera3D
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	var origin := Vector2i(floori(worker.global_position.x), floori(worker.global_position.z))
 	for radius in range(1, 17):
 		for y in range(-radius, radius + 1):
@@ -169,8 +195,12 @@ func _defense_placement_anchor(
 					if footprint.intersects(reserved):
 						overlaps_reserved = true
 						break
-				if not overlaps_reserved:
-					return candidate
+				if overlaps_reserved:
+					continue
+				var screen := camera.unproject_position(Vector3(candidate.x + 0.25, 0.0, candidate.y + 0.25))
+				if hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(screen)):
+					continue
+				return candidate
 	return Vector2i(-1, -1)
 
 func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
@@ -179,8 +209,11 @@ func _arm_defense(main: Node3D, button: Button, kind: String) -> bool:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	if int(GrusBridge.command_feedback_revision()) != revision \
-			or str(main.get("_placement_kind")) != kind:
-		_fail("%s build button leaked a command or did not arm placement" % kind)
+			or str(main.get("_placement_kind")) != kind \
+			or not button.button_pressed:
+		_fail("%s build button leaked a command, did not arm placement, or lost its lit tile: placement=%s pressed=%s revision=%d->%d feedback=%s" % [
+			kind, main.get("_placement_kind"), button.button_pressed,
+			revision, int(GrusBridge.command_feedback_revision()), GrusBridge.command_feedback()])
 		return false
 	return true
 
@@ -245,9 +278,10 @@ func _assert_fog_overlay(where: String, snap: Dictionary) -> bool:
 	return true
 
 func _assert_action_icon_paths(main: Node3D) -> bool:
+	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	for spec in [
-		["HUD/CommandPanel/BuildGrid", "buildings", 9],
-		["HUD/CommandPanel/TrainGrid", "units", 3],
+		["HUD/CommandPanel/BuildGrid", "buildings", 9, "Build"],
+		["HUD/CommandPanel/TrainGrid", "units", 3, "Train"],
 	]:
 		var grid := main.get_node_or_null(spec[0]) as Container
 		if grid == null:
@@ -265,8 +299,155 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 			if kind.is_empty() or actual != expected:
 				_fail("%s icon path is %s; expected %s" % [button.name, actual if not actual.is_empty() else "missing", expected])
 				return false
+			# Icon-only tiles still name their catalogue action: the tooltip
+			# leads with the real building/unit and the accessible name repeats
+			# the Build/Train verb, so hovering and assistive tech identify it.
+			if not button.tooltip_text.begins_with("%s\n" % kind) \
+					or button.accessibility_name != "%s %s" % [spec[3], kind]:
+				_fail("%s does not name %s %s: tooltip=%s accessibility=%s" % [
+					button.name, spec[3], kind, button.tooltip_text, button.accessibility_name])
+				return false
+			# HPA-698 readability: the painted icon and its cost must fill the
+			# tile, not sit tiny inside an oversized rim.
+			var cost_label := button.get_node_or_null("Cost") as RichTextLabel
+			if button.size.y < 70.0 or button.get_theme_constant("icon_max_width") < 40 \
+					or cost_label == null \
+					or cost_label.get_theme_font_size("normal_font_size") < 13:
+				_fail("%s action tile does not fill its icon/cost slot: size=%s icon_width=%d cost_font=%d" % [
+					button.name, button.size, button.get_theme_constant("icon_max_width"),
+					cost_label.get_theme_font_size("normal_font_size") if cost_label != null else -1])
+				return false
+			# The tooltip is the catalogue stat surface: price, time, max HP
+			# and any optional combat/counter fields — never a copied table.
+			var entry: Dictionary = catalogue.get(spec[1], {}).get(kind, {})
+			var counter: TextureRect = button.get_node_or_null("CounterIcon") as TextureRect
+			if entry.is_empty() or not button.tooltip_text.contains("Cost:") \
+					or not button.tooltip_text.contains("%s: %ds" % [spec[3], int(entry.get("seconds", 0))]) \
+					or not button.tooltip_text.contains("HP: %d" % int(entry.get("max_health", 0))):
+				_fail("%s tooltip is missing its catalogue cost/time/HP row: %s" % [button.name, button.tooltip_text])
+				return false
+			if entry.has("damage"):
+				if not button.tooltip_text.contains("Damage %d" % int(entry.get("damage", 0))) \
+						or not button.tooltip_text.contains("Range") \
+						or not button.tooltip_text.contains(str(entry.get("counter_target", ""))) \
+						or counter == null or not counter.visible \
+						or counter.texture == null \
+						or not counter.texture.resource_path.ends_with(
+							"units/%s.png" % str(entry.get("counter_target", "")).to_snake_case()):
+					_fail("%s tooltip/counter art does not project its catalogue combat row: %s" % [button.name, button.tooltip_text])
+					return false
+			elif counter != null and counter.visible:
+				_fail("%s shows a counter icon without catalogue combat stats" % button.name)
+				return false
+			if spec[1] == "buildings":
+				var heat := int(entry.get("heat_supply", 0)) + int(entry.get("heat_demand", 0))
+				if heat > 0 and not button.tooltip_text.contains("Heat:"):
+					_fail("%s tooltip omits its catalogue heat contribution" % button.name)
+					return false
 		if count != int(spec[2]):
 			_fail("%s has %d action Buttons; expected %d" % [grid.name, count, int(spec[2])])
+			return false
+	return true
+
+## HPA-698 final review: command feedback (rejected orders, armed targets) is
+## drawn before the bottom selection card, so it must sit wholly above it.
+func _assert_command_status_above_selection() -> bool:
+	var status := get_node_or_null("Main/HUD/CommandStatus") as Label
+	var selection_card := get_node_or_null("Main/HUD/SelectionPanel") as Panel
+	if status == null or selection_card == null:
+		_fail("CommandStatus or SelectionPanel is missing for the layout check")
+		return false
+	var status_rect := status.get_global_rect()
+	var card_rect := selection_card.get_global_rect()
+	if not status.is_visible_in_tree() or status.text.is_empty() \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(status_rect) \
+			or status_rect.intersects(card_rect) or status_rect.end.y > card_rect.position.y:
+		_fail("CommandStatus is not wholly above the selection card: status=%s card=%s" % [
+			status_rect, card_rect])
+		return false
+	return true
+
+## HPA-698 presentation contract: one project-wide Frostline theme using the
+## bundled Barlow faces (never a system-font assumption), the 15 HPA-695 icons
+## imported at 128 px into the existing icon tree, and the UI-kit/screen
+## plates the HUD styles with. Asset presence alone is not a rendering check;
+## the checkpoint's rendered-frame review covers that separately.
+func _assert_frostline_assets() -> bool:
+	var theme_path := str(ProjectSettings.get_setting("gui/theme/custom", ""))
+	var theme := load(theme_path) as Theme if not theme_path.is_empty() else null
+	if theme == null or theme.default_font == null \
+			or str(theme.default_font.resource_path) != "res://assets/fonts/Barlow-Regular.ttf":
+		_fail("project gui/theme/custom is not the bundled Barlow theme: \"%s\"" % theme_path)
+		return false
+	# get_stylebox() returns the engine fallback stylebox when the property is
+	# absent, so only has_stylebox() can detect a missing UnaffordableTile
+	# normal style.
+	if not theme.has_stylebox("normal", "UnaffordableTile"):
+		_fail("project theme is missing the unaffordable-tile Button variation")
+		return false
+	# The round order buttons must scale the complete circular source image.
+	# Nine-slice margins larger than the rendered button collapse the centre
+	# and leave only transparent source corners (the original Task 4 bug).
+	var round_texture := load("res://assets/ui/frostline/ui/round_button.png") as Texture2D
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		if not theme.has_stylebox(state, "OrderButton"):
+			_fail("project theme is missing the OrderButton/%s round style" % state)
+			return false
+		var order_style := theme.get_stylebox(state, "OrderButton") as StyleBoxTexture
+		if order_style == null or order_style.texture != round_texture \
+				or not is_zero_approx(order_style.texture_margin_left) \
+				or not is_zero_approx(order_style.texture_margin_top) \
+				or not is_zero_approx(order_style.texture_margin_right) \
+				or not is_zero_approx(order_style.texture_margin_bottom):
+			_fail("OrderButton/%s does not scale the full round image (margins %s/%s/%s/%s)" % [
+				state, order_style.texture_margin_left if order_style != null else -1,
+				order_style.texture_margin_top if order_style != null else -1,
+				order_style.texture_margin_right if order_style != null else -1,
+				order_style.texture_margin_bottom if order_style != null else -1])
+			return false
+	var license := FileAccess.get_file_as_string("res://assets/fonts/OFL.txt")
+	if not license.contains("SIL Open Font License"):
+		_fail("bundled Barlow OFL license text is missing")
+		return false
+	for icon_path in [
+		"res://assets/ui/icons/actions/attack_move.png",
+		"res://assets/ui/icons/actions/gather.png",
+		"res://assets/ui/icons/actions/move.png",
+		"res://assets/ui/icons/actions/pause.png",
+		"res://assets/ui/icons/actions/rally.png",
+		"res://assets/ui/icons/actions/stop.png",
+		"res://assets/ui/icons/status/health.png",
+		"res://assets/ui/icons/status/idle_workers.png",
+		"res://assets/ui/icons/status/locked.png",
+		"res://assets/ui/icons/status/mouse_left.png",
+		"res://assets/ui/icons/status/mouse_right.png",
+		"res://assets/ui/icons/status/mouse_wheel.png",
+		"res://assets/ui/icons/status/population.png",
+		"res://assets/ui/icons/status/research_rate.png",
+		"res://assets/ui/icons/status/time.png",
+	]:
+		var icon := load(icon_path) as Texture2D
+		if icon == null or icon.get_width() != 128 or icon.get_height() != 128:
+			_fail("HPA-695 icon is missing or not the 128 px import size: %s" % icon_path)
+			return false
+	for plate_path in [
+		"res://assets/ui/frostline/ui/bar_frame.png",
+		"res://assets/ui/frostline/ui/frost_overlay.png",
+		"res://assets/ui/frostline/ui/plate.png",
+		"res://assets/ui/frostline/ui/portrait_bezel.png",
+		"res://assets/ui/frostline/ui/round_button.png",
+		"res://assets/ui/frostline/ui/socket.png",
+		"res://assets/ui/frostline/ui/tile_locked.png",
+		"res://assets/ui/frostline/ui/tile_normal.png",
+		"res://assets/ui/frostline/ui/tile_selected.png",
+		"res://assets/ui/frostline/ui/tile_unaffordable.png",
+		"res://assets/ui/frostline/screens/defeat_banner.png",
+		"res://assets/ui/frostline/screens/emblem.png",
+		"res://assets/ui/frostline/screens/start_key_art.png",
+		"res://assets/ui/frostline/screens/victory_banner.png",
+	]:
+		if load(plate_path) as Texture2D == null:
+			_fail("Frostline UI-kit texture is missing: %s" % plate_path)
 			return false
 	return true
 
@@ -733,7 +914,11 @@ func _run() -> void:
 	if viewport_size != Vector2(TEST_VIEWPORT_SIZE):
 		_fail("smoke viewport did not resize to project baseline: %s" % viewport_size)
 		return
+	if not _assert_frostline_assets():
+		return
 	if not _assert_action_icon_paths(get_node("Main") as Node3D):
+		return
+	if not _assert_command_status_above_selection():
 		return
 	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
 		return
@@ -808,6 +993,137 @@ func _run() -> void:
 		if not token in control_words:
 			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
 			return
+	# HPA-698 Start key art, emblem and noninteractive atmosphere: the
+	# backdrop is visible outside Playing, every decorative overlay uses
+	# mouse IGNORE, the frost overlay is warm-hidden at 15/10, and the
+	# always-on vignette carries a real generated gradient.
+	var session_backdrop := get_node_or_null("Main/HUD/SessionBackdrop") as Control
+	var start_art := get_node_or_null("Main/HUD/SessionBackdrop/StartArt") as TextureRect
+	var result_banner := get_node_or_null("Main/HUD/SessionBackdrop/ResultBanner") as TextureRect
+	var session_emblem := get_node_or_null("Main/HUD/SessionPanel/SessionEmblem") as TextureRect
+	var session_title := get_node_or_null("Main/HUD/SessionPanel/SessionTitle") as Label
+	var vignette := get_node_or_null("Main/HUD/Vignette") as TextureRect
+	var frost_overlay := get_node_or_null("Main/HUD/Atmosphere/FrostOverlay") as TextureRect
+	if session_backdrop == null or start_art == null or result_banner == null \
+			or session_emblem == null or session_title == null \
+			or vignette == null or frost_overlay == null:
+		_fail("Start/Result atmosphere nodes are missing")
+		return
+	if not session_backdrop.visible or not start_art.visible \
+			or start_art.texture == null \
+			or not start_art.texture.resource_path.ends_with("screens/start_key_art.png") \
+			or not session_emblem.visible or session_emblem.texture == null \
+			or not session_emblem.texture.resource_path.ends_with("screens/emblem.png"):
+		_fail("Start key art or emblem is missing before Start")
+		return
+	# The mockup Start lockup is emblem-and-wordmark led: both must be larger
+	# than the former 96 px emblem / 60 px title while staying on screen.
+	if session_emblem.get_global_rect().size.x < 128.0 \
+			or session_emblem.get_global_rect().size.y < 128.0 \
+			or not session_title.visible \
+			or session_title.get_theme_font_size("font_size") < 72 \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(
+				session_title.get_global_rect()):
+		_fail("Start title/emblem are not large and visible: emblem=%s title_size=%d" % [
+			session_emblem.get_global_rect().size, session_title.get_theme_font_size("font_size")])
+		return
+	# HPA-698 visual fidelity Start layout: three painted-icon objectives, a
+	# compact horizontal controls strip and the bright shared Start/Restart
+	# action, all fully on screen and non-overlapping.
+	var session_panel := get_node_or_null("Main/HUD/SessionPanel") as Panel
+	var objectives := get_node_or_null("Main/HUD/SessionPanel/Objectives") as VBoxContainer
+	var start_button := get_node_or_null("Main/HUD/SessionPanel/StartButton") as Button
+	var resume_button := get_node_or_null("Main/HUD/SessionPanel/ResumeButton") as Button
+	var restart_button := get_node_or_null("Main/HUD/SessionPanel/RestartButton") as Button
+	if session_panel == null or objectives == null or start_button == null \
+			or resume_button == null or restart_button == null:
+		_fail("Start objectives or session action controls are missing")
+		return
+	if not objectives.is_visible_in_tree() or objectives.get_child_count() != 3:
+		_fail("Start does not show exactly three objectives")
+		return
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE))
+	for row in objectives.get_children():
+		var objective_icon := row.get_node_or_null("Icon") as TextureRect
+		var objective_title := row.get_node_or_null("Text/Title") as Label
+		var objective_detail := row.get_node_or_null("Text/Detail") as Label
+		if objective_icon == null or objective_icon.texture == null \
+				or not objective_icon.is_visible_in_tree() \
+				or objective_title == null or objective_title.text.strip_edges().is_empty() \
+				or objective_detail == null or objective_detail.text.strip_edges().is_empty():
+			_fail("Start objective row is not icon-led with title/detail: %s" % row.name)
+			return
+	var catalogue_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
+	var opening_prep := int(roundf(float(GrusBridge.wave_snapshot().get("timer_total_seconds", 0.0))))
+	var research_detail := objectives.get_child(2).get_node("Text/Detail") as Label
+	var survive_detail := objectives.get_child(0).get_node("Text/Detail") as Label
+	if catalogue_target <= 0 or not research_detail.text.replace(",", "").contains(str(catalogue_target)):
+		_fail("Research objective does not derive its target from the catalogue: %s" % research_detail.text)
+		return
+	if opening_prep <= 0 or not survive_detail.text.contains("%d:%02d" % [opening_prep / 60, opening_prep % 60]):
+		_fail("Survive objective does not derive the initial preparation from the wave snapshot: %s" % survive_detail.text)
+		return
+	if controls_label.get_global_rect().size.y > 56.0 \
+			or controls_label.get_global_rect().size.x < 800.0:
+		_fail("ControlsLabel is not a horizontal strip: %s" % controls_label.get_global_rect())
+		return
+	# The documented instructions must stay legible and fully inside their
+	# painted strip: a 13 px floor plus the shaped text (mandatory breaks)
+	# against the strip's own content area.
+	if controls_label.get_theme_font_size("font_size") < 13:
+		_fail("ControlsLabel font is below the 13 px legibility floor: %d" % [
+			controls_label.get_theme_font_size("font_size")])
+		return
+	var controls_style := controls_label.get_theme_stylebox("normal") as StyleBox
+	if controls_style == null:
+		_fail("ControlsLabel has no painted strip stylebox")
+		return
+	var controls_text_size := _shaped_label_size(controls_label)
+	var controls_region := controls_label.get_global_rect().size - Vector2(
+		controls_style.get_content_margin(SIDE_LEFT) + controls_style.get_content_margin(SIDE_RIGHT),
+		controls_style.get_content_margin(SIDE_TOP) + controls_style.get_content_margin(SIDE_BOTTOM))
+	if controls_text_size.x > controls_region.x + 0.5 or controls_text_size.y > controls_region.y + 0.5:
+		_fail("ControlsLabel text does not fit its allocated region: text=%s region=%s" % [
+			controls_text_size, controls_region])
+		return
+	for control in [objectives, start_button, controls_label]:
+		if not viewport_rect.encloses(control.get_global_rect()):
+			_fail("Start control %s is offscreen: %s" % [control.name, control.get_global_rect()])
+			return
+	if objectives.get_global_rect().intersects(start_button.get_global_rect()) \
+			or objectives.get_global_rect().intersects(controls_label.get_global_rect()) \
+			or start_button.get_global_rect().intersects(controls_label.get_global_rect()):
+		_fail("Start objectives/action/controls strip overlap")
+		return
+	var start_button_rect := start_button.get_global_rect()
+	if start_button_rect.size.x < 280.0 or start_button_rect.size.y < 56.0 \
+			or not start_button.is_visible_in_tree() or start_button.disabled:
+		_fail("Start action is not a visible, reachable call to action: %s" % start_button_rect)
+		return
+	var start_style := start_button.get_theme_stylebox("normal") as StyleBoxFlat
+	var restart_style := restart_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if start_style == null or start_style.bg_color.v < 0.5 \
+			or restart_style == null or restart_style.bg_color != start_style.bg_color:
+		_fail("Start does not carry the shared bright Frostline action style")
+		return
+	if is_same(resume_button.get_theme_stylebox("normal"), start_style):
+		_fail("Resume inherited the Start-only bright action style")
+		return
+	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-start")
+	if not start_capture.is_empty():
+		_fail(start_capture)
+		return
+	if result_banner.visible or frost_overlay.visible or vignette.texture == null or not vignette.visible:
+		_fail("Result banner/frost/vignette visibility is wrong at the warm Start screen")
+		return
+	for path in ["Main/HUD/SessionBackdrop", "Main/HUD/SessionBackdrop/StartArt",
+			"Main/HUD/SessionBackdrop/Dim", "Main/HUD/SessionBackdrop/ResultBanner",
+			"Main/HUD/Vignette", "Main/HUD/Atmosphere", "Main/HUD/Atmosphere/FrostOverlay",
+			"Main/HUD/IncomingGlow", "Main/HUD/IncomingGlow/North"]:
+		var overlay := get_node_or_null(path) as Control
+		if overlay == null or overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+			_fail("decorative overlay %s is missing or intercepts mouse input" % path)
+			return
 	# The Start overlay keeps the first wave timer frozen until the player
 	# starts the one-base survival match.
 	if not GrusBridge.start_match():
@@ -816,13 +1132,67 @@ func _run() -> void:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
 		return
+	if not await _wait_until(func(): return not session_backdrop.visible and vignette.visible,
+			5.0, "Playing did not hide the Start backdrop or lost the always-on vignette"):
+		return
+	# Wave timer geometry from the Rust constants: wave 1 opens on the
+	# authored preparation interval and the live remaining can never exceed
+	# the snapshot's own total.
+	var opening_wave: Dictionary = GrusBridge.wave_snapshot()
+	if int(opening_wave.get("next_wave", -1)) != 1 \
+			or typeof(opening_wave.get("timer_total_seconds")) != TYPE_FLOAT \
+			or not is_equal_approx(float(opening_wave.get("timer_total_seconds", -1.0)), 300.0) \
+			or float(opening_wave.get("seconds_remaining", -1.0)) <= 0.0 \
+			or float(opening_wave.get("seconds_remaining", 0.0)) > float(opening_wave.get("timer_total_seconds", 0.0)) + 1.0:
+		_fail("Playing wave timer total/remaining geometry is wrong: %s" % [opening_wave])
+		return
 	await get_tree().process_frame
 	if controls_label.is_visible_in_tree():
 		_fail("ControlsLabel stayed visible after the match reached Playing")
 		return
+	# HPA-698 map-edge provenance: only an opt-in real-render capture pans
+	# west past the authored ground edge, through the real middle-drag path,
+	# and restores the exact framing the rest of the journey projects through.
+	# A headless or uncaptured run must not move the camera at all. Restoring
+	# the logical position is not enough: the renderer reads the physics-
+	# interpolated camera transform, so without reset_physics_interpolation
+	# later projections stay on the panned frame (minimap.gd does the same
+	# after a jump). unit_one stands still here, so its projected point is a
+	# stable pixel-level probe of the rendered framing.
+	var edge_camera_position := camera.position
+	var edge_probe_point := unit_one.global_position
+	var edge_probe_screen := camera.unproject_position(edge_probe_point)
+	if SmokeHelpers.capture_enabled():
+		_mouse_drag(Vector2(200.0, 300.0), Vector2(800.0, 300.0), MOUSE_BUTTON_MIDDLE)
+		await get_tree().process_frame
+		if camera.position.is_equal_approx(edge_camera_position):
+			_fail("map-edge capture pan did not move the camera")
+			return
+		var edge_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-map-edge")
+		if not edge_capture.is_empty():
+			_fail(edge_capture)
+			return
+		camera.position = edge_camera_position
+		camera.reset_physics_interpolation()
+		await get_tree().process_frame
+	if not camera.global_transform.is_equal_approx(default_camera_transform) \
+			or not camera.position.is_equal_approx(edge_camera_position):
+		_fail("map-edge capture did not restore the logical camera framing: %s" % camera.position)
+		return
+	if not await _wait_until(func():
+			return camera.get_global_transform_interpolated().is_equal_approx(default_camera_transform) \
+				and camera.unproject_position(edge_probe_point).distance_to(edge_probe_screen) < 0.5,
+			2.0, "map-edge capture left the rendered camera projection stale",
+			func():
+				return "logical=%s interpolated=%s projection=%s expected=%s" % [
+					camera.global_transform, camera.get_global_transform_interpolated(),
+					camera.unproject_position(edge_probe_point), edge_probe_screen]):
+		return
 
 	var command_status := get_node("Main/HUD/CommandStatus") as Label
-	var clear_screen := Vector2(viewport_size.x * 0.5, viewport_size.y - 40.0)
+	# Empty ground outside every re-laid-out HUD zone: the old viewport-bottom
+	# point now sits under the bottom selection card.
+	var clear_screen := Vector2(viewport_size.x * 0.5 + 260.0, viewport_size.y * 0.5 - 60.0)
 
 	# Camera framing contract, before any pan/zoom/minimap interaction: the
 	# live Team-1 Research Center view (stable BuildingId 1) must project
@@ -861,19 +1231,55 @@ func _run() -> void:
 	var research_label := get_node_or_null("Main/HUD/ResearchPanel/ResearchLabel") as Label
 	var research_icon := get_node_or_null("Main/HUD/ResearchPanel/ResearchIcon") as TextureRect
 	var analyze_button := get_node_or_null("Main/HUD/ResearchPanel/AnalyzeButton") as Button
+	var research_markers := get_node_or_null("Main/HUD/ResearchPanel/ResearchMarkers") as RichTextLabel
 	var wave_hud := get_node("Main/HUD/WaveLabel") as Control
 	if research_panel == null or research_bar == null or research_label == null or research_icon == null \
-			or analyze_button == null or wave_hud == null:
+			or analyze_button == null or research_markers == null or wave_hud == null:
 		_fail("research HUD nodes are missing under HUD/ResearchPanel")
+		return
+	# HPA-698 research markers are catalogue-derived: both tower unlock
+	# thresholds and the wave-growth milestone, with their planted icons.
+	var marker_catalogue: Dictionary = GrusBridge.catalogue_snapshot()
+	var marker_buildings: Dictionary = marker_catalogue.get("buildings", {})
+	var flame_points := int(marker_buildings.get("FlameTower", {}).get("unlock_points", 0))
+	var lance_points := int(marker_buildings.get("CrystalLance", {}).get("unlock_points", 0))
+	var wave_points := int(marker_catalogue.get("research", {}).get("wave_growth_points", 0))
+	var marker_text := research_markers.get_parsed_text()
+	if flame_points <= 0 or lance_points <= 0 or wave_points <= 0 \
+			or not marker_text.contains(str(flame_points)) \
+			or not marker_text.contains(str(lance_points)) \
+			or not marker_text.contains(str(wave_points)) \
+			or not research_markers.text.contains("res://assets/ui/icons/buildings/flame_tower.png") \
+			or not research_markers.text.contains("res://assets/ui/icons/buildings/crystal_lance.png") \
+			or not research_markers.text.contains("res://assets/ui/icons/status/incoming_zone.png"):
+		_fail("research markers do not project the catalogue tower/wave thresholds: %s" % [research_markers.text])
+		return
+	# The milestone row's hover explanation must be reachable from the real
+	# pointer, not hidden behind a mouse-ignoring child of the research card.
+	var expected_marker_tooltip := "FlameTower at %d research · CrystalLance at %d research · Wave growth at %d research" % [
+		flame_points, lance_points, wave_points]
+	var marker_tooltip := research_markers.get_tooltip(
+		research_markers.get_global_rect().get_center() - research_markers.global_position)
+	if research_markers.mouse_filter == Control.MOUSE_FILTER_IGNORE \
+			or marker_tooltip != expected_marker_tooltip:
+		_fail("research milestone row tooltip is unreachable or incomplete: %s" % marker_tooltip)
+		return
+	var marker_hover := InputEventMouseMotion.new()
+	marker_hover.position = research_markers.get_global_rect().get_center()
+	get_tree().root.push_input(marker_hover)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if get_viewport().gui_get_hovered_control() != research_markers:
+		_fail("research milestone row is not the real hover target")
 		return
 	if not _has_visible_icon(get_node("Main/HUD"), "res://assets/ui/icons/status/research_progress.png"):
 		_fail("research HUD is missing status/research_progress.png")
 		return
-	# The compact panel hugs the left edge below the InputShield band,
-	# inside the 1280x720 viewport, and fully contains its Analyze button —
-	# never over the northwest corridor's or expansion salvage's projected
-	# cells, which must stay clickable under the default framing. The salvage
-	# point derives from its live view so the probe tracks the authored layout.
+	# The compact top-centre research card sits fully inside the viewport and
+	# contains its Analyze button — never over the northwest corridor's or
+	# expansion salvage's projected cells, which must stay clickable under the
+	# default framing. The salvage point derives from its live view so the
+	# probe tracks the authored layout.
 	var research_rect := research_panel.get_global_rect()
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
@@ -894,8 +1300,9 @@ func _run() -> void:
 		return
 	var salvage_screen := camera.unproject_position(salvage_view.global_position)
 	if research_rect.has_point(salvage_screen):
-		_fail("research panel covers the expansion salvage at %s: %s" % [
-			salvage_screen, research_rect])
+		_fail("research panel covers the expansion salvage at %s: %s (camera logical=%s interpolated=%s default=%s)" % [
+			salvage_screen, research_rect, camera.global_transform,
+			camera.get_global_transform_interpolated(), default_camera_transform])
 		return
 	for corridor_cell in [Vector2(38, 24), Vector2(40, 20)]:
 		var corridor_screen := camera.unproject_position(
@@ -1168,6 +1575,42 @@ func _run() -> void:
 		_fail("left-click input did not select friendly unit 1 after camera pan/zoom")
 		return
 
+	# HPA-698 selection detail: one live worker shows exact current/max HP
+	# derived from its live view ratio and the Rust catalogue max_health, a
+	# worker task line and the Rust carry limit. A mixed selection must hide
+	# every per-unit number rather than invent an aggregate.
+	var selection_panel := get_node_or_null("Main/HUD/SelectionPanel") as Panel
+	var selection_name := get_node_or_null("Main/HUD/SelectionPanel/SelectionName") as Label
+	var selection_health := get_node_or_null("Main/HUD/SelectionPanel/HealthBar") as ProgressBar
+	var selection_health_label := get_node_or_null("Main/HUD/SelectionPanel/HealthLabel") as Label
+	var selection_task := get_node_or_null("Main/HUD/SelectionPanel/SelectionLabel") as Label
+	var carry_bar := get_node_or_null("Main/HUD/SelectionPanel/CarryBar") as ProgressBar
+	var carry_label := get_node_or_null("Main/HUD/SelectionPanel/CarryLabel") as RichTextLabel
+	if selection_panel == null or selection_name == null or selection_health == null \
+			or selection_health_label == null or selection_task == null \
+			or carry_bar == null or carry_label == null:
+		_fail("selection detail nodes are missing under HUD/SelectionPanel")
+		return
+	var worker_entry: Dictionary = GrusBridge.catalogue_snapshot().get("units", {}).get("Worker", {})
+	var worker_max_health := int(worker_entry.get("max_health", 0))
+	var worker_health := clampi(roundi(float(unit_one.call("health_ratio")) * worker_max_health), 0, worker_max_health)
+	if worker_max_health <= 0:
+		_fail("catalogue exposes no Worker max_health for the selection detail")
+		return
+	if not await _wait_until(func():
+			return selection_health.visible \
+				and is_equal_approx(selection_health.max_value, float(worker_max_health)) \
+				and is_equal_approx(selection_health.value, float(worker_health)) \
+				and selection_name.text.to_lower().contains("worker") \
+				and selection_health_label.text.contains("%d / %d" % [worker_health, worker_max_health]) \
+				and carry_bar.max_value == float(GrusBridge.catalogue_snapshot().get("carry_limit", -1)),
+			5.0, "single Worker selection does not render catalogue-backed HP/carry detail"):
+		return
+	if not selection_panel.tooltip_text.contains("HP: %d" % worker_max_health) \
+			or not selection_panel.tooltip_text.contains("Train: %ds" % int(worker_entry.get("seconds", 0))):
+		_fail("Worker selection tooltip is missing its catalogue HP/train stats: %s" % [selection_panel.tooltip_text])
+		return
+
 	# Resource gathering through real input only: at maximum zoom, a
 	# right-click on the farthest-projected art corner of every visible
 	# resource must queue a gather — the pick target scales with the cell,
@@ -1187,7 +1630,7 @@ func _run() -> void:
 	# the wrong neighbour can no longer pass on a stale status label.
 	var gathered := {}
 	# Click points must reach _unhandled_input: skip any spot a HUD Control
-	# would consume (shield, minimap, panels, buttons).
+	# would consume (top bar, minimap, panels, buttons).
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for resource in get_tree().get_nodes_in_group("resource_views"):
 		if not resource.is_visible_in_tree():
@@ -1284,6 +1727,12 @@ func _run() -> void:
 	if not _ring(unit_one).visible or not _ring(unit_two).visible:
 		_fail("Shift-click did not add a second friendly unit after camera pan/zoom")
 		return
+	await get_tree().process_frame
+	if selection_health.visible or carry_bar.visible \
+			or not selection_name.text.contains("×2"):
+		_fail("mixed selection invented aggregate HP/carry numbers: name=%s hp=%s carry=%s" % [
+			selection_name.text, selection_health.visible, carry_bar.visible])
+		return
 
 	_modifier_event(KEY_CTRL, true)
 	await get_tree().process_frame
@@ -1330,19 +1779,311 @@ func _run() -> void:
 		_fail("Stop input did not settle the active move order")
 		return
 
-	var input_shield := get_node_or_null("Main/HUD/InputShield") as Control
-	if input_shield == null:
-		_fail("HUD input shield is missing")
+	# HPA-698 modal orders: one controller-owned _armed_order string, armed by
+	# a real order-tile click, dispatched by the next real right-click and
+	# consumed exactly once. An armed Move must outrank the contextual Gather
+	# pick, and Cancel/Esc clear without dispatching or pausing.
+	var order_grid := get_node_or_null("Main/HUD/CommandPanel/OrderGrid") as Container
+	if order_grid == null:
+		_fail("HUD/CommandPanel/OrderGrid is missing")
 		return
-	var feedback_before_ui := int(GrusBridge.command_feedback_revision())
-	_mouse_click(input_shield.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	var order_buttons := {}
+	for order_name in ["MoveButton", "StopButton", "AttackMoveButton", "GatherButton", "RallyButton", "CancelButton"]:
+		var order_button := order_grid.get_node_or_null(order_name) as Button
+		if order_button == null:
+			_fail("order tile %s is missing from OrderGrid" % order_name)
+			return
+		order_buttons[order_name] = order_button
+	for spec in [["MoveButton", "move"], ["StopButton", "stop"], ["AttackMoveButton", "attack_move"],
+			["GatherButton", "gather"], ["RallyButton", "rally"], ["CancelButton", "cancel"]]:
+		var button: Button = order_buttons[spec[0]]
+		var icon_name: String = "cancel" if str(spec[1]) == "cancel" else str(spec[1])
+		if spec[1] != "cancel" \
+				and (button.icon == null or not button.icon.resource_path.ends_with("actions/%s.png" % icon_name)):
+			_fail("%s does not use the painted actions/%s icon" % [spec[0], icon_name])
+			return
+		if button.tooltip_text.is_empty():
+			_fail("%s has no action tooltip" % spec[0])
+			return
+		if button.size.x < 56.0 or absf(button.size.x - button.size.y) > 0.5:
+			_fail("%s does not render the round order plate square: %s" % [spec[0], button.size])
+			return
+	var fallback_resource := Vector2.INF
+	var fallback_resource_id := -1
+	var hud_surfaces := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	for resource in get_tree().get_nodes_in_group("resource_views"):
+		if not resource.is_visible_in_tree():
+			continue
+		var resource_screen := camera.unproject_position(resource.global_position)
+		if not Rect2(Vector2.ZERO, viewport_size).has_point(resource_screen) \
+				or hud_surfaces.any(func(rect: Rect2) -> bool: return rect.has_point(resource_screen)):
+			continue
+		fallback_resource = resource_screen
+		fallback_resource_id = int(resource.get_meta("resource_id", -1))
+		break
+	if fallback_resource == Vector2.INF:
+		_fail("no HUD-clear visible resource for the armed-order fallback probe")
+		return
+	var move_button: Button = order_buttons["MoveButton"]
+	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
-	if not _ring(unit_two).visible or int(GrusBridge.command_feedback_revision()) != feedback_before_ui:
-		_fail("HUD click leaked into world controls")
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "move" or not move_button.button_pressed:
+		_fail("Move tile did not arm the one controller order state or render pressed")
+		return
+	var move_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Move was not consumed by the ground right-click: %s" % command_status.text)
+		return
+	if not await _wait_until(_accepted_since.bind(move_revision), 10.0,
+			"armed Move on open ground was not accepted by the sim"):
+		return
+	# With Move armed against a resource art target the modal order still
+	# wins: the status must be Move, never the contextual Gather fallback.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), fallback_resource, MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Move fell back to Gather or was not consumed by the resource right-click: %s" % command_status.text)
+		return
+	# Attack-move tile: same modal dispatch through the existing bridge path.
+	var attack_button: Button = order_buttons["AttackMoveButton"]
+	SmokeHelpers.push_mouse_click(get_tree(), attack_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "attack_move" or not attack_button.button_pressed \
+			or move_button.button_pressed:
+		_fail("Attack-move tile did not replace the armed order or light only its own tile")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Attack-move queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Attack-move did not consume into the attack-move command: %s" % command_status.text)
+		return
+	# Gather tile: requires selected workers and a real resource target.
+	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not _ring(unit_one).visible:
+		_fail("could not reselect Worker 1 for the armed Gather tile")
+		return
+	var gather_button: Button = order_buttons["GatherButton"]
+	SmokeHelpers.push_mouse_click(get_tree(), gather_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "gather" or not gather_button.button_pressed:
+		_fail("Gather tile did not arm gather")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), fallback_resource, MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Gather command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("armed Gather did not consume into a gather command: %s" % command_status.text)
+		return
+	# Armed Gather against empty ground rejects: the click still consumes the
+	# arming, dispatches no bridge command, and never falls back to Move.
+	SmokeHelpers.push_mouse_click(get_tree(), gather_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "gather":
+		_fail("Gather tile did not re-arm for the invalid-target regression")
+		return
+	var invalid_gather_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Gather command rejected" \
+			or str(get_node("Main").get("_armed_order")) != "" \
+			or int(GrusBridge.command_feedback_revision()) != invalid_gather_revision:
+		_fail("armed Gather on empty ground did not reject without a command or Move fallback: %s" % command_status.text)
+		return
+	await get_tree().process_frame
+	if gather_button.button_pressed:
+		_fail("rejected armed Gather left its tile lit")
+		return
+	# Cancel clears the armed order without a bridge command or a pause.
+	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	var cancel_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["CancelButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	if str(get_node("Main").get("_armed_order")) != "" \
+			or str(command_status.text) != "Order canceled" \
+			or int(GrusBridge.command_feedback_revision()) != cancel_revision:
+		_fail("Cancel did not clear the armed order without dispatching a command")
+		return
+	await get_tree().process_frame
+	if move_button.button_pressed or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("Cancel left its armed tile lit or paused the session")
+		return
+	# Esc clears the armed order before it can pause the Playing session.
+	SmokeHelpers.push_mouse_click(get_tree(), attack_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_key_tap(KEY_ESCAPE)
+	await get_tree().process_frame
+	if str(get_node("Main").get("_armed_order")) != "" \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
+		_fail("Esc did not clear the armed order before pausing")
+		return
+	# Stop tile executes immediately through the existing stop path.
+	var stop_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	if str(command_status.text) != "Stop command queued" \
+			or str(get_node("Main").get("_armed_order")) != "":
+		_fail("Stop tile did not execute immediately: %s" % command_status.text)
+		return
+	if not await _wait_until(func(): return int(GrusBridge.command_feedback_revision()) > stop_revision,
+			5.0, "Stop command never settled its authoritative feedback"):
+		return
+	# Losing the selection clears a modal order instead of leaving it armed.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func(): return int(get_node("Main").get("selected_building_id")) == -1 \
+			and (get_node("Main").get("selected_ids") as Array).is_empty() \
+			and str(get_node("Main").get("_armed_order")) == "",
+			5.0, "selection loss left a modal order armed"):
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func(): return _ring(unit_two).visible,
+			5.0, "Worker 2 did not reselect before the placement/order crossover probes"):
 		return
 
-	# ResearchPanel sits below InputShield's band; its STOP filter must
-	# likewise keep panel clicks from clearing selection or queuing orders.
+	# HPA-698 build tiles mirror the controller-owned placement kind, not
+	# transient focus: the armed tile stays lit through focus and selection
+	# changes, moves to a newly armed kind, and clears on Cancel without a
+	# command.
+	var crossover_main := get_node("Main") as Node3D
+	var bunkhouse_tile := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
+	var wall_tile := get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button
+	if not await _arm_defense(crossover_main, bunkhouse_tile, "Bunkhouse"):
+		return
+	move_button.grab_focus()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
+		_fail("armed Bunkhouse tile lost or shared its placement state after focus moved")
+		return
+	_key_tap(KEY_1)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" \
+			or not bunkhouse_tile.button_pressed or not _ring(unit_one).visible:
+		_fail("real selection transition cleared the armed build tile or its placement")
+		return
+	var tile_transition_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), wall_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Wall" \
+			or not wall_tile.button_pressed or bunkhouse_tile.button_pressed \
+			or int(GrusBridge.command_feedback_revision()) != tile_transition_revision:
+		_fail("build-tile transition left the previous tile lit or dispatched a command")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["CancelButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or wall_tile.button_pressed \
+			or bunkhouse_tile.button_pressed or command_status.text != "Placement canceled" \
+			or int(GrusBridge.command_feedback_revision()) != tile_transition_revision:
+		_fail("Cancel left an armed build tile lit or dispatched a command")
+		return
+
+	# HPA-698 targeting modes are mutually exclusive. A build tile and an
+	# armed order may not coexist, in either entry order, and keyboard A must
+	# leave placement before arming Attack-move. The next right-click must
+	# execute the modal order rather than merely canceling placement.
+	if not _ring(unit_two).visible:
+		_fail("Worker 2 is not selected before the placement/order crossover probes")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" or str(crossover_main.get("_armed_order")) != "":
+		_fail("build tile did not enter placement exclusively: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or str(crossover_main.get("_armed_order")) != "move":
+		_fail("Move after Build left both targeting modes active: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	var crossover_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued" \
+			or str(crossover_main.get("_placement_kind")) != "" \
+			or str(crossover_main.get("_armed_order")) != "":
+		_fail("Build→Move right-click canceled placement instead of executing Move: %s" % command_status.text)
+		return
+	if not await _wait_until(_accepted_since.bind(crossover_revision), 10.0,
+			"Build→Move crossover was not accepted by the sim"):
+		return
+	# Reverse: arming Move first, then entering placement must clear the order.
+	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "Bunkhouse" or str(crossover_main.get("_armed_order")) != "":
+		_fail("Build after Move left a latent armed order: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	var placement_cancel_revision := int(GrusBridge.command_feedback_revision())
+	command_status.text = "<placement right-click>"
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "<placement right-click>" \
+			or str(crossover_main.get("_placement_kind")) != "" \
+			or str(crossover_main.get("_armed_order")) != "" \
+			or int(GrusBridge.command_feedback_revision()) != placement_cancel_revision:
+		_fail("placement right-click dispatched a latent order or changed feedback")
+		return
+	# Keyboard A while placement is active must cancel placement first.
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	_key_tap(KEY_A)
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" or str(crossover_main.get("_armed_order")) != "attack_move":
+		_fail("keyboard A did not leave placement before arming attack-move: placement=%s order=%s" % [
+			crossover_main.get("_placement_kind"), crossover_main.get("_armed_order")])
+		return
+	var crossover_attack_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Attack-move queued" \
+			or str(crossover_main.get("_armed_order")) != "":
+		_fail("A armed attack-move did not win the placement crossover: %s" % command_status.text)
+		return
+	# The worker is a non-combatant, so the authoritative outcome of this
+	# intentional Attack-move is the typed NotCombatant reject — still a
+	# legitimate command that advances the feedback revision. Settle that
+	# verdict before the panel-leak probes capture their own baseline,
+	# otherwise a fixed tick during either panel check looks exactly like UI
+	# leakage. (An accepted unit attack-move is covered by the Guard journey in
+	# combat_lifecycle_smoke_test.)
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > crossover_attack_revision \
+				and int(GrusBridge.last_reject_code()) == REJECT_NOT_COMBATANT \
+				and str(GrusBridge.command_feedback()).contains("NotCombatant"),
+			10.0, "A armed attack-move crossover feedback did not settle"):
+		return
+
+	# The obsolete InputShield rectangle is gone: the full-width top bar's own
+	# STOP panel is the shield, and clicking its empty face must never select a
+	# world object or queue a command.
+	if get_node_or_null("Main/HUD/InputShield") != null:
+		_fail("obsolete HUD InputShield still exists beside the full-width top bar")
+		return
+	var top_bar := get_node_or_null("Main/HUD/EconomyPanel") as Control
+	if top_bar == null or not top_bar.is_visible_in_tree() \
+			or not is_equal_approx(top_bar.get_global_rect().size.x, viewport_size.x):
+		_fail("HUD top bar is missing or not the full-width STOP surface")
+		return
+	var feedback_before_ui := int(GrusBridge.command_feedback_revision())
+	_mouse_click(top_bar.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not _ring(unit_two).visible or int(GrusBridge.command_feedback_revision()) != feedback_before_ui:
+		_fail("top-bar click leaked into world controls")
+		return
+
+	# ResearchPanel shares the upper band with the full-width top bar; its
+	# STOP filter must likewise keep panel clicks from clearing selection or
+	# queuing orders.
 	var research_panel_leak := get_node_or_null("Main/HUD/ResearchPanel") as Panel
 	if research_panel_leak == null:
 		_fail("research HUD panel is missing")
@@ -1411,6 +2152,13 @@ func _run() -> void:
 		return
 	var main := get_node("Main") as Node3D
 	var minimap := get_node("Main/HUD/Minimap") as Control
+	# Mockup framing: the interactive map fills a readable 4:3 frame at the
+	# bottom left; its normalized click mapping keeps one cell per pixel
+	# semantic (see _minimap_click_point and minimap.gd).
+	if minimap.size.x < 180.0 or minimap.size.y < 135.0 \
+			or absf(minimap.size.x / minimap.size.y - 128.0 / 96.0) > 0.01:
+		_fail("minimap is not the readable 4:3 framed map: %s" % minimap.size)
+		return
 
 	# The expansion target derives from its live view so the choreography
 	# tracks the authored layout instead of a copied coordinate list.
@@ -1504,7 +2252,7 @@ func _run() -> void:
 
 	# Minimap click recenters the camera and never queues a command.
 	var feedback_revision := int(GrusBridge.command_feedback_revision())
-	var click_at := minimap.get_global_rect().position + Vector2(20, 80)
+	var click_at := _minimap_click_point(minimap, Vector2(20, 80))
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.position = click_at
@@ -1537,7 +2285,14 @@ func _run() -> void:
 		return
 
 	# Defense placement runs through the visible build buttons and real world
-	# input. Each successful Wall/Gate click stays armed for the next site.
+	# input. The minimap leg left the camera on the southwest corner where the
+	# re-laid-out bottom cards now cover Worker 1; recenter through the same
+	# real minimap path first, then click the unit at the clear viewport centre.
+	SmokeHelpers.push_mouse_click(get_tree(),
+		_minimap_click_point(minimap, Vector2(unit_one.global_position.x, unit_one.global_position.z)),
+		MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_mouse_click(camera.unproject_position(unit_one.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	if not _ring(unit_one).visible:
@@ -1735,16 +2490,23 @@ func _run() -> void:
 	if target_points <= 0 or int(analyze_cost.get("crystals", 0)) <= 0 or analyze_gain <= 0:
 		_fail("catalogue research block is incomplete: %s" % [research_catalogue])
 		return
+	# The wave-growth marker is the Rust `unlock_points(75%)` milestone:
+	# 6,750 of the 9,000-point victory target, between the two tower
+	# unlocks.
+	var wave_growth_points := int(research_catalogue.get("wave_growth_points", 0))
+	if wave_growth_points != 6750:
+		_fail("catalogue wave_growth_points is not the Rust wave-boost milestone: %s" % [research_catalogue])
+		return
 	if not analyze_button.text.contains(str(int(analyze_cost.get("crystals", -1)))) \
 			or not analyze_button.text.contains(str(analyze_gain)):
 		_fail("Analyze button does not render the catalogue cost/gain: %s" % [analyze_button.text])
 		return
 
-	# The two advanced towers fill the last cells of the 3x3 BuildGrid and
+	# The two advanced towers fill the last cells of the 5x2 BuildGrid and
 	# bind their catalogue unlock thresholds; every other kind binds zero.
 	var build_grid := get_node("Main/HUD/CommandPanel/BuildGrid") as GridContainer
-	if build_grid.columns != 3 or build_grid.get_child_count() != 9:
-		_fail("BuildGrid is not the 3x3 layout with the two advanced towers: cols=%d children=%d" % [build_grid.columns, build_grid.get_child_count()])
+	if build_grid.columns != 5 or build_grid.get_child_count() != 9:
+		_fail("BuildGrid is not the 5x2 layout with the two advanced towers: cols=%d children=%d" % [build_grid.columns, build_grid.get_child_count()])
 		return
 	for tower_kind in ["FlameTower", "CrystalLance"]:
 		var tower_button := get_node("Main/HUD/CommandPanel/BuildGrid/%sButton" % tower_kind) as Button
@@ -1845,7 +2607,7 @@ func _run() -> void:
 		return
 	var feedback_before_minimap := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(),
-		minimap.get_global_rect().position + Vector2(rc_view.global_position.x, rc_view.global_position.z),
+		_minimap_click_point(minimap, Vector2(rc_view.global_position.x, rc_view.global_position.z)),
 		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -1903,6 +2665,21 @@ func _run() -> void:
 			return int(main.selected_building_id) == 1 \
 				and main.selected_ids.is_empty(),
 			5.0, "left-click on the Research Center view did not select building 1"):
+		return
+	# The same single-selection HP contract applies to a live building: the
+	# view ratio times the catalogue max_health, never a stored duplicate.
+	var rc_entry: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get("ResearchCenter", {})
+	var rc_max_health := int(rc_entry.get("max_health", 0))
+	var rc_health := clampi(roundi(float(rc_view.call("health_ratio")) * rc_max_health), 0, rc_max_health)
+	if not await _wait_until(func():
+			return selection_health.visible \
+				and is_equal_approx(selection_health.max_value, float(rc_max_health)) \
+				and is_equal_approx(selection_health.value, float(rc_health)) \
+				and selection_name.text.to_lower().contains("research") \
+				and selection_health_label.text.contains("%d / %d" % [rc_health, rc_max_health]) \
+				and selection_panel.tooltip_text.contains("HP: %d" % rc_max_health) \
+				and selection_panel.tooltip_text.contains("Heat:"),
+			5.0, "single Research Center selection does not render catalogue-backed HP/heat detail"):
 		return
 	# HPA-291 silhouette picking: a click inside the model's projected art
 	# rect — beyond the old 20 px center-radius — must select the same
@@ -1975,20 +2752,38 @@ func _run() -> void:
 		if points_after - points_before_click < float(analyze_gain):
 			_fail("accepted Analyze did not bank the +%d reward: before=%f now=%f" % [analyze_gain, points_before_click, points_after])
 			return
-	# Deselect on open ground: Analyze disables again and a click on the
-	# disabled button dispatches nothing to the bridge.
+	# Deselect on open ground: Analyze intentionally remains enabled while
+	# Playing with a living Research Center, and a real click still queues the
+	# command for the controller-resolved live core. With zero Crystals the
+	# sim's typed InsufficientResources verdict is the only honest outcome.
 	_mouse_click(clear_screen, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(main.selected_building_id) == -1 \
-				and analyze_button.disabled,
-			5.0, "Analyze did not disable after the Research Center was deselected"):
+				and main.selected_ids.is_empty() and not analyze_button.disabled,
+			5.0, "Analyze disabled after deselection while Playing with a live Research Center"):
 		return
-	var revision_before_disabled := int(GrusBridge.command_feedback_revision())
+	var crystals_before_deselected := int(GrusBridge.economy_snapshot().get("crystals", -1))
+	var points_before_deselected := float(GrusBridge.research_snapshot().get("points", -1.0))
+	var revision_before_deselected := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
-	for _frame in 6:
-		await get_tree().process_frame
-	if int(GrusBridge.command_feedback_revision()) != revision_before_disabled:
-		_fail("a click on the disabled Analyze button reached the bridge")
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > revision_before_deselected,
+			10.0, "selection-free Analyze press produced no sim verdict"):
+		return
+	if crystals_before_deselected < analyze_price:
+		if int(GrusBridge.last_reject_code()) != 8 \
+				or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
+			_fail("selection-free zero-Crystal Analyze did not surface code 8: code=%d feedback=%s" % [
+				int(GrusBridge.last_reject_code()), GrusBridge.command_feedback()])
+			return
+		if int(GrusBridge.economy_snapshot().get("crystals", -1)) != crystals_before_deselected:
+			_fail("selection-free rejected Analyze changed the Crystal ledger")
+			return
+		if float(GrusBridge.research_snapshot().get("points", -1.0)) - points_before_deselected >= float(analyze_gain):
+			_fail("selection-free rejected Analyze banked the point reward")
+			return
+	elif not str(GrusBridge.command_feedback()).begins_with("Command accepted"):
+		_fail("selection-free affordable Analyze was not accepted: %s" % GrusBridge.command_feedback())
 		return
 
 	var roof_bunkhouse: Node3D = null
@@ -2037,7 +2832,7 @@ func _run() -> void:
 	var bunkhouse_zoom_start := camera.size
 	var bunkhouse_world := roof_bunkhouse.global_position
 	var viewport_center := viewport_size * 0.5
-	var minimap_point := minimap.get_global_rect().position + Vector2(bunkhouse_world.x, bunkhouse_world.z)
+	var minimap_point := _minimap_click_point(minimap, Vector2(bunkhouse_world.x, bunkhouse_world.z))
 	SmokeHelpers.push_mouse_click(get_tree(), minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2066,7 +2861,7 @@ func _run() -> void:
 	# still at minimum zoom: recenter through the real minimap path, click a
 	# live roof triangle beyond the old center radius.
 	var rc_roof_world := rc_view.global_position
-	var rc_minimap_point := minimap.get_global_rect().position + Vector2(rc_roof_world.x, rc_roof_world.z)
+	var rc_minimap_point := _minimap_click_point(minimap, Vector2(rc_roof_world.x, rc_roof_world.z))
 	SmokeHelpers.push_mouse_click(get_tree(), rc_minimap_point, MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -2277,7 +3072,7 @@ func _run() -> void:
 		_fail("could not restore sim speed after the radius-steal park")
 		return
 	SmokeHelpers.push_mouse_click(get_tree(),
-		minimap.get_global_rect().position + Vector2(steal_rc.global_position.x, steal_rc.global_position.z),
+		_minimap_click_point(minimap, Vector2(steal_rc.global_position.x, steal_rc.global_position.z)),
 		MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame

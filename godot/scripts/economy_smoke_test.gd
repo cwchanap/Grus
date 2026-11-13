@@ -48,6 +48,13 @@ const DEPOT_ANCHOR := Vector2i(40, 20)
 const STAGING_CELL := Vector2i(5, 47)
 ## Research Center rally cell for the rally-point proof.
 const RALLY_CELL := Vector2i(20, 58)
+## Selection is a real click whose projected point goes stale while the
+## buffered input waits at 20x. Each attempt re-projects from the live view;
+## the attempt count is a small fixed bound, not an extended timeout.
+const STAGING_SELECT_ATTEMPTS := 4
+## Far outside the controller's 20 px pick radius: an injected miss cannot
+## accidentally select the intended unit.
+const STAGING_MISS_OFFSET := Vector2(120.0, 0.0)
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
@@ -62,6 +69,13 @@ func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
 var _camera: Camera3D
 var _start_ms := 0
 var _building_ids := {}
+## Test-only failure injection for the staging interaction. Production paths
+## never set these; the smoke still sends every click/key through real input.
+var _staging_click_miss_remaining := 0
+var _staging_click_miss_all := false
+var _staging_miss_selection_cleared := false
+var _staging_vanish_probe := false
+var _staging_reject_interleave_remaining := 0
 
 func _ready() -> void:
 	call_deferred("_run")
@@ -144,7 +158,8 @@ func _click_button(button: Button) -> void:
 
 ## Polls a condition every physics frame until it holds or the frame budget
 ## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
-func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool:
+## `details` is called only on timeout so the log carries live diagnostics.
+func _wait_until(condition: Callable, timeout_s: float, message: String, details := Callable()) -> bool:
 	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
 	var gather_wait := message.begins_with("gatherers never stockpiled")
 	var gather_started_ms := Time.get_ticks_msec()
@@ -152,11 +167,13 @@ func _wait_until(condition: Callable, timeout_s: float, message: String) -> bool
 		if condition.call():
 			return true
 		await get_tree().physics_frame
-	var details := ""
+	var suffix := ""
 	if gather_wait:
 		var elapsed := float(Time.get_ticks_msec() - gather_started_ms) / 1000.0
-		details = ": %s" % _gather_wait_details(elapsed)
-	_fail("%s (waited %.0fs)%s" % [message, timeout_s, details])
+		suffix = ": %s" % _gather_wait_details(elapsed)
+	elif details.is_valid():
+		suffix = ": %s" % details.call()
+	_fail("%s (waited %.0fs)%s" % [message, timeout_s, suffix])
 	return false
 
 func _find_view(group: String, meta: String, id: int) -> Node3D:
@@ -183,8 +200,142 @@ func _queue_label(id: int) -> String:
 func _queue_progress(id: int) -> float:
 	return float(GrusBridge.building_snapshot(id).get("queue_progress", 0.0))
 
+func _training_queue(id: int) -> Array:
+	return GrusBridge.building_snapshot(id).get("training_queue", [])
+
 func _blocked_reason(id: int) -> int:
 	return int(GrusBridge.building_snapshot(id).get("blocked_reason", -1))
+
+## HPA-698 queue presentation floor: every visible socket and its unit icon
+## must be visibly larger than the old 44 px / 30 px strip, sit inside the
+## selection panel's padded plate, and never overlap the status rows, the
+## portrait or each other. Returns "" only when the whole row holds.
+func _queue_layout_error(sockets: Container, where: String) -> String:
+	var panel := get_node("Main/HUD/SelectionPanel") as Control
+	var status := get_node("Main/HUD/SelectionPanel/SelectionLabel") as Control
+	var portrait := get_node("Main/HUD/SelectionPanel/PortraitBezel") as Control
+	if sockets == null or panel == null or status == null or portrait == null:
+		return "%s queue layout controls are missing" % where
+	var overflow := sockets.get_node_or_null("OverflowChip") as Control
+	if overflow == null:
+		return "%s queue overflow chip is missing" % where
+	var padded := panel.get_global_rect().grow(-8.0)
+	var row := sockets.get_global_rect()
+	if not padded.encloses(row):
+		return "%s queue row %s leaves the padded selection panel %s" % [where, row, padded]
+	if row.intersects(status.get_global_rect()) or row.intersects(portrait.get_global_rect()):
+		return "%s queue row %s overlaps the status/portrait content" % [where, row]
+	var previous := Rect2()
+	var seen := false
+	for socket_index in sockets.get_child_count():
+		var control := sockets.get_child(socket_index) as Control
+		if control == null or not control.visible:
+			continue
+		var rect := control.get_global_rect()
+		if not padded.encloses(rect):
+			return "%s queue control %s leaves the padded selection panel %s" % [
+				where, control.name, padded]
+		if seen and rect.intersects(previous):
+			return "%s queue controls overlap: %s intersects %s" % [where, control.name, previous]
+		previous = rect
+		seen = true
+		if control is Panel:
+			if rect.size.x < 64.0 or rect.size.y < 60.0:
+				return "%s socket %s is %s, below the 64x60 presentation floor" % [
+					where, control.name, rect.size]
+			var icon := control.get_node_or_null("Icon") as TextureRect
+			if icon == null or icon.size.x < 44.0 or icon.size.y < 44.0:
+				return "%s socket %s icon is %s, below the 44 px presentation floor" % [
+					where, control.name, icon.size if icon != null else Vector2.ZERO]
+			if not rect.encloses(icon.get_global_rect()):
+				return "%s socket %s icon escapes its socket" % [where, control.name]
+			if socket_index == 0:
+				var timer := control.get_node_or_null("Time") as Label
+				if timer == null:
+					return "%s queue head timer is missing" % where
+				var font_size := timer.get_theme_font_size("font_size")
+				if font_size < 14:
+					return "%s queue head timer font is below the 14 px floor: %d" % [
+						where, font_size]
+				var timer_rect := timer.get_global_rect()
+				if not rect.encloses(timer_rect):
+					return "%s queue head timer label escapes its socket: label=%s socket=%s" % [
+						where, timer_rect, rect]
+				if not timer.text.is_empty():
+					var text_size := SmokeHelpers.shaped_text_size(timer)
+					if text_size.x > timer_rect.size.x + 0.5 \
+							or text_size.y > timer_rect.size.y + 0.5:
+						return "%s queue head timer text does not fit its label: text=%s label=%s" % [
+							where, text_size, timer_rect.size]
+		elif control != overflow:
+			return "%s queue row has an unexpected visible child %s" % [where, control.name]
+	return ""
+
+## Painted queue treatment: queued sockets reuse the theme's square Tile
+## normal plate and the head its pressed plate, read from the active theme so
+## the expected texture paths are never copied here. Empty sockets keep the
+## recessed flat square (the round socket.png is not a queue bezel). The
+## painted plate must not resize the sockets: their 64x64 floor and the
+## queue row's bounds stay the ones the test last validated.
+func _queue_painted_treatment_error(sockets: Container, filled: int, where: String) -> String:
+	if sockets == null:
+		return "%s queue sockets are missing" % where
+	var hud := get_node("Main/HUD/SelectionPanel") as Control
+	var tile_normal := hud.get_theme_stylebox("normal", "Tile")
+	var tile_pressed := hud.get_theme_stylebox("pressed", "Tile")
+	if not tile_normal is StyleBoxTexture or not tile_pressed is StyleBoxTexture:
+		return "%s theme Tile normal/pressed styles are not textures" % where
+	var normal_path := (tile_normal as StyleBoxTexture).texture.resource_path
+	var pressed_path := (tile_pressed as StyleBoxTexture).texture.resource_path
+	if normal_path.is_empty() or pressed_path.is_empty() or normal_path == pressed_path:
+		return "%s theme Tile normal/pressed styles have no distinct texture paths: %s %s" % [
+			where, normal_path, pressed_path]
+	var row := sockets.get_global_rect()
+	for index in 5:
+		var panel := sockets.get_child(index) as Panel
+		if panel == null:
+			return "%s socket %d is not a Panel" % [where, index + 1]
+		if not row.encloses(panel.get_global_rect()):
+			return "%s socket %d bounds %s leave the queue row %s" % [
+				where, index + 1, panel.get_global_rect(), row]
+		if not panel.get_combined_minimum_size().is_equal_approx(panel.custom_minimum_size):
+			return "%s socket %d bounds grew with its plate: min %s, floor %s" % [
+				where, index + 1, panel.get_combined_minimum_size(), panel.custom_minimum_size]
+		var style := panel.get_theme_stylebox("panel")
+		if index < filled:
+			var expected := pressed_path if index == 0 else normal_path
+			if not style is StyleBoxTexture \
+					or (style as StyleBoxTexture).texture.resource_path != expected:
+				return "%s socket %d does not carry the theme Tile %s plate %s" % [
+					where, index + 1, "pressed" if index == 0 else "normal", expected]
+		elif style is StyleBoxTexture:
+			return "%s empty socket %d carries a painted plate instead of the recessed square" % [
+				where, index + 1]
+	return ""
+
+## One-sample acceptance for the overflow capture. The bounded wait, the
+## capture gate and the focused regression all judge this same state; the
+## regression passes explicit selection/queue copies so stale, wrong-producer
+## and drained cases are rejected without touching gameplay.
+func _queue_overflow_projection_error(sockets: Container, chip: Label,
+		expected_building: int, selection: int, queue: Array) -> String:
+	if sockets == null or chip == null:
+		return "queue sockets or overflow chip are missing"
+	if selection != expected_building:
+		return "overflow projection selection %d is not the intended producer %d" % [
+			selection, expected_building]
+	if not sockets.is_visible_in_tree() or not chip.is_visible_in_tree():
+		return "queue row or overflow chip is not visible in tree"
+	if sockets.get_child_count() != 6:
+		return "queue row has %d children, not five sockets plus the chip" % sockets.get_child_count()
+	if queue.size() != 6:
+		return "overflow projection has %d queued jobs, not six" % queue.size()
+	for kind in queue:
+		if str(kind) != "Worker":
+			return "overflow projection is not a six-Worker queue: %s" % [queue]
+	if chip.text != "+1":
+		return "overflow chip reads %s, not +1" % chip.text
+	return ""
 
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
@@ -214,7 +365,9 @@ func _building_complete_at(id: int) -> bool:
 
 ## Heat boundary stage: the Rust snapshot's supply/demand/efficiency and the
 ## rendered HUD third line must both report the expected stage — the HUD
-## text is the acceptance surface, the snapshot pins the exact fraction.
+## text is the acceptance surface, the snapshot pins the exact fraction. The
+## top-bar heat bar and cold chip are display-only projections of that same
+## snapshot and must appear exactly while the surface is below full efficiency.
 func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: String) -> bool:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	if int(economy.get("heat_supply", -1)) != supply \
@@ -222,13 +375,27 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 			or absf(float(economy.get("surface_efficiency", 0.0)) - efficiency) > 0.0001:
 		return false
 	var label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
-	var lines := _visible_text(label).split("\n")
-	var hud_parts := hud_line.split(" · ")
-	var cold_icon := _rich_text_has_icon(label, "res://assets/ui/icons/status/surface_cold.png")
-	return lines.size() > 2 and hud_parts.size() == 2 \
-			and str(lines[2]).contains(str(hud_parts[0])) \
-			and str(lines[2]).contains(str(hud_parts[1])) \
-			and cold_icon == (efficiency < 1.0)
+	var heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
+	var cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as RichTextLabel
+	var frost_overlay := get_node_or_null("Main/HUD/Atmosphere/FrostOverlay") as TextureRect
+	if label == null or heat_bar == null or cold_chip == null or frost_overlay == null:
+		return false
+	var deficit := efficiency < 1.0
+	if heat_bar.visible != deficit or cold_chip.visible != deficit \
+			or frost_overlay.visible != deficit \
+			or frost_overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+			or frost_overlay.texture == null:
+		return false
+	if deficit:
+		var percent := roundi(efficiency * 100.0)
+		if percent >= 100:
+			percent = 99
+		if not is_equal_approx(heat_bar.max_value, float(maxi(demand, 1))) \
+				or not is_equal_approx(heat_bar.value, float(mini(supply, demand))) \
+				or not _visible_text(cold_chip).contains("%d%%" % percent) \
+				or not _rich_text_has_icon(cold_chip, "res://assets/ui/icons/status/surface_cold.png"):
+			return false
+	return _visible_text(label).contains(hud_line)
 
 ## Every mesh of a building view's active Model carries the shared
 ## translucent ice material_overlay exactly while its Rust-pushed cold
@@ -261,11 +428,16 @@ func _all_overlaid(views: Array, cold: bool) -> bool:
 ## the worker stands near the Depot. Its far-tree gather slots sit a few
 ## cells from the Depot origin and ~30 from the Research Center, so only a
 ## real Depot deposit can satisfy this within one physics frame of drift.
-func _scrap_deposited_at_depot(worker: Node3D, depot: Vector3, box: Dictionary) -> bool:
+## The worker is re-resolved from its stable id every poll: a captured view
+## can be freed between frames (the same stale-capture class that already
+## aborted this wait), and a freed bound Node raises instead of failing the
+## predicate.
+func _scrap_deposited_at_depot(worker_id: int, depot: Vector3, box: Dictionary) -> bool:
 	var scrap := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	var increased := scrap > int(box.get("scrap", scrap))
 	box["scrap"] = scrap
-	return increased and worker.global_position.distance_to(depot) < 12.0
+	var worker := _unit_view(worker_id)
+	return increased and worker != null and worker.global_position.distance_to(depot) < 12.0
 
 func _new_building_present(kind: String, box: Dictionary) -> bool:
 	for node in get_tree().get_nodes_in_group("building_views"):
@@ -288,6 +460,7 @@ func _unit_of_kind_present(kind: String, min_id: int, box: Dictionary) -> bool:
 		var id := int(node.get_meta("unit_id", -1))
 		if id >= min_id and str(node.get_meta("unit_kind", "")) == kind:
 			box["view"] = node
+			box["id"] = id
 			return true
 	return false
 
@@ -309,26 +482,234 @@ func _select_building(view: Node3D) -> void:
 		return
 	await _click_view(view, MOUSE_BUTTON_LEFT)
 
-## Retires a gatherer through the UI (select + Stop). Finite sources deplete
-## at 20x virtual time, and a depleted source leaves the worker idled at its
-## drop-off slot — sometimes inside a building click zone — so the scenario
-## stops its gatherers once the banked thresholds are met.
-func _stop_unit(view: Node3D) -> void:
-	await _click_view(view, MOUSE_BUTTON_LEFT)
+## The controller's current selection, read from the live test surface.
+func _selected_ids() -> Array:
+	var main := get_node_or_null("Main")
+	var selected: Variant = main.get("selected_ids") if main != null else null
+	return selected as Array if selected is Array else []
+
+## Applies a test-only off-target offset when the miss counters are armed.
+func _staging_click_point(unit_id: int, attempt: int, screen: Vector2) -> Vector2:
+	if not _staging_click_miss_all and _staging_click_miss_remaining <= 0:
+		return screen
+	if not _staging_click_miss_all:
+		_staging_click_miss_remaining -= 1
+	print("GRUS_ECONOMY_STAGING_MISS_INJECTED unit=%d attempt=%d at=%s" % [
+		unit_id, attempt + 1, screen])
+	return screen + STAGING_MISS_OFFSET
+
+## Clears selection through a real left click on the open staging cell before
+## a deliberately missed probe click. A pre-existing selection must never make
+## an injected miss look like a successful selection.
+func _clear_selection_for_miss_probe(unit_id: int) -> bool:
+	var screen := _camera.unproject_position(
+		Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5))
+	var main := get_node("Main")
+	if (main.call("_nearest_view", "unit_views", screen, 0) as Node3D) != null \
+			or (main.call("_building_at", screen, 0) as Node3D) != null:
+		_fail("miss probe clear point %s is not open ground for unit %d" % [
+			screen, unit_id])
+		return false
+	for rect in SmokeHelpers.hud_rects(get_node("Main/HUD")):
+		if rect.has_point(screen):
+			_fail("miss probe clear point %s is under HUD %s" % [screen, rect])
+			return false
+	_mouse_click(screen, MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var selected := _selected_ids()
+	if not selected.is_empty():
+		_fail("miss probe could not clear selection before unit %d: %s; %s" % [
+			unit_id, selected, _staging_details(unit_id)])
+		return false
+	print("GRUS_ECONOMY_STAGING_MISS_SELECTION_CLEARED unit=%d at=%s" % [unit_id, screen])
+	return true
+
+## Selects exactly one stable id through real left clicks. A buffered click
+## projected before a 20x frame can land behind a moving worker, so each
+## bounded attempt re-resolves the live view and re-projects immediately
+## before sending; no stale coordinate is retried.
+func _select_unit(unit_id: int) -> bool:
+	var attempts := PackedStringArray()
+	var injected_misses := 0
+	for attempt in STAGING_SELECT_ATTEMPTS:
+		var injected := _staging_click_miss_all or _staging_click_miss_remaining > 0
+		if injected and not _staging_miss_selection_cleared:
+			if not await _clear_selection_for_miss_probe(unit_id):
+				return false
+			_staging_miss_selection_cleared = true
+		var view := _unit_view(unit_id)
+		if view == null:
+			_fail("staging target %d vanished during selection: %s" % [
+				unit_id, _staging_details(unit_id)])
+			return false
+		var view_position := view.global_position
+		var screen := _staging_click_point(
+			unit_id, attempt, _camera.unproject_position(view_position))
+		_mouse_click(screen, MOUSE_BUTTON_LEFT)
+		await get_tree().process_frame
+		# Test-only vanish probe: free the isolated island UnitView between the
+		# click await and the result check. No real gameplay unit is touched.
+		if _staging_vanish_probe and unit_id == 99901:
+			var doomed := _unit_view(unit_id)
+			if doomed != null:
+				doomed.free()
+		await get_tree().process_frame
+		var selected := _selected_ids()
+		attempts.append("%d@%s view=%s%s=>%s" % [
+			attempt + 1, screen, view_position,
+			" (injected miss)" if injected else "", selected])
+		if _unit_view(unit_id) == null:
+			_fail("staging target %d vanished after the selection await: %s" % [
+				unit_id, _staging_details(unit_id)])
+			return false
+		if injected:
+			injected_misses += 1
+			if selected.size() == 1 and int(selected[0]) == unit_id:
+				_fail("injected miss falsely reports unit %d selected at %s; probe invalid: %s" % [
+					unit_id, screen, _staging_details(unit_id)])
+				return false
+		elif selected.size() == 1 and int(selected[0]) == unit_id:
+			if injected_misses > 0:
+				print("GRUS_ECONOMY_STAGING_SELECT_RECOVERED unit=%d attempt=%d attempts=%s" % [
+					unit_id, attempt + 1, "; ".join(attempts)])
+			return true
+	_fail("staging click did not select unit %d after %d fresh-coordinate attempts: %s; %s" % [
+		unit_id, STAGING_SELECT_ATTEMPTS, "; ".join(attempts), _staging_details(unit_id)])
+	return false
+
+## Retires a gatherer through the UI (select + Stop) for the intended stable
+## id. Finite sources deplete at 20x virtual time, and a depleted source
+## leaves the worker idled at its drop-off slot — sometimes inside a building
+## click zone — so the scenario stops its gatherers once the banked
+## thresholds are met. Selection must resolve to exactly this id before S;
+## otherwise a missed click would Stop whatever was selected instead.
+func _stop_unit(unit_id: int) -> bool:
+	if not await _select_unit(unit_id):
+		return false
+	var selected := _selected_ids()
+	if selected.size() != 1 or int(selected[0]) != unit_id:
+		_fail("Stop would target %s instead of unit %d: %s" % [
+			selected, unit_id, _staging_details(unit_id)])
+		return false
 	_key_tap(KEY_S)
 	await get_tree().process_frame
+	# Correlated Stop result: a worker (non-empty task snapshot) must be Idle,
+	# proving the accepted Stop cancelled this id's gather/route rather than a
+	# different selection. Combatants carry no WorkerTask; their later Move
+	# arrival proves the same for the physical order.
+	var stop_task := str(GrusBridge.unit_task_snapshot(unit_id).get("task", ""))
+	if not stop_task.is_empty() and stop_task != "Idle":
+		if not await _wait_until(
+				func(): return str(GrusBridge.unit_task_snapshot(unit_id).get("task", "")) == "Idle",
+				2.0, "Stop did not cancel unit %d's worker task" % unit_id,
+				func(): return _staging_details(unit_id)):
+			return false
+	return true
+
+## A diagnosis string for one stable unit id; used when staging fails so the
+## log records identity, live position, selection, task, session and wave
+## phase and the last command verdict instead of a bare timeout.
+func _staging_details(unit_id: int) -> String:
+	var view := _unit_view(unit_id)
+	var economy: Dictionary = GrusBridge.economy_snapshot()
+	var session: Dictionary = GrusBridge.session_snapshot()
+	var wave: Dictionary = GrusBridge.wave_snapshot()
+	var idle: PackedInt32Array = economy.get("idle_worker_ids", PackedInt32Array())
+	var main := get_node_or_null("Main")
+	var selected: Variant = main.get("selected_ids") if main != null else null
+	var position := "missing" if view == null else "(%.2f,%.2f)" % [
+		view.global_position.x, view.global_position.z]
+	return "unit=%d view=%s position=%s idle=%s selection=%s task=%s phase=%s wave=%s countdown=%s revision=%d feedback=%s last_reject=%d" % [
+		unit_id, "live" if view != null else "missing", position, idle.has(unit_id),
+		selected if selected is Array else [], GrusBridge.unit_task_snapshot(unit_id),
+		str(session.get("phase", "unknown")), str(wave.get("wave", "unknown")),
+		str(wave.get("seconds_remaining", "unknown")),
+		GrusBridge.command_feedback_revision(), GrusBridge.command_feedback(),
+		GrusBridge.last_reject_code()]
+
+## Stable-id preflight for staging: "" only while the id resolves to a live
+## unit view. Callers pass ids, never captured views — a view can be freed
+## between frames, and a typed freed argument aborts before any check.
+func _staging_target_error(unit_id: int) -> String:
+	if _unit_view(unit_id) != null:
+		return ""
+	return "staging target %d is not a live unit view: %s" % [unit_id, _staging_details(unit_id)]
 
 ## Stops a unit and parks it on the staging ground, clear of every later
-## building-origin click.
-func _park_at_staging(view: Node3D) -> void:
-	await _stop_unit(view)
-	await _click_view(view, MOUSE_BUTTON_LEFT)
-	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
+## building-origin click. Takes the stable id and re-resolves the view after
+## every await; returns false with the diagnosis already logged so callers
+## stop immediately instead of driving a freed or absent worker further.
+func _park_at_staging(unit_id: int) -> bool:
+	var target_error := _staging_target_error(unit_id)
+	if not target_error.is_empty():
+		_fail(target_error)
+		return false
+	var view := _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed before Stop: %s" % [unit_id, _staging_details(unit_id)])
+		return false
+	if not await _stop_unit(unit_id):
+		return false
+	view = _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed after Stop: %s" % [unit_id, _staging_details(unit_id)])
+		return false
+	if not await _select_unit(unit_id):
+		return false
+	view = _unit_view(unit_id)
+	if view == null:
+		_fail("staging target %d was freed before the Move: %s" % [unit_id, _staging_details(unit_id)])
+		return false
+	var start_position := view.global_position
 	var staging := Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
+	await _click_world(Vector2(STAGING_CELL), MOUSE_BUTTON_RIGHT)
+	# Test-only interleave: after the staging Move is dispatched and before its
+	# result is read, issue a real rejected Move for another stable unit (the
+	# builder) into a bridge-reported ruin. Its route rejection overwrites the
+	# global feedback/reject and must never decide the staging Move's result;
+	# the intended unit's arrival does.
+	if _staging_reject_interleave_remaining > 0:
+		_staging_reject_interleave_remaining -= 1
+		var rects: PackedInt32Array = GrusBridge.obstacle_rects()
+		if rects.size() < 20:
+			_fail("unrelated rejection injection has no ruin quad 4: %s" % [rects])
+			return false
+		var ruin_min := Vector2i(rects[16], rects[17])
+		var ruin_max := Vector2i(rects[18], rects[19])
+		var ruin_cells := ruin_max - ruin_min + Vector2i.ONE
+		var blocked := Vector2(
+			ruin_min.x + ruin_cells.x * 0.5, ruin_min.y + ruin_cells.y * 0.5)
+		if not await _select_unit(4):
+			return false
+		await _click_world(blocked, MOUSE_BUTTON_RIGHT)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var injected_reject := int(GrusBridge.last_reject_code())
+		print("GRUS_ECONOMY_STAGING_REJECT_INTERLEAVED reject=%d feedback=%s selection=%s" % [
+			injected_reject, GrusBridge.command_feedback(), _selected_ids()])
+		if injected_reject == -1:
+			_fail("unrelated rejection injection did not land: feedback=%s selection=%s" % [
+				GrusBridge.command_feedback(), _selected_ids()])
+			return false
+	# The global feedback/reject is diagnostic only: an unrelated route failure
+	# can overwrite it after this Move. Arrival by the intended stable id is the
+	# correlated result that proves the Move reached this unit.
 	if not await _wait_until(
-			func(): return view.global_position.distance_to(staging) < 3.0,
-			15.0, "retired gatherer never reached the staging ground"):
-		return
+			func():
+				var live := _unit_view(unit_id)
+				return live != null and live.global_position.distance_to(staging) < 3.0,
+			15.0, "retired gatherer never reached the staging ground",
+			func(): return _staging_arrival_details(unit_id, start_position)):
+		return false
+	return true
+
+## Timeout diagnosis for a staging Move: how far the intended unit travelled
+## from where the order was issued, plus the live identity/phase snapshot.
+func _staging_arrival_details(unit_id: int, start: Vector3) -> String:
+	var live := _unit_view(unit_id)
+	var moved := -1.0 if live == null else start.distance_to(live.global_position)
+	return "from=%s moved=%.2f; %s" % [start, moved, _staging_details(unit_id)]
 
 ## Full UI placement: select builder, press the build button, sweep the
 ## placement preview over the anchor, assert it rendered, then place.
@@ -364,6 +745,14 @@ func _single_ringed_idle_worker() -> bool:
 
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
+	# Test-only injection knobs. They alter only real-input coordinates or add
+	# a real rejected UI command; they never write selection or gameplay.
+	_staging_click_miss_remaining = OS.get_environment(
+		"GRUS_ECONOMY_STAGING_MISS_CLICKS").to_int()
+	_staging_click_miss_all = OS.get_environment("GRUS_ECONOMY_STAGING_MISS_ALL") == "1"
+	_staging_vanish_probe = OS.get_environment("GRUS_ECONOMY_STAGING_VANISH_PROBE") == "1"
+	_staging_reject_interleave_remaining = OS.get_environment(
+		"GRUS_ECONOMY_STAGING_REJECT_INTERLEAVE").to_int()
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
 	window.size = TEST_VIEWPORT_SIZE
@@ -381,6 +770,45 @@ func _run() -> void:
 
 	if not await _wait_until(_fixture_views_settled, 20.0,
 			"skirmish startup never settled to 4 units / 1 building / 18 resources"):
+		return
+
+	# Isolated presentation-only regression: one synthetic UnitView in
+	# `unit_views` is selected by a real click and freed between the selection
+	# click's awaits. No gameplay unit, command or selection is written
+	# directly; the helper must diagnose the vanished stable id and fail.
+	if _staging_vanish_probe:
+		var probe := (load("res://scenes/unit_view.tscn") as PackedScene).instantiate() as Node3D
+		probe.set_meta("unit_id", 99901)
+		probe.set_meta("team_id", 1)
+		probe.visible = true
+		add_child(probe)
+		probe.global_position = Vector3(STAGING_CELL.x + 0.5, 0.0, STAGING_CELL.y + 0.5)
+		if not await _select_unit(99901):
+			print("GRUS_ECONOMY_STAGING_VANISH_DIAGNOSED")
+		else:
+			_fail("vanish probe unexpectedly treated a freed unit as selected")
+		if is_instance_valid(probe):
+			probe.queue_free()
+		return
+
+	# Stable-id regressions for the staging helper. A missing id must be
+	# diagnosed, and the caller pattern must stop the journey instead of
+	# driving real input at a freed/absent worker. The failure probes exit
+	# nonzero on purpose: GRUS_SMOKE_STAGING_FAILURE_PROBE=1 (missing id) or
+	# =missed-click (every real selection click deliberately misses).
+	var missing_stage := _staging_target_error(999)
+	if missing_stage.is_empty() or not missing_stage.contains("999"):
+		_fail("staging preflight did not diagnose a missing stable id: %s" % missing_stage)
+		return
+	var staging_probe := OS.get_environment("GRUS_SMOKE_STAGING_FAILURE_PROBE")
+	if staging_probe == "1":
+		if not await _park_at_staging(999):
+			print("GRUS_ECONOMY_STAGING_FAILURE_PROPAGATED")
+		return
+	if staging_probe == "missed-click":
+		_staging_click_miss_all = true
+		if not await _park_at_staging(2):
+			print("GRUS_ECONOMY_STAGING_MISSED_CLICK_PROPAGATED")
 		return
 
 	var boot: Dictionary = GrusBridge.economy_snapshot()
@@ -409,6 +837,52 @@ func _run() -> void:
 		if catalogue_units.has(removed) or catalogue.get("buildings", {}).has(removed):
 			_fail("catalogue still advertises the deleted %s" % removed)
 			return
+	# The training catalogue stays human-only: alien rows would otherwise
+	# contribute an empty producer kind and route ordinary ground
+	# right-clicks to set_rally(-1, ...).
+	if catalogue_units.size() != 3 or catalogue_units.has("Swarmer"):
+		_fail("training catalogue is not the human-only UnitKind::HUMAN loop: %s" % [catalogue_units.keys()])
+		return
+	# HPA-698 combat/health stats ride the same Rust specs: Worker is a
+	# noncombatant with no optional combat keys, Guard and Rifleman carry
+	# their real damage/range/counter values.
+	if int(worker_entry.get("max_health", -1)) != 50 or worker_entry.has("damage"):
+		_fail("Worker catalogue stats are wrong: %s" % [worker_entry])
+		return
+	if int(guard_entry.get("max_health", -1)) != 100 \
+			or int(guard_entry.get("damage", -1)) != 10 \
+			or not is_equal_approx(float(guard_entry.get("range", -1.0)), 1.5) \
+			or str(guard_entry.get("counter_target", "")) != "Swarmer" \
+			or int(guard_entry.get("counter_bonus", -1)) != 5:
+		_fail("Guard catalogue combat stats are wrong: %s" % [guard_entry])
+		return
+	if int(rifleman_entry.get("max_health", -1)) != 70 \
+			or int(rifleman_entry.get("damage", -1)) != 8 \
+			or not is_equal_approx(float(rifleman_entry.get("range", -1.0)), 6.0) \
+			or str(rifleman_entry.get("counter_target", "")) != "Spitter" \
+			or int(rifleman_entry.get("counter_bonus", -1)) != 4:
+		_fail("Rifleman catalogue combat stats are wrong: %s" % [rifleman_entry])
+		return
+	if int(catalogue.get("carry_limit", -1)) != 10:
+		_fail("catalogue carry_limit is not the Rust CARRY_LIMIT: %s" % [catalogue])
+		return
+	var turret_entry: Dictionary = catalogue.get("buildings", {}).get("GunTurret", {})
+	if int(turret_entry.get("max_health", -1)) != 350 \
+			or int(turret_entry.get("heat_supply", -1)) != 0 \
+			or int(turret_entry.get("heat_demand", -1)) != 2 \
+			or int(turret_entry.get("damage", -1)) != 10 \
+			or not is_equal_approx(float(turret_entry.get("range", -1.0)), 8.0) \
+			or str(turret_entry.get("counter_target", "")) != "Spitter" \
+			or int(turret_entry.get("counter_bonus", -1)) != 5:
+		_fail("Gun Turret catalogue stat row is wrong: %s" % [turret_entry])
+		return
+	var research_center_entry: Dictionary = catalogue.get("buildings", {}).get("ResearchCenter", {})
+	if int(research_center_entry.get("max_health", -1)) != 800 \
+			or int(research_center_entry.get("heat_supply", -1)) != 15 \
+			or int(research_center_entry.get("heat_demand", -1)) != 10 \
+			or research_center_entry.has("damage"):
+		_fail("Research Center catalogue stat row is wrong: %s" % [research_center_entry])
+		return
 	# HPA-181: the Coal Furnace build button exists and reads its footprint
 	# and cost/build time from this same catalogue snapshot — no Godot
 	# balance literals.
@@ -418,7 +892,10 @@ func _run() -> void:
 		_fail("catalogue snapshot is missing the 2x2 / 80-Scrap / 20 s Coal Furnace: %s" % [furnace_entry])
 		return
 	var furnace_button := get_node_or_null("Main/HUD/CommandPanel/BuildGrid/CoalFurnaceButton") as Button
-	if furnace_button == null or furnace_button.tooltip_text != "Cost: 80 Scrap\nBuild: 20s":
+	if furnace_button == null \
+			or not furnace_button.tooltip_text.begins_with("CoalFurnace\nCost: 80 Scrap\nBuild: 20s") \
+			or not furnace_button.tooltip_text.contains("HP: %d" % int(furnace_entry.get("max_health", 0))) \
+			or not furnace_button.tooltip_text.contains("Heat: +12 supply"):
 		_fail("Coal Furnace build button does not show the catalogue-derived tooltip: \"%s\"" %
 				(furnace_button.tooltip_text if furnace_button != null else "<missing>"))
 		return
@@ -431,6 +908,19 @@ func _run() -> void:
 	if int(boot.get("population_used", -1)) != 4 or int(boot.get("population_cap", -1)) != 10:
 		_fail("starting population is not 4/10: %s" % [boot])
 		return
+	# Invalid ids stay empty snapshots: the new queue/carry keys sit behind
+	# the same missing/fog-hidden guards as the existing payload.
+	for bad_id in [-1, 999999]:
+		if not GrusBridge.building_snapshot(bad_id).is_empty() \
+				or not GrusBridge.unit_task_snapshot(bad_id).is_empty():
+			_fail("invalid id %d leaked a snapshot: %s / %s" % [bad_id,
+				GrusBridge.building_snapshot(bad_id), GrusBridge.unit_task_snapshot(bad_id)])
+			return
+	var idle_task: Dictionary = GrusBridge.unit_task_snapshot(1)
+	if str(idle_task.get("task", "")) != "Idle" or int(idle_task.get("carry_amount", -1)) != 0 \
+			or str(idle_task.get("carry_kind", "?")) != "":
+		_fail("idle worker 1 snapshot does not report an empty Carry: %s" % [idle_task])
+		return
 	if boot.has("age"):
 		_fail("economy snapshot still carries the deleted age field: %s" % [boot])
 		return
@@ -438,50 +928,74 @@ func _run() -> void:
 	# boot values — Crystals included — straight off economy_snapshot. The
 	# session is still at Start, so the label cannot have drifted from the
 	# 200/300/150/0 seed; the placeholder's zero stocks differ on Food.
-	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as Control
+	var economy_label := get_node("Main/HUD/EconomyPanel/EconomyLabel") as RichTextLabel
 	if economy_label == null:
 		_fail("economy HUD label is missing")
+		return
+	# Icon-first readability: the row uses 28 px painted icons and an 18 px
+	# value face — the approved mockup's prominent horizontal resource bar,
+	# not the old compressed three-line block.
+	if economy_label.get_theme_font_size("normal_font_size") < 18:
+		_fail("economy HUD value font is below the 18 px readability floor: %d" % economy_label.get_theme_font_size("normal_font_size"))
 		return
 	for icon_name in ["food", "scrap", "coal", "crystals", "heat"]:
 		var icon_path := "res://assets/ui/icons/resources/%s.png" % icon_name
 		if not _rich_text_has_icon(economy_label, icon_path):
 			_fail("economy HUD is missing required icon %s" % icon_path)
 			return
+	if not _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/population.png"):
+		_fail("economy HUD is missing the population icon")
+		return
+	var heat_bar := get_node_or_null("Main/HUD/EconomyPanel/HeatBar") as ProgressBar
+	var cold_chip := get_node_or_null("Main/HUD/EconomyPanel/ColdChip") as RichTextLabel
+	if heat_bar == null or cold_chip == null:
+		_fail("economy HUD is missing the heat supply/demand bar or cold chip")
+		return
+	if heat_bar.visible or cold_chip.visible:
+		_fail("warm economy HUD shows the cold bar/chip at full efficiency")
+		return
 	if _rich_text_has_icon(economy_label, "res://assets/ui/icons/status/surface_cold.png"):
 		_fail("warm economy HUD shows an incorrect surface-cold warning")
 		return
 	var economy_text := _visible_text(economy_label)
-	var hud_lines := economy_text.split("\n")
-	if hud_lines.size() != 3:
-		_fail("economy HUD does not keep three logical lines: \"%s\"" % economy_text)
+	if economy_text.contains("\n"):
+		_fail("economy HUD is not a single horizontal icon/value row: \"%s\"" % economy_text)
 		return
-	var economy_markup := (economy_label as RichTextLabel).text
-	var markup_lines := economy_markup.split("\n")
+	var economy_markup := economy_label.text
 	var previous_pair_end := 0
-	for resource in [["Food", "food", 0], ["Scrap", "scrap", 0], ["Coal", "coal", 0], ["Crystals", "crystals", 1], ["Heat", "heat_supply", 2]]:
+	for resource in [
+		["Food", "food", "food", 0],
+		["Scrap", "scrap", "scrap", 0],
+		["Coal", "coal", "coal", 0],
+		["Crystals", "crystals", "crystals", 0],
+	]:
 		var currency := str(resource[0])
-		var line_index := int(resource[2])
+		var icon_path := "res://assets/ui/icons/resources/%s.png" % str(resource[2])
 		var shown := str(int(boot.get(str(resource[1]), -1)))
-		if currency == "Heat":
-			shown = "%d / %d" % [int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
-		var icon_path := "res://assets/ui/icons/resources/%s.png" % currency.to_lower()
-		var expected_pair := "[img=18x18]%s[/img] %s" % [icon_path, shown]
+		var expected_pair := "[img=28x28]%s[/img] %s" % [icon_path, shown]
 		var pair_position := economy_markup.find(expected_pair, previous_pair_end)
-		if pair_position < 0 or not str(markup_lines[line_index]).contains(expected_pair):
-			_fail("economy HUD does not pair the %s icon with its live value %s in line %d: \"%s\"" % [
-				currency, shown, line_index + 1, economy_text])
+		if pair_position < 0:
+			_fail("economy HUD does not pair the %s icon with its live value %s: \"%s\"" % [
+				currency, shown, economy_text])
 			return
 		previous_pair_end = pair_position + expected_pair.length()
+	var population_pair := "[img=28x28]res://assets/ui/icons/status/population.png[/img] %d / %d" % [
+		int(boot.get("population_used", -1)), int(boot.get("population_cap", -1))]
+	if not economy_markup.contains(population_pair):
+		_fail("economy HUD population pair is not the live used/cap value: %s" % economy_markup)
+		return
+	var heat_pair := "[img=28x28]res://assets/ui/icons/resources/heat.png[/img] %d / %d" % [
+		int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
+	if not economy_markup.contains(heat_pair):
+		_fail("economy HUD heat pair is not the live supply/demand value: %s" % economy_markup)
+		return
 	# Rendered bounds, not just text: after the layout settles, the label's
 	# laid-out extent (rect grown to the minimum text size — wrapping is
 	# off, so a wide line expands past the authored offsets) must stay
 	# inside EconomyPanel and the baseline viewport.
 	await get_tree().process_frame
 	var rendered := economy_label.get_global_rect()
-	var content_size := economy_label.get_minimum_size()
-	if economy_label is RichTextLabel:
-		var rich_label := economy_label as RichTextLabel
-		content_size = content_size.max(Vector2(rich_label.get_content_width(), rich_label.get_content_height()))
+	var content_size := Vector2(economy_label.get_content_width(), economy_label.get_content_height())
 	rendered.size = rendered.size.max(content_size)
 	var panel_rect := (get_node("Main/HUD/EconomyPanel") as Control).get_global_rect()
 	if not panel_rect.encloses(rendered):
@@ -491,17 +1005,13 @@ func _run() -> void:
 	if not viewport_rect.encloses(rendered):
 		_fail("economy HUD label rendered bounds %s escape the %s viewport" % [rendered, viewport_rect])
 		return
-	# Crystals rides the Population line so the first currency line stays
-	# narrow enough for the authored rectangle.
-	if hud_lines.size() != 3 or hud_lines[0].contains("Crystals") \
-			or not hud_lines[1].contains("Population"):
-		_fail("economy HUD does not keep Crystals on the Population line: \"%s\"" % economy_text)
+	if content_size.y > 40.0 or content_size.x > panel_rect.size.x - 20.0:
+		_fail("economy HUD row wraps or overflows instead of one horizontal bar: %s" % content_size)
 		return
-	# HPA-181: the third line is the live heat boundary. The boot is still at
-	# Start, whose ticks recompute supply/demand without burning anything, so
-	# the label must show the warm Research Center baseline exactly.
-	if not hud_lines[2].contains("15 / 10 · surface 100%"):
-		_fail("economy HUD heat line is not the warm 15/10 baseline: \"%s\"" % economy_text)
+	# HPA-181: the live heat boundary stays in the same row; the boot is
+	# still at Start, so the warm Research Center baseline must be exact.
+	if not economy_text.contains("15 / 10 · surface 100%"):
+		_fail("economy HUD heat readout is not the warm 15/10 baseline: \"%s\"" % economy_text)
 		return
 	var research_center := _building_view(1)
 	if research_center == null:
@@ -542,6 +1052,46 @@ func _run() -> void:
 			or int(after.get("food", -1)) != int(before.get("food", -1)) \
 			or int(after.get("coal", -1)) != int(before.get("coal", -1)):
 		_fail("stockpile moved before any worker could gather and deposit: %s -> %s" % [before, after])
+		return
+
+	# The live worker Carry reaches unit_task_snapshot through the same real
+	# gather order: worker 1 heads to the authored salvage source, so its
+	# carried kind reads Scrap and its amount stays inside the catalogue's
+	# Rust CARRY_LIMIT. Poll after the stockpile comparison so deposits the
+	# gather orders have already begun can never fail that earlier premise.
+	if not await _wait_until(
+			func():
+				var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+				return str(task.get("carry_kind", "")) == "Scrap" \
+					and int(task.get("carry_amount", 0)) > 0 \
+					and int(task.get("carry_amount", 0)) <= int(catalogue.get("carry_limit", 0)),
+			30.0, "worker 1 never reported a live Scrap carry through unit_task_snapshot"):
+		return
+	# HPA-698 carry detail: the selected worker's HUD bar and label mirror the
+	# same live carry amount and the Rust CARRY_LIMIT, with the resource icon
+	# only while a kind is held.
+	await _click_view(_unit_view(1), MOUSE_BUTTON_LEFT)
+	var carry_bar := get_node_or_null("Main/HUD/SelectionPanel/CarryBar") as ProgressBar
+	var carry_label := get_node_or_null("Main/HUD/SelectionPanel/CarryLabel") as RichTextLabel
+	if carry_bar == null or carry_label == null:
+		_fail("selection carry detail nodes are missing under HUD/SelectionPanel")
+		return
+	if not await _wait_until(func():
+			var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+			var parsed := carry_label.get_parsed_text()
+			var amount_text := parsed.split(" / ")[0].strip_edges()
+			var limit := int(catalogue.get("carry_limit", 0))
+			# The HUD refresh and this bridge read can straddle one gather tick;
+			# require the rendered bar/label to agree with each other exactly and
+			# with the live carry within one gather step, rather than forcing the
+			# same instant under frame throttling.
+			return carry_bar.visible and carry_label.visible \
+				and is_equal_approx(carry_bar.max_value, float(limit)) \
+				and amount_text.is_valid_int() and int(amount_text) == int(carry_bar.value) \
+				and parsed.contains("/ %d" % limit) \
+				and absf(carry_bar.value - float(task.get("carry_amount", -1))) <= 3.0 \
+				and carry_label.text.contains("resources/%s.png" % str(task.get("carry_kind", "")).to_snake_case()),
+			10.0, "selected worker carry detail does not mirror the live Carry snapshot"):
 		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
@@ -626,12 +1176,13 @@ func _run() -> void:
 	# The far salvage's view is fog-revealed: it pays the fog settle.
 	await _click_view(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
-	if not await _wait_until(_scrap_deposited_at_depot.bind(scrap_worker, depot.global_position, delivery_box), 45.0,
+	if not await _wait_until(_scrap_deposited_at_depot.bind(1, depot.global_position, delivery_box), 45.0,
 			"no scrap delivery ever reached the Depot"):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
-	# later click target, so parking in place is safe.
-	await _stop_unit(scrap_worker)
+	# later click target, so parking in place is safe. Stable id only.
+	if not await _stop_unit(1):
+		return
 
 	# Reject-code pin: the read-only placement preview reports the numeric
 	# Occupied code for a footprint inside the seeded Research Center — the same
@@ -645,35 +1196,157 @@ func _run() -> void:
 
 	# Retire the food and coal gatherers: the finite sources deplete at 20x
 	# virtual time and would otherwise idle a worker inside the Research Center
-	# click zone. Park both on the staging ground.
-	var food_worker := _unit_view(2)
-	var coal_worker := _unit_view(3)
-	if food_worker == null or coal_worker == null:
-		_fail("workers 2/3 views are missing")
+	# click zone. Park both on the staging ground. Stable ids only — a view can
+	# be freed while another staging wait is in flight.
+	if not await _park_at_staging(2) or not await _park_at_staging(3):
 		return
-	await _park_at_staging(food_worker)
-	await _park_at_staging(coal_worker)
 
 	# Step 6: a Research Center rally point; the next trained unit walks to it.
 	await _select_building(research_center)
+	# HPA-698 contextual train filtering: the Research Center is the Worker
+	# producer, so only its catalogue-matching tile is visible.
+	var train_grid := get_node("Main/HUD/CommandPanel/TrainGrid") as Container
+	var worker_button := get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button
+	var filter_guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
+	var filter_rifleman_button := get_node("Main/HUD/CommandPanel/TrainGrid/RiflemanButton") as Button
+	if not await _wait_until(func():
+			return train_grid.visible and worker_button.visible \
+				and not filter_guard_button.visible and not filter_rifleman_button.visible,
+			5.0, "Research Center selection did not filter train tiles to Worker"):
+		return
 	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(_rally_stored.bind(research_center_id), 10.0,
 			"Research Center rally point was never stored"):
 		return
-	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/WorkerButton") as Button)
+	# HPA-698 five-socket FIFO projection: six real Worker clicks fill all
+	# five sockets and surface the +1 overflow chip. The queue is asserted
+	# before the 20x head job (15 s) can finish.
+	for _job in 6:
+		await _click_button(worker_button)
+	if not await _wait_until(func(): return _training_queue(research_center_id).size() == 6,
+			10.0, "six real Worker enqueues never reached the FIFO queue"):
+		return
+	var sockets := get_node("Main/HUD/SelectionPanel/QueueSockets") as Container
+	var overflow_chip := sockets.get_node_or_null("OverflowChip") as Label
+	if sockets == null or overflow_chip == null or sockets.get_child_count() != 6:
+		_fail("five-socket queue does not render its +1 overflow chip: sockets=%s chip=%s" % [
+			sockets.get_child_count() if sockets != null else -1,
+			overflow_chip.text if overflow_chip != null else "missing"])
+		return
+	# The chip is a per-frame projection of the bridge queue: let the HUD
+	# refresh catch up, then require the intended producer selection, a
+	# visible row/chip, the current six-Worker snapshot and +1 in one sample.
+	var queue_main := get_node("Main") as Node3D
+	var queue_error := func() -> String:
+		return _queue_overflow_projection_error(sockets, overflow_chip, research_center_id,
+			int(queue_main.get("selected_building_id")), _training_queue(research_center_id))
+	if not await _wait_until(func(): return queue_error.call().is_empty(), 5.0,
+			"five-socket queue never showed the current six-Worker +1 projection",
+			queue_error):
+		return
+	var queue_layout_error := _queue_layout_error(sockets, "Research Center overflow")
+	if not queue_layout_error.is_empty():
+		_fail(queue_layout_error)
+		return
+	var painted_error := _queue_painted_treatment_error(sockets, 5, "Research Center overflow")
+	if not painted_error.is_empty():
+		_fail(painted_error)
+		return
+	# Re-check the same projection at the capture point so the frame cannot be
+	# certified from a historical six-job observation.
+	var capture_error := str(queue_error.call())
+	if not capture_error.is_empty():
+		_fail("queue overflow projection changed before capture: %s" % capture_error)
+		return
+	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-overflow")
+	if not capture_error.is_empty():
+		_fail(capture_error)
+		return
+	# Focused acceptance regression (presentation-only and synchronous, so no
+	# frame renders while the row/chip is altered): the live six-Worker row is
+	# accepted; a hidden row, hidden or stale chip, wrong-producer selection
+	# and a drained or non-Worker queue are rejected. The selection/queue
+	# arguments are copies from this sample; no gameplay or HUD data is
+	# fabricated on screen.
+	var live_selection := int(queue_main.get("selected_building_id"))
+	var live_queue: Array = _training_queue(research_center_id).duplicate()
+	var probe_error := str(queue_error.call())
+	if not probe_error.is_empty():
+		_fail("live six-Worker overflow projection was rejected: %s" % probe_error)
+		return
+	var sockets_visible := sockets.visible
+	sockets.visible = false
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	sockets.visible = sockets_visible
+	if not probe_error.contains("not visible in tree"):
+		_fail("hidden queue row did not fail the overflow projection: %s" % probe_error)
+		return
+	var chip_visible := overflow_chip.visible
+	overflow_chip.visible = false
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	overflow_chip.visible = chip_visible
+	if not probe_error.contains("not visible in tree"):
+		_fail("hidden overflow chip did not fail the overflow projection: %s" % probe_error)
+		return
+	var chip_text := overflow_chip.text
+	overflow_chip.text = "+0"
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	overflow_chip.text = chip_text
+	if not probe_error.contains("not +1"):
+		_fail("stale overflow chip did not fail the overflow projection: %s" % probe_error)
+		return
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection + 1, live_queue)
+	if not probe_error.contains("not the intended"):
+		_fail("wrong-producer selection did not fail the overflow projection: %s" % probe_error)
+		return
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue.slice(1))
+	if not probe_error.contains("not six"):
+		_fail("drained queue did not fail the overflow projection: %s" % probe_error)
+		return
+	var wrong_kind := live_queue.duplicate()
+	wrong_kind[0] = "Guard"
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, wrong_kind)
+	if not probe_error.contains("six-Worker"):
+		_fail("non-Worker queue did not fail the overflow projection: %s" % probe_error)
+		return
+	var worker_icon := "res://assets/ui/icons/units/worker.png"
+	for socket_index in 5:
+		var socket := sockets.get_child(socket_index) as Panel
+		var icon := socket.get_node("Icon") as TextureRect
+		if icon.texture == null or icon.texture.resource_path != worker_icon:
+			_fail("queue socket %d does not carry the Worker FIFO icon" % (socket_index + 1))
+			return
+	var head_time := (sockets.get_child(0).get_node("Time") as Label).text
+	if head_time.is_empty() or not head_time.ends_with("s") \
+			or not (sockets.get_child(1).get_node("Time") as Label).text.is_empty():
+		_fail("queue sockets do not show the head remaining time only: %s" % [head_time])
+		return
+	if not await _wait_until(func():
+			var head_progress := sockets.get_child(0).get_node("Progress") as ProgressBar
+			var next_progress := sockets.get_child(1).get_node("Progress") as ProgressBar
+			return head_progress.visible and not next_progress.visible \
+				and absf(head_progress.value - _queue_progress(research_center_id) * 100.0) <= 12.0,
+			5.0, "head socket progress does not track the live queue_progress"):
+		return
 	var rally_worker_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
 			"rallied Worker view never appeared"):
+		return
+	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
+			or int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
+		_fail("first economy leg did not reach population 5 of 20 with the first trained Worker")
 		return
 	var rally_worker: Node3D = rally_worker_box["view"]
 	var rally_target := Vector3(RALLY_CELL.x + 0.5, 0.0, RALLY_CELL.y + 0.5)
 	if not await _wait_until(
 			func(): return rally_worker.global_position.distance_to(rally_target) < 1.5,
 			15.0, "rallied worker never moved toward the rally point"):
-		return
-	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
-			or int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
-		_fail("first economy leg did not finish at population 5 of 20")
 		return
 	# The gather/build/rally leg is complete. Assert the countdown stayed
 	# intact before resetting the fixture, then run military production and
@@ -773,8 +1446,10 @@ func _run() -> void:
 	# Step 7: the Barracks is the single military producer — it accepts both
 	# Guard and Rifleman on one FIFO queue, each charged once at acceptance.
 	# The ring slot west of the city is probed off the live RC view.
-	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "":
-		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s" % [_blocked_reason(barracks_id), _queue_label(barracks_id)])
+	if _blocked_reason(barracks_id) != 0 or _queue_label(barracks_id) != "" \
+			or not _training_queue(barracks_id).is_empty():
+		_fail("fresh Barracks queue is not idle and unblocked: blocked=%d label=%s queue=%s" % [
+			_blocked_reason(barracks_id), _queue_label(barracks_id), _training_queue(barracks_id)])
 		return
 
 	# HPA-181 heat boundary leg, all through real UI placement paths and
@@ -791,11 +1466,8 @@ func _run() -> void:
 	# stockpile-unchanged assertions (queue charge, enqueue rejects) need a
 	# quiet Scrap flow to stay exact.
 	for worker_id in [1, 2, 3]:
-		var gatherer := _unit_view(worker_id)
-		if gatherer == null:
-			_fail("heat-leg gatherer %d view went missing before retirement" % worker_id)
+		if not await _park_at_staging(worker_id):
 			return
-		await _park_at_staging(gatherer)
 
 	# Cold demand: Depot (+1) and Gun Turret (+2) push demand past supply —
 	# 15/16 ≈ 93.75%, reported as 94% (a deficit never rounds up to 100%) —
@@ -909,8 +1581,34 @@ func _run() -> void:
 			_fail("completed %s fails the catalogue geometry contract: %s" % [kind, art_error])
 			return
 
-	await _park_at_staging(builder)
+	if not await _park_at_staging(4):
+		return
 	await _select_building(barracks)
+	if not await _wait_until(func(): return filter_guard_button.visible and filter_rifleman_button.visible,
+			5.0, "Barracks selection did not show its Guard/Rifleman production row"):
+		return
+	# HPA-698 modal Rally: the tile arms rally, the next real right-click
+	# dispatches set_rally and consumes the order once.
+	var barracks_main := get_node("Main") as Node3D
+	var barracks_status := barracks_main.get_node("HUD/CommandStatus") as Label
+	var rally_tile := barracks_main.get_node("HUD/CommandPanel/OrderGrid/RallyButton") as Button
+	await _click_button(rally_tile)
+	if str(barracks_main.get("_armed_order")) != "rally" or not rally_tile.button_pressed:
+		_fail("Rally tile did not arm the modal rally on the selected Barracks")
+		return
+	var rally_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), _camera.unproject_position(
+		Vector3(RALLY_CELL.x + 0.25, 0.0, RALLY_CELL.y + 0.25)), MOUSE_BUTTON_RIGHT)
+	if str(barracks_status.text) != "Rally point queued" \
+			or str(barracks_main.get("_armed_order")) != "":
+		_fail("armed Rally did not consume into set_rally: %s" % barracks_status.text)
+		return
+	if not await _wait_until(_rally_stored.bind(barracks_id), 10.0,
+			"armed Rally did not store the Barracks rally point"):
+		return
+	if not await _wait_until(func(): return int(GrusBridge.command_feedback_revision()) > rally_revision,
+			10.0, "armed Rally produced no sim verdict"):
+		return
 	var food_before := int(GrusBridge.economy_snapshot().get("food", -1))
 	var scrap_before := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	await _click_button(get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button)
@@ -926,13 +1624,64 @@ func _run() -> void:
 			"Guard queue progress never advanced"):
 		return
 	# Both jobs charged once at enqueue: 60f Guard + 40f/40w Rifleman (the
-	# second click lands on the next command tick, so poll briefly).
+	# second click lands on the next command tick, so poll briefly). The
+	# ordered training_queue must carry both labels before the 20x head
+	# Guard can finish.
 	if not await _wait_until(
 			func():
 				var charged: Dictionary = GrusBridge.economy_snapshot()
-				return int(charged.get("food", -1)) == food_before - 100 \
+				return _training_queue(barracks_id) == ["Guard", "Rifleman"] \
+					and int(charged.get("food", -1)) == food_before - 100 \
 					and int(charged.get("scrap", -1)) == scrap_before - 40,
-			10.0, "Barracks enqueue did not charge Guard+Rifleman exactly once"):
+			10.0, "Barracks enqueue did not charge Guard+Rifleman once into a FIFO training_queue"):
+		return
+	if _training_queue(barracks_id) != ["Guard", "Rifleman"]:
+		_fail("Barracks training_queue lost FIFO order while Guard is the head: %s" % [
+			_training_queue(barracks_id)])
+		return
+	# The Barracks is a Guard/Rifleman producer: the Worker tile is hidden and
+	# the two FIFO jobs fill the first two of the five fixed sockets.
+	if not await _wait_until(func():
+			return worker_button.visible == false and filter_guard_button.visible \
+				and filter_rifleman_button.visible,
+			5.0, "Barracks selection did not filter train tiles to Guard/Rifleman"):
+		return
+	if not await _wait_until(func():
+			return (sockets.get_child(0).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(0).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/guard.png" \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/rifleman.png" \
+				and (sockets.get_child(2).get_node("Icon") as TextureRect).texture == null \
+				and not overflow_chip.visible,
+			5.0, "Barracks FIFO sockets do not render Guard then Rifleman with empty overflow"):
+		return
+	queue_layout_error = _queue_layout_error(sockets, "Barracks FIFO")
+	if not queue_layout_error.is_empty():
+		_fail(queue_layout_error)
+		return
+	painted_error = _queue_painted_treatment_error(sockets, 2, "Barracks FIFO")
+	if not painted_error.is_empty():
+		_fail(painted_error)
+		return
+	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-barracks")
+	if not capture_error.is_empty():
+		_fail(capture_error)
+		return
+	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
+	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text
+	var head_time_value := head_time_text.trim_suffix("s")
+	if not head_time_value.is_valid_int() \
+			or int(head_time_value) < 0 or int(head_time_value) > int(ceilf(guard_seconds)):
+		_fail("Guard head socket shows %s, outside the catalogue %ds train time" % [
+			head_time_text, int(guard_seconds)])
+		return
+	if not await _wait_until(func():
+			var progress_bar := sockets.get_child(0).get_node("Progress") as ProgressBar
+			return progress_bar.visible \
+				and absf(progress_bar.value - _queue_progress(barracks_id) * 100.0) <= 12.0,
+			5.0, "Guard head socket progress does not track the live queue_progress"):
 		return
 	var guard_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Guard", 5, guard_box), 30.0,
@@ -941,6 +1690,17 @@ func _run() -> void:
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "Rifleman", 15.0,
 			"Rifleman never became the FIFO head after the Guard spawned"):
 		return
+	if _training_queue(barracks_id) != ["Rifleman"]:
+		_fail("Barracks training_queue did not transition to the Rifleman head: %s" % [
+			_training_queue(barracks_id)])
+		return
+	if not await _wait_until(func():
+			return (sockets.get_child(0).get_node("Icon") as TextureRect).texture != null \
+				and (sockets.get_child(0).get_node("Icon") as TextureRect).texture.resource_path \
+					== "res://assets/ui/icons/units/rifleman.png" \
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture == null,
+			5.0, "queue sockets did not shift to the Rifleman FIFO head"):
+		return
 	var rifleman_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 5, rifleman_box), 35.0,
 			"trained Rifleman view never appeared"):
@@ -948,10 +1708,15 @@ func _run() -> void:
 	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 15.0,
 			"Rifleman job never left the Barracks queue"):
 		return
+	if not _training_queue(barracks_id).is_empty():
+		_fail("Barracks training_queue did not empty after the Rifleman spawned: %s" % [
+			_training_queue(barracks_id)])
+		return
 	# Park both combatants at staging so their live views cannot intercept the
-	# Barracks-origin click below.
-	for unit in [guard_box["view"], rifleman_box["view"]]:
-		await _park_at_staging(unit as Node3D)
+	# Barracks-origin click below. Stable ids, never the captured view.
+	for unit_box in [guard_box, rifleman_box]:
+		if not await _park_at_staging(int(unit_box.get("id", -1))):
+			return
 
 	# Step 8 recap: construction ramp (Bunkhouse), queue ramps (Guard/Rifleman),
 	# the Occupied reject code, and the blocked fields were all asserted at
@@ -990,6 +1755,9 @@ func _run() -> void:
 			str(main.get("_left_pressed")), str(main.get("_left_press_position")),
 			str(main.get("selected_ids")),
 			_camera.unproject_position(selected_unit.global_position) if selected_unit != null else "missing"])
+		return
+	if not await _wait_until(func(): return filter_guard_button.visible,
+			5.0, "reselecting the Barracks did not restore its Guard tile"):
 		return
 	var guard_button := get_node("Main/HUD/CommandPanel/TrainGrid/GuardButton") as Button
 	var insufficient := false
@@ -1054,10 +1822,11 @@ func _run() -> void:
 		return
 
 	# The accepted drain jobs must leave the FIFO before the unaffordable
-	# click re-tests it: an empty head label with zero progress is the
-	# authoritative "no jobs" proof — the head label alone cannot see
-	# queued successors (building_snapshot exposes only the front job).
-	if not await _wait_until(func(): return _queue_label(barracks_id) == "", 60.0,
+	# click re-tests it: an empty head label, zero progress and an empty
+	# training_queue together are the authoritative "no jobs" proof.
+	if not await _wait_until(func(): return _queue_label(barracks_id) == "" \
+			and _queue_progress(barracks_id) == 0.0 \
+			and _training_queue(barracks_id).is_empty(), 60.0,
 			"accepted drain jobs never emptied the Barracks queue"):
 		return
 	var reject_revision: int = GrusBridge.command_feedback_revision()
@@ -1084,8 +1853,10 @@ func _run() -> void:
 			or int(unaffordable_after.get("coal", -1)) > unaffordable_before["coal"]:
 		_fail("rejected Guard enqueue still moved the stockpile")
 		return
-	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0:
-		_fail("rejected Guard enqueue still left a Barracks job: %s" % _queue_label(barracks_id))
+	if _queue_label(barracks_id) != "" or _queue_progress(barracks_id) != 0.0 \
+			or not _training_queue(barracks_id).is_empty():
+		_fail("rejected Guard enqueue still left a Barracks job: %s / %s" % [
+			_queue_label(barracks_id), _training_queue(barracks_id)])
 		return
 	if _blocked_reason(barracks_id) != unaffordable_before["blocked"]:
 		_fail("rejected Guard enqueue changed the Barracks blocked state")

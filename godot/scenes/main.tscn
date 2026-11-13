@@ -1,9 +1,22 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
 [ext_resource type="Script" path="res://scripts/combat_fx.gd" id="3_fx"]
 [ext_resource type="Script" path="res://scripts/minimap.gd" id="4_minimap"]
+[ext_resource type="Script" path="res://scripts/frostline_hud.gd" id="5_hud"]
+[ext_resource type="Script" path="res://scripts/underground_drawer.gd" id="6_underground"]
+[ext_resource type="PackedScene" path="res://scenes/action_tile.tscn" id="7_tile"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/ui/portrait_bezel.png" id="8_portrait"]
+[ext_resource type="Script" path="res://scripts/wave_ring.gd" id="9_wave_ring"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/start_key_art.png" id="10_start_art"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/emblem.png" id="11_emblem"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/victory_banner.png" id="12_victory"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/screens/defeat_banner.png" id="13_defeat"]
+[ext_resource type="Texture2D" path="res://assets/ui/frostline/ui/frost_overlay.png" id="14_frost"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/status/wave_countdown.png" id="15_survive"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/buildings/research_center.png" id="16_protect"]
+[ext_resource type="Texture2D" path="res://assets/ui/icons/status/research_progress.png" id="17_research"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -13,15 +26,42 @@ resource_local_to_scene = true
 transparency = 1
 albedo_color = Color(0.3, 0.85, 0.3, 0.4)
 
-[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_underground_tooltip"]
-content_margin_left = 8.0
-content_margin_top = 6.0
-content_margin_right = 8.0
-content_margin_bottom = 6.0
-bg_color = Color(0.06, 0.06, 0.06, 1)
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_heat_fill"]
+bg_color = Color(0.94, 0.58, 0.22, 0.95)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
-[sub_resource type="Theme" id="Theme_underground"]
-TooltipPanel/styles/panel = SubResource("StyleBoxFlat_underground_tooltip")
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cold_chip"]
+content_margin_left = 6.0
+content_margin_top = 3.0
+content_margin_right = 6.0
+content_margin_bottom = 3.0
+bg_color = Color(0.12, 0.09, 0.06, 0.94)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.93, 0.55, 0.22, 0.9)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_health_fill"]
+bg_color = Color(0.36, 0.76, 0.42, 0.95)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_carry_fill"]
+bg_color = Color(0.85, 0.6, 0.2, 0.95)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
 
 [node name="Main" type="Node3D"]
 script = ExtResource("2_controller")
@@ -48,341 +88,951 @@ mesh = SubResource("BoxMesh_placement")
 material_override = SubResource("Material_placement")
 
 [node name="HUD" type="CanvasLayer" parent="."]
+script = ExtResource("5_hud")
 
-[node name="Title" type="Label" parent="HUD"]
-offset_left = 18.0
-offset_top = 14.0
-offset_right = 410.0
-offset_bottom = 44.0
-theme_override_font_sizes/font_size = 22
-text = "GRUS — 2.5D Battlefield"
+[node name="Atmosphere" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="FrostOverlay" type="TextureRect" parent="HUD/Atmosphere"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("14_frost")
+expand_mode = 1
+stretch_mode = 6
+modulate = Color(0.85, 0.92, 1, 0.55)
+
+[node name="Vignette" type="TextureRect" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="IncomingGlow" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="North" type="TextureRect" parent="HUD/IncomingGlow"]
+visible = false
+layout_mode = 1
+anchor_right = 1.0
+offset_top = 56.0
+offset_bottom = 176.0
+grow_horizontal = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="South" type="TextureRect" parent="HUD/IncomingGlow"]
+visible = false
+layout_mode = 1
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -130.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="West" type="TextureRect" parent="HUD/IncomingGlow"]
+visible = false
+layout_mode = 1
+anchor_bottom = 1.0
+offset_right = 130.0
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
+
+[node name="East" type="TextureRect" parent="HUD/IncomingGlow"]
+visible = false
+layout_mode = 1
+anchor_left = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -130.0
+grow_horizontal = 0
+grow_vertical = 2
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 0
 
 [node name="CommandStatus" type="Label" parent="HUD"]
-offset_left = 18.0
-offset_top = 48.0
-offset_right = 600.0
-offset_bottom = 76.0
+offset_left = 216.0
+offset_top = 478.0
+offset_right = 720.0
+offset_bottom = 502.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 12
 text = "ECS bridge initializing…"
 
-[node name="WaveLabel" type="RichTextLabel" parent="HUD"]
-offset_left = 18.0
-offset_top = 78.0
-offset_right = 850.0
-offset_bottom = 102.0
+[node name="WavePanel" type="Panel" parent="HUD"]
+offset_left = 10.0
+offset_top = 64.0
+offset_right = 368.0
+offset_bottom = 148.0
+tooltip_text = "Wave prep, live aliens and the next wave countdown"
+
+[node name="WaveRing" type="Control" parent="HUD"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 76.0
+offset_right = 80.0
+offset_bottom = 132.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 14
+script = ExtResource("9_wave_ring")
+
+[node name="ClockIcon" type="TextureRect" parent="HUD/WaveRing"]
+layout_mode = 0
+offset_left = 14.0
+offset_top = 14.0
+offset_right = 42.0
+offset_bottom = 42.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="WaveLabel" type="RichTextLabel" parent="HUD"]
+offset_left = 88.0
+offset_top = 70.0
+offset_right = 358.0
+offset_bottom = 148.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 15
 bbcode_enabled = true
 scroll_active = false
 text = "Wave"
 
 [node name="ResearchPanel" type="Panel" parent="HUD"]
-offset_left = 18.0
-offset_top = 106.0
-offset_right = 296.0
-offset_bottom = 190.0
-mouse_filter = 0
+offset_left = 460.0
+offset_top = 64.0
+offset_right = 840.0
+offset_bottom = 176.0
+tooltip_text = "Research points toward the 9,000-point victory target"
 
 [node name="ResearchBar" type="ProgressBar" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 270.0
-offset_bottom = 20.0
+offset_left = 42.0
+offset_top = 22.0
+offset_right = 244.0
+offset_bottom = 42.0
 mouse_filter = 2
 show_percentage = false
 
 [node name="ResearchLabel" type="Label" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 30.0
-offset_top = 22.0
-offset_right = 270.0
-offset_bottom = 42.0
+offset_left = 42.0
+offset_top = 44.0
+offset_right = 368.0
+offset_bottom = 66.0
 mouse_filter = 2
 theme_override_font_sizes/font_size = 13
 text = "Research"
 
+[node name="ResearchMarkers" type="RichTextLabel" parent="HUD/ResearchPanel"]
+layout_mode = 0
+offset_left = 42.0
+offset_top = 80.0
+offset_right = 368.0
+offset_bottom = 104.0
+mouse_filter = 0
+theme_override_font_sizes/normal_font_size = 11
+bbcode_enabled = true
+scroll_active = false
+autowrap_mode = 0
+text = "Markers"
+
 [node name="ResearchIcon" type="TextureRect" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 23.0
-offset_right = 26.0
-offset_bottom = 41.0
+offset_left = 12.0
+offset_top = 22.0
+offset_right = 30.0
+offset_bottom = 40.0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
 
 [node name="AnalyzeButton" type="Button" parent="HUD/ResearchPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 46.0
-offset_right = 138.0
-offset_bottom = 74.0
+offset_left = 252.0
+offset_top = 22.0
+offset_right = 368.0
+offset_bottom = 78.0
 disabled = true
 text = "Analyze"
 
-[node name="InputShield" type="Control" parent="HUD"]
-layout_mode = 3
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 620.0
-offset_bottom = 88.0
-mouse_filter = 0
-
 [node name="EconomyPanel" type="Panel" parent="HUD"]
-offset_left = 1000.0
-offset_top = 8.0
-offset_right = 1268.0
-offset_bottom = 130.0
-mouse_filter = 0
-tooltip_text = "Resource icons in order: Food, Scrap, Coal, Crystals, Heat. Heat shows supply / demand."
+offset_left = 0.0
+offset_top = 0.0
+offset_right = 1280.0
+offset_bottom = 56.0
+theme_type_variation = &"TopBar"
+tooltip_text = "Resource icons in order: Food, Scrap, Coal, Crystals, Population, Heat. Heat shows supply / demand."
 
 [node name="EconomyLabel" type="RichTextLabel" parent="HUD/EconomyPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 258.0
-offset_bottom = 86.0
+offset_left = 10.0
+offset_top = 14.0
+offset_right = 1010.0
+offset_bottom = 48.0
 mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 18
+bbcode_enabled = true
+scroll_active = false
+autowrap_mode = 0
+
+[node name="HeatBar" type="ProgressBar" parent="HUD/EconomyPanel"]
+visible = false
+layout_mode = 0
+offset_left = 720.0
+offset_top = 18.0
+offset_right = 900.0
+offset_bottom = 38.0
+tooltip_text = "Heat supply / demand"
+show_percentage = false
+theme_override_styles/fill = SubResource("StyleBoxFlat_heat_fill")
+
+[node name="ColdChip" type="RichTextLabel" parent="HUD/EconomyPanel"]
+visible = false
+layout_mode = 0
+offset_left = 914.0
+offset_top = 12.0
+offset_right = 1002.0
+offset_bottom = 44.0
+tooltip_text = "Surface efficiency below full"
 theme_override_font_sizes/normal_font_size = 14
+theme_override_styles/normal = SubResource("StyleBoxFlat_cold_chip")
 bbcode_enabled = true
 scroll_active = false
 
 [node name="IdleButton" type="Button" parent="HUD/EconomyPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 90.0
-offset_right = 258.0
-offset_bottom = 122.0
+offset_left = 1014.0
+offset_top = 4.0
+offset_right = 1176.0
+offset_bottom = 52.0
 text = "Idle: 0 — Next"
 
 [node name="SelectionPanel" type="Panel" parent="HUD"]
-offset_left = 1000.0
-offset_top = 138.0
-offset_right = 1268.0
-offset_bottom = 290.0
-mouse_filter = 0
+offset_left = 216.0
+offset_top = 510.0
+offset_right = 724.0
+offset_bottom = 710.0
+
+[node name="PortraitBezel" type="TextureRect" parent="HUD/SelectionPanel"]
+layout_mode = 0
+offset_left = 12.0
+offset_top = 34.0
+offset_right = 104.0
+offset_bottom = 156.0
+mouse_filter = 2
+texture = ExtResource("8_portrait")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="PortraitIcon" type="TextureRect" parent="HUD/SelectionPanel"]
+layout_mode = 0
+offset_left = 36.0
+offset_top = 70.0
+offset_right = 80.0
+offset_bottom = 114.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="SelectionName" type="Label" parent="HUD/SelectionPanel"]
+layout_mode = 0
+offset_left = 112.0
+offset_top = 8.0
+offset_right = 496.0
+offset_bottom = 36.0
+mouse_filter = 2
+theme_type_variation = &"Header"
+text = "Nothing selected"
+
+[node name="HealthBar" type="ProgressBar" parent="HUD/SelectionPanel"]
+visible = false
+layout_mode = 0
+offset_left = 112.0
+offset_top = 40.0
+offset_right = 496.0
+offset_bottom = 58.0
+mouse_filter = 2
+show_percentage = false
+theme_override_styles/fill = SubResource("StyleBoxFlat_health_fill")
+
+[node name="HealthLabel" type="Label" parent="HUD/SelectionPanel"]
+visible = false
+layout_mode = 0
+offset_left = 112.0
+offset_top = 38.0
+offset_right = 496.0
+offset_bottom = 60.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 14
+text = "50 / 50"
+horizontal_alignment = 2
 
 [node name="SelectionLabel" type="Label" parent="HUD/SelectionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 252.0
-offset_bottom = 146.0
-autowrap_mode = 2
+offset_left = 112.0
+offset_top = 64.0
+offset_right = 496.0
+offset_bottom = 98.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 13
 text = "Nothing selected"
+autowrap_mode = 2
+
+[node name="CarryBar" type="ProgressBar" parent="HUD/SelectionPanel"]
+visible = false
+layout_mode = 0
+offset_left = 112.0
+offset_top = 104.0
+offset_right = 300.0
+offset_bottom = 118.0
+mouse_filter = 2
+show_percentage = false
+theme_override_styles/fill = SubResource("StyleBoxFlat_carry_fill")
+
+[node name="CarryLabel" type="RichTextLabel" parent="HUD/SelectionPanel"]
+visible = false
+layout_mode = 0
+offset_left = 306.0
+offset_top = 100.0
+offset_right = 496.0
+offset_bottom = 124.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 13
+bbcode_enabled = true
+scroll_active = false
+
+[node name="QueueSockets" type="HBoxContainer" parent="HUD/SelectionPanel"]
+layout_mode = 0
+offset_left = 112.0
+offset_top = 126.0
+offset_right = 496.0
+offset_bottom = 190.0
+mouse_filter = 2
+theme_override_constants/separation = 4
 
 [node name="CommandPanel" type="Panel" parent="HUD"]
-offset_left = 8.0
-offset_top = 500.0
-offset_right = 600.0
-offset_bottom = 712.0
-mouse_filter = 0
+offset_left = 736.0
+offset_top = 400.0
+offset_right = 1272.0
+offset_bottom = 710.0
+
+[node name="OrderGrid" type="HBoxContainer" parent="HUD/CommandPanel"]
+layout_mode = 0
+offset_left = 12.0
+offset_top = 8.0
+offset_right = 524.0
+offset_bottom = 68.0
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="MoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "move"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Move: arm, then right-click a ground target"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/MoveButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Move"
+horizontal_alignment = 1
+
+[node name="StopButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "stop"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Stop immediately (S)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/StopButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Stop"
+horizontal_alignment = 1
+
+[node name="AttackMoveButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "attack_move"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Attack-move: arm, then right-click a ground target (A)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/AttackMoveButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "A-Move"
+horizontal_alignment = 1
+
+[node name="GatherButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "gather"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Gather: arm, then right-click a resource"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/GatherButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Gather"
+horizontal_alignment = 1
+
+[node name="RallyButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "rally"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+toggle_mode = true
+tooltip_text = "Rally: arm, then right-click a ground point with a producer selected"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/RallyButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Rally"
+horizontal_alignment = 1
+
+[node name="CancelButton" type="Button" parent="HUD/CommandPanel/OrderGrid"]
+metadata/order = "cancel"
+custom_minimum_size = Vector2(60, 60)
+layout_mode = 2
+theme_type_variation = &"OrderButton"
+tooltip_text = "Cancel placement or armed order (Esc)"
+icon_alignment = 1
+
+[node name="ActionLabel" type="Label" parent="HUD/CommandPanel/OrderGrid/CancelButton"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -17.0
+offset_bottom = -3.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 10
+text = "Cancel"
+horizontal_alignment = 1
 
 [node name="BuildGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 584.0
-offset_bottom = 120.0
-columns = 3
+offset_left = 12.0
+offset_top = 74.0
+offset_right = 524.0
+offset_bottom = 224.0
+theme_override_constants/h_separation = 6
+theme_override_constants/v_separation = 6
+columns = 5
 
-[node name="BunkhouseButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="BunkhouseButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Bunkhouse"
 metadata/kind = "Bunkhouse"
 
-[node name="DepotButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="DepotButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Depot"
 metadata/kind = "Depot"
 
-[node name="BarracksButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="BarracksButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Barracks"
 metadata/kind = "Barracks"
 
-[node name="WallButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="WallButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Wall"
 metadata/kind = "Wall"
 
-[node name="GateButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GateButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Gate"
 metadata/kind = "Gate"
 
-[node name="GunTurretButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GunTurretButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Gun Turret"
 metadata/kind = "GunTurret"
 
-[node name="CoalFurnaceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="CoalFurnaceButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Coal Furnace"
 metadata/kind = "CoalFurnace"
 
-[node name="FlameTowerButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="FlameTowerButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Flame Tower"
 metadata/kind = "FlameTower"
 
-[node name="CrystalLanceButton" type="Button" parent="HUD/CommandPanel/BuildGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="CrystalLanceButton" parent="HUD/CommandPanel/BuildGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Crystal Lance"
 metadata/kind = "CrystalLance"
 
 [node name="TrainGrid" type="GridContainer" parent="HUD/CommandPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 128.0
-offset_right = 584.0
-offset_bottom = 204.0
+offset_left = 12.0
+offset_top = 230.0
+offset_right = 524.0
+offset_bottom = 302.0
+theme_override_constants/h_separation = 6
 columns = 3
 
-[node name="WorkerButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="WorkerButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Worker"
 metadata/kind = "Worker"
 
-[node name="GuardButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="GuardButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Guard"
 metadata/kind = "Guard"
 
-[node name="RiflemanButton" type="Button" parent="HUD/CommandPanel/TrainGrid"]
-custom_minimum_size = Vector2(188, 32)
+[node name="RiflemanButton" parent="HUD/CommandPanel/TrainGrid" instance=ExtResource("7_tile")]
 layout_mode = 2
-text = "Rifleman"
 metadata/kind = "Rifleman"
 
 [node name="PauseButton" type="Button" parent="HUD"]
-offset_left = 930.0
-offset_top = 8.0
-offset_right = 990.0
-offset_bottom = 40.0
-text = "Pause"
+offset_left = 1196.0
+offset_top = 4.0
+offset_right = 1258.0
+offset_bottom = 52.0
+tooltip_text = "Pause (Esc)"
 
 [node name="UndergroundPanel" type="Panel" parent="HUD"]
 visible = false
 offset_left = 848.0
-offset_top = 298.0
-offset_right = 1268.0
-offset_bottom = 584.0
-mouse_filter = 0
-theme = SubResource("Theme_underground")
+offset_top = 64.0
+offset_right = 1272.0
+offset_bottom = 398.0
+script = ExtResource("6_underground")
 
 [node name="HeaderLabel" type="Label" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 6.0
-offset_right = 412.0
-offset_bottom = 64.0
+offset_left = 14.0
+offset_top = 12.0
+offset_right = 410.0
+offset_bottom = 52.0
 mouse_filter = 2
+theme_type_variation = &"Header"
 theme_override_font_sizes/font_size = 14
-text = "Underground"
-
-[node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
-layout_mode = 0
-offset_left = 8.0
-offset_top = 68.0
-offset_right = 412.0
-offset_bottom = 94.0
-disabled = true
-theme_override_font_sizes/font_size = 14
-text = "Excavate"
+text = "UNDERGROUND"
 
 [node name="KindsBox" type="HBoxContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 98.0
-offset_right = 412.0
-offset_bottom = 163.0
-theme_override_constants/separation = 2
+offset_left = 10.0
+offset_top = 54.0
+offset_right = 414.0
+offset_bottom = 110.0
+theme_override_constants/separation = 4
+
+[node name="ArmedDetail" type="RichTextLabel" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 112.0
+offset_right = 414.0
+offset_bottom = 128.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 11
+bbcode_enabled = true
+scroll_active = false
+text = "Arm a room kind"
+
+[node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 130.0
+offset_right = 414.0
+offset_bottom = 158.0
+disabled = true
+text = "Excavate"
+
+[node name="DigProgress" type="ProgressBar" parent="HUD/UndergroundPanel"]
+visible = false
+layout_mode = 0
+offset_left = 10.0
+offset_top = 160.0
+offset_right = 320.0
+offset_bottom = 176.0
+mouse_filter = 2
+max_value = 1.0
+step = 0.001
+show_percentage = false
+
+[node name="DigTime" type="Label" parent="HUD/UndergroundPanel"]
+visible = false
+layout_mode = 0
+offset_left = 322.0
+offset_top = 160.0
+offset_right = 414.0
+offset_bottom = 176.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(0.95, 0.82, 0.55, 1)
+theme_override_font_sizes/font_size = 12
+text = ""
+horizontal_alignment = 2
+vertical_alignment = 1
 
 [node name="ScrollContainer" type="ScrollContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 166.0
-offset_right = 412.0
-offset_bottom = 278.0
+offset_left = 10.0
+offset_top = 178.0
+offset_right = 414.0
+offset_bottom = 330.0
+clip_contents = true
 horizontal_scroll_mode = 0
 
 [node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
 
+[node name="MinimapFrame" type="Panel" parent="HUD"]
+offset_left = 2.0
+offset_top = 546.0
+offset_right = 206.0
+offset_bottom = 702.0
+mouse_filter = 2
+
+[node name="Minimap" type="Control" parent="HUD"]
+offset_left = 8.0
+offset_top = 552.0
+offset_right = 200.0
+offset_bottom = 696.0
+script = ExtResource("4_minimap")
+
+[node name="SessionBackdrop" type="Control" parent="HUD"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="StartArt" type="TextureRect" parent="HUD/SessionBackdrop"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+texture = ExtResource("10_start_art")
+expand_mode = 1
+stretch_mode = 6
+modulate = Color(0.82, 0.88, 0.95, 1)
+
+[node name="Dim" type="ColorRect" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(0.02, 0.03, 0.05, 0.5)
+
+[node name="ResultBanner" type="TextureRect" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 0
+offset_left = 290.0
+offset_top = 40.0
+offset_right = 990.0
+offset_bottom = 507.0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 5
+
+[node name="ResultTitle" type="Label" parent="HUD/SessionBackdrop"]
+visible = false
+layout_mode = 0
+offset_left = 360.0
+offset_top = 170.0
+offset_right = 920.0
+offset_bottom = 286.0
+mouse_filter = 2
+theme_type_variation = &"Header"
+theme_override_colors/font_color = Color(1, 0.97, 0.9, 1)
+theme_override_colors/font_outline_color = Color(0.08, 0.05, 0.03, 0.95)
+theme_override_colors/font_shadow_color = Color(0.03, 0.02, 0.01, 0.9)
+theme_override_constants/outline_size = 6
+theme_override_constants/shadow_offset_x = 3
+theme_override_constants/shadow_offset_y = 3
+theme_override_font_sizes/font_size = 76
+text = "Defeat"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="ResultBar" type="Panel" parent="HUD"]
+visible = false
+offset_left = 116.0
+offset_top = 594.0
+offset_right = 1268.0
+offset_bottom = 702.0
+mouse_filter = 2
+
+[node name="ResultStats" type="RichTextLabel" parent="HUD/ResultBar"]
+layout_mode = 0
+offset_left = 24.0
+offset_top = 32.0
+offset_right = 704.0
+offset_bottom = 80.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 20
+bbcode_enabled = true
+scroll_active = false
+text = ""
+
 [node name="SessionPanel" type="Panel" parent="HUD"]
-offset_left = 440.0
-offset_top = 250.0
-offset_right = 840.0
-offset_bottom = 620.0
-mouse_filter = 0
+offset_left = 60.0
+offset_top = 64.0
+offset_right = 640.0
+offset_bottom = 656.0
+
+[node name="SessionEmblem" type="TextureRect" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 10.0
+offset_right = 168.0
+offset_bottom = 158.0
+mouse_filter = 2
+texture = ExtResource("11_emblem")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="SessionTitle" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 184.0
+offset_top = 4.0
+offset_right = 620.0
+offset_bottom = 112.0
+mouse_filter = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 84
+text = "GRUS"
+
+[node name="SessionSubtitle" type="Label" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 186.0
+offset_top = 108.0
+offset_right = 620.0
+offset_bottom = 136.0
+mouse_filter = 2
+theme_override_font_sizes/font_size = 18
+text = "THE LAST CITY"
+
+[node name="Objectives" type="VBoxContainer" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 166.0
+offset_right = 600.0
+offset_bottom = 318.0
+theme_override_constants/separation = 8
+
+[node name="Survive" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Survive"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("15_survive")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Survive"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Survive/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "SURVIVE"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Survive/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "First wave in —"
+
+[node name="Protect" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Protect"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("16_protect")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Protect"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Protect/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "PROTECT"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Protect/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "Protect the Research Center"
+
+[node name="Research" type="HBoxContainer" parent="HUD/SessionPanel/Objectives"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="Icon" type="TextureRect" parent="HUD/SessionPanel/Objectives/Research"]
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+mouse_filter = 2
+texture = ExtResource("17_research")
+expand_mode = 1
+stretch_mode = 5
+
+[node name="Text" type="VBoxContainer" parent="HUD/SessionPanel/Objectives/Research"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="HUD/SessionPanel/Objectives/Research/Text"]
+layout_mode = 2
+theme_type_variation = &"Header"
+theme_override_font_sizes/font_size = 18
+text = "RESEARCH"
+
+[node name="Detail" type="Label" parent="HUD/SessionPanel/Objectives/Research/Text"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "— to win"
 
 [node name="SessionLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 8.0
-offset_right = 392.0
-offset_bottom = 56.0
+offset_left = 20.0
+offset_top = 184.0
+offset_right = 600.0
+offset_bottom = 266.0
+mouse_filter = 2
+theme_type_variation = &"Header"
 theme_override_font_sizes/font_size = 20
 text = "Survive the alien waves"
+autowrap_mode = 2
 
 [node name="StartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 70.0
-offset_right = 392.0
-offset_bottom = 110.0
+offset_left = 20.0
+offset_top = 326.0
+offset_right = 380.0
+offset_bottom = 390.0
 text = "Start"
 
 [node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
 visible = false
 layout_mode = 0
-offset_left = 8.0
-offset_top = 70.0
-offset_right = 392.0
-offset_bottom = 110.0
+offset_left = 20.0
+offset_top = 286.0
+offset_right = 360.0
+offset_bottom = 348.0
 text = "Resume"
 
 [node name="RestartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 120.0
-offset_right = 392.0
-offset_bottom = 160.0
+offset_left = 856.0
+offset_top = 550.0
+offset_right = 1048.0
+offset_bottom = 610.0
 text = "Restart"
 
 [node name="QuitButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 170.0
-offset_right = 392.0
-offset_bottom = 210.0
+offset_left = 1072.0
+offset_top = 550.0
+offset_right = 1152.0
+offset_bottom = 610.0
 text = "Quit"
 
 [node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 8.0
-offset_top = 220.0
-offset_right = 392.0
-offset_bottom = 360.0
-theme_override_font_sizes/font_size = 13
-text = "Select: left click / drag / Shift\nCommand: right click\nAttack-move: A then right click\nStop: S\nPause: Esc · Underground: Tab\nCamera: wheel / middle-drag\nMinimap: click to recenter"
-
-[node name="Minimap" type="Control" parent="HUD"]
-offset_left = 1120.0
-offset_top = 592.0
-offset_right = 1248.0
-offset_bottom = 688.0
-script = ExtResource("4_minimap")
+offset_left = 60.0
+offset_top = 530.0
+offset_right = 1100.0
+offset_bottom = 582.0
+theme_override_font_sizes/font_size = 14
+clip_text = true
+text = "Select: left click / drag / Shift   ·   Command: right click   ·   Attack-move: A then right click   ·   Stop: S
+Pause: Esc   ·   Underground: Tab   ·   Camera: wheel / middle-drag   ·   Minimap: click to recenter"
+horizontal_alignment = 1
+vertical_alignment = 1

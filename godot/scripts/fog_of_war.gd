@@ -8,13 +8,25 @@ extends Node3D
 
 const FOG_Y := 0.15
 
+## One shared dark color for unexplored cells and the empty world behind the
+## map edge. The default clear color is set from it to narrow the boundary to
+## the unexplored fog and the Result dim; real-render gameplay captures still
+## show a faint residual step, so this value alone does not prove a seamless
+## edge.
+const UNEXPLORED_COLOR := Color(0.02, 0.03, 0.05, 1.0)
+const EXPLORED_ALPHA := 0.45
+
 var _revision := -1
 var _unexplored: MultiMeshInstance3D
 var _explored: MultiMeshInstance3D
 
+func unexplored_color() -> Color:
+	return UNEXPLORED_COLOR
+
 func _ready() -> void:
-	_unexplored = _make_layer(Color(0.02, 0.03, 0.05, 1.0))
-	_explored = _make_layer(Color(0.02, 0.03, 0.05, 0.45))
+	RenderingServer.set_default_clear_color(UNEXPLORED_COLOR)
+	_unexplored = _make_layer(UNEXPLORED_COLOR)
+	_explored = _make_layer(Color(UNEXPLORED_COLOR, EXPLORED_ALPHA))
 
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.visibility_revision())

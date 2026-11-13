@@ -178,6 +178,12 @@ func _building_complete(id: int) -> bool:
 func _session_panel() -> Panel:
 	return _main.get_node("HUD/SessionPanel") as Panel
 
+func _result_bar() -> Panel:
+	return _main.get_node_or_null("HUD/ResultBar") as Panel
+
+func _ug_drawer() -> Panel:
+	return _main.get_node("HUD/UndergroundPanel") as Panel
+
 func _session_label() -> Label:
 	return _main.get_node("HUD/SessionPanel/SessionLabel") as Label
 
@@ -196,9 +202,13 @@ func _assert_input_gated(where: String) -> bool:
 	if _main.command_status.text != "Match is not playing":
 		_fail("%s: context command was not refused: %s" % [where, _main.command_status.text])
 		return false
-	if bool(_main._attack_move_armed) \
+	if str(_main._armed_order) != "" \
 			or int(GrusBridge.command_feedback_revision()) != revision:
 		_fail("%s: an input handler reached the bridge while not Playing" % where)
+		return false
+	var analyze := _main.get_node("HUD/ResearchPanel/AnalyzeButton") as Button
+	if analyze == null or not analyze.disabled:
+		_fail("%s: Analyze is not disabled outside Playing" % where)
 		return false
 	return true
 
@@ -368,7 +378,7 @@ func _research_boundary_leg() -> bool:
 	# it must visibly tick down, and each capture must agree with its own
 	# snapshot's ceil-ed seconds within a rendered frame of skew (the label
 	# mirrors the previous _process frame's read) — ±5 s covers that plus
-	# the controller's ceil() rounding while still catching a frozen label.
+	# the HUD's ceil() rounding while still catching a frozen label.
 	var label_after := research_label.text
 	var label_eta_after := SmokeHelpers.research_label_eta_seconds(label_after)
 	if label_eta_after < 0 or label_eta_after >= label_eta_wait \
@@ -382,13 +392,41 @@ func _research_boundary_leg() -> bool:
 			research_bar.max_value, target_points])
 		return false
 
-	# Leave the building deselected for the production legs: a real click
-	# on open ground clears the pick and disables Analyze again.
-	await _mouse_click(Vector2(TEST_VIEWPORT_SIZE) * Vector2(0.5, 0.85), MOUSE_BUTTON_LEFT)
+	# Leave the building deselected for the production legs: a real click on
+	# open ground right of the new bottom selection/command cards clears the
+	# pick. Analyze intentionally stays enabled while Playing with a living
+	# Research Center, and the same real button click now resolves that live
+	# core and queues Analyze without a selected building — the authoritative
+	# zero-Crystal reject remains the only honest verdict.
+	var open_ground := Vector2(TEST_VIEWPORT_SIZE.x * 0.7, TEST_VIEWPORT_SIZE.y * 0.42)
+	await _mouse_click(open_ground, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(_main.selected_building_id) == -1 \
-					and _main.selected_ids.is_empty() and analyze_button.disabled,
-			5.0, "open-ground click did not deselect the Research Center and disable Analyze"):
+					and _main.selected_ids.is_empty() and not analyze_button.disabled,
+			5.0, "open-ground click did not deselect the Research Center while Analyze stayed enabled"):
+		return false
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != 0:
+		_fail("selection-free Analyze leg is not the zero-Crystal window: %s" % [GrusBridge.economy_snapshot()])
+		return false
+	var crystals_before_deselected := int(GrusBridge.economy_snapshot().get("crystals", -1))
+	var points_before_deselected := float(GrusBridge.research_snapshot().get("points", -1.0))
+	var feedback_before_deselected := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), analyze_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > feedback_before_deselected \
+					and str(_main.command_status.text) == "Command rejected (InsufficientResources)",
+			10.0, "selection-free Analyze press produced neither the sim verdict nor its reject text"):
+		return false
+	if int(GrusBridge.last_reject_code()) != REJECT_INSUFFICIENT_RESOURCES \
+			or str(GrusBridge.command_feedback()) != "Command rejected (InsufficientResources)":
+		_fail("selection-free zero-Crystal Analyze did not surface the typed InsufficientResources reject: code=%d feedback=%s" % [
+			int(GrusBridge.last_reject_code()), GrusBridge.command_feedback()])
+		return false
+	if int(GrusBridge.economy_snapshot().get("crystals", -1)) != crystals_before_deselected:
+		_fail("selection-free rejected Analyze changed the zero-Crystal stockpile")
+		return false
+	if float(GrusBridge.research_snapshot().get("points", -1.0)) - points_before_deselected >= analyze_gain:
+		_fail("selection-free rejected Analyze banked the +%d reward" % int(analyze_gain))
 		return false
 	return true
 
@@ -458,11 +496,16 @@ func _restart_settled() -> bool:
 	return ids.size() == 4 and ids.has(1) and ids.has(2) and ids.has(3) and ids.has(4)
 
 func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
-	if snapshot.size() != 5:
+	if snapshot.size() != 6:
 		return false
-	for key in ["wave", "next_wave", "seconds_remaining", "incoming_zones", "live_aliens"]:
+	for key in ["wave", "next_wave", "seconds_remaining", "incoming_zones", "live_aliens", "timer_total_seconds"]:
 		if not snapshot.has(key):
 			return false
+	var total: Variant = snapshot.get("timer_total_seconds")
+	if typeof(total) != TYPE_FLOAT and typeof(total) != TYPE_INT:
+		return false
+	if float(total) <= 0.0:
+		return false
 	var zones: Array = snapshot.get("incoming_zones", [])
 	for zone in zones:
 		if zone.size() != 3 or not zone.has("name") \
@@ -505,6 +548,10 @@ func _run() -> void:
 	if str(session.get("phase", "")) != "Start":
 		_fail("fixture boot session is not Start: %s" % [session])
 		return
+	var result_bar := _main.get_node_or_null("HUD/ResultBar") as Panel
+	if result_bar == null or result_bar.visible:
+		_fail("Result bar is missing or visible during the Start phase")
+		return
 	if not (_session_panel().visible and _button("HUD/SessionPanel/StartButton").visible \
 				and not _button("HUD/SessionPanel/QuitButton").visible):
 		_fail("Start overlay is not up during the Start phase")
@@ -517,6 +564,10 @@ func _run() -> void:
 			5.0, "Start-phase gameplay order was not rejected with SessionLocked"):
 		return
 	if not _assert_input_gated("Start"):
+		return
+	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-start")
+	if not start_capture.is_empty():
+		_fail(start_capture)
 		return
 
 	if not GrusBridge.start_match():
@@ -621,13 +672,25 @@ func _run() -> void:
 			func(): return scout.global_position.distance_to(Vector3(scout_target.x, 0.0, scout_target.y)) < 2.0,
 			15.0, "scout never reached its warning-derived position"):
 		return
-	var defender_target := Vector2(anchor.x, anchor.y + 22.0)
+	# North-of-the-city staging point, far enough south that its projection
+	# clears the re-laid-out top research card: a click aimed under a HUD
+	# STOP surface would be swallowed rather than exercising the order.
+	var defender_target := Vector2(anchor.x, anchor.y + 32.0)
 	var defenders_revision := int(GrusBridge.command_feedback_revision())
 	if not await _select_guards(guards, guard_ids):
 		return
+	# Keyboard Attack-move must also leave an active build placement; these are
+	# Guards, so the subsequent real right-click is an accepted command and is
+	# awaited authoritatively below.
+	var bunkhouse_tile := _button("HUD/CommandPanel/BuildGrid/BunkhouseButton")
+	SmokeHelpers.push_mouse_click(get_tree(), bunkhouse_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(_main._placement_kind) != "Bunkhouse" or str(_main._armed_order) != "":
+		_fail("build tile did not arm placement before the Guard attack-move crossover")
+		return
 	await _key_tap(KEY_A)
-	if not bool(_main._attack_move_armed):
-		_fail("controller A-key did not arm Guard attack-move")
+	if str(_main._placement_kind) != "" or str(_main._armed_order) != "attack_move":
+		_fail("controller A-key did not leave placement before arming Guard attack-move")
 		return
 	var defender_screen: Vector2 = _main.camera.unproject_position(Vector3(defender_target.x, 0.0, defender_target.y))
 	# The "queued" text is a synchronous transient written inside the input
@@ -678,13 +741,27 @@ func _run() -> void:
 		_fail("no visible live alien target after the scout reveal")
 		return
 	var target: Node3D = target_box["view"]
+	# The approved layout's research card covers the northern approach at the
+	# default framing. Recenter through the minimap's own real click path when
+	# the alien projects under a HUD surface; the click then lands on open
+	# world center where a player could actually attack it.
+	var target_screen: Vector2 = _main.camera.unproject_position(target.global_position)
+	if SmokeHelpers.hud_rects(_main.get_node("HUD")).any(func(rect: Rect2) -> bool: return rect.has_point(target_screen)):
+		var minimap := _main.get_node("HUD/Minimap") as Control
+		SmokeHelpers.push_mouse_click(get_tree(),
+			minimap.get_global_rect().position
+				+ Vector2(target.global_position.x, target.global_position.z) * (minimap.size / Vector2(128.0, 96.0)),
+			MOUSE_BUTTON_LEFT)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		target_screen = _main.camera.unproject_position(target.global_position)
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var attack_revision := int(GrusBridge.command_feedback_revision())
 	# Same synchronous-transient read as the attack-move announcement above:
 	# the verdict mirror in _process may legitimately replace it before any
 	# awaited frame completes under throttled fps.
-	SmokeHelpers.push_mouse_click(get_tree(), _main.camera.unproject_position(target.global_position), MOUSE_BUTTON_RIGHT)
+	SmokeHelpers.push_mouse_click(get_tree(), target_screen, MOUSE_BUTTON_RIGHT)
 	if str(_main.command_status.text) != "Attack command queued":
 		_fail("controller right-click did not queue a direct attack on the visible alien: %s" % [_main.command_status.text])
 		return
@@ -701,19 +778,39 @@ func _run() -> void:
 		_fail("one Swarmer kill did not credit exactly one Crystal: %s" % [GrusBridge.economy_snapshot()])
 		return
 
-	# Pause freezes health and combat-event totals. Resume into a real alien
-	# Defeat; the remaining wave still attacks the sole Research Center.
-	if not GrusBridge.set_paused(true):
-		_fail("set_paused(true) was refused after the alien kill")
+	# A phase change clears the one modal order: arm Attack-move through its
+	# real tile, pause via the bridge, and require the controller to drop it
+	# before any resumed gameplay click can consume it.
+	var attack_tile := _main.get_node("HUD/CommandPanel/OrderGrid/AttackMoveButton") as Button
+	if attack_tile == null:
+		_fail("Attack-move order tile is missing")
 		return
+	SmokeHelpers.push_mouse_click(get_tree(), attack_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if str(_main._armed_order) != "attack_move":
+		_fail("Attack-move tile did not arm before the pause phase change")
+		return
+	# Pause freezes health and combat-event totals. Resume into a real alien
+	# Defeat; the remaining wave still attacks the sole Research Center. Both
+	# transitions take the visible Button path (hit test, pressed signal and
+	# handler), not a direct bridge call.
+	var pause_button := _button("HUD/PauseButton")
+	if not pause_button.visible or pause_button.disabled:
+		_fail("Pause button is not visible and enabled while Playing")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), pause_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused", 5.0,
-			"session never reached Paused"):
+			"real Pause button click never reached Paused"):
+		return
+	if not await _wait_until(func(): return str(_main._armed_order) == "", 5.0,
+			"Paused phase did not clear the armed order"):
 		return
 	if not await _wait_until(
 			func(): return _session_panel().visible \
 					and _button("HUD/SessionPanel/ResumeButton").visible \
 					and not _button("HUD/PauseButton").visible \
 					and not _button("HUD/SessionPanel/QuitButton").visible \
+					and not _result_bar().visible \
 					and _session_label().text == "Paused",
 			5.0, "Paused overlay is not showing Resume with Pause/Quit hidden"):
 		return
@@ -734,14 +831,38 @@ func _run() -> void:
 		return
 	if not _assert_input_gated("Paused"):
 		return
-	if not GrusBridge.set_paused(false):
-		_fail("set_paused(false) was refused")
+	# Paused inspection stays available: a real Tab opens the drawer without
+	# resuming, and the drawer survives Resume so the Result transition below
+	# is the one that must close it.
+	var ug_drawer := _ug_drawer()
+	await _key_tap(KEY_TAB)
+	if not ug_drawer.visible \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Paused":
+		_fail("real Tab during Paused did not open the inspection drawer")
 		return
+	var resume_button := _button("HUD/SessionPanel/ResumeButton")
+	if not resume_button.visible or resume_button.disabled:
+		_fail("Resume button is not visible and enabled while Paused")
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), resume_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,
-			"session never resumed to Playing"):
+			"real Resume button click never resumed to Playing"):
+		return
+	if not ug_drawer.visible:
+		_fail("Paused inspection drawer did not survive Resume into Playing")
 		return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
+		return
+	# Entering Result closes the drawer even though it was open before the
+	# outcome, and Tab cannot reopen it there.
+	if ug_drawer.visible:
+		_fail("Result phase still exposes the UndergroundPanel drawer")
+		return
+	await _key_tap(KEY_TAB)
+	if ug_drawer.visible \
+			or str(GrusBridge.session_snapshot().get("phase", "")) != "Result":
+		_fail("Tab reopened or leaked through the Result phase")
 		return
 	var result: Dictionary = GrusBridge.session_snapshot()
 	if int(result.get("winner_team", -1)) != 2:
@@ -753,6 +874,136 @@ func _run() -> void:
 					and _button("HUD/SessionPanel/QuitButton").visible,
 			5.0, "Result overlay is not showing Defeat with Restart/Quit"):
 		return
+	var result_banner := _main.get_node("HUD/SessionBackdrop/ResultBanner") as TextureRect
+	if result_banner == null or not result_banner.visible \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png") \
+			or result_banner.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		_fail("Result overlay is not showing the noninteractive Defeat banner art")
+		return
+	# The source banners carry no text, so the actual session-driven outcome
+	# title must be visibly rendered over them with the two Result actions.
+	var result_title := _main.get_node("HUD/SessionBackdrop/ResultTitle") as Label
+	if result_title == null or not result_title.visible \
+			or result_title.text != "Defeat" \
+			or result_title.get_theme_font_size("font_size") < 40 \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(result_title.get_global_rect()) \
+			or not result_title.get_global_rect().intersects(result_banner.get_global_rect()) \
+			or _button("HUD/SessionPanel/RestartButton").disabled \
+			or _button("HUD/SessionPanel/QuitButton").disabled:
+		_fail("Result overlay does not show the readable session Defeat title over its banner")
+		return
+	# HPA-698 visual fidelity Result: the existing backdrop still covers the
+	# whole viewport, the fog and the renderer's default clear color agree
+	# (the opt-in captured frame is what proves the pixels), and each winner's
+	# title sits on its own cloth instead of the same fixed box.
+	var session_backdrop := _main.get_node("HUD/SessionBackdrop") as Control
+	if not session_backdrop.visible \
+			or session_backdrop.get_global_rect() != Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)):
+		_fail("Result backdrop does not cover the viewport: %s" % session_backdrop.get_global_rect())
+		return
+	# One shared backdrop alpha serves Pause and Result, capped at 0.55 so the
+	# real battlefield stays legible behind the outcome while the banner and
+	# title carry the hierarchy.
+	var session_dim := _main.get_node_or_null("HUD/SessionBackdrop/Dim") as ColorRect
+	if session_dim == null or not session_dim.visible or session_dim.color.a > 0.55:
+		_fail("Result dim is missing, hidden, or darker than the shared 0.55 cap: %s" % [
+			session_dim.color if session_dim != null else null])
+		return
+	var fog_error := SmokeHelpers.fog_clear_color_error(_main.get_node("Battlefield/FogOfWar"))
+	if not fog_error.is_empty():
+		_fail(fog_error)
+		return
+	if not result_banner.get_global_rect().encloses(result_title.get_global_rect()):
+		_fail("Defeat title is not placed inside its banner cloth")
+		return
+	var defeat_title_center := result_title.get_global_rect().get_center()
+	var defeat_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-defeat")
+	if not defeat_capture.is_empty():
+		_fail(defeat_capture)
+		return
+	# Result actions sit in a bottom bar matching the mockup composition. The
+	# bar is decorative (mouse IGNORE); the two named buttons stay distinct and
+	# reachable, and every printed figure comes from a live read-only snapshot.
+	var result_stats := _main.get_node_or_null("HUD/ResultBar/ResultStats") as RichTextLabel
+	var restart_button := _button("HUD/SessionPanel/RestartButton")
+	var quit_button := _button("HUD/SessionPanel/QuitButton")
+	if result_bar == null or not result_bar.visible \
+			or result_bar.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+			or result_stats == null or not result_stats.is_visible_in_tree():
+		_fail("Result bar is missing, not visible, or intercepts mouse input")
+		return
+	var viewport_rect := Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE))
+	var bar_rect := result_bar.get_global_rect()
+	if bar_rect.position.y < TEST_VIEWPORT_SIZE.y * 0.75 or not viewport_rect.encloses(bar_rect):
+		_fail("Result bar is not a visible bottom bar at 1280x720: %s" % [bar_rect])
+		return
+	var restart_rect := restart_button.get_global_rect()
+	var quit_rect := quit_button.get_global_rect()
+	if not bar_rect.encloses(restart_rect) or not bar_rect.encloses(quit_rect) \
+			or restart_rect.intersects(quit_rect) \
+			or not viewport_rect.encloses(restart_rect) or not viewport_rect.encloses(quit_rect) \
+			or restart_button.disabled or quit_button.disabled \
+			or not restart_button.is_visible_in_tree() or not quit_button.is_visible_in_tree():
+		_fail("Result bar Restart/Quit are not distinct, reachable controls")
+		return
+	var result_research: Dictionary = GrusBridge.research_snapshot()
+	var result_economy: Dictionary = GrusBridge.economy_snapshot()
+	var result_wave: Dictionary = GrusBridge.wave_snapshot()
+	var result_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
+	for expected in [
+			"Wave %d" % int(result_wave.get("wave", 0)),
+			"Research %d/%d" % [floori(float(result_research.get("points", 0.0))), result_target],
+			"Pop %d" % int(result_economy.get("population_used", 0)),
+			"Crystals %d" % int(result_economy.get("crystals", 0))]:
+		if not result_stats.text.contains(expected):
+			_fail("Result bar statistics are not snapshot-derived (missing %s): %s" % [expected, result_stats.text])
+			return
+	# The outcome composition replaces the in-match HUD; no live gameplay
+	# control may sit exposed behind or beside the Result bar.
+	for path in ["HUD/EconomyPanel", "HUD/ResearchPanel", "HUD/SelectionPanel",
+			"HUD/CommandPanel", "HUD/WavePanel", "HUD/WaveRing", "HUD/WaveLabel",
+			"HUD/MinimapFrame", "HUD/Minimap", "HUD/CommandStatus",
+			"HUD/UndergroundPanel"]:
+		if (_main.get_node(path) as CanvasItem).visible:
+			_fail("Result phase still exposes in-match HUD %s" % path)
+			return
+	# Presentation-only variant probe: call the HUD render directly with both
+	# winner values and restore the actual session immediately. This is not a
+	# gameplay victory journey; it proves the banner/title pair reacts to the
+	# same session field without manufacturing sim state.
+	var hud := _main.get_node("HUD")
+	# Hold the controller's per-frame refresh for the probe only: the awaited
+	# capture needs a rendered frame, and leaving _process running would
+	# overwrite the presentation-only winner before that frame draws.
+	_main.set_process(false)
+	hud.call("refresh_session", "Result", 1)
+	var victory_title_center := result_title.get_global_rect().get_center()
+	if not result_title.visible or result_title.text != "Victory" \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/victory_banner.png") \
+			or not result_bar.visible or not result_stats.is_visible_in_tree() \
+			or _button("HUD/SessionPanel/RestartButton").disabled \
+			or _button("HUD/SessionPanel/QuitButton").disabled \
+			or not result_banner.get_global_rect().encloses(result_title.get_global_rect()) \
+			or is_equal_approx(victory_title_center.y, defeat_title_center.y):
+		_main.set_process(true)
+		_fail("presentation probe did not render the Victory title on its own banner cloth height")
+		return
+	var victory_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-victory-probe")
+	_main.set_process(true)
+	if not victory_capture.is_empty():
+		_fail(victory_capture)
+		return
+	hud.call("refresh_session", "Result", 2)
+	if not result_title.visible or result_title.text != "Defeat" \
+			or result_banner.texture == null \
+			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png") \
+			or not result_bar.visible:
+		_fail("presentation probe did not restore the Defeat title/art")
+		return
+	var actual_result: Dictionary = GrusBridge.session_snapshot()
+	hud.call("refresh_session", str(actual_result.get("phase", "")), int(actual_result.get("winner_team", -1)))
 	if not GrusBridge.move_units(PackedInt32Array([1]), Vector2(30, 44)):
 		_fail("bridge refused to queue the Result-phase probe command")
 		return
@@ -771,7 +1022,7 @@ func _run() -> void:
 	_main.selected_ids = old_ids
 	_main.selected_building_id = barracks_id
 	_main._control_groups[1] = old_ids.duplicate()
-	_main._attack_move_armed = true
+	_main._armed_order = "attack_move"
 	_fx.call("spawn_death", Vector3.ZERO)
 	if int(_fx.call("effect_count")) < 1:
 		_fail("transient effect seed for the restart check did not land")
@@ -805,6 +1056,13 @@ func _run() -> void:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Start":
 		_fail("restart did not return to Start")
 		return
+	for path in ["HUD/EconomyPanel", "HUD/SelectionPanel", "HUD/CommandPanel", "HUD/Minimap"]:
+		if not (_main.get_node(path) as CanvasItem).visible:
+			_fail("restart did not restore in-match HUD %s" % path)
+			return
+	if _button("HUD/SessionPanel/RestartButton").visible:
+		_fail("restart left the Result bar actions visible during Start")
+		return
 	var reset_wave: Dictionary = GrusBridge.wave_snapshot()
 	if not _snapshot_has_safe_surface(reset_wave) \
 			or int(reset_wave.get("wave", -1)) != 0 \
@@ -818,7 +1076,7 @@ func _run() -> void:
 		_fail("restart did not bring the Start overlay back with Quit hidden")
 		return
 	if not _main.selected_ids.is_empty() or not _main._control_groups.is_empty() \
-			or int(_main.selected_building_id) != -1 or bool(_main._attack_move_armed):
+			or int(_main.selected_building_id) != -1 or str(_main._armed_order) != "":
 		_fail("restart left old selection/control-group state behind")
 		return
 	if int(_fx.call("effect_count")) != 0:

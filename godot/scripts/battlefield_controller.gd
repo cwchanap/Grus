@@ -8,31 +8,29 @@ const ZOOM_STEP := 6.0
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
-@onready var wave_label: RichTextLabel = $HUD/WaveLabel
-@onready var research_bar: ProgressBar = $HUD/ResearchPanel/ResearchBar
-@onready var research_label: Label = $HUD/ResearchPanel/ResearchLabel
-@onready var research_icon: TextureRect = $HUD/ResearchPanel/ResearchIcon
+## Rendering lives on the HUD CanvasLayer's own script; it holds no gameplay
+## state, so the controller stays the single owner of every snapshot read.
+@onready var _hud = $HUD
 @onready var analyze_button: Button = $HUD/ResearchPanel/AnalyzeButton
-@onready var economy_label: RichTextLabel = $HUD/EconomyPanel/EconomyLabel
 @onready var idle_button: Button = $HUD/EconomyPanel/IdleButton
-@onready var selection_label: Label = $HUD/SelectionPanel/SelectionLabel
 @onready var _build_grid: Container = $HUD/CommandPanel/BuildGrid
 @onready var _train_grid: Container = $HUD/CommandPanel/TrainGrid
+@onready var _order_grid: Container = $HUD/CommandPanel/OrderGrid
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
 @onready var _fx: Node3D = $CombatFx
-@onready var session_panel: Panel = $HUD/SessionPanel
-@onready var session_label: Label = $HUD/SessionPanel/SessionLabel
-@onready var _minimap: Control = $HUD/Minimap
 @onready var start_button: Button = $HUD/SessionPanel/StartButton
 @onready var resume_button: Button = $HUD/SessionPanel/ResumeButton
 @onready var restart_button: Button = $HUD/SessionPanel/RestartButton
 @onready var quit_button: Button = $HUD/SessionPanel/QuitButton
 @onready var pause_button: Button = $HUD/PauseButton
-@onready var _underground_panel: Panel = $HUD/UndergroundPanel
-@onready var _underground_header: Label = $HUD/UndergroundPanel/HeaderLabel
+## The drawer script on the existing panel owns its visual arming state and
+## emits the two action intents; Tab/Esc, the Playing gate, dispatch and the
+## command status stay here.
+@onready var _ug_drawer = $HUD/UndergroundPanel
+## The Excavate button is static scene content, so the controller owns its
+## pressed wiring like every other static Button: it connects straight to the
+## drawer's existing intent signal.
 @onready var _underground_excavate: Button = $HUD/UndergroundPanel/ExcavateButton
-@onready var _underground_kinds: Container = $HUD/UndergroundPanel/KindsBox
-@onready var _underground_levels: Container = $HUD/UndergroundPanel/ScrollContainer/LevelsBox
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -48,47 +46,21 @@ var _session_phase := ""
 var _unit_kinds: Dictionary = {}
 var _previous_unit_kinds: Dictionary = {}
 var _building_kinds: Dictionary = {}
-var _attack_move_armed := false
+## One controller-owned modal order: "", "attack_move", "move", "gather",
+## "rally". Build placement stays a separate `_placement_kind` because it has
+## its own preview/queued-placement lifecycle.
+var _armed_order := ""
 ## Producer building kinds come from the Rust catalogue via
 ## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
-## Static research tuning, cached once from the catalogue's "research"
-## block; the live points/rate/ETA arrive per frame through
-## research_snapshot — never a mirrored mutable copy.
-var _research_target_points := 0
-## Static underground catalogue rows (name/min_level/cost/seconds),
-## cached once from the catalogue's "underground" block; every dynamic
-## value (depth, dig, slots) arrives per frame through underground_snapshot
-## while the panel is visible — never a mirrored mutable copy.
-var _ug_rooms: Array[Dictionary] = []
-var _ug_slots_per_level := 4
 ## Tick/phase markers behind the per-tick refresh gate: the snapshot can
 ## only change inside a fixed tick, and the lock line only on a phase
 ## change, so anything fresher is a wasted rebuild.
 var _ug_last_tick := -1
 var _ug_last_phase := ""
-## Index into `_ug_rooms` of the armed room kind (-1 = none armed); the
-## only selection state — slots derive eligibility from it every refresh.
-var _ug_armed_index := -1
-var _ug_kind_buttons: Array[Button] = []
-var _icon_cache: Dictionary = {}
-## Cosmetic button labels only — the authoritative kind wire names ride the
-## catalogue entries and bridge commands.
-const UNDERGROUND_DISPLAY_NAMES := {
-	"Shelter": "Shelter",
-	"Greenhouse": "Green",
-	"CoalVein": "Coal",
-	"GeothermalTap": "Tap",
-	"Lab": "Lab",
-	"DeepMine": "Mine",
-}
 
 func _ready() -> void:
-	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
-	research_icon.texture = research_progress_icon
-	research_icon.visible = research_progress_icon != null
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
-	var buildings: Dictionary = catalogue.get("buildings", {})
 	var producers := {}
 	var units: Dictionary = catalogue.get("units", {})
 	for kind in units:
@@ -97,100 +69,22 @@ func _ready() -> void:
 	_producer_kinds.sort()
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
-	# The one static research read at init: point target, Analyze price and
-	# reward. Every dynamic value (points/rate/ETA, lock states) refreshes
-	# per frame from research_snapshot in _refresh_hud.
-	var research_catalogue: Dictionary = catalogue.get("research", {})
-	_research_target_points = int(research_catalogue.get("target_points", 0))
-	var analyze_cost: Dictionary = research_catalogue.get("analyze_cost", {})
-	var analyze_crystals := int(analyze_cost.get("crystals", 0))
-	var analyze_gain := int(research_catalogue.get("analyze_gain_points", 0))
-	research_bar.max_value = maxf(float(_research_target_points), 1.0)
-	analyze_button.text = "Analyze %d→+%d" % [analyze_crystals, analyze_gain]
-	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
-	analyze_button.pressed.connect(_on_analyze_pressed)
-	# The static underground catalogue: room rows in wire-name order plus the
-	# slot count — the only room-rule/price source, read once here. All
-	# dynamic underground state arrives through underground_snapshot while
-	# the panel is visible.
-	var underground_catalogue: Dictionary = catalogue.get("underground", {})
-	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
-	for kind in underground_catalogue.get("room_kinds", []):
-		var ug_entry: Dictionary = ug_rooms.get(str(kind), {})
-		if ug_entry.is_empty():
-			continue
-		ug_entry["name"] = str(kind)
-		_ug_rooms.append(ug_entry)
-	_ug_slots_per_level = maxi(int(underground_catalogue.get("slots", 4)), 1)
-	_underground_excavate.pressed.connect(_on_excavate_pressed)
-	# One ordinary toggle Button per room kind, built from the catalogue in
-	# wire-name order: clicking arms the kind (the only selection state);
-	# tooltips carry the full catalogue cost/time/effect.
-	for index in _ug_rooms.size():
-		var ug_entry: Dictionary = _ug_rooms[index]
-		var kind_button := Button.new()
-		kind_button.toggle_mode = true
-		kind_button.add_theme_font_size_override("font_size", 14)
-		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		kind_button.custom_minimum_size = Vector2(52, 65)
-		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		var kind := str(ug_entry.get("name", ""))
-		var display_name := _underground_display_name(kind)
-		kind_button.text = display_name
-		var room_icon := _icon_for_kind("underground", kind)
-		if room_icon != null:
-			kind_button.icon = room_icon
-			kind_button.add_theme_constant_override("icon_max_width", 22)
-			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
-			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
-			kind_button.text = ""
-			kind_button.accessibility_name = display_name
-			var name_label := Label.new()
-			name_label.name = "KindLabel"
-			name_label.text = display_name
-			name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			name_label.add_theme_font_size_override("font_size", 11)
-			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-			name_label.offset_top = -22
-			name_label.offset_bottom = -2
-			kind_button.add_child(name_label)
-		kind_button.tooltip_text = _ug_kind_tooltip(ug_entry)
-		kind_button.toggled.connect(_on_kind_toggled.bind(index))
-		_underground_kinds.add_child(kind_button)
-		_ug_kind_buttons.append(kind_button)
-	var excavate_icon := _icon_for_kind("underground", "Excavate")
-	if excavate_icon != null:
-		_underground_excavate.icon = excavate_icon
-		_underground_excavate.add_theme_constant_override("icon_max_width", 20)
+	_ug_drawer.excavate_requested.connect(_on_excavate_requested)
+	_ug_drawer.room_requested.connect(_on_room_requested)
+	_underground_excavate.pressed.connect(_ug_drawer.excavate_requested.emit)
+	# The drawer creates its kind toggles in its own _ready (children ready
+	# before this node), so observe them here for the controller-owned hint —
+	# no third drawer signal and no duplicated armed state.
+	for button in _ug_drawer.get_node("KindsBox").get_children():
+		button.toggled.connect(_on_underground_kind_toggled.bind(str(button.get_meta("kind"))))
 	for button in _build_grid.get_children():
-		var kind := str(button.get_meta("kind"))
-		var entry: Dictionary = buildings.get(kind, {})
-		var building_icon := _icon_for_kind("buildings", kind)
-		if building_icon != null:
-			button.icon = building_icon
-			button.add_theme_constant_override("icon_max_width", 20)
-		var costs := PackedStringArray()
-		for resource in ["food", "scrap", "coal", "crystals"]:
-			var amount := int(entry.get(resource, 0))
-			if amount > 0:
-				costs.append("%d %s" % [amount, resource.capitalize()])
-		button.tooltip_text = "Cost: %s\nBuild: %ds" % [", ".join(costs), int(entry.get("seconds", 0))]
-		# The catalogue-derived research threshold rides the button meta; the
-		# per-frame lock refresh in _refresh_research_controls compares it
-		# against the live point total. No per-kind conditions.
-		var unlock_points := int(entry.get("unlock_points", 0))
-		button.set_meta("unlock_points", unlock_points)
-		if unlock_points > 0:
-			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
-		button.pressed.connect(_on_build_pressed.bind(kind))
+		button.pressed.connect(_on_build_pressed.bind(str(button.get_meta("kind"))))
 	for button in _train_grid.get_children():
-		var unit_icon := _icon_for_kind("units", str(button.get_meta("kind")))
-		if unit_icon != null:
-			button.icon = unit_icon
-			button.add_theme_constant_override("icon_max_width", 20)
 		button.pressed.connect(_on_train_pressed.bind(str(button.get_meta("kind"))))
+	for button in _order_grid.get_children():
+		if button is Button:
+			button.pressed.connect(_on_order_pressed.bind(str(button.get_meta("order", ""))))
+	analyze_button.pressed.connect(_on_analyze_pressed)
 	idle_button.pressed.connect(_on_idle_pressed)
 	start_button.pressed.connect(_on_start_pressed)
 	resume_button.pressed.connect(_on_resume_pressed)
@@ -211,7 +105,7 @@ func _process(_delta: float) -> void:
 	_previous_unit_kinds = _unit_kinds
 	_reconcile_selection()
 	_refresh_hud()
-	if _underground_panel.visible \
+	if _ug_drawer.visible \
 			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
 
@@ -220,16 +114,6 @@ func _view_kinds(group: String, id_key: String, kind_key: String) -> Dictionary:
 	for view in get_tree().get_nodes_in_group(group):
 		kinds[int(view.get_meta(id_key, -1))] = str(view.get_meta(kind_key, ""))
 	return kinds
-
-func _icon_for_kind(group: String, kind: String) -> Texture2D:
-	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
-	if not _icon_cache.has(path):
-		_icon_cache[path] = ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
-	return _icon_cache[path] as Texture2D
-
-func _inline_icon(group: String, kind: String, size := 18) -> String:
-	var icon := _icon_for_kind(group, kind)
-	return "[img=%dx%d]%s[/img] " % [size, size, icon.resource_path] if icon != null else ""
 
 func _consume_placement_results() -> bool:
 	var unresolved: Array[Dictionary] = []
@@ -266,42 +150,20 @@ func _refresh_session() -> void:
 	var snap: Dictionary = GrusBridge.session_snapshot()
 	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
+	if _session_phase == "Result":
+		# Result owns the screen; the drawer is inspection-only and must not
+		# sit behind the mouse-ignoring outcome composition.
+		_close_underground_panel()
+	if _session_phase != "Playing":
+		_armed_order = ""
 	_fx.set_wind_phase(_session_phase)
-	_refresh_session_overlay(snap)
+	_hud.refresh_session(_session_phase, int(snap.get("winner_team", -1)))
 	var result_frame := _session_phase == "Result" and previous_phase != "Result"
 	if _session_phase != "Playing" and not result_frame:
 		return
 	var events: Array = GrusBridge.drain_combat_events()
 	for event in events:
 		_dispatch_combat_event(event)
-
-func _refresh_session_overlay(snap: Dictionary) -> void:
-	var playing := _session_phase == "Playing"
-	session_panel.visible = not playing
-	pause_button.visible = playing
-	# Restart/Quit belong to Result only.
-	match _session_phase:
-		"Start":
-			session_label.text = "Survive the alien waves"
-			start_button.visible = true
-			resume_button.visible = false
-			restart_button.visible = false
-			quit_button.visible = false
-		"Paused":
-			session_label.text = "Paused"
-			start_button.visible = false
-			resume_button.visible = true
-			restart_button.visible = false
-			quit_button.visible = false
-		"Result":
-			session_label.text = "Victory!" if int(snap.get("winner_team", -1)) == 1 else "Defeat"
-			start_button.visible = false
-			resume_button.visible = false
-			restart_button.visible = true
-			quit_button.visible = true
-		_:
-			# Playing: panel hidden.
-			pass
 
 ## Gameplay orders only ever leave Godot while the session is Playing.
 func _playing() -> bool:
@@ -379,128 +241,33 @@ func _reconcile_selection() -> void:
 	if changed:
 		_apply_selection()
 
+## One read of each HUD snapshot per frame, handed straight to the HUD view;
+## the controller keeps the selection/session context the render needs and
+## never keeps a second copy of the rendered values.
 func _refresh_hud() -> void:
-	var economy: Dictionary = GrusBridge.economy_snapshot()
-	var surface := float(economy.get("surface_efficiency", 1.0))
-	var surface_percent := roundi(surface * 100.0)
-	# A real deficit must never display as a full 100%: clamp the rounded
-	# value down to 99 while the sim reports any efficiency shortfall.
-	if surface_percent >= 100 and surface < 1.0:
-		surface_percent = 99
-	var cold_icon := _inline_icon("status", "SurfaceCold") if surface < 1.0 else ""
-	economy_label.text = "%s%d   %s%d   %s%d\n%s%d   Population %d/%d\n%s%d / %d · %ssurface %d%%" % [
-		_inline_icon("resources", "Food"),
-		int(economy.get("food", 0)),
-		_inline_icon("resources", "Scrap"),
-		int(economy.get("scrap", 0)),
-		_inline_icon("resources", "Coal"),
-		int(economy.get("coal", 0)),
-		_inline_icon("resources", "Crystals"),
-		int(economy.get("crystals", 0)),
-		int(economy.get("population_used", 0)),
-		int(economy.get("population_cap", 0)),
-		_inline_icon("resources", "Heat"),
-		int(economy.get("heat_supply", 0)),
-		int(economy.get("heat_demand", 0)),
-		cold_icon,
-		surface_percent,
-	]
-	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
-	var wave: Dictionary = GrusBridge.wave_snapshot()
-	var remaining := maxi(ceili(float(wave.get("seconds_remaining", 0.0))), 0)
-	var incoming_names := PackedStringArray()
-	for zone in wave.get("incoming_zones", []):
-		incoming_names.append(str(zone.get("name", "")))
-	var wave_number := int(wave.get("wave", 0))
-	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
-	wave_label.text = "%s   %sNext wave %d in %d:%02d   Aliens %d" % [
-		current_label,
-		_inline_icon("status", "WaveCountdown"),
-		int(wave.get("next_wave", 1)),
-		int(remaining / 60),
-		remaining % 60,
-		int(wave.get("live_aliens", 0)),
-	]
-	if not incoming_names.is_empty():
-		wave_label.text += "   %sIncoming: %s" % [
-			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
-	# One bridge read per frame: hand the same snapshot to the minimap so
-	# HUD text and incoming pings can never disagree.
-	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
-		_minimap.set_wave_snapshot(wave)
-	# The one dynamic research read per HUD frame: drives the progress bar,
-	# the ETA text, the Analyze enable and every build-button lock — the
-	# frontend derives percent and availability from these fields only.
+	_hud.refresh_economy(GrusBridge.economy_snapshot())
+	_hud.refresh_wave(GrusBridge.wave_snapshot())
 	var research: Dictionary = GrusBridge.research_snapshot()
 	var building: Dictionary = {}
+	var building_health := -1.0
 	if selected_building_id > 0:
 		building = GrusBridge.building_snapshot(selected_building_id)
-	_refresh_selection(building)
-	_refresh_research_controls(research, building)
-
-## Per-frame research refresh behind the one dynamic snapshot: the bar and
-## label track live points/rate/ETA, and every catalogue-bound lock state
-## (build buttons, Analyze) re-derives here — never a one-time _ready read.
-func _refresh_research_controls(research: Dictionary, building: Dictionary) -> void:
-	var points := float(research.get("points", 0.0))
-	var target := maxf(float(_research_target_points), 1.0)
-	research_bar.value = clampf(points, 0.0, target)
-	# Floor the percent so a positive sub-total never displays an early
-	# 100%; the target itself still reads 100%.
-	var percent := floori(clampf(points, 0.0, target) / target * 100.0)
-	var eta := float(research.get("eta_seconds", -1.0))
-	var eta_text := "—"
-	if eta >= 0.0:
-		var total := maxi(ceili(eta), 0)
-		eta_text = "%d:%02d" % [total / 60, total % 60]
-	research_label.text = "Research %d/%d · %d%% · ETA %s" % [
-		floori(points), _research_target_points, percent, eta_text,
-	]
-	# Analyze is enabled while Playing with the owned, completed Research
-	# Center selected — affordability is deliberately NOT checked here:
-	# the sim reports InsufficientResources through normal feedback.
-	var analyze_context := _playing() and not building.is_empty() \
-		and str(building.get("kind", "")) == "ResearchCenter" \
-		and int(building.get("team_id", -1)) == 1 \
-		and bool(building.get("complete", false))
-	analyze_button.disabled = not analyze_context
-	# Locked buttons unlock mid-match: the live point total vs each button's
-	# catalogue-derived threshold, every frame. Rust still rejects a stale
-	# click through the authoritative Locked gate.
-	for button in _build_grid.get_children():
-		var required := float(button.get_meta("unlock_points", 0))
-		button.disabled = required > 0.0 and points < required
-
-func _refresh_selection(building: Dictionary) -> void:
-	if not selected_ids.is_empty():
-		var labels := PackedStringArray()
-		for id in selected_ids:
-			labels.append("%s #%d" % [_unit_kind(id), id])
-		selection_label.text = "Selected: " + ", ".join(labels)
-		return
-	if selected_building_id > 0 and not building.is_empty():
-		var text := "%s #%d (team %d)" % [
-			str(building.get("kind", "?")),
-			selected_building_id,
-			int(building.get("team_id", 0)),
-		]
-		if bool(building.get("complete", false)):
-			text += "\nConstruction complete"
-		else:
-			text += "\nConstruction %d%%" % roundi(float(building.get("construction_progress", 0.0)) * 100.0)
-		var queue_label := str(building.get("queue_label", ""))
-		if queue_label != "":
-			text += "\nTraining %s — %d%%" % [queue_label, roundi(float(building.get("queue_progress", 0.0)) * 100.0)]
-		var blocked := int(building.get("blocked_reason", 0))
-		if blocked != 0:
-			text += "\nBlocked (code %d)" % blocked
-		if int(building.get("rally_x", -1)) >= 0:
-			text += "\nRally: (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))]
-		else:
-			text += "\nRally: none"
-		selection_label.text = text
-		return
-	selection_label.text = "Nothing selected"
+		var building_view := _building_view(selected_building_id)
+		if building_view != null:
+			building_health = float(building_view.call("health_ratio"))
+	var unit_task: Dictionary = {}
+	var unit_health := -1.0
+	if selected_ids.size() == 1:
+		var unit_id := selected_ids[0]
+		unit_task = GrusBridge.unit_task_snapshot(unit_id)
+		var unit_view := _unit_view(unit_id)
+		if unit_view != null:
+			unit_health = float(unit_view.call("health_ratio"))
+	_hud.refresh_selection(selected_ids, selected_building_id, building, _unit_kinds,
+		unit_task, unit_health, building_health)
+	_hud.refresh_orders(_armed_order, _playing())
+	_hud.refresh_build_placement(_placement_kind)
+	_hud.refresh_research_controls(research, _playing(), _research_center_id() > 0)
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
 ## and mark the event handled: `ui_focus_next` would otherwise consume Tab
@@ -520,7 +287,7 @@ func _input(event: InputEvent) -> void:
 		return
 	if not key.pressed or key.echo:
 		return
-	if key.keycode == KEY_ESCAPE and _underground_panel.visible:
+	if key.keycode == KEY_ESCAPE and _ug_drawer.visible:
 		_close_underground_panel()
 		get_viewport().set_input_as_handled()
 
@@ -573,17 +340,23 @@ func _handle_key(event: InputEventKey) -> void:
 	if event.keycode == KEY_ESCAPE:
 		if _placement_kind != "":
 			_cancel_placement()
+		elif _armed_order != "":
+			_armed_order = ""
+			command_status.text = "Order canceled"
 		elif _session_phase == "Playing":
 			GrusBridge.set_paused(true)
 		elif _session_phase == "Paused":
 			GrusBridge.set_paused(false)
 		return
 	if event.keycode == KEY_S:
+		_armed_order = ""
 		_issue_stop()
 		return
 	if event.keycode == KEY_A:
 		if _playing() and not selected_ids.is_empty():
-			_attack_move_armed = true
+			if _placement_kind != "":
+				_cancel_placement()
+			_armed_order = "attack_move"
 			command_status.text = "Attack-move: right-click a ground target"
 		return
 	if event.keycode < KEY_1 or event.keycode > KEY_9:
@@ -657,8 +430,24 @@ func _apply_selection() -> void:
 		if selected:
 			live_selected.append(id)
 	selected_ids = live_selected
-	if selected_ids.is_empty():
-		_attack_move_armed = false
+	_clear_invalid_armed_order()
+
+## One modal order outlives a selection only while its context still exists:
+## units for move/attack-move/gather (workers for Gather), a selected
+## producer for Rally. Lost selection/context clears it, never a hidden fallback.
+func _clear_invalid_armed_order() -> void:
+	match _armed_order:
+		"":
+			return
+		"rally":
+			if not _producer_kinds.has(_selected_producer_kind()):
+				_armed_order = ""
+		"gather":
+			if _selected_worker_ids().is_empty():
+				_armed_order = ""
+		_:
+			if selected_ids.is_empty():
+				_armed_order = ""
 
 func _issue_context_command(screen_position: Vector2) -> void:
 	if not _playing():
@@ -667,16 +456,12 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	if _placement_kind != "":
 		_cancel_placement()
 		return
-	var armed := _attack_move_armed
-	_attack_move_armed = false
-	# An armed attack-move is a modal order: it outranks every contextual
-	# pick (worker gather/construction, enemy attack, rally, move).
-	if armed and not selected_ids.is_empty():
-		var target = _ground_target(screen_position)
-		if target != null and GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
-			command_status.text = "Attack-move queued"
-		else:
-			command_status.text = "Attack-move rejected"
+	# An armed order is modal: it outranks every contextual pick and is
+	# consumed by this one right-click, even when its target is invalid.
+	if _armed_order != "":
+		var armed := _armed_order
+		_armed_order = ""
+		_dispatch_armed_order(armed, screen_position)
 		return
 	var workers := _selected_worker_ids()
 	if not workers.is_empty():
@@ -716,6 +501,43 @@ func _issue_context_command(screen_position: Vector2) -> void:
 				command_status.text = "Rally point rejected"
 			return
 	_issue_move(screen_position)
+
+## The one modal-order dispatch table. Each branch reuses the existing bridge
+## operation and never falls through to a generic contextual pick.
+func _dispatch_armed_order(order: String, screen_position: Vector2) -> void:
+	match order:
+		"attack_move":
+			var target = _ground_target(screen_position)
+			if target == null or selected_ids.is_empty():
+				command_status.text = "Attack-move rejected"
+				return
+			if GrusBridge.attack_move_units(PackedInt32Array(selected_ids), target):
+				command_status.text = "Attack-move queued"
+			else:
+				command_status.text = "Attack-move rejected"
+		"move":
+			_issue_move(screen_position)
+		"gather":
+			var workers := _selected_worker_ids()
+			var resource_id := _gatherable_resource_id(screen_position)
+			if workers.is_empty() or resource_id <= 0:
+				command_status.text = "Gather command rejected"
+				return
+			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
+				command_status.text = "Gather command queued"
+			else:
+				command_status.text = "Gather command rejected"
+		"rally":
+			var target = _ground_target(screen_position)
+			if target == null or not _producer_kinds.has(_selected_producer_kind()):
+				command_status.text = "Rally point rejected"
+				return
+			if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):
+				command_status.text = "Rally point queued"
+			else:
+				command_status.text = "Rally point rejected"
+		_:
+			command_status.text = "Order canceled"
 
 func _issue_move(screen_position: Vector2) -> void:
 	if not _playing():
@@ -889,10 +711,8 @@ func _restart_match() -> void:
 	selected_building_id = -1
 	_control_groups.clear()
 	_idle_cursor = 0
-	_attack_move_armed = false
-	_ug_armed_index = -1
-	for kind_button in _ug_kind_buttons:
-		kind_button.set_pressed_no_signal(false)
+	_armed_order = ""
+	_ug_drawer.reset()
 	_pending_placement_requests.clear()
 	_cancel_placement()
 	_fx.clear_all()
@@ -994,9 +814,54 @@ func _on_build_pressed(kind: String) -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
+	# Placement and a modal order are mutually exclusive targeting modes.
+	_armed_order = ""
 	_placement_generation += 1
 	_placement_kind = kind
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
+
+## A real order-tile click arms the one modal order after checking its
+## context; Stop runs immediately and Cancel clears placement/order without
+## enqueueing a gameplay command.
+func _on_order_pressed(order: String) -> void:
+	if order == "cancel":
+		if _placement_kind != "":
+			_cancel_placement()
+			command_status.text = "Placement canceled"
+		elif _armed_order != "":
+			_armed_order = ""
+			command_status.text = "Order canceled"
+		return
+	if not _playing():
+		command_status.text = "Match is not playing"
+		return
+	if order == "stop":
+		_armed_order = ""
+		_issue_stop()
+		return
+	if order in ["move", "attack_move"] and selected_ids.is_empty():
+		command_status.text = "Select units first"
+		return
+	if order == "gather" and _selected_worker_ids().is_empty():
+		command_status.text = "Select workers to gather"
+		return
+	if order == "rally" and not _producer_kinds.has(_selected_producer_kind()):
+		command_status.text = "Select a production building first"
+		return
+	# Entering a targeting order leaves placement first; the reverse entry
+	# (`_on_build_pressed`) clears a modal order. The two never coexist.
+	if _placement_kind != "":
+		_cancel_placement()
+	_armed_order = order
+	match order:
+		"move":
+			command_status.text = "Move: right-click a ground target"
+		"attack_move":
+			command_status.text = "Attack-move: right-click a ground target"
+		"gather":
+			command_status.text = "Gather: right-click a resource"
+		"rally":
+			command_status.text = "Rally: right-click a ground target"
 
 func _cancel_placement() -> void:
 	_placement_generation += 1
@@ -1071,18 +936,34 @@ func _on_train_pressed(kind: String) -> void:
 	else:
 		command_status.text = "Training rejected"
 
-## One Analyze conversion on the selected Research Center — the same
-## queued-command/feedback path as every other order. The button's enabled
-## state already encodes the session+selection context; the sim stays the
-## final validator for ownership, kind and Crystals.
+## The live friendly Research Center view id, resolved from the existing
+## building_views metadata (kind/team/id) — never a hardcoded building id.
+func _research_center_id() -> int:
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var view := node as Node3D
+		if view == null or not view.is_visible_in_tree():
+			continue
+		if int(view.get_meta("team_id", -1)) != 1 \
+				or str(view.get_meta("building_kind", "")) != "ResearchCenter":
+			continue
+		var id := int(view.get_meta("building_id", -1))
+		if id > 0:
+			return id
+	return -1
+
+## One Analyze conversion on the live Team-1 Research Center, independent of
+## the current selection — the same queued-command/feedback path as every
+## other order. The button's enabled state encodes Playing + core presence;
+## the sim stays the final validator for ownership, completion and Crystals.
 func _on_analyze_pressed() -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
-	if selected_building_id <= 0:
-		command_status.text = "Select the Research Center first"
+	var core_id := _research_center_id()
+	if core_id <= 0:
+		command_status.text = "Research Center unavailable"
 		return
-	if GrusBridge.analyze(selected_building_id):
+	if GrusBridge.analyze(core_id):
 		command_status.text = "Analyze queued"
 	else:
 		command_status.text = "Analyze rejected"
@@ -1112,199 +993,41 @@ func _on_idle_pressed() -> void:
 
 ## Tab toggles the underground panel; the panel itself consumes mouse input
 ## (Control STOP filter) so clicks never leak into ground selection,
-## placement or unit commands.
+## placement or unit commands. Result never reopens it: the outcome screen
+## owns the frame.
 func _toggle_underground_panel() -> void:
-	if _underground_panel.visible:
+	if _session_phase == "Result":
+		return
+	if _ug_drawer.visible:
 		_close_underground_panel()
 	else:
-		_underground_panel.visible = true
+		_ug_drawer.visible = true
 		# One immediate refresh so the first shown frame is current; the
 		# status line keeps the last command feedback — panel state never
 		# clobbers it (the Esc hint lives on the panel's own header).
 		_refresh_underground_panel()
 
 func _close_underground_panel() -> void:
-	_underground_panel.visible = false
+	_ug_drawer.visible = false
 
-## Dynamic underground refresh, only while the panel is visible and gated
-## by the applied-tick counter plus session phase: the snapshot can only
-## change inside a fixed tick, so a mid-tick frame never rebuilds one.
-## Level rows mirror the snapshot's level count — appended when a dig
-## completes, rebuilt only on the depth-shrinking reseed — so a live press
-## is never freed out from under a click. Live text (dig countdown, build
-## progress, benefit lines, eligibility) refreshes per refresh from the
-## read-only snapshot plus the static catalogue. No dig-price or
-## room-effects math lives here — the snapshot carries the Rust-computed
-## numbers.
+## Dynamic underground refresh, only while the panel is visible and gated by
+## the applied-tick counter plus session phase: the snapshot can only change
+## inside a fixed tick, so a mid-tick frame never hands the drawer a repeat.
 func _refresh_underground_panel() -> void:
 	_ug_last_tick = int(GrusBridge.sim_tick())
 	_ug_last_phase = _session_phase
-	var snap: Dictionary = GrusBridge.underground_snapshot()
-	_sync_underground_rows(snap)
-	_refresh_underground_header(snap)
-	_refresh_underground_kinds(snap)
-	_refresh_underground_slots(snap)
+	_ug_drawer.refresh(GrusBridge.underground_snapshot(), _session_phase)
 
-## Keep one row per snapshot level. Growth only ever appends (a level row
-## appears exactly when a dig completes), so existing slot buttons — and
-## any press in flight on them — are never freed mid-click. Depth shrinks
-## only through a match reseed, the one case that still rebuilds.
-func _sync_underground_rows(snap: Dictionary) -> void:
-	var levels: Array = snap.get("levels", [])
-	var rows := _underground_levels.get_child_count()
-	if levels.size() < rows:
-		for child in _underground_levels.get_children():
-			_underground_levels.remove_child(child)
-			child.queue_free()
-		rows = 0
-	for index in range(rows, levels.size()):
-		_add_underground_row(int(levels[index].get("level", index + 1)))
-
-func _add_underground_row(level_number: int) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 2)
-	var level_label := Label.new()
-	level_label.text = "L%d" % level_number
-	level_label.custom_minimum_size = Vector2(24, 48)
-	level_label.add_theme_font_size_override("font_size", 14)
-	row.add_child(level_label)
-	for slot_index in _ug_slots_per_level:
-		var button := Button.new()
-		button.add_theme_font_size_override("font_size", 13)
-		button.add_theme_color_override("font_disabled_color", Color(0.8, 0.8, 0.8))
-		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		button.custom_minimum_size = Vector2(84, 48)
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		button.pressed.connect(_on_slot_pressed.bind(level_number, slot_index))
-		row.add_child(button)
-	_underground_levels.add_child(row)
-
-func _refresh_underground_header(snap: Dictionary) -> void:
-	var depth := int(snap.get("depth", 0))
-	var target := int(snap.get("target", 1))
-	var cost_text := _ug_cost_text(snap.get("next_cost", {}))
-	var dig_line := ""
-	if bool(snap.get("excavating", false)):
-		dig_line = "Digging L%d · %d%% · %ds left" % [
-			target, roundi(float(snap.get("progress", 0.0)) * 100.0),
-			maxi(ceili(float(snap.get("remaining", 0.0))), 0)]
-	else:
-		dig_line = "Dig L%d · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
-	var lock_line := ""
-	if _session_phase == "Paused":
-		lock_line = "\nPaused — inspection only"
-	elif not _playing():
-		lock_line = "\n%s — inspection only" % _session_phase
-	_underground_header.text = "Underground — depth %d · Esc closes\n%s%s" % [
-		depth, dig_line, lock_line]
-	if bool(snap.get("excavating", false)):
-		_underground_excavate.disabled = true
-		_underground_excavate.text = "Digging L%d · %d%%" % [
-			target, roundi(float(snap.get("progress", 0.0)) * 100.0)]
-	else:
-		_underground_excavate.disabled = not _playing()
-		# The header line always carries the full price/time; the button keeps
-		# the terse form so deeper (longer) prices can never clip.
-		_underground_excavate.text = "Excavate L%d" % target
-
-## A kind Button becomes selectable once the completed depth reaches its
-## catalogue min_level; the pressed look marks the armed kind.
-func _refresh_underground_kinds(snap: Dictionary) -> void:
-	var depth := int(snap.get("depth", 0))
-	for index in _ug_kind_buttons.size():
-		var button := _ug_kind_buttons[index]
-		var min_level := int(_ug_rooms[index].get("min_level", 1))
-		button.disabled = depth < min_level
-		var name_label := button.get_node_or_null("KindLabel") as Label
-		if name_label != null:
-			var color_name := "font_disabled_color" if button.disabled else "font_color"
-			name_label.add_theme_color_override("font_color", button.get_theme_color(color_name))
-
-## Formats a cost dictionary carried by a snapshot or catalogue entry;
-## GDScript renders, Rust computes.
-func _ug_cost_text(cost: Dictionary) -> String:
-	var parts := PackedStringArray()
-	for resource in ["food", "scrap", "coal", "crystals"]:
-		var amount := int(cost.get(resource, 0))
-		if amount > 0:
-			parts.append("%d %s" % [amount, resource.capitalize()])
-	return " + ".join(parts)
-
-func _underground_display_name(kind: String) -> String:
-	return str(UNDERGROUND_DISPLAY_NAMES.get(kind, kind))
-
-## The full kind tooltip: catalogue name, cost, build time and the
-## Rust-computed effect line — straight off the static catalogue row,
-## never retyped here.
-func _ug_kind_tooltip(entry: Dictionary) -> String:
-	return "%s — Requires L%d\nCost: %s · Build: %ds\n%s" % [
-		str(entry.get("name", "")), int(entry.get("min_level", 1)), _ug_cost_text(entry),
-		int(entry.get("seconds", 0)), str(entry.get("effect", ""))]
-
-## Per-refresh slot update against the live snapshot and the armed kind:
-## empty slots act only with a kind armed, only on rows at or above its
-## min_level, and only while Playing; shallower rows stay disabled and say
-## why. Occupied/constructing slots are never actionable.
-func _refresh_underground_slots(snap: Dictionary) -> void:
-	var levels: Array = snap.get("levels", [])
-	var armed := _ug_armed_index >= 0 and _ug_armed_index < _ug_rooms.size()
-	var armed_entry: Dictionary = _ug_rooms[_ug_armed_index] if armed else {}
-	var armed_min := int(armed_entry.get("min_level", 1)) if armed else 0
-	for row_index in mini(_underground_levels.get_child_count(), levels.size()):
-		var row: Node = _underground_levels.get_child(row_index)
-		var level_number := int(levels[row_index].get("level", 0))
-		var slots: Array = levels[row_index].get("slots", [])
-		for slot_index in mini(_ug_slots_per_level, slots.size()):
-			var button := row.get_child(slot_index + 1) as Button
-			var slot: Dictionary = slots[slot_index]
-			var kind := str(slot.get("kind", ""))
-			if kind == "":
-				button.icon = null
-				if armed and level_number < armed_min:
-					button.text = "Requires\nL%d" % armed_min
-					button.tooltip_text = "%s requires L%d" % [
-						str(armed_entry.get("name", "")), armed_min]
-					button.disabled = true
-				elif armed:
-					button.text = "Empty"
-					button.tooltip_text = _ug_kind_tooltip(armed_entry)
-					button.disabled = not _playing()
-				else:
-					button.text = "Empty"
-					button.tooltip_text = "Arm a room kind above"
-					button.disabled = true
-				continue
-			var display := _underground_display_name(kind)
-			button.icon = _icon_for_kind("underground", kind)
-			if button.icon != null:
-				button.add_theme_constant_override("icon_max_width", 20)
-				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
-			if bool(slot.get("complete", false)):
-				button.text = "%s\n%s" % [display, str(slot.get("benefit", ""))]
-				button.tooltip_text = "%s — complete: %s" % [kind, str(slot.get("benefit", ""))]
-			else:
-				var progress := roundi(float(slot.get("progress", 0.0)) * 100.0)
-				button.text = "%s\n%d%%" % [display, progress]
-				button.tooltip_text = "%s — building, %ds left" % [
-					kind, maxi(ceili(float(slot.get("remaining", 0.0))), 0)]
-			button.disabled = true
-
-## Arming is the panel's only selection state: pressing a kind button arms
-## it (exclusively), pressing the armed one again disarms; slot eligibility
-## recomputes from the catalogue + snapshot on the next refresh.
-func _on_kind_toggled(pressed: bool, index: int) -> void:
+## The drawer owns arming and emits no arm signal; the controller observes
+## the already-created room-kind toggles only to keep its own status hint.
+func _on_underground_kind_toggled(pressed: bool, kind: String) -> void:
 	if pressed:
-		_ug_armed_index = index
-		for other in _ug_kind_buttons.size():
-			_ug_kind_buttons[other].set_pressed_no_signal(other == index)
-		command_status.text = "%s armed — click an eligible slot" % str(_ug_rooms[index].get("name", ""))
-	else:
-		_ug_armed_index = -1
-	_refresh_underground_panel()
+		command_status.text = "%s armed — click an eligible slot" % kind
 
-## One paid excavation — the same queued-command/feedback path as every
-## other order; the sim owns the single-dig rule and affordability.
-func _on_excavate_pressed() -> void:
+## One paid excavation intent from the drawer — the same queued-command/
+## feedback path as every other order; the sim owns the single-dig rule and
+## affordability.
+func _on_excavate_requested() -> void:
 	if not _playing():
 		command_status.text = "Match is not playing"
 		return
@@ -1313,17 +1036,13 @@ func _on_excavate_pressed() -> void:
 	else:
 		command_status.text = "Excavate rejected"
 
-## An eligible empty-slot click queues the armed kind at this 1-based level
-## and 0-based slot; disabled buttons never fire, and Rust revalidates
-## everything authoritatively.
-func _on_slot_pressed(level: int, slot: int) -> void:
-	if not _playing() or _ug_armed_index < 0 or _ug_armed_index >= _ug_rooms.size():
-		return
-	var kind := str(_ug_rooms[_ug_armed_index].get("name", ""))
-	if kind == "":
+## An eligible empty-slot intent carries the drawer-resolved kind with its
+## 1-based level and 0-based slot; Rust revalidates everything authoritatively.
+func _on_room_requested(level: int, slot: int, kind: String) -> void:
+	if not _playing() or kind == "":
 		return
 	if GrusBridge.build_room(level, slot, kind):
 		command_status.text = "%s queued (L%d slot %d)" % [
-			_underground_display_name(kind), level, slot + 1]
+			_ug_drawer.display_name(kind), level, slot + 1]
 	else:
 		command_status.text = "Room command rejected"
