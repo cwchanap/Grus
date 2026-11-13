@@ -227,8 +227,8 @@ func _queue_layout_error(sockets: Container, where: String) -> String:
 		return "%s queue row %s overlaps the status/portrait content" % [where, row]
 	var previous := Rect2()
 	var seen := false
-	for child in sockets.get_children():
-		var control := child as Control
+	for socket_index in sockets.get_child_count():
+		var control := sockets.get_child(socket_index) as Control
 		if control == null or not control.visible:
 			continue
 		var rect := control.get_global_rect()
@@ -249,6 +249,24 @@ func _queue_layout_error(sockets: Container, where: String) -> String:
 					where, control.name, icon.size if icon != null else Vector2.ZERO]
 			if not rect.encloses(icon.get_global_rect()):
 				return "%s socket %s icon escapes its socket" % [where, control.name]
+			if socket_index == 0:
+				var timer := control.get_node_or_null("Time") as Label
+				if timer == null:
+					return "%s queue head timer is missing" % where
+				var font_size := timer.get_theme_font_size("font_size")
+				if font_size < 14:
+					return "%s queue head timer font is below the 14 px floor: %d" % [
+						where, font_size]
+				var timer_rect := timer.get_global_rect()
+				if not rect.encloses(timer_rect):
+					return "%s queue head timer label escapes its socket: label=%s socket=%s" % [
+						where, timer_rect, rect]
+				if not timer.text.is_empty():
+					var text_size := SmokeHelpers.shaped_text_size(timer)
+					if text_size.x > timer_rect.size.x + 0.5 \
+							or text_size.y > timer_rect.size.y + 0.5:
+						return "%s queue head timer text does not fit its label: text=%s label=%s" % [
+							where, text_size, timer_rect.size]
 		elif control != overflow:
 			return "%s queue row has an unexpected visible child %s" % [where, control.name]
 	return ""
@@ -1186,11 +1204,17 @@ func _run() -> void:
 		return
 	var sockets := get_node("Main/HUD/SelectionPanel/QueueSockets") as Container
 	var overflow_chip := sockets.get_node_or_null("OverflowChip") as Label
-	if sockets == null or overflow_chip == null or sockets.get_child_count() != 6 \
-			or not overflow_chip.visible or overflow_chip.text != "+1":
+	if sockets == null or overflow_chip == null or sockets.get_child_count() != 6:
 		_fail("five-socket queue does not render its +1 overflow chip: sockets=%s chip=%s" % [
 			sockets.get_child_count() if sockets != null else -1,
 			overflow_chip.text if overflow_chip != null else "missing"])
+		return
+	# The chip is a per-frame projection of the bridge queue: let the HUD
+	# refresh catch up with the last enqueue before reading it.
+	if not await _wait_until(func(): return overflow_chip.visible and overflow_chip.text == "+1",
+			5.0, "five-socket queue does not render its +1 overflow chip",
+			func(): return "sockets=%d chip=%s" % [
+				sockets.get_child_count(), overflow_chip.text if overflow_chip.visible else "(hidden)"]):
 		return
 	var queue_layout_error := _queue_layout_error(sockets, "Research Center overflow")
 	if not queue_layout_error.is_empty():

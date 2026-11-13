@@ -393,14 +393,22 @@ func _build_queue_sockets() -> void:
 		time.name = "Time"
 		time.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		time.add_theme_font_size_override("font_size", 12)
+		# The head timer is the one live number in the row: the theme's bold
+		# condensed face at 16 px with a bright frost tint, still on the
+		# socket's own top-right corner like the approved mockup.
+		time.add_theme_font_override("font", selection_panel.get_theme_font("font", "Header"))
+		time.add_theme_font_size_override("font_size", 16)
+		time.add_theme_color_override("font_color", Color(0.93, 0.99, 1.0))
 		time.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.05, 0.95))
-		time.add_theme_constant_override("outline_size", 3)
+		time.add_theme_constant_override("outline_size", 4)
+		# Fixed box: the smoke measures the live text against it, so the timer
+		# can never silently grow over the socket artwork.
+		time.clip_text = true
 		time.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-		time.offset_left = -44.0
-		time.offset_top = 2.0
+		time.offset_left = -52.0
+		time.offset_top = 4.0
 		time.offset_right = -4.0
-		time.offset_bottom = 20.0
+		time.offset_bottom = 26.0
 		socket.add_child(time)
 		var progress := ProgressBar.new()
 		progress.name = "Progress"
