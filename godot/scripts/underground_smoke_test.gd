@@ -179,29 +179,62 @@ func _button_content_error(button: Button) -> String:
 	var plate := button.get_theme_stylebox("disabled" if button.disabled else "normal")
 	var font := button.get_theme_font("font")
 	var font_size := button.get_theme_font_size("font_size")
-	var text_width := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var text_width := _shaped_text_size(button.text, font, font_size).x
 	var icon_width := 0.0
 	if button.icon != null:
-		icon_width = button.icon.get_width()
+		var icon_size := button.icon.get_size()
 		var icon_max := float(button.get_theme_constant("icon_max_width"))
-		if icon_max > 0.0:
-			icon_width = minf(icon_width, icon_max)
-	var needed := icon_width + (float(button.get_theme_constant("h_separation")) if icon_width > 0.0 else 0.0) + text_width
+		if icon_max > 0.0 and icon_size.x > icon_max:
+			icon_size = Vector2(icon_max, icon_size.y * icon_max / icon_size.x)
+		icon_width = icon_size.round().x
+	var needed := icon_width + (maxf(float(button.get_theme_constant("h_separation")), 0.0) \
+			if button.icon != null else 0.0) + text_width
 	var available := button.size.x - float(plate.get_content_margin(SIDE_LEFT)) \
 			- float(plate.get_content_margin(SIDE_RIGHT))
 	if needed > available + 0.5:
 		return "icon+text need %.1f px but only %.1f px fit" % [needed, available]
 	return ""
 
-## The Button's own rendered text box: font metrics, the centring the Button
-## applies to its icon+text group, and the live style's content margins. The
-## whole Button rectangle says nothing about where its text actually lands.
+## Shaped text metrics from the same TextParagraph the engine draws with.
+func _shaped_text_size(text: String, font: Font, font_size: int) -> Vector2:
+	var paragraph := TextParagraph.new()
+	paragraph.set_break_flags(TextServer.BREAK_MANDATORY)
+	paragraph.set_direction(TextServer.DIRECTION_LTR)
+	paragraph.add_string(text, font, font_size, "")
+	return paragraph.get_size()
+
+## `_button_text_rect` models one supported Button layout only: a left icon
+## and centred, unwrapped, LTR text. Refuse to measure anything else rather
+## than silently returning a rectangle for settings the model does not cover.
+func _button_text_layout_error(button: Button) -> String:
+	if button.get_text_alignment() != HORIZONTAL_ALIGNMENT_CENTER:
+		return "Button text alignment is not centre"
+	if button.get_icon_alignment() != HORIZONTAL_ALIGNMENT_LEFT:
+		return "Button icon alignment is not left"
+	if button.get_vertical_icon_alignment() != VERTICAL_ALIGNMENT_CENTER:
+		return "Button icon vertical alignment is not centre"
+	if button.is_expand_icon():
+		return "Button expands its icon"
+	if button.get_autowrap_mode() != TextServer.AUTOWRAP_OFF:
+		return "Button wraps its text"
+	if button.get_theme_constant("line_spacing") != 0:
+		return "Button line spacing is non-zero"
+	if button.get_theme_constant("align_to_largest_stylebox") != 0:
+		return "Button aligns to its largest stylebox"
+	if button.is_layout_rtl() or button.get_text_direction() == Control.TEXT_DIRECTION_RTL:
+		return "Button lays out right-to-left"
+	if not button.get_language().is_empty():
+		return "Button overrides its shaping language"
+	return ""
+
+## The Button's own rendered text box for the layout validated above: style
+## margins, the rounded/fitted icon, h_separation, the shaped text size and the
+## renderer's centring formula. The whole Button rectangle says nothing about
+## where its text actually lands.
 func _button_text_rect(button: Button) -> Rect2:
 	var plate := button.get_theme_stylebox("disabled" if button.disabled else "normal")
-	var font := button.get_theme_font("font")
-	var font_size := button.get_theme_font_size("font_size")
-	var text_size := font.get_string_size(button.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-	var text_height := font.get_height(font_size)
+	var shaped := _shaped_text_size(button.text, button.get_theme_font("font"),
+		button.get_theme_font_size("font_size"))
 	var content := Rect2(
 		button.get_global_rect().position + Vector2(
 			plate.get_content_margin(SIDE_LEFT), plate.get_content_margin(SIDE_TOP)),
@@ -210,41 +243,46 @@ func _button_text_rect(button: Button) -> Rect2:
 			plate.get_content_margin(SIDE_TOP) + plate.get_content_margin(SIDE_BOTTOM)))
 	var icon_width := 0.0
 	if button.icon != null:
-		icon_width = button.icon.get_width()
+		var icon_size := button.icon.get_size()
 		var icon_max := float(button.get_theme_constant("icon_max_width"))
-		if icon_max > 0.0:
-			icon_width = minf(icon_width, icon_max)
-	var separation := float(button.get_theme_constant("h_separation")) if icon_width > 0.0 else 0.0
-	var group_width := icon_width + separation + text_size.x
+		if icon_max > 0.0 and icon_size.x > icon_max:
+			icon_size = Vector2(icon_max, icon_size.y * icon_max / icon_size.x)
+		icon_width = icon_size.round().x
+	var separation := maxf(float(button.get_theme_constant("h_separation")), 0.0) \
+		if button.icon != null else 0.0
+	var text_area_width := content.size.x - icon_width - separation
+	var text_buf_width := ceilf(maxf(1.0, text_area_width))
 	var text_position := Vector2(
-		content.position.x + (content.size.x - group_width) * 0.5 + icon_width + separation,
-		content.position.y + (content.size.y - text_height) * 0.5)
-	return Rect2(text_position, Vector2(text_size.x, text_height))
+		content.position.x + icon_width + separation + (text_area_width - text_buf_width) * 0.5 \
+			+ floor((text_buf_width - shaped.x) * 0.5),
+		content.position.y + (content.size.y - shaped.y) * 0.5)
+	return Rect2(text_position, shaped)
 
-## A Label's painted text box from its font metrics and alignment.
+## A Label's painted text box from its shaped size and alignment.
 func _label_text_rect(label: Label) -> Rect2:
-	var font := label.get_theme_font("font")
-	var font_size := label.get_theme_font_size("font_size")
-	var text_size := font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
-	var text_height := font.get_height(font_size)
+	var shaped := _shaped_text_size(label.text, label.get_theme_font("font"),
+		label.get_theme_font_size("font_size"))
 	var rect := label.get_global_rect()
 	var x := rect.position.x
 	if label.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER:
-		x += (rect.size.x - text_size.x) * 0.5
+		x += floor((rect.size.x - shaped.x) * 0.5)
 	elif label.horizontal_alignment == HORIZONTAL_ALIGNMENT_RIGHT:
-		x += rect.size.x - text_size.x
+		x += rect.size.x - shaped.x
 	var y := rect.position.y
 	if label.vertical_alignment == VERTICAL_ALIGNMENT_CENTER:
-		y += (rect.size.y - text_height) * 0.5
+		y += (rect.size.y - shaped.y) * 0.5
 	elif label.vertical_alignment == VERTICAL_ALIGNMENT_BOTTOM:
-		y += rect.size.y - text_height
-	return Rect2(Vector2(x, y), Vector2(text_size.x, text_height))
+		y += rect.size.y - shaped.y
+	return Rect2(Vector2(x, y), shaped)
 
 ## The occupied-slot presentation contract: the room name alone keeps the
 ## centre clear, the construction percentage lives in its top-right badge and
 ## a completed room keeps its snapshot benefit visible at the bottom. This is
 ## what the reviewer found missing behind the texture-path checks.
 func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> String:
+	var layout_error := _button_text_layout_error(button)
+	if not layout_error.is_empty():
+		return "%s: %s" % [where, layout_error]
 	var content_error := _button_content_error(button)
 	if not content_error.is_empty():
 		return "%s: %s" % [where, content_error]
@@ -1024,6 +1062,13 @@ func _run() -> void:
 	# Disarm the live Tap kind first so the synthetic row could never
 	# dispatch a room command even if a future regression leaves it
 	# unclipped; the journey's armed state is restored below.
+	# The probe and its optional captures run at the same 1x clock as the
+	# Analyze probe above: each frame_post_draw wait at 20x otherwise burns
+	# simulated prep seconds. The paid journey is over; 20x is restored before
+	# the margin guard and tail.
+	if not _check(GrusBridge.set_sim_speed(1.0), "could not slow the synthetic probe"):
+		return
+	await _settle()
 	await _click(_kind("GeothermalTap"))
 	if not _check(not _kind("GeothermalTap").button_pressed,
 			"deeper-row probe could not disarm the live Tap kind"):
@@ -1146,6 +1191,10 @@ func _run() -> void:
 	if not _check(_kind("GeothermalTap").button_pressed,
 			"deeper-row probe did not restore the armed Tap kind"):
 		return
+	if not _check(GrusBridge.set_sim_speed(20.0),
+			"could not restore the underground 20x clock"):
+		return
+	await _settle()
 	var final_stock := _stock()
 	# Expected totals rebuild from the recorded dig debits plus catalogue
 	# room/barracks prices — retuning changes both sides together.

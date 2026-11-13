@@ -232,6 +232,13 @@ func _add_row(level_number: int) -> void:
 	for slot_index in _slots_per_level:
 		var button := Button.new()
 		button.add_theme_font_size_override("font_size", 12)
+		# The smoke's actual-text guard measures exactly this layout: a left
+		# icon and centred, unwrapped LTR text. Keep it explicit so a later
+		# change cannot silently move the glyphs outside the measured rect.
+		button.alignment = HORIZONTAL_ALIGNMENT_CENTER
+		button.icon_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		button.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
+		button.expand_icon = false
 		button.add_theme_color_override("font_disabled_color", Color(0.92, 0.94, 0.96))
 		button.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		button.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
