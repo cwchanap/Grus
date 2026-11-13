@@ -902,6 +902,14 @@ func _run() -> void:
 			or session_backdrop.get_global_rect() != Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)):
 		_fail("Result backdrop does not cover the viewport: %s" % session_backdrop.get_global_rect())
 		return
+	# One shared backdrop alpha serves Pause and Result, capped at 0.55 so the
+	# real battlefield stays legible behind the outcome while the banner and
+	# title carry the hierarchy.
+	var session_dim := _main.get_node_or_null("HUD/SessionBackdrop/Dim") as ColorRect
+	if session_dim == null or not session_dim.visible or session_dim.color.a > 0.55:
+		_fail("Result dim is missing, hidden, or darker than the shared 0.55 cap: %s" % [
+			session_dim.color if session_dim != null else null])
+		return
 	var fog_error := SmokeHelpers.fog_clear_color_error(_main.get_node("Battlefield/FogOfWar"))
 	if not fog_error.is_empty():
 		_fail(fog_error)

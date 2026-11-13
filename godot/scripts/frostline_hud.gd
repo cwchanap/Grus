@@ -201,7 +201,7 @@ func _ready() -> void:
 	controls_label.add_theme_stylebox_override("normal", controls_strip)
 	start_button.add_theme_font_size_override("font_size", 22)
 	start_button.text = "START"
-	restart_button.add_theme_font_size_override("font_size", 20)
+	restart_button.add_theme_font_size_override("font_size", 22)
 	restart_button.text = "RESTART"
 	quit_button.add_theme_font_size_override("font_size", 18)
 	quit_button.text = "QUIT"
