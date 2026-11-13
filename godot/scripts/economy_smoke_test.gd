@@ -313,6 +313,30 @@ func _queue_painted_treatment_error(sockets: Container, filled: int, where: Stri
 				where, index + 1]
 	return ""
 
+## One-sample acceptance for the overflow capture. The bounded wait, the
+## capture gate and the focused regression all judge this same state; the
+## regression passes explicit selection/queue copies so stale, wrong-producer
+## and drained cases are rejected without touching gameplay.
+func _queue_overflow_projection_error(sockets: Container, chip: Label,
+		expected_building: int, selection: int, queue: Array) -> String:
+	if sockets == null or chip == null:
+		return "queue sockets or overflow chip are missing"
+	if selection != expected_building:
+		return "overflow projection selection %d is not the intended producer %d" % [
+			selection, expected_building]
+	if not sockets.is_visible_in_tree() or not chip.is_visible_in_tree():
+		return "queue row or overflow chip is not visible in tree"
+	if sockets.get_child_count() != 6:
+		return "queue row has %d children, not five sockets plus the chip" % sockets.get_child_count()
+	if queue.size() != 6:
+		return "overflow projection has %d queued jobs, not six" % queue.size()
+	for kind in queue:
+		if str(kind) != "Worker":
+			return "overflow projection is not a six-Worker queue: %s" % [queue]
+	if chip.text != "+1":
+		return "overflow chip reads %s, not +1" % chip.text
+	return ""
+
 func _fixture_views_settled() -> bool:
 	var units := get_tree().get_nodes_in_group("unit_views")
 	var buildings := get_tree().get_nodes_in_group("building_views")
@@ -1210,11 +1234,15 @@ func _run() -> void:
 			overflow_chip.text if overflow_chip != null else "missing"])
 		return
 	# The chip is a per-frame projection of the bridge queue: let the HUD
-	# refresh catch up with the last enqueue before reading it.
-	if not await _wait_until(func(): return overflow_chip.visible and overflow_chip.text == "+1",
-			5.0, "five-socket queue does not render its +1 overflow chip",
-			func(): return "sockets=%d chip=%s" % [
-				sockets.get_child_count(), overflow_chip.text if overflow_chip.visible else "(hidden)"]):
+	# refresh catch up, then require the intended producer selection, a
+	# visible row/chip, the current six-Worker snapshot and +1 in one sample.
+	var queue_main := get_node("Main") as Node3D
+	var queue_error := func() -> String:
+		return _queue_overflow_projection_error(sockets, overflow_chip, research_center_id,
+			int(queue_main.get("selected_building_id")), _training_queue(research_center_id))
+	if not await _wait_until(func(): return queue_error.call().is_empty(), 5.0,
+			"five-socket queue never showed the current six-Worker +1 projection",
+			queue_error):
 		return
 	var queue_layout_error := _queue_layout_error(sockets, "Research Center overflow")
 	if not queue_layout_error.is_empty():
@@ -1224,9 +1252,68 @@ func _run() -> void:
 	if not painted_error.is_empty():
 		_fail(painted_error)
 		return
-	var capture_error := await SmokeHelpers.capture_frame(get_tree(), "economy-queue-overflow")
+	# Re-check the same projection at the capture point so the frame cannot be
+	# certified from a historical six-job observation.
+	var capture_error := str(queue_error.call())
+	if not capture_error.is_empty():
+		_fail("queue overflow projection changed before capture: %s" % capture_error)
+		return
+	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-overflow")
 	if not capture_error.is_empty():
 		_fail(capture_error)
+		return
+	# Focused acceptance regression (presentation-only and synchronous, so no
+	# frame renders while the row/chip is altered): the live six-Worker row is
+	# accepted; a hidden row, hidden or stale chip, wrong-producer selection
+	# and a drained or non-Worker queue are rejected. The selection/queue
+	# arguments are copies from this sample; no gameplay or HUD data is
+	# fabricated on screen.
+	var live_selection := int(queue_main.get("selected_building_id"))
+	var live_queue: Array = _training_queue(research_center_id).duplicate()
+	var probe_error := str(queue_error.call())
+	if not probe_error.is_empty():
+		_fail("live six-Worker overflow projection was rejected: %s" % probe_error)
+		return
+	var sockets_visible := sockets.visible
+	sockets.visible = false
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	sockets.visible = sockets_visible
+	if not probe_error.contains("not visible in tree"):
+		_fail("hidden queue row did not fail the overflow projection: %s" % probe_error)
+		return
+	var chip_visible := overflow_chip.visible
+	overflow_chip.visible = false
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	overflow_chip.visible = chip_visible
+	if not probe_error.contains("not visible in tree"):
+		_fail("hidden overflow chip did not fail the overflow projection: %s" % probe_error)
+		return
+	var chip_text := overflow_chip.text
+	overflow_chip.text = "+0"
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue)
+	overflow_chip.text = chip_text
+	if not probe_error.contains("not +1"):
+		_fail("stale overflow chip did not fail the overflow projection: %s" % probe_error)
+		return
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection + 1, live_queue)
+	if not probe_error.contains("not the intended"):
+		_fail("wrong-producer selection did not fail the overflow projection: %s" % probe_error)
+		return
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, live_queue.slice(1))
+	if not probe_error.contains("not six"):
+		_fail("drained queue did not fail the overflow projection: %s" % probe_error)
+		return
+	var wrong_kind := live_queue.duplicate()
+	wrong_kind[0] = "Guard"
+	probe_error = _queue_overflow_projection_error(sockets, overflow_chip,
+		research_center_id, live_selection, wrong_kind)
+	if not probe_error.contains("six-Worker"):
+		_fail("non-Worker queue did not fail the overflow projection: %s" % probe_error)
 		return
 	var worker_icon := "res://assets/ui/icons/units/worker.png"
 	for socket_index in 5:
