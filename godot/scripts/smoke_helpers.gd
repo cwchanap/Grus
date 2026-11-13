@@ -98,6 +98,16 @@ static func world_triangles(view: Node3D) -> Array:
 				triangles.append(triangle)
 	return triangles
 
+## Shaped size of a Label's current text with its own theme font and size —
+## the measured text a fixed label rect must contain.
+static func shaped_text_size(label: Label) -> Vector2:
+	var paragraph := TextParagraph.new()
+	paragraph.set_break_flags(TextServer.BREAK_MANDATORY)
+	paragraph.set_direction(TextServer.DIRECTION_LTR)
+	paragraph.add_string(label.text, label.get_theme_font("font"),
+		label.get_theme_font_size("font_size"), "")
+	return paragraph.get_size()
+
 ## Clickable HUD rectangles from visible Controls with non-ignore mouse filter.
 static func hud_rects(hud_root: Node) -> Array[Rect2]:
 	var rects: Array[Rect2] = []
