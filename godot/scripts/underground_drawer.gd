@@ -51,15 +51,14 @@ var _kind_buttons: Array[Button] = []
 var _snapshot: Dictionary = {}
 var _phase := ""
 var _icon_cache: Dictionary = {}
-## Kind buttons paint the active theme's Tile styles; slot branches paint
-## dimmed, slim-edged copies of those same textures (see `_slot_plate`), so
-## every state reuses the approved mockup art without the wide square frame
-## competing with the room text. `_recessed` is the one hand-built flat square
-## for an unarmed empty slot (the same recess the production queue keeps for
-## its empties).
+## Kind buttons paint the active theme's Tile styles. Slot rows stay quiet:
+## only an occupied room keeps the painted steel frame, while locked and
+## actionable empties are flat plates with their own border weight and their
+## state text (`L3` + lock glyph / `Empty`). `_recessed` remains the unarmed
+## empty recess, matching the production queue's empties.
 var _tile_normal: StyleBox
-var _tile_selected: StyleBox
-var _tile_locked: StyleBox
+var _locked_plate := StyleBoxFlat.new()
+var _actionable_plate := StyleBoxFlat.new()
 var _recessed := StyleBoxFlat.new()
 
 func _ready() -> void:
@@ -67,8 +66,14 @@ func _ready() -> void:
 	var underground_catalogue: Dictionary = catalogue.get("underground", {})
 	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
 	_tile_normal = _slot_plate(get_theme_stylebox("normal", "Tile"), Color(0.72, 0.76, 0.8))
-	_tile_selected = _slot_plate(get_theme_stylebox("pressed", "Tile"))
-	_tile_locked = _slot_plate(get_theme_stylebox("disabled", "Tile"), Color(0.8, 0.8, 0.84))
+	_locked_plate.bg_color = Color(0.04, 0.05, 0.06, 0.94)
+	_locked_plate.border_color = Color(0.3, 0.32, 0.34, 0.85)
+	_locked_plate.set_border_width_all(1)
+	_locked_plate.set_corner_radius_all(5)
+	_actionable_plate.bg_color = Color(0.05, 0.12, 0.14, 0.92)
+	_actionable_plate.border_color = Color(0.35, 0.86, 0.94, 0.95)
+	_actionable_plate.set_border_width_all(2)
+	_actionable_plate.set_corner_radius_all(5)
 	_recessed.bg_color = Color(0.05, 0.07, 0.09, 0.92)
 	_recessed.border_color = Color(0.24, 0.3, 0.35, 0.8)
 	_recessed.set_border_width_all(1)
@@ -167,10 +172,10 @@ func _ready() -> void:
 		_excavate.icon = excavate_icon
 		_excavate.add_theme_constant_override("icon_max_width", 20)
 
-## Wide-slot copies of the active theme's Tile plates: the same texture path
-## and 9-slice frame, but a slimmer edge and a dimmed modulation so the square
-## artwork stretched across an 84 × 48 slot no longer competes with the room
-## name and benefit. Kind tiles keep the untouched theme plates.
+## Wide-slot copy of the active theme's steel Tile plate for occupied rooms:
+## same texture path and 9-slice frame, slimmer edge and dimmed modulation so
+## the square artwork stretched across an 84 × 48 slot no longer competes
+## with the room name and benefit. Kind tiles keep untouched theme plates.
 func _slot_plate(source: StyleBox, tint := Color.WHITE) -> StyleBox:
 	var plate := source.duplicate() as StyleBoxTexture
 	if plate == null:
@@ -387,13 +392,13 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 					if button.icon != null:
 						button.add_theme_constant_override("icon_max_width", 22)
 						button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.95))
-					_set_slot_plate(button, _tile_locked, "locked")
+					_set_slot_plate(button, _locked_plate, "locked")
 				elif armed:
 					button.text = "Empty"
 					button.tooltip_text = _kind_tooltip(armed_entry)
 					button.accessibility_name = "Empty slot"
 					button.disabled = not playing
-					_set_slot_plate(button, _tile_selected, "armed")
+					_set_slot_plate(button, _actionable_plate, "armed")
 				else:
 					button.text = "Empty"
 					button.tooltip_text = "Arm a room kind above"

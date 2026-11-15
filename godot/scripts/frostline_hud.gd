@@ -110,8 +110,21 @@ var _result_wave_text := ""
 var _result_research_text := ""
 var _result_population_text := ""
 var _result_crystals_text := ""
+## Pause owns a compact, centered card; Start and Result keep the scene's full
+## composition. The untouched rects are captured once so every non-Paused
+## phase restores them exactly.
+const PAUSE_CARD_SIZE := Vector2(360, 208)
+var _start_card_rect := Rect2()
+var _start_label_rect := Rect2()
+var _start_resume_rect := Rect2()
+var _start_label_font := 0
+var _pause_layout := false
 
 func _ready() -> void:
+	_start_card_rect = Rect2(session_panel.position, session_panel.size)
+	_start_label_rect = Rect2(session_label.position, session_label.size)
+	_start_resume_rect = Rect2(resume_button.position, resume_button.size)
+	_start_label_font = session_label.get_theme_font_size("font_size")
 	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
 	research_icon.texture = research_progress_icon
 	research_icon.visible = research_progress_icon != null
@@ -840,6 +853,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	var start := phase == "Start"
 	var paused := phase == "Paused"
 	var result := phase == "Result"
+	_apply_pause_card(paused)
 	session_panel.visible = not playing
 	session_backdrop.visible = not playing
 	# Result is a full-screen outcome composition: hide the in-match HUD so the
@@ -901,6 +915,33 @@ func refresh_session(phase: String, winner_team: int) -> void:
 		_:
 			# Playing: panel hidden.
 			pass
+
+## Centered Pause card: the Start card is 580 × 592 at its fixed top-left
+## offsets, so Paused would otherwise read as an oversized empty plate. Only
+## the panel and the two Paused children move; Resume keeps its connection,
+## wording and Esc path, and any other phase restores the captured rects.
+func _apply_pause_card(paused: bool) -> void:
+	if paused == _pause_layout:
+		return
+	_pause_layout = paused
+	if not paused:
+		session_panel.position = _start_card_rect.position
+		session_panel.size = _start_card_rect.size
+		session_label.position = _start_label_rect.position
+		session_label.size = _start_label_rect.size
+		session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		session_label.add_theme_font_size_override("font_size", _start_label_font)
+		resume_button.position = _start_resume_rect.position
+		resume_button.size = _start_resume_rect.size
+		return
+	session_panel.position = ((get_viewport().get_visible_rect().size - PAUSE_CARD_SIZE) * 0.5).floor()
+	session_panel.size = PAUSE_CARD_SIZE
+	session_label.position = Vector2(20.0, 38.0)
+	session_label.size = Vector2(PAUSE_CARD_SIZE.x - 40.0, 40.0)
+	session_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	session_label.add_theme_font_size_override("font_size", 26)
+	resume_button.position = Vector2(24.0, 112.0)
+	resume_button.size = Vector2(PAUSE_CARD_SIZE.x - 48.0, 60.0)
 
 func _icon_for_kind(group: String, kind: String) -> Texture2D:
 	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
