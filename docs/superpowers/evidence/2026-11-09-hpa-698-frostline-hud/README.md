@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+**Latest opening access and audio shutdown:** see [the 2026-11-15 access captures and verification](access-shutdown-2026-11-15/README.md).
+
 **Latest framing and command tiles:** see [the 2026-11-15 framing captures](framing-2026-11-15/README.md).
 
 **Command-hint contrast fix:** see [the fix-head armed-hint capture and comparison](command-status-2026-11-15/README.md).
