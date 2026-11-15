@@ -236,12 +236,10 @@ func _add_row(level_number: int) -> void:
 	for slot_index in _slots_per_level:
 		var button := Button.new()
 		button.add_theme_font_size_override("font_size", 13)
-		# The room name paints over the occupied room's painted frame; the dark
-		# outline alone still let the bright bevel through, so the name also
-		# carries a hard drop shadow.
-		button.add_theme_color_override("font_shadow_color", TEXT_OUTLINE)
-		button.add_theme_constant_override("shadow_offset_x", 1)
-		button.add_theme_constant_override("shadow_offset_y", 1)
+		# Button draws `outline_size` and `font_outline_color` (no shadow
+		# theme item exists for it): the name uses a 3 px dark edge over the
+		# painted frame instead of the previous 2 px override.
+		button.add_theme_constant_override("outline_size", 3)
 		# The smoke's actual-text guard measures exactly this layout: a left
 		# icon and centred, unwrapped LTR text. Keep it explicit so a later
 		# change cannot silently move the glyphs outside the measured rect.
@@ -251,7 +249,6 @@ func _add_row(level_number: int) -> void:
 		button.expand_icon = false
 		button.add_theme_color_override("font_disabled_color", Color(0.92, 0.94, 0.96))
 		button.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
-		button.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		button.custom_minimum_size = Vector2(84, 48)
 		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL

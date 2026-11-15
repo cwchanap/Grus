@@ -1159,6 +1159,16 @@ func _run() -> void:
 			or resume_button.get_theme_font_size("font_size") < 22:
 		_fail("Resume does not carry the shared bright primary action style")
 		return
+	# The shared plate is loud; the readable dark ink is Resume-specific, so
+	# the unchanged Start/Restart ink must still be the light theme value.
+	var resume_ink := resume_button.get_theme_color("font_color")
+	var start_ink := start_button.get_theme_color("font_color")
+	var restart_ink := restart_button.get_theme_color("font_color")
+	if resume_ink.get_luminance() >= 0.4 \
+			or start_ink != restart_ink or start_ink.get_luminance() < 0.7:
+		_fail("Resume ink or the Start/Restart ink was silently restyled: resume=%s start=%s" % [
+			resume_ink, start_ink])
+		return
 	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-start")
 	if not start_capture.is_empty():
 		_fail(start_capture)

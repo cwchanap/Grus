@@ -227,6 +227,20 @@ func _ready() -> void:
 	start_button.add_theme_font_size_override("font_size", 22)
 	start_button.text = "START"
 	resume_button.add_theme_font_size_override("font_size", 22)
+	# The bright primary plate needs dark ink; this is Resume-only so Start
+	# and Result keep their existing light-on-cyan text. Focus gets a thick
+	# white ring expanded outside the plate's cyan edge, so keyboard focus is
+	# spatially distinct rather than a recolouring of that edge.
+	for state in ["font_color", "font_hover_color", "font_pressed_color",
+			"font_hover_pressed_color", "font_focus_color"]:
+		resume_button.add_theme_color_override(state, Color(0.02, 0.05, 0.07))
+	var resume_focus := StyleBoxFlat.new()
+	resume_focus.draw_center = false
+	resume_focus.border_color = Color(0.98, 0.99, 1.0)
+	resume_focus.set_border_width_all(3)
+	resume_focus.set_corner_radius_all(7)
+	resume_focus.set_expand_margin_all(4.0)
+	resume_button.add_theme_stylebox_override("focus", resume_focus)
 	restart_button.add_theme_font_size_override("font_size", 22)
 	restart_button.text = "RESTART"
 	quit_button.add_theme_font_size_override("font_size", 18)
