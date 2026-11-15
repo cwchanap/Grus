@@ -1698,21 +1698,29 @@ func _run() -> void:
 				int(source.get_meta("resource_id", -1)), "; ".join(opening_clearance_report)])
 			return
 	# A real gather on each source proves the click reaches the world and Rust
-	# accepts it (not just that the point is uncovered). S then stops the last
-	# order so no gather task leaks into the later fixture and stockpile legs.
+	# acquires that exact source — an accepted Move (a pick miss) also reports
+	# "Command accepted", so the authoritative worker task must name the live
+	# source id. S then stops the last order so no gather task leaks into the
+	# later fixture and stockpile legs.
+	var opening_worker_id := int(framing_main.selected_ids[0])
 	for source in opening_safe_sources:
+		var source_id := int(source.get_meta("resource_id", -1))
 		var gather_revision := int(GrusBridge.command_feedback_revision())
 		_mouse_click(camera.unproject_position(source.global_position), MOUSE_BUTTON_RIGHT)
 		if not await _wait_until(_accepted_since.bind(gather_revision), 5.0,
 				"right-click on starting safe source %d was not accepted at the opening framing (screen %s)" % [
-					int(source.get_meta("resource_id", -1)),
-					camera.unproject_position(source.global_position)]):
+					source_id, camera.unproject_position(source.global_position)]):
+			return
+		if not await _wait_until(func():
+				return int(GrusBridge.unit_task_snapshot(opening_worker_id).get("source", -1)) == source_id,
+				5.0, "right-click on starting safe source %d was accepted but worker %d did not acquire it: %s" % [
+					source_id, opening_worker_id,
+					GrusBridge.unit_task_snapshot(opening_worker_id)]):
 			return
 	_key_tap(KEY_S)
-	var gather_worker_id := int(framing_main.selected_ids[0])
 	if not await _wait_until(func():
-			return str(GrusBridge.unit_task_snapshot(gather_worker_id).get("task", "")) == "Idle",
-			5.0, "the opening safe-source gather probe did not stop worker %d" % gather_worker_id):
+			return str(GrusBridge.unit_task_snapshot(opening_worker_id).get("task", "")) == "Idle",
+			5.0, "the opening safe-source gather probe did not stop worker %d" % opening_worker_id):
 		return
 	print("SMOKE_OPENING_SAFE_SOURCES %s" % " | ".join(opening_clearance_report))
 	var framing_clear := _clear_click_point(viewport_size, framing_main)
