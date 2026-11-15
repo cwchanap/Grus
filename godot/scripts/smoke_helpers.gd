@@ -98,6 +98,51 @@ static func world_triangles(view: Node3D) -> Array:
 				triangles.append(triangle)
 	return triangles
 
+## The pinned RichTextLabel parser reads `alt="..."` from an image's opening
+## tag and uses it as that ROLE_IMAGE's accessibility name. GDScript cannot
+## read the engine accessibility tree, so this checks the exact BBCode the
+## engine parses: every inline image must carry a non-empty alternative, and
+## `expected` pins the path-to-alternative vocabulary where the caller knows
+## it. No screen-reader behavior is claimed from this check.
+static func inline_image_alt_error(label: RichTextLabel, expected: Dictionary,
+		where := "RichTextLabel") -> String:
+	var text := label.text
+	var cursor := 0
+	var seen := {}
+	while true:
+		var open := text.find("[img", cursor)
+		if open == -1:
+			break
+		var close := text.find("]", open)
+		if close == -1:
+			return "%s has an unterminated image tag" % where
+		var tag := text.substr(open, close - open + 1)
+		var alt_marker := tag.find("alt=\"")
+		var alt := ""
+		if alt_marker >= 0:
+			var alt_end := tag.find("\"", alt_marker + 5)
+			if alt_end >= 0:
+				alt = tag.substr(alt_marker + 5, alt_end - alt_marker - 5)
+		var path_start := close + 1
+		var path_end := text.find("[", path_start)
+		if path_end == -1:
+			return "%s has an unterminated image element: %s" % [where, tag]
+		var image_path := text.substr(path_start, path_end - path_start).strip_edges()
+		if alt.is_empty():
+			return "%s image %s has no alt alternative: %s" % [where, image_path, tag]
+		if expected.has(image_path) and alt != str(expected[image_path]):
+			return "%s image %s has alt \"%s\", not the catalogue \"%s\"" % [
+				where, image_path, alt, expected[image_path]]
+		seen[image_path] = true
+		cursor = path_end
+	for image_path in expected:
+		if not seen.has(image_path):
+			return "%s is missing the expected image %s" % [where, image_path]
+	if seen.size() != expected.size():
+		return "%s has %d images with alternatives, expected %d" % [
+			where, seen.size(), expected.size()]
+	return ""
+
 ## Shaped size of a Label's current text with its own theme font and size —
 ## the measured text a fixed label rect must contain.
 static func shaped_text_size(label: Label) -> Vector2:

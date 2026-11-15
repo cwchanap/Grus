@@ -1053,6 +1053,18 @@ func _run() -> void:
 		if not result_stats.text.contains(expected):
 			_fail("Result bar statistics are not snapshot-derived (missing %s): %s" % [expected, result_stats.text])
 			return
+	# HPA-698 finding 1: the Result figures are icon-led, so each of the four
+	# inline images must carry the catalogue-worded alternative the pinned
+	# RichTextLabel parser exposes as that ROLE_IMAGE's accessible name.
+	var result_alt_error := SmokeHelpers.inline_image_alt_error(result_stats, {
+		"res://assets/ui/icons/status/wave_countdown.png": "Wave Countdown",
+		"res://assets/ui/icons/status/research_progress.png": "Research Progress",
+		"res://assets/ui/icons/status/population.png": "Population",
+		"res://assets/ui/icons/resources/crystals.png": "Crystals",
+	}, "ResultStats")
+	if not result_alt_error.is_empty():
+		_fail(result_alt_error)
+		return
 	# The outcome composition replaces the in-match HUD; no live gameplay
 	# control may sit exposed behind or beside the Result bar.
 	for path in ["HUD/EconomyPanel", "HUD/ResearchPanel", "HUD/SelectionPanel",

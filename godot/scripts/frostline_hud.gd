@@ -646,9 +646,11 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	var marker_parts := PackedStringArray()
 	for marker in _research_marker_entries:
 		var reached := points >= float(marker["points"])
-		marker_parts.append("[color=%s][img=14x14]%s[/img] %s %d[/color]" % [
+		# The marker emitter bypasses _inline_icon, so its catalogue label is
+		# the image alternative (the visible short form stays unchanged).
+		marker_parts.append("[color=%s][img=14x14 alt=\"%s\"]%s[/img] %s %d[/color]" % [
 			"#8fd18f" if reached else "#aab7c2",
-			marker["icon"], marker["short"], int(marker["points"])])
+			marker["label"], marker["icon"], marker["short"], int(marker["points"])])
 	research_markers.text = "  ".join(marker_parts)
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is
@@ -690,7 +692,7 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		var status := _task_text(unit_task)
 		selection_label.text = status if status != "" else "Ready"
 		_set_train_producer("")
-		queue_sockets.visible = false
+		_hide_queue()
 		var is_worker := kind == "Worker"
 		carry_bar.visible = is_worker
 		carry_label.visible = is_worker
@@ -712,7 +714,7 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 				break
 		health_bar.visible = false
 		health_label.visible = false
-		queue_sockets.visible = false
+		_hide_queue()
 		portrait_icon.texture = null
 		selection_panel.tooltip_text = ""
 		selection_name.text = "%s ×%d" % [common if common != "" else "Units", selected_ids.size()]
@@ -744,11 +746,11 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		if can_train and _producer_kinds.has(kind):
 			_render_queue(building)
 		else:
-			queue_sockets.visible = false
+			_hide_queue()
 		return
 	health_bar.visible = false
 	health_label.visible = false
-	queue_sockets.visible = false
+	_hide_queue()
 	portrait_icon.texture = null
 	selection_panel.tooltip_text = ""
 	selection_label.text = ""
@@ -813,6 +815,8 @@ func _render_queue(building: Dictionary) -> void:
 			# The head's timer chip must not linger as an empty rectangle.
 			time.visible = false
 			progress_bar.visible = false
+			# Neither may a finished job's accessible name linger.
+			panel.accessibility_name = ""
 			continue
 		var kind := str(queue[index])
 		var style := _socket_head_style if index == 0 else _socket_queued_style
@@ -820,20 +824,31 @@ func _render_queue(building: Dictionary) -> void:
 			panel.add_theme_stylebox_override("panel", style)
 		icon.texture = HudHelpers.icon_for_kind("units", kind)
 		time.visible = index == 0
+		# Icon-only row: each portrait names the live FIFO job it shows, and
+		# the head says its remaining seconds from the same progress readout.
 		if index == 0:
 			var remaining := maxi(ceili(float(building.get("queue_remaining", 0.0))), 0)
 			time.text = "%ds" % remaining
+			panel.accessibility_name = "Training %s — %ds remaining" % [kind, remaining]
 			icon.modulate = Color(1, 1, 1, 1)
 			progress_bar.max_value = 100.0
 			progress_bar.value = clampf(progress * 100.0, 0.0, 100.0)
 			progress_bar.visible = true
 		else:
 			time.text = ""
+			panel.accessibility_name = "Queued %s" % kind
 			icon.modulate = Color(0.75, 0.82, 0.88, 0.95)
 			progress_bar.visible = false
 	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
 	_queue_overflow.text = "+%d" % (queue.size() - QUEUE_SOCKET_COUNT)
 	queue_sockets.visible = true
+
+## The queue row only ever speaks for the currently selected producer, so
+## hiding it also drops the names of the previous producer's jobs.
+func _hide_queue() -> void:
+	queue_sockets.visible = false
+	for socket in _socket_panels:
+		socket.accessibility_name = ""
 
 ## Contextual train tiles: visible exactly when the selected building's
 ## catalogue producer matches the unit row. No selection hides the whole row.
@@ -995,6 +1010,13 @@ func _follow_pause_viewport() -> void:
 		session_panel.position = target
 
 
+## Every inline icon is an accessible image, never a bare glyph: the pinned
+## RichTextLabel parser uses the tag's `alt` as that ROLE_IMAGE's name, and
+## the catalogue kind humanised is already the word the icon stands for
+## ("Population", "Surface Cold"). Art, size and visible text are unchanged.
 func _inline_icon(group: String, kind: String, size := 18) -> String:
 	var icon := HudHelpers.icon_for_kind(group, kind)
-	return "[img=%dx%d]%s[/img] " % [size, size, icon.resource_path] if icon != null else ""
+	if icon == null:
+		return ""
+	return "[img=%dx%d alt=\"%s\"]%s[/img] " % [
+		size, size, kind.capitalize(), icon.resource_path]
