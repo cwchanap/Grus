@@ -2099,4 +2099,5 @@ func _run() -> void:
 		REJECT_INSUFFICIENT,
 		Time.get_ticks_msec() - _start_ms,
 	])
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()
