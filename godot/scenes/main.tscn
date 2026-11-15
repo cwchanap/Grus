@@ -76,7 +76,7 @@ rotation_degrees = Vector3(-55, -25, 0)
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
-position = Vector3(64, 65, 95)
+position = Vector3(65, 65, 94.8)
 rotation_degrees = Vector3(-54, 0, 0)
 projection = 1
 size = 54.0
@@ -190,17 +190,17 @@ text = "ECS bridge initializing…"
 
 [node name="WavePanel" type="Panel" parent="HUD"]
 offset_left = 10.0
-offset_top = 64.0
+offset_top = 120.0
 offset_right = 368.0
-offset_bottom = 148.0
+offset_bottom = 204.0
 tooltip_text = "Wave prep, live aliens and the next wave countdown"
 
 [node name="WaveRing" type="Control" parent="HUD"]
 layout_mode = 0
 offset_left = 24.0
-offset_top = 76.0
+offset_top = 132.0
 offset_right = 80.0
-offset_bottom = 132.0
+offset_bottom = 188.0
 mouse_filter = 2
 script = ExtResource("9_wave_ring")
 
@@ -216,9 +216,9 @@ stretch_mode = 5
 
 [node name="WaveLabel" type="RichTextLabel" parent="HUD"]
 offset_left = 88.0
-offset_top = 70.0
+offset_top = 126.0
 offset_right = 358.0
-offset_bottom = 148.0
+offset_bottom = 204.0
 mouse_filter = 2
 theme_override_font_sizes/normal_font_size = 15
 bbcode_enabled = true

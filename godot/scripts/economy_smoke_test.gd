@@ -67,6 +67,10 @@ func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
 	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
 
 var _camera: Camera3D
+## The authored opening framing, captured at boot so the HPA-698 clearance
+## probes prove they ran on the default view (no earlier zoom or pan).
+var _authored_camera_transform := Transform3D()
+var _authored_camera_size := 0.0
 var _start_ms := 0
 var _building_ids := {}
 ## Test-only failure injection for the staging interaction. Production paths
@@ -151,10 +155,11 @@ func _click_world(point: Vector2, button: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-## HPA-698: the closer authored framing can put a far world target behind a
-## HUD card (the northwest corridor sits under the wave prep card). A real
-## wheel zoom-out restores the former coverage for that one click, then the
-## authored framing returns. The target, the click and the command path are
+## The far northwest expansion salvage boots behind the top bar at the
+## authored framing. This real wheel zoom-out restores the former coverage
+## for that one fog-revealed gather click, then the authored framing returns.
+## It is not used for the opening scout/Depot targets, which clear the HUD by
+## at least 8 px on the default view; the target, click and command path are
 ## unchanged — no camera pan, no direct gameplay write.
 func _click_visible(world_point: Vector3, button: int) -> void:
 	var authored_size: float = await SmokeHelpers.zoom_until_visible(
@@ -173,9 +178,6 @@ func _click_view_visible(view: Node3D, button: int, fog_settle := false) -> void
 	await _click_visible(view.global_position, button)
 	if fog_settle:
 		await get_tree().process_frame
-
-func _click_world_visible(point: Vector2, button: int) -> void:
-	await _click_visible(Vector3(point.x + 0.25, 0.0, point.y + 0.25), button)
 
 func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
@@ -856,6 +858,8 @@ func _run() -> void:
 		_fail("economy smoke viewport did not resize to project baseline: %s" % viewport_size)
 		return
 	_camera = get_node("Main/Camera3D") as Camera3D
+	_authored_camera_transform = _camera.global_transform
+	_authored_camera_size = _camera.size
 
 	if not GrusBridge.set_sim_speed(20.0):
 		_fail("failed to accelerate Bevy virtual time")
@@ -1243,8 +1247,29 @@ func _run() -> void:
 	# footprints and gather requires explored sources, so scout the corridor
 	# first. The expansion salvage's view becoming visible is the explored
 	# proof (views are the presentation projection of the sim fog).
+	#
+	# HPA-698 opening access: both clicks below stay on the authored default
+	# view. Each real click point must clear every visible HUD surface by at
+	# least 8 px, so the corridor is reachable without a test-only wheel zoom.
+	var scout_point := Vector3(38.25, 0.0, 24.25)
+	var depot_point := Vector3(DEPOT_ANCHOR.x + 0.25, 0.0, DEPOT_ANCHOR.y + 0.25)
+	if not _camera.global_transform.is_equal_approx(_authored_camera_transform) \
+			or not is_equal_approx(_camera.size, _authored_camera_size):
+		_fail("opening accessibility probes are not on the authored camera framing: pos=%s size=%.1f" % [
+			_camera.global_transform.origin, _camera.size])
+		return
+	var opening_clearances := PackedStringArray()
+	for probe in [["northwest scout", scout_point], ["Depot placement", depot_point]]:
+		var clearance: float = SmokeHelpers.default_view_clearance(
+			_camera, get_node("Main/HUD"), probe[1])
+		opening_clearances.append("%s=%.2f" % [str(probe[0]).replace(" ", "_"), clearance])
+		if clearance < 8.0:
+			_fail("opening %s click point %s has %.1f px HUD clearance at the default view, need 8" % [
+				probe[0], probe[1], clearance])
+			return
+	print("GRUS_ECONOMY_OPENING_CLEARANCE %s" % " ".join(opening_clearances))
 	await _click_view(builder, MOUSE_BUTTON_LEFT)
-	await _click_world_visible(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
+	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(
 			func(): return _resource_view(FAR_SALVAGE_ID) != null \
 					and (_resource_view(FAR_SALVAGE_ID) as Node3D).is_visible_in_tree(),
