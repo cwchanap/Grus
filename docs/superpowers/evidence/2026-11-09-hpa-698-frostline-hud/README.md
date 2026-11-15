@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+**Latest framing and command tiles:** see [the 2026-11-15 framing captures](framing-2026-11-15/README.md).
+
 **Latest primary-action contrast:** see [the fix-head 2026-11-15 captures](primary-contrast-2026-11-15/README.md).
 
 **Latest contrast pass:** see [the 2026-11-15 contrast captures](contrast-2026-11-15/README.md).
