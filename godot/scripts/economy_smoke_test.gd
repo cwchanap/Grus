@@ -271,25 +271,43 @@ func _queue_layout_error(sockets: Container, where: String) -> String:
 			return "%s queue row has an unexpected visible child %s" % [where, control.name]
 	return ""
 
-## Painted queue treatment: queued sockets reuse the theme's square Tile
-## normal plate and the head its pressed plate, read from the active theme so
-## the expected texture paths are never copied here. Empty sockets keep the
-## recessed flat square (the round socket.png is not a queue bezel). The
-## painted plate must not resize the sockets: their 64x64 floor and the
-## queue row's bounds stay the ones the test last validated.
-func _queue_painted_treatment_error(sockets: Container, filled: int, where: String) -> String:
+## Queue separation: the active portrait owns its own cell — a flat plate with
+## a bright cyan border, a wider footprint and a dark timer backing — instead
+## of one more painted queued frame. Queued jobs keep the theme's square Tile
+## normal plate, read from the active theme so its texture path is never
+## copied here, and empty sockets keep the recessed flat square (the round
+## socket.png is not a queue bezel). Either plate must leave the sockets'
+## 64x64 floor and the queue row's bounds as the layout check validated.
+func _queue_separation_error(sockets: Container, filled: int, where: String) -> String:
 	if sockets == null:
 		return "%s queue sockets are missing" % where
 	var hud := get_node("Main/HUD/SelectionPanel") as Control
 	var tile_normal := hud.get_theme_stylebox("normal", "Tile")
-	var tile_pressed := hud.get_theme_stylebox("pressed", "Tile")
-	if not tile_normal is StyleBoxTexture or not tile_pressed is StyleBoxTexture:
-		return "%s theme Tile normal/pressed styles are not textures" % where
+	if not tile_normal is StyleBoxTexture:
+		return "%s theme Tile normal style is not a texture" % where
 	var normal_path := (tile_normal as StyleBoxTexture).texture.resource_path
-	var pressed_path := (tile_pressed as StyleBoxTexture).texture.resource_path
-	if normal_path.is_empty() or pressed_path.is_empty() or normal_path == pressed_path:
-		return "%s theme Tile normal/pressed styles have no distinct texture paths: %s %s" % [
-			where, normal_path, pressed_path]
+	if normal_path.is_empty():
+		return "%s theme Tile normal style has no texture path" % where
+	var head := sockets.get_child(0) as Panel
+	if head == null:
+		return "%s active queue portrait is not a Panel" % where
+	var head_style := head.get_theme_stylebox("panel")
+	if not head_style is StyleBoxFlat:
+		return "%s active queue portrait does not own a flat plate: %s" % [where, head_style]
+	var head_plate := head_style as StyleBoxFlat
+	if head_plate.border_width_left < 2 or head_plate.border_width_top < 2 \
+			or head_plate.border_color.b < 0.9 or head_plate.border_color.g < 0.6 \
+			or head_plate.border_color.r > 0.6:
+		return "%s active queue plate has no bright cyan border: %s" % [
+			where, head_plate.border_color]
+	var timer := head.get_node_or_null("Time") as Label
+	if timer == null:
+		return "%s active queue portrait timer is missing" % where
+	var timer_backing := timer.get_theme_stylebox("normal") as StyleBoxFlat
+	if timer_backing == null or timer_backing.bg_color.a < 0.6 \
+			or timer_backing.bg_color.get_luminance() > 0.25:
+		return "%s active queue timer has no dark backing chip: %s" % [
+			where, timer_backing.bg_color if timer_backing != null else null]
 	var row := sockets.get_global_rect()
 	for index in 5:
 		var panel := sockets.get_child(index) as Panel
@@ -302,15 +320,18 @@ func _queue_painted_treatment_error(sockets: Container, filled: int, where: Stri
 			return "%s socket %d bounds grew with its plate: min %s, floor %s" % [
 				where, index + 1, panel.get_combined_minimum_size(), panel.custom_minimum_size]
 		var style := panel.get_theme_stylebox("panel")
-		if index < filled:
-			var expected := pressed_path if index == 0 else normal_path
+		if index < filled and index > 0:
 			if not style is StyleBoxTexture \
-					or (style as StyleBoxTexture).texture.resource_path != expected:
-				return "%s socket %d does not carry the theme Tile %s plate %s" % [
-					where, index + 1, "pressed" if index == 0 else "normal", expected]
-		elif style is StyleBoxTexture:
+					or (style as StyleBoxTexture).texture.resource_path != normal_path:
+				return "%s queued socket %d does not carry the theme Tile normal plate %s" % [
+					where, index + 1, normal_path]
+		elif index >= filled and style is StyleBoxTexture:
 			return "%s empty socket %d carries a painted plate instead of the recessed square" % [
 				where, index + 1]
+	var queued := sockets.get_child(1) as Panel
+	if queued == null or head.custom_minimum_size.x <= queued.custom_minimum_size.x:
+		return "%s active queue portrait is not wider than a queued socket: %s vs %s" % [
+			where, head.custom_minimum_size, queued.custom_minimum_size if queued != null else Vector2.ZERO]
 	return ""
 
 ## One-sample acceptance for the overflow capture. The bounded wait, the
@@ -1251,7 +1272,7 @@ func _run() -> void:
 	if not queue_layout_error.is_empty():
 		_fail(queue_layout_error)
 		return
-	var painted_error := _queue_painted_treatment_error(sockets, 5, "Research Center overflow")
+	var painted_error := _queue_separation_error(sockets, 5, "Research Center overflow")
 	if not painted_error.is_empty():
 		_fail(painted_error)
 		return
@@ -1667,7 +1688,7 @@ func _run() -> void:
 	if not queue_layout_error.is_empty():
 		_fail(queue_layout_error)
 		return
-	painted_error = _queue_painted_treatment_error(sockets, 2, "Barracks FIFO")
+	painted_error = _queue_separation_error(sockets, 2, "Barracks FIFO")
 	if not painted_error.is_empty():
 		_fail(painted_error)
 		return

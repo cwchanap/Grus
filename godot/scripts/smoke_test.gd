@@ -27,16 +27,6 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
-## The shaped bounds of a Label's text with its mandatory line breaks — the
-## same TextParagraph the renderer draws with, not the control's grown size.
-func _shaped_label_size(label: Label) -> Vector2:
-	var paragraph := TextParagraph.new()
-	paragraph.set_break_flags(TextServer.BREAK_MANDATORY)
-	paragraph.set_direction(TextServer.DIRECTION_LTR)
-	paragraph.add_string(label.text, label.get_theme_font("font"),
-		label.get_theme_font_size("font_size"), "")
-	return paragraph.get_size()
-
 func _modifier_event(keycode: int, pressed: bool) -> void:
 	var event := InputEventKey.new()
 	event.keycode = keycode
@@ -976,22 +966,40 @@ func _run() -> void:
 	if str(boot_session.get("phase", "")) != "Start":
 		_fail("skirmish boot session is not Start: %s" % [boot_session])
 		return
-	# First-run controls aid: the Start overlay must surface the controls label
-	# before gameplay opens. Tokens match case-insensitively against the label's
-	# own text; A/S must appear as standalone words, not substrings.
-	var controls_label := get_node("Main/HUD/SessionPanel/ControlsLabel") as Label
-	if controls_label == null or not controls_label.is_visible_in_tree():
+	# First-run controls aid: the Start overlay must surface the controls strip
+	# before gameplay opens. The strip renders the shipped mouse/action cues
+	# inline, so it is a RichTextLabel whose parsed text still carries every
+	# instruction; tokens match case-insensitively against that text and A/S
+	# must appear as standalone words, not substrings.
+	var controls_node := get_node_or_null("Main/HUD/SessionPanel/ControlsLabel") as Control
+	if controls_node == null or not controls_node.is_visible_in_tree():
 		_fail("HUD/SessionPanel/ControlsLabel is missing or not visible before Start")
 		return
-	var controls_text := controls_label.text.to_lower()
+	if not controls_node is RichTextLabel:
+		_fail("ControlsLabel does not carry the existing control cues as a RichTextLabel: %s" % [
+			controls_node.get_class()])
+		return
+	var controls_label := controls_node as RichTextLabel
+	var controls_text := controls_label.get_parsed_text().to_lower()
 	for token in ["right click", "minimap", "esc"]:
 		if not controls_text.contains(token):
-			_fail("ControlsLabel is missing '%s': %s" % [token, controls_label.text])
+			_fail("ControlsLabel is missing '%s': %s" % [token, controls_label.get_parsed_text()])
 			return
 	var control_words := controls_text.replace("\n", " ").split(" ", false)
 	for token in ["a", "s"]:
 		if not token in control_words:
-			_fail("ControlsLabel is missing standalone token '%s': %s" % [token, controls_label.text])
+			_fail("ControlsLabel is missing standalone token '%s': %s" % [
+				token, controls_label.get_parsed_text()])
+			return
+	if not controls_label.bbcode_enabled:
+		_fail("ControlsLabel does not render its inline control cues")
+		return
+	for cue_path in ["res://assets/ui/icons/status/mouse_left.png",
+			"res://assets/ui/icons/status/mouse_right.png",
+			"res://assets/ui/icons/status/mouse_wheel.png",
+			"res://assets/ui/icons/actions/pause.png"]:
+		if not controls_label.text.contains(cue_path):
+			_fail("ControlsLabel lost the existing control cue %s" % cue_path)
 			return
 	# HPA-698 Start key art, emblem and noninteractive atmosphere: the
 	# backdrop is visible outside Playing, every decorative overlay uses
@@ -1068,17 +1076,22 @@ func _run() -> void:
 		_fail("ControlsLabel is not a horizontal strip: %s" % controls_label.get_global_rect())
 		return
 	# The documented instructions must stay legible and fully inside their
-	# painted strip: a 13 px floor plus the shaped text (mandatory breaks)
-	# against the strip's own content area.
-	if controls_label.get_theme_font_size("font_size") < 13:
+	# painted strip: a 13 px floor plus the RichTextLabel's own two-line
+	# layout (inline cue images included, no wrapping) against the strip's
+	# content area. An empty or hidden strip cannot measure as content.
+	if controls_label.get_theme_font_size("normal_font_size") < 13:
 		_fail("ControlsLabel font is below the 13 px legibility floor: %d" % [
-			controls_label.get_theme_font_size("font_size")])
+			controls_label.get_theme_font_size("normal_font_size")])
 		return
 	var controls_style := controls_label.get_theme_stylebox("normal") as StyleBox
 	if controls_style == null:
 		_fail("ControlsLabel has no painted strip stylebox")
 		return
-	var controls_text_size := _shaped_label_size(controls_label)
+	var controls_text_size := Vector2(
+		controls_label.get_content_width(), controls_label.get_content_height())
+	if controls_text_size.x < 600.0 or controls_text_size.y < 24.0:
+		_fail("ControlsLabel did not measure its two instruction lines: %s" % controls_text_size)
+		return
 	var controls_region := controls_label.get_global_rect().size - Vector2(
 		controls_style.get_content_margin(SIDE_LEFT) + controls_style.get_content_margin(SIDE_RIGHT),
 		controls_style.get_content_margin(SIDE_TOP) + controls_style.get_content_margin(SIDE_BOTTOM))
