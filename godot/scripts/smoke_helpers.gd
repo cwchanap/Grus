@@ -143,6 +143,50 @@ static func inline_image_alt_error(label: RichTextLabel, expected: Dictionary,
 			where, seen.size(), expected.size()]
 	return ""
 
+## The bright primary plate reads only with dark ink: every reachable
+## interactive state of Start/Resume/Restart must clear ordinary-text
+## contrast on that plate, and focus must be a thick ring expanded outside the
+## plate rather than a recolouring of its own cyan edge. Labels, wording,
+## geometry and commands stay the caller's contract.
+static func primary_ink_focus_error(buttons: Array, where: String) -> String:
+	for entry in buttons:
+		var button := entry as Button
+		var plate := button.get_theme_stylebox("normal") as StyleBoxFlat
+		if plate == null:
+			return "%s: %s has no primary plate" % [where, button.text]
+		for state in ["font_color", "font_hover_color", "font_pressed_color",
+				"font_focus_color"]:
+			var ratio := contrast_ratio(button.get_theme_color(state), plate.bg_color)
+			if ratio < 4.5:
+				return "%s: %s %s contrast on the primary plate is %.2f:1" % [
+					where, button.text, state, ratio]
+		var focus := button.get_theme_stylebox("focus") as StyleBoxFlat
+		if focus == null or focus.draw_center \
+				or focus.border_width_left < 3 or focus.border_width_top < 3 \
+				or focus.border_width_right < 3 or focus.border_width_bottom < 3:
+			return "%s: %s focus is not a thick outline: %s" % [where, button.text, focus]
+		for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+			if focus.get_expand_margin(side) < 2.0:
+				return "%s: %s focus does not expand outside the primary plate" % [
+					where, button.text]
+		var ring := contrast_ratio(focus.border_color, Color(0.05, 0.07, 0.09))
+		if ring < 4.5:
+			return "%s: %s focus ring contrast is %.2f:1" % [where, button.text, ring]
+	return ""
+
+## Reference sRGB contrast for the two colours the renderer actually draws.
+static func contrast_ratio(a: Color, b: Color) -> float:
+	var la := linear_luminance(a)
+	var lb := linear_luminance(b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+static func linear_luminance(color: Color) -> float:
+	return 0.2126 * linear_channel(color.r) \
+			+ 0.7152 * linear_channel(color.g) + 0.0722 * linear_channel(color.b)
+
+static func linear_channel(value: float) -> float:
+	return value / 12.92 if value <= 0.04045 else pow((value + 0.055) / 1.055, 2.4)
+
 ## Shaped size of a Label's current text with its own theme font and size —
 ## the measured text a fixed label rect must contain.
 static func shaped_text_size(label: Label) -> Vector2:

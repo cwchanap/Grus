@@ -1159,15 +1159,13 @@ func _run() -> void:
 			or resume_button.get_theme_font_size("font_size") < 22:
 		_fail("Resume does not carry the shared bright primary action style")
 		return
-	# The shared plate is loud; the readable dark ink is Resume-specific, so
-	# the unchanged Start/Restart ink must still be the light theme value.
-	var resume_ink := resume_button.get_theme_color("font_color")
-	var start_ink := start_button.get_theme_color("font_color")
-	var restart_ink := restart_button.get_theme_color("font_color")
-	if resume_ink.get_luminance() >= 0.4 \
-			or start_ink != restart_ink or start_ink.get_luminance() < 0.7:
-		_fail("Resume ink or the Start/Restart ink was silently restyled: resume=%s start=%s" % [
-			resume_ink, start_ink])
+	# The shared plate is loud, so every primary action must carry the readable
+	# dark ink and a distinct outside focus ring — the real Start screen is
+	# where the boot-time label has to hold up.
+	var primary_error := SmokeHelpers.primary_ink_focus_error(
+		[start_button, resume_button, restart_button], "Start")
+	if not primary_error.is_empty():
+		_fail(primary_error)
 		return
 	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-start")
 	if not start_capture.is_empty():
