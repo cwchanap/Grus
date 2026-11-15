@@ -79,7 +79,7 @@ shadow_enabled = true
 position = Vector3(64, 65, 95)
 rotation_degrees = Vector3(-54, 0, 0)
 projection = 1
-size = 72.0
+size = 54.0
 current = true
 
 [node name="PlacementPreview" type="MeshInstance3D" parent="."]
