@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+**Latest contrast pass:** see [the 2026-11-15 contrast captures](contrast-2026-11-15/README.md).
+
 **Accessibility follow-up:** see [the fix-head verification and captures](accessibility-2026-11-15/README.md), including later rendered-capture timeouts.
 
 **Latest visual polish:** see [the 2026-11-15 captures and comparison](visual-polish-2026-11-15/README.md). Earlier sections document previous heads.
