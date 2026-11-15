@@ -213,12 +213,13 @@ func _paused_resize_error(target: Vector2i) -> String:
 func _button(path: String) -> Button:
 	return _main.get_node(path) as Button
 
-## Prominent Resume: the Paused action must carry the same bright primary
-## plate and 22 px label as Start/Restart, while keeping its node, wording,
-## connection, geometry and Esc path untouched. Its ink must stay readable on
-## that plate in every interactive state, and focus must be a spatially
-## distinct high-contrast ring rather than a recoloured edge.
-func _paused_primary_action_error() -> String:
+## Prominent primary actions: Paused Resume draws the same bright plate and
+## 22 px label as Start/Restart, and the one shared treatment must keep every
+## action's ink readable in each interactive state with a spatially distinct
+## high-contrast focus ring rather than a recoloured edge. Nodes, wording,
+## connections, geometry and Esc paths stay untouched. Called at Paused and
+## again at the genuine alien Defeat screen, where Restart is the live action.
+func _primary_action_error() -> String:
 	var start := _button("HUD/SessionPanel/StartButton")
 	var resume := _button("HUD/SessionPanel/ResumeButton")
 	var restart := _button("HUD/SessionPanel/RestartButton")
@@ -239,46 +240,17 @@ func _paused_primary_action_error() -> String:
 		return "Resume label is below the 22 px primary-action floor: %d" % [
 			resume.get_theme_font_size("font_size")]
 	# Resume is visible only while enabled, so disabled ink is not applicable;
-	# every reachable interactive state must stay above ordinary-text contrast.
-	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
-		var ink := resume.get_theme_color(state)
-		var ratio := _contrast_ratio(ink, resume_style.bg_color)
-		if ratio < 4.5:
-			return "Resume %s contrast on the primary plate is %.2f:1" % [state, ratio]
-	var focus := resume.get_theme_stylebox("focus") as StyleBoxFlat
-	if focus == null or focus.draw_center \
-			or focus.border_width_left < 3 or focus.border_width_top < 3 \
-			or focus.border_width_right < 3 or focus.border_width_bottom < 3:
-		return "Resume focus is not a thick outline: %s" % focus
-	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
-		if focus.get_expand_margin(side) < 2.0:
-			return "Resume focus does not expand outside the primary plate"
-	var focus_ratio := _contrast_ratio(focus.border_color, Color(0.05, 0.07, 0.09))
-	if focus_ratio < 4.5:
-		return "Resume focus ring contrast is %.2f:1" % focus_ratio
-	return ""
+	# every reachable interactive state of all three actions must stay above
+	# ordinary-text contrast.
+	return SmokeHelpers.primary_ink_focus_error([start, resume, restart], "primary action")
 
 ## Test-only focus set-up: the global Tab handler owns focus navigation, so
-## the real-keyboard leg focuses Resume directly and then activates it with a
-## real Enter. Returns "" only when the viewport focus is actually on Resume.
-func _paused_focus_error() -> String:
-	var resume := _button("HUD/SessionPanel/ResumeButton")
-	if not resume.has_focus() or get_viewport().gui_get_focus_owner() != resume:
-		return "Resume did not receive keyboard focus"
+## these legs focus a primary action directly and then activate it with a real
+## key or click. Returns "" only when the viewport focus is actually on it.
+func _focus_error(button: Button, what: String) -> String:
+	if not button.has_focus() or get_viewport().gui_get_focus_owner() != button:
+		return "%s did not receive keyboard focus" % what
 	return ""
-
-## Reference sRGB contrast for the two colours the renderer actually draws.
-func _contrast_ratio(a: Color, b: Color) -> float:
-	var la := _linear_luminance(a)
-	var lb := _linear_luminance(b)
-	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
-
-func _linear_luminance(color: Color) -> float:
-	return 0.2126 * _linear_channel(color.r) \
-			+ 0.7152 * _linear_channel(color.g) + 0.0722 * _linear_channel(color.b)
-
-func _linear_channel(value: float) -> float:
-	return value / 12.92 if value <= 0.04045 else pow((value + 0.055) / 1.055, 2.4)
 
 ## Outside Playing neither input handler may reach the bridge: right-click
 ## is refused, A arms nothing, and the command feedback revision is stable.
@@ -659,6 +631,20 @@ func _run() -> void:
 	if not start_capture.is_empty():
 		_fail(start_capture)
 		return
+	# Focused Start evidence uses the same test-side focus convention as the
+	# Pause leg: the global Tab handler owns focus navigation, so the frame is
+	# set up here and released before the real Start transition.
+	var start_control := _button("HUD/SessionPanel/StartButton")
+	start_control.grab_focus()
+	if not await _wait_until(
+			func(): return _focus_error(start_control, "Start").is_empty(), 5.0,
+			"Start did not take the test-set keyboard focus"):
+		return
+	var start_focused_capture := await SmokeHelpers.capture_frame(get_tree(), "start-focused")
+	if not start_focused_capture.is_empty():
+		_fail(start_focused_capture)
+		return
+	start_control.release_focus()
 
 	if not GrusBridge.start_match():
 		_fail("start_match rejected the Start -> Playing transition")
@@ -925,8 +911,8 @@ func _run() -> void:
 		return
 	# Prominent Resume: the same real Pause entry must show the bright primary
 	# action, not a neutral secondary plate.
-	if not await _wait_until(func(): return _paused_primary_action_error().is_empty(), 5.0,
-			"Resume is not a clear primary action: %s" % _paused_primary_action_error()):
+	if not await _wait_until(func(): return _primary_action_error().is_empty(), 5.0,
+			"Pause card actions are not clear primaries: %s" % _primary_action_error()):
 		return
 	# Live resize while Paused: the card must follow the viewport without
 	# locking window size, including when returning to the required 1280 x 720
@@ -982,7 +968,7 @@ func _run() -> void:
 		_fail(unfocused_capture)
 		return
 	resume_button.grab_focus()
-	if not await _wait_until(func(): return _paused_focus_error().is_empty(), 5.0,
+	if not await _wait_until(func(): return _focus_error(resume_button, "Resume").is_empty(), 5.0,
 			"Resume did not take the test-set keyboard focus"):
 		return
 	var focused_capture := await SmokeHelpers.capture_frame(get_tree(), "pause-focused")
@@ -1037,6 +1023,13 @@ func _run() -> void:
 					and _button("HUD/SessionPanel/RestartButton").visible \
 					and _button("HUD/SessionPanel/QuitButton").visible,
 			5.0, "Result overlay is not showing Defeat with Restart/Quit"):
+		return
+	# The genuine alien Defeat screen is where Restart is the live primary, so
+	# the shared plate must keep the same readable ink and distinct focus ring
+	# here as it does on the real Start and Pause screens.
+	var defeat_primary_error := _primary_action_error()
+	if not defeat_primary_error.is_empty():
+		_fail("Result Restart is not a clear primary action: %s" % defeat_primary_error)
 		return
 	# Leaving Pause restores the Start/Result card exactly; otherwise Restart/
 	# Quit would inherit the compact Pause card's offsets.
@@ -1097,6 +1090,20 @@ func _run() -> void:
 	if not defeat_capture.is_empty():
 		_fail(defeat_capture)
 		return
+	# Focused Restart evidence on the genuine Defeat screen. This is the same
+	# test-set focus convention and shared primary ring; focus is released
+	# before the real Restart click below.
+	var result_restart := _button("HUD/SessionPanel/RestartButton")
+	result_restart.grab_focus()
+	if not await _wait_until(
+			func(): return _focus_error(result_restart, "Restart").is_empty(), 5.0,
+			"Restart did not take the test-set keyboard focus"):
+		return
+	var defeat_focused_capture := await SmokeHelpers.capture_frame(get_tree(), "defeat-focused")
+	if not defeat_focused_capture.is_empty():
+		_fail(defeat_focused_capture)
+		return
+	result_restart.release_focus()
 	# Result actions sit in a bottom bar matching the mockup composition. The
 	# bar is decorative (mouse IGNORE); the two named buttons stay distinct and
 	# reachable, and every printed figure comes from a live read-only snapshot.
