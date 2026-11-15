@@ -67,8 +67,14 @@ var _selected_building_snap_id := -1
 ## change, so anything fresher is a wasted rebuild.
 var _ug_last_tick := -1
 var _ug_last_phase := ""
+## One-way flag for the single quit path; it also freezes session refreshes so
+## no cue or the ambience restarts during the audio drain.
+var _shutting_down := false
 
 func _ready() -> void:
+	# Quit must go through request_quit so the audio drain runs; the OS close
+	# request is handled below instead of SceneTree's implicit quit.
+	get_tree().auto_accept_quit = false
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var units: Dictionary = catalogue.get("units", {})
 	_producer_kinds = HudHelpers.producer_kinds(units)
@@ -151,6 +157,8 @@ func _consume_placement_results() -> bool:
 ## leftovers stay unreadable: those stale events must never replay as fresh
 ## effects.
 func _refresh_session() -> void:
+	if _shutting_down:
+		return
 	var snap: Dictionary = GrusBridge.session_snapshot()
 	var previous_phase := _session_phase
 	_session_phase = str(snap.get("phase", ""))
@@ -709,7 +717,21 @@ func _on_restart_pressed() -> void:
 	_restart_match()
 
 func _on_quit_pressed() -> void:
+	request_quit()
+
+## The single quit path (OS window close and the Result button): stop the
+## ambience/cues and let the audio mixer reclaim their playbacks before the
+## engine tears down (see CombatFx.stop_and_drain).
+func request_quit() -> void:
+	if _shutting_down:
+		return
+	_shutting_down = true
+	await _fx.stop_and_drain()
 	get_tree().quit(0)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		request_quit()
 
 ## Restart clears every transient Godot-side fact while the bridge reseeds:
 ## selection, control groups, placement, attack-move arming, the armed

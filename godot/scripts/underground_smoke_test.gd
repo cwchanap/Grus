@@ -1360,4 +1360,5 @@ func _run() -> void:
 	GrusBridge.set_sim_speed(1.0)
 	print("GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=%d gathered_coal=%d paid_scrap=%d paid_coal=%d cold_rate=%.4f heat_delta=%d margin_s=%.2f elapsed_ms=%d" % [
 		gathered_scrap, gathered_coal, _spent_scrap, _spent_coal, cold_rate, tap_heat, margin, Time.get_ticks_msec() - _started_ms])
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()

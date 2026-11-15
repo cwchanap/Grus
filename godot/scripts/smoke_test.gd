@@ -3659,4 +3659,5 @@ func _run() -> void:
 	unready_view.free()
 
 	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()

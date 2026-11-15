@@ -364,7 +364,8 @@ func _run() -> void:
 		return
 	GrusBridge.set_sim_speed(1.0)
 	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=catalogue_glb_grounded setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()
 
 func _perimeter_cells() -> Array[Vector2i]:
 	var cells: Array[Vector2i] = [_gate_cell]

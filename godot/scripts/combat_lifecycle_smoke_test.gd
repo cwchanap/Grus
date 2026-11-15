@@ -1330,4 +1330,5 @@ func _run() -> void:
 		return
 	print(marker)
 	GrusBridge.set_sim_speed(1.0)
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()
