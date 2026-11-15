@@ -297,6 +297,7 @@ func _refresh_hud() -> void:
 ## keeps its existing `_unhandled_input` route.
 func _input(event: InputEvent) -> void:
 	if _shutting_down:
+		get_viewport().set_input_as_handled()
 		return
 	if not event is InputEventKey:
 		return
@@ -314,6 +315,7 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if _shutting_down:
+		get_viewport().set_input_as_handled()
 		return
 	if event is InputEventKey:
 		_handle_key(event as InputEventKey)
@@ -741,8 +743,10 @@ func request_quit() -> void:
 	if _shutting_down:
 		return
 	_shutting_down = true
-	if _session_phase == "Playing":
-		GrusBridge.set_paused(true)
+	# Unconditional: Rust leaves Start/Paused/Result and a session-free
+	# benchmark unchanged, and this also covers a Start/Resume whose phase the
+	# frame cache has not seen yet.
+	GrusBridge.set_paused(true)
 	var drained = await _fx.stop_and_drain()
 	if not drained:
 		push_warning("audio shutdown drain hit its deadline; playbacks may still be live")
