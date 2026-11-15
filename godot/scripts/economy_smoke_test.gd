@@ -308,9 +308,10 @@ func _queue_separation_error(sockets: Container, filled: int, where: String) -> 
 			or timer_backing.bg_color.get_luminance() > 0.25:
 		return "%s active queue timer has no dark backing chip: %s" % [
 			where, timer_backing.bg_color if timer_backing != null else null]
-	# The portrait itself must read: its ground is lifted above the empty
-	# recess so the dark unit art has a silhouette, and the timer chip keeps
-	# most of the portrait uncovered while still carrying the live seconds.
+	# The portrait control rectangle must read: its ground is lifted above the
+	# empty recess so the dark unit art has a silhouette, and the timer chip
+	# covers at most a third of that rectangle. This measures the control rect
+	# only (not the fitted texture or its artwork pixels).
 	if head_plate.bg_color.get_luminance() < 0.16:
 		return "%s active portrait ground is too dark for its unit art: %s" % [
 			where, head_plate.bg_color]
@@ -321,7 +322,7 @@ func _queue_separation_error(sockets: Container, filled: int, where: String) -> 
 	var covered := portrait_rect.intersection(timer.get_global_rect()).get_area()
 	var visible_fraction := 1.0 - covered / maxf(portrait_rect.get_area(), 1.0)
 	if visible_fraction < 0.68:
-		return "%s active portrait is %d%% covered by its timer chip" % [
+		return "%s active portrait control rectangle is %d%% covered by its timer chip" % [
 			where, roundi((1.0 - visible_fraction) * 100.0)]
 	var row := sockets.get_global_rect()
 	for index in 5:
