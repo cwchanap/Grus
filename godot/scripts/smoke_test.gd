@@ -27,38 +27,11 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
-## The pinned RichTextLabel parser reads `alt="..."` from an image's opening
-## tag, unquotes it and uses it as the accessibility name of that ROLE_IMAGE.
-## GDScript cannot read the engine's accessibility tree or configuration
-## warnings (the public C++ warning accessor is not bound), so this checks the
-## exact BBCode the engine parses: each cue image must carry its own non-empty
-## alternative and no other image tag may appear.
+## The pinned RichTextLabel parser turns each cue's `alt="..."` into the
+## ROLE_IMAGE accessibility name; the shared checker reads the exact BBCode
+## the engine parses. Covers every image tag, not only the four expected cues.
 func _controls_cue_alt_error(controls: RichTextLabel, expected: Dictionary) -> String:
-	var text := controls.text
-	var cursor := 0
-	var seen := {}
-	while true:
-		var open := text.find("[img", cursor)
-		if open == -1:
-			break
-		var close := text.find("]", open)
-		if close == -1:
-			return "ControlsLabel has an unterminated image tag"
-		var tag := text.substr(open, close - open + 1)
-		var path_end := text.find("[", close)
-		if path_end == -1:
-			return "ControlsLabel has an unterminated image element: %s" % tag
-		var image_path := text.substr(close + 1, path_end - close - 1).strip_edges()
-		var alt := str(expected.get(image_path, ""))
-		if alt.is_empty():
-			return "ControlsLabel image %s has no expected alternative" % image_path
-		if not tag.contains("alt=\"%s\"" % alt):
-			return "ControlsLabel image %s is missing alt=\"%s\": %s" % [image_path, alt, tag]
-		seen[image_path] = true
-		cursor = path_end
-	if seen.size() != expected.size():
-		return "ControlsLabel has %d/%d cue images with alternatives" % [seen.size(), expected.size()]
-	return ""
+	return SmokeHelpers.inline_image_alt_error(controls, expected, "ControlsLabel")
 
 func _modifier_event(keycode: int, pressed: bool) -> void:
 	var event := InputEventKey.new()
@@ -1327,6 +1300,16 @@ func _run() -> void:
 			or not research_markers.text.contains("res://assets/ui/icons/buildings/crystal_lance.png") \
 			or not research_markers.text.contains("res://assets/ui/icons/status/incoming_zone.png"):
 		_fail("research markers do not project the catalogue tower/wave thresholds: %s" % [research_markers.text])
+		return
+	# HPA-698 finding 1: every milestone marker is a named image, not a bare
+	# glyph — the existing label is its catalogue-worded alternative.
+	var marker_alt_error := SmokeHelpers.inline_image_alt_error(research_markers, {
+		"res://assets/ui/icons/buildings/flame_tower.png": "FlameTower",
+		"res://assets/ui/icons/buildings/crystal_lance.png": "CrystalLance",
+		"res://assets/ui/icons/status/incoming_zone.png": "Wave growth",
+	}, "ResearchMarkers")
+	if not marker_alt_error.is_empty():
+		_fail(marker_alt_error)
 		return
 	# The milestone row's hover explanation must be reachable from the real
 	# pointer, not hidden behind a mouse-ignoring child of the research card.
