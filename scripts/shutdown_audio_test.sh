@@ -1,25 +1,39 @@
 #!/usr/bin/env bash
-# Real-process shutdown contract: run a smoke scene through its real quit path
-# with --verbose and fail if Godot reports leaked ObjectDB instances or
-# resources still in use at exit. Godot reclaims a stopped AudioStreamPlayback
-# on its mixer thread, so a quit in the same frame as the stop used to leak the
-# Ogg playback and its stream; the game therefore drains before quitting.
+# Real-process shutdown contract: run a scene through its real quit path with
+# --verbose and fail if Godot reports leaked ObjectDB instances or resources
+# still in use at exit. Godot reclaims a stopped AudioStreamPlayback on its
+# mixer thread, so the game drains best-effort before quitting; this runner is
+# the process-output gate that notices when that mitigation stops working.
 #
-# The scene and its success marker can be overridden to audit another journey:
-#   GRUS_SHUTDOWN_SCENE=res://scenes/economy_smoke_test.tscn \
-#   GRUS_SHUTDOWN_MARKER=GRUS_ECONOMY_SMOKE_OK scripts/shutdown_audio_test.sh
+# Every invocation writes into its own log directory under GRUS_SHUTDOWN_LOG_DIR
+# (default test_output/shutdown-audio), so a retry never overwrites evidence.
+#   GRUS_RUNS            positive integer, default 3
+#   GRUS_SHUTDOWN_SCENE  default res://scenes/smoke_test.tscn
+#   GRUS_SHUTDOWN_MARKER default GRUS_GODOT_SMOKE_OK
+#   GODOT_BIN            default godot
 set -uo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 godot_bin="${GODOT_BIN:-godot}"
 scene="${GRUS_SHUTDOWN_SCENE:-res://scenes/smoke_test.tscn}"
 marker="${GRUS_SHUTDOWN_MARKER:-GRUS_GODOT_SMOKE_OK}"
-runs="${GRUS_RUNS:-3}"
-log_dir="${GRUS_SHUTDOWN_LOG_DIR:-$repo_root/test_output/shutdown-audio}"
-mkdir -p "$log_dir"
+runs="${GRUS_RUNS-3}"
+base_dir="${GRUS_SHUTDOWN_LOG_DIR:-$repo_root/test_output/shutdown-audio}"
+
+if ! [[ "$runs" =~ ^[1-9][0-9]*$ ]]; then
+    echo "FAIL: GRUS_RUNS must be a positive integer, got '$runs'" >&2
+    exit 2
+fi
+
+log_dir="$base_dir/$(date -u +%Y%m%dT%H%M%SZ)-$$"
+if ! mkdir -p "$log_dir"; then
+    echo "FAIL: cannot create log directory $log_dir" >&2
+    exit 2
+fi
+echo "logs: $log_dir"
 
 status=0
-for run in $(seq 1 "$runs"); do
+for ((run = 1; run <= runs; run++)); do
     log="$log_dir/run-$run.log"
     "$godot_bin" --headless --path "$repo_root/godot" "$scene" --verbose >"$log" 2>&1
     rc=$?
