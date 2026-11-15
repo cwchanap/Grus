@@ -110,25 +110,31 @@ func clear_all() -> void:
 ## callbacks can be missed, a stalled driver cannot be drained, and devices
 ## whose callbacks are far smaller than a mixer block can still hit the
 ## deadline. The caller quits either way and reports the fallback.
-## `clock`/`timeout_ms` are injectable for the focused shutdown test.
-func stop_and_drain(clock: Callable = Callable(), timeout_ms := DRAIN_TIMEOUT_MS) -> bool:
+## `clock`/`timeout_ms`/`mix_rate` are injectable for the focused shutdown
+## test. The deadline is frame-polled (not a hard upper bound: a stalled frame
+## or the driver-locked clock read can overrun it) and is rechecked after the
+## await and clock read, so a resumed iteration past it returns the fallback
+## instead of reporting success.
+func stop_and_drain(clock: Callable = Callable(), timeout_ms := DRAIN_TIMEOUT_MS, mix_rate := 0.0) -> bool:
 	for cue_id in _players:
 		(_players[cue_id] as AudioStreamPlayer).stop()
 	var read_clock: Callable = clock if clock.is_valid() else AudioServer.get_time_since_last_mix
-	var mix_rate := float(AudioServer.get_mix_rate())
+	var rate := mix_rate if mix_rate > 0.0 else float(AudioServer.get_mix_rate())
 	var last: float = read_clock.call()
 	var callbacks := 0
 	var credited := 0
 	var deadline := Time.get_ticks_msec() + timeout_ms
-	while Time.get_ticks_msec() < deadline:
+	while true:
 		await get_tree().process_frame
 		var mix: float = read_clock.call()
+		if Time.get_ticks_msec() >= deadline:
+			return false
 		if mix < last:
 			callbacks += 1
 			# The first reset only syncs the window: its interval may start
 			# before the stop, so it is never credited.
 			if callbacks >= DRAIN_MIN_CALLBACKS:
-				credited += int(last * mix_rate)
+				credited += int(last * rate)
 				if credited >= DRAIN_TARGET_FRAMES:
 					return true
 		last = mix
