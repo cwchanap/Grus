@@ -151,6 +151,32 @@ func _click_world(point: Vector2, button: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+## HPA-698: the closer authored framing can put a far world target behind a
+## HUD card (the northwest corridor sits under the wave prep card). A real
+## wheel zoom-out restores the former coverage for that one click, then the
+## authored framing returns. The target, the click and the command path are
+## unchanged — no camera pan, no direct gameplay write.
+func _click_visible(world_point: Vector3, button: int) -> void:
+	var authored_size: float = await SmokeHelpers.zoom_until_visible(
+		get_tree(), _camera, get_node("Main/HUD"), [world_point])
+	if authored_size < 0.0:
+		_fail("could not wheel-zoom %s clear of the HUD" % world_point)
+		return
+	_mouse_click(_camera.unproject_position(world_point), button)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var restored := await SmokeHelpers.restore_camera_size(get_tree(), _camera, authored_size)
+	if not restored:
+		_fail("real wheel zoom never restored the authored camera framing: %s" % _camera.size)
+
+func _click_view_visible(view: Node3D, button: int, fog_settle := false) -> void:
+	await _click_visible(view.global_position, button)
+	if fog_settle:
+		await get_tree().process_frame
+
+func _click_world_visible(point: Vector2, button: int) -> void:
+	await _click_visible(Vector3(point.x + 0.25, 0.0, point.y + 0.25), button)
+
 func _click_button(button: Button) -> void:
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -1218,7 +1244,7 @@ func _run() -> void:
 	# first. The expansion salvage's view becoming visible is the explored
 	# proof (views are the presentation projection of the sim fog).
 	await _click_view(builder, MOUSE_BUTTON_LEFT)
-	await _click_world(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
+	await _click_world_visible(Vector2(38, 24), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(
 			func(): return _resource_view(FAR_SALVAGE_ID) != null \
 					and (_resource_view(FAR_SALVAGE_ID) as Node3D).is_visible_in_tree(),
@@ -1242,7 +1268,7 @@ func _run() -> void:
 		return
 	await _click_view(scrap_worker, MOUSE_BUTTON_LEFT)
 	# The far salvage's view is fog-revealed: it pays the fog settle.
-	await _click_view(far_salvage, MOUSE_BUTTON_RIGHT, true)
+	await _click_view_visible(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
 	if not await _wait_until(_scrap_deposited_at_depot.bind(1, depot.global_position, delivery_box), 45.0,
 			"no scrap delivery ever reached the Depot"):

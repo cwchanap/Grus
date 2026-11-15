@@ -209,6 +209,38 @@ static func hud_rects(hud_root: Node) -> Array[Rect2]:
 			rects.append(control.get_global_rect())
 	return rects
 
+## HPA-698: the closer authored framing can leave a far world target behind a
+## HUD card. Real wheel zoom-out at the viewport center restores the former
+## coverage until every world point projects off the HUD, without panning.
+## Returns the authored camera size for restore_camera_size, or -1.0 when the
+## points stay covered at the maximum zoom. Presentation-only: no gameplay,
+## selection or camera position is written.
+static func zoom_until_visible(tree: SceneTree, camera: Camera3D, hud: Node,
+		world_points: Array) -> float:
+	var authored_size := camera.size
+	for _step in 16:
+		var rects := hud_rects(hud)
+		var clear := true
+		for point in world_points:
+			var screen := camera.unproject_position(point as Vector3)
+			if rects.any(func(rect: Rect2) -> bool: return rect.has_point(screen)):
+				clear = false
+				break
+		if clear:
+			return authored_size
+		push_mouse_click(tree, tree.root.get_visible_rect().size * 0.5, MOUSE_BUTTON_WHEEL_DOWN)
+		await tree.process_frame
+	return -1.0
+
+## Wheel back in through real input to the authored size captured above.
+static func restore_camera_size(tree: SceneTree, camera: Camera3D, size: float) -> bool:
+	for _step in 16:
+		if camera.size <= size:
+			break
+		push_mouse_click(tree, tree.root.get_visible_rect().size * 0.5, MOUSE_BUTTON_WHEEL_UP)
+		await tree.process_frame
+	return is_equal_approx(camera.size, size)
+
 ## Whether this run is an opt-in real-render capture. Journey points that only
 ## exist to produce a frame (the map-edge camera pan) must gate on this, so a
 ## headless or uncaptured smoke never mutates presentation for a frame nobody
