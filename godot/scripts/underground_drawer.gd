@@ -236,7 +236,13 @@ func _add_row(level_number: int) -> void:
 	row.add_child(level_label)
 	for slot_index in _slots_per_level:
 		var button := Button.new()
-		button.add_theme_font_size_override("font_size", 12)
+		button.add_theme_font_size_override("font_size", 13)
+		# The room name paints over the occupied room's painted frame; the dark
+		# outline alone still let the bright bevel through, so the name also
+		# carries a hard drop shadow.
+		button.add_theme_color_override("font_shadow_color", TEXT_OUTLINE)
+		button.add_theme_constant_override("shadow_offset_x", 1)
+		button.add_theme_constant_override("shadow_offset_y", 1)
 		# The smoke's actual-text guard measures exactly this layout: a left
 		# icon and centred, unwrapped LTR text. Keep it explicit so a later
 		# change cannot silently move the glyphs outside the measured rect.
@@ -278,7 +284,7 @@ func _add_row(level_number: int) -> void:
 		benefit_backing.name = "SlotBenefitBacking"
 		benefit_backing.visible = false
 		benefit_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		benefit_backing.color = Color(0.03, 0.05, 0.07, 0.7)
+		benefit_backing.color = Color(0.03, 0.05, 0.07, 0.88)
 		benefit_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 		benefit_backing.offset_left = 26.0
 		benefit_backing.offset_top = -17.0
@@ -291,7 +297,10 @@ func _add_row(level_number: int) -> void:
 		benefit.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		benefit.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		benefit.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
-		benefit.add_theme_font_size_override("font_size", 11)
+		# The compact bold face is the same one the HUD uses for live numeric
+		# callouts; at 12 px it reads above the frame and still fits the band.
+		benefit.add_theme_font_override("font", _levels.get_theme_font("font", "Header"))
+		benefit.add_theme_font_size_override("font_size", 12)
 		benefit.add_theme_color_override("font_color", Color(0.78, 0.96, 0.8))
 		benefit.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		benefit.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
