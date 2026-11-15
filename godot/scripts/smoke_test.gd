@@ -352,6 +352,199 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 			return false
 	return true
 
+## The painted texture a StyleBox draws, or "" for a flat plate.
+func _plate_texture_path(plate: StyleBox) -> String:
+	if plate is StyleBoxTexture and (plate as StyleBoxTexture).texture != null:
+		return (plate as StyleBoxTexture).texture.resource_path
+	return ""
+
+## Mean sRGB colour of a texture's opaque pixels, sampled every fourth pixel.
+## A deliberately conservative icon-presence readout: it averages a glyph's
+## dark outlines with its bright body instead of sampling its brightest core.
+func _opaque_mean_color(texture: Texture2D) -> Color:
+	if texture == null:
+		return Color.BLACK
+	var image := texture.get_image()
+	var sample := Color(0, 0, 0, 0)
+	var count := 0
+	for y in range(0, image.get_height(), 4):
+		for x in range(0, image.get_width(), 4):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a > 0.5:
+				sample += pixel
+				count += 1
+	if count == 0:
+		return Color.BLACK
+	return Color(sample.r / count, sample.g / count, sample.b / count, 1.0)
+
+## HPA-698 command-tile clarity: the nine build and three train plates paint
+## one quiet flat frame, while each exceptional state keeps the shipped painted
+## art — armed the cyan selected frame, true locks the locked frame and
+## unaffordable actions the rust frame (still enabled). Focus is a ring drawn
+## outside the plate, so it stays visible over every state and is not a
+## recolouring of the armed edge. The shared Tile variation must stay painted:
+## the underground drawer still reads it. Prices and icons must clear contrast
+## on the quieter field, with the same content box in every state.
+func _assert_command_tile_treatment() -> bool:
+	await get_tree().process_frame
+	var theme := load(str(ProjectSettings.get_setting("gui/theme/custom", ""))) as Theme
+	if theme == null:
+		_fail("command-tile check has no project theme")
+		return false
+	var normal := theme.get_stylebox("normal", "CommandTile")
+	var hover := theme.get_stylebox("hover", "CommandTile")
+	var pressed := theme.get_stylebox("pressed", "CommandTile")
+	var disabled := theme.get_stylebox("disabled", "CommandTile")
+	var focus := theme.get_stylebox("focus", "CommandTile")
+	# Theme.get_stylebox falls back to the engine default theme for an unknown
+	# type, so only has_stylebox can prove the project defines these plates.
+	for state in ["normal", "hover", "pressed", "disabled", "focus"]:
+		if not theme.has_stylebox(state, "CommandTile"):
+			_fail("command tiles have no quiet CommandTile %s variation" % state)
+			return false
+	# The repeated field: one dark, low-contrast flat plate per tile instead of
+	# the painted ice frame that used to repeat twelve times.
+	if not normal is StyleBoxFlat:
+		_fail("command normal plate still paints %s art" % normal.get_class())
+		return false
+	var normal_fill := (normal as StyleBoxFlat).bg_color
+	var normal_border := (normal as StyleBoxFlat).border_color
+	if SmokeHelpers.linear_luminance(normal_fill) > 0.02 \
+			or SmokeHelpers.linear_luminance(normal_border) > 0.2 \
+			or (normal as StyleBoxFlat).border_width_left != 1:
+		_fail("command normal plate is not quiet: fill=%s border=%s width=%d" % [
+			normal_fill, normal_border, (normal as StyleBoxFlat).border_width_left])
+		return false
+	# Hover must answer the pointer without becoming a second lit frame, and it
+	# must not be the armed plate under another name.
+	if not hover is StyleBoxFlat \
+			or SmokeHelpers.linear_luminance((hover as StyleBoxFlat).bg_color) \
+				<= SmokeHelpers.linear_luminance(normal_fill) \
+			or SmokeHelpers.linear_luminance((hover as StyleBoxFlat).bg_color) > 0.05 \
+			or SmokeHelpers.linear_luminance((hover as StyleBoxFlat).border_color) \
+				<= SmokeHelpers.linear_luminance(normal_border):
+		_fail("command hover plate is not a quiet lift over normal: %s" % hover)
+		return false
+	# Exceptional states keep their shipped art, each a different picture, and
+	# none of them is the ornate frame the quiet plate replaced.
+	var painted := {
+		"pressed": _plate_texture_path(pressed),
+		"disabled": _plate_texture_path(disabled),
+		"unaffordable": _plate_texture_path(theme.get_stylebox("normal", "UnaffordableTile")),
+	}
+	var expected := {
+		"pressed": "res://assets/ui/frostline/ui/tile_selected.png",
+		"disabled": "res://assets/ui/frostline/ui/tile_locked.png",
+		"unaffordable": "res://assets/ui/frostline/ui/tile_unaffordable.png",
+	}
+	for state in expected:
+		if painted[state] != expected[state]:
+			_fail("command %s state paints %s; expected %s" % [
+				state, painted[state] if painted[state] != "" else "a flat plate", expected[state]])
+			return false
+	if painted.values().has("res://assets/ui/frostline/ui/tile_normal.png"):
+		_fail("command tiles still paint the repeated ornate tile frame")
+		return false
+	# An unaffordable tile stays clickable, so it needs its own hover lift and
+	# the same armed plate: an armed unaffordable tile must never look idle.
+	var unaffordable_hover := theme.get_stylebox("hover", "UnaffordableTile") as StyleBoxTexture
+	if unaffordable_hover == null or unaffordable_hover.texture == null \
+			or not unaffordable_hover.texture.resource_path.ends_with("tile_unaffordable.png") \
+			or SmokeHelpers.linear_luminance(unaffordable_hover.modulate_color) \
+				<= SmokeHelpers.linear_luminance(Color.WHITE):
+		_fail("unaffordable hover is not a lifted unaffordable frame: %s" % unaffordable_hover)
+		return false
+	if _plate_texture_path(theme.get_stylebox("pressed", "UnaffordableTile")) \
+			!= "res://assets/ui/frostline/ui/tile_selected.png":
+		_fail("armed unaffordable tile does not paint the armed frame")
+		return false
+	# Keyboard focus is its own ring outside the plate, bright enough to read
+	# over the flat, hover, armed, locked and unaffordable plates alike.
+	if not focus is StyleBoxFlat:
+		_fail("command focus is not a flat ring: %s" % focus.get_class())
+		return false
+	var ring := focus as StyleBoxFlat
+	if ring.draw_center or ring.border_width_left < 2 or ring.border_width_top < 2 \
+			or ring.border_width_right < 2 or ring.border_width_bottom < 2 \
+			or ring.get_expand_margin(SIDE_LEFT) < 2.0 \
+			or SmokeHelpers.linear_luminance(ring.border_color) < 0.8:
+		_fail("command focus ring is not a bright outline outside the plate: %s" % ring)
+		return false
+	# The shared Tile variation still paints the shipped steel frame for the
+	# underground drawer; only the command grids opt into the quiet plates.
+	var shared_tile := theme.get_stylebox("normal", "Tile")
+	if _plate_texture_path(shared_tile) != "res://assets/ui/frostline/ui/tile_normal.png":
+		_fail("shared Tile plate changed; the underground drawer still paints the shipped steel tile")
+		return false
+	# State changes must not move the icon or the price: every command plate
+	# keeps the painted Tile's content box.
+	for state in ["normal", "hover", "pressed", "disabled"]:
+		var plate: StyleBox = theme.get_stylebox(state, "CommandTile")
+		for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+			if plate.get_content_margin(side) != shared_tile.get_content_margin(side):
+				_fail("command %s plate content margin %s differs from the painted tile %s" % [
+					state, plate.get_content_margin(side), shared_tile.get_content_margin(side)])
+				return false
+	# Live tiles: the grids opt into the quiet treatment (never the shared or
+	# any other variation), prices stay readable on it, and the icon art keeps
+	# a real contrast step over the quiet field.
+	var margin_plate: StyleBox = theme.get_stylebox("normal", "UnaffordableTile")
+	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+		if margin_plate.get_content_margin(side) != shared_tile.get_content_margin(side):
+			_fail("unaffordable plate content margin moved the price/icon box")
+			return false
+	for grid_path in ["HUD/CommandPanel/BuildGrid", "HUD/CommandPanel/TrainGrid"]:
+		var grid := get_node_or_null("Main/%s" % grid_path) as Container
+		if grid == null:
+			_fail("command grid is missing: %s" % grid_path)
+			return false
+		for node in grid.get_children():
+			if not node is Button:
+				continue
+			var button := node as Button
+			if button.theme_type_variation != &"CommandTile" \
+					and button.theme_type_variation != &"UnaffordableTile":
+				_fail("%s paints the shared %s variation; the command grids must opt into the quiet plates" % [
+					button.name, button.theme_type_variation])
+				return false
+			var cost := button.get_node_or_null("Cost") as RichTextLabel
+			if cost == null:
+				_fail("%s lost its catalogue price label" % button.name)
+				return false
+			var price_ratio := SmokeHelpers.contrast_ratio(
+				cost.get_theme_color("default_color"), normal_fill)
+			if price_ratio < 7.0:
+				_fail("%s price contrast on the quiet plate is %.2f:1" % [button.name, price_ratio])
+				return false
+			# 2.5:1 over the mean glyph colour is a floor for a metric that
+			# averages dark outlines into the icon body; the bright core is
+			# far above it.
+			var icon_ratio := SmokeHelpers.contrast_ratio(_opaque_mean_color(button.icon), normal_fill)
+			if icon_ratio < 2.5:
+				_fail("%s icon art contrast on the quiet plate is %.2f:1" % [button.name, icon_ratio])
+				return false
+	# Live exceptional states at the opening stockpile: FlameTower is a true
+	# lock (affordable, research-locked), CrystalLance is unaffordable and
+	# locked, so both must resolve their painted frames from real metadata.
+	var flame := get_node("Main/HUD/CommandPanel/BuildGrid/FlameTowerButton") as Button
+	var lance := get_node("Main/HUD/CommandPanel/BuildGrid/CrystalLanceButton") as Button
+	if not flame.disabled or float(flame.get_meta("unlock_points", 0)) <= 0.0:
+		_fail("FlameTower is not the live research lock at the opening stockpile")
+		return false
+	if _plate_texture_path(flame.get_theme_stylebox("disabled")) \
+			!= "res://assets/ui/frostline/ui/tile_locked.png":
+		_fail("locked FlameTower does not resolve the painted locked frame")
+		return false
+	if lance.theme_type_variation != &"UnaffordableTile" \
+			or _plate_texture_path(lance.get_theme_stylebox("normal")) \
+				!= "res://assets/ui/frostline/ui/tile_unaffordable.png" \
+			or _plate_texture_path(lance.get_theme_stylebox("disabled")) \
+				!= "res://assets/ui/frostline/ui/tile_locked.png":
+		_fail("CrystalLance does not present both its unaffordable and locked frames: %s" % [
+			lance.theme_type_variation])
+		return false
+	return true
+
 ## HPA-698 final review: command feedback (rejected orders, armed targets) is
 ## drawn before the bottom selection card, so it must sit wholly above it.
 func _assert_command_status_above_selection() -> bool:
@@ -920,6 +1113,8 @@ func _run() -> void:
 	if not _assert_frostline_assets():
 		return
 	if not _assert_action_icon_paths(get_node("Main") as Node3D):
+		return
+	if not await _assert_command_tile_treatment():
 		return
 	if not _assert_command_status_above_selection():
 		return
@@ -2119,6 +2314,48 @@ func _run() -> void:
 	var crossover_main := get_node("Main") as Node3D
 	var bunkhouse_tile := get_node("Main/HUD/CommandPanel/BuildGrid/BunkhouseButton") as Button
 	var wall_tile := get_node("Main/HUD/CommandPanel/BuildGrid/WallButton") as Button
+	# HPA-698 command-tile states through the real control tree: the idle
+	# field is the quiet plate, a true lock keeps the painted locked frame,
+	# and a real click on that lock must not arm or dispatch anything.
+	var flame_tile := get_node("Main/HUD/CommandPanel/BuildGrid/FlameTowerButton") as Button
+	var locked_card := flame_tile.get_theme_stylebox("disabled") as StyleBoxTexture
+	if bunkhouse_tile.disabled or bunkhouse_tile.theme_type_variation != &"CommandTile" \
+			or not flame_tile.disabled or locked_card == null or locked_card.texture == null \
+			or not locked_card.texture.resource_path.ends_with("tile_locked.png"):
+		_fail("command tiles do not present the quiet idle plate and painted lock: bunkhouse=%s disabled=%s flame_disabled=%s lock_plate=%s" % [
+			bunkhouse_tile.theme_type_variation, bunkhouse_tile.disabled,
+			flame_tile.disabled, locked_card])
+		return
+	# The normal-state frame keeps its one test-set focus removed: a ring on an
+	# unrelated control would misread as a command-tile focus state.
+	if SmokeHelpers.capture_enabled():
+		get_viewport().gui_release_focus()
+	var normal_tile_capture := await SmokeHelpers.capture_frame(get_tree(), "command-tiles-normal")
+	if not normal_tile_capture.is_empty():
+		_fail(normal_tile_capture)
+		return
+	# Pointer-hover evidence on the quiet plate: real motion over the still
+	# affordable Depot tile, captured after the frame settles.
+	if SmokeHelpers.capture_enabled():
+		var depot_tile := get_node("Main/HUD/CommandPanel/BuildGrid/DepotButton") as Button
+		var hover_motion := InputEventMouseMotion.new()
+		hover_motion.position = depot_tile.get_global_rect().get_center()
+		get_tree().root.push_input(hover_motion)
+		await get_tree().process_frame
+		await get_tree().process_frame
+	var hover_tile_capture := await SmokeHelpers.capture_frame(get_tree(), "command-tiles-hover")
+	if not hover_tile_capture.is_empty():
+		_fail(hover_tile_capture)
+		return
+	var locked_revision := int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), flame_tile.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if str(crossover_main.get("_placement_kind")) != "" \
+			or int(GrusBridge.command_feedback_revision()) != locked_revision \
+			or not _ring(unit_two).visible:
+		_fail("locked build tile dispatched a command, armed placement or dropped the selection")
+		return
 	if not await _arm_defense(crossover_main, bunkhouse_tile, "Bunkhouse"):
 		return
 	move_button.grab_focus()
@@ -2126,6 +2363,25 @@ func _run() -> void:
 	await get_tree().process_frame
 	if not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
 		_fail("armed Bunkhouse tile lost or shared its placement state after focus moved")
+		return
+	# Focus must read as its own bright ring outside the plate — never as the
+	# armed cyan frame or the quiet hover edge — while the Bunkhouse stays the
+	# one armed tile.
+	wall_tile.grab_focus()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var focus_ring := wall_tile.get_theme_stylebox("focus") as StyleBoxFlat
+	if get_viewport().gui_get_focus_owner() != wall_tile \
+			or focus_ring == null or focus_ring.draw_center \
+			or focus_ring.border_width_left < 2 \
+			or focus_ring.get_expand_margin(SIDE_LEFT) < 2.0 \
+			or SmokeHelpers.linear_luminance(focus_ring.border_color) < 0.8 \
+			or not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
+		_fail("command focus is not a bright ring outside the plate or disturbed the armed tile: %s" % focus_ring)
+		return
+	var armed_tile_capture := await SmokeHelpers.capture_frame(get_tree(), "command-tiles-armed")
+	if not armed_tile_capture.is_empty():
+		_fail(armed_tile_capture)
 		return
 	_key_tap(KEY_1)
 	await get_tree().process_frame
