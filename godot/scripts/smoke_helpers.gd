@@ -342,6 +342,38 @@ static func ring_anchor(builder_id: int, kind: String, research_center: Node3D) 
 				return candidate
 	return Vector2i(-1, -1)
 
+## HPA-698 live unaffordable command tile: an unaffordable action stays
+## clickable (Rust is the final validator), keeps the shipped unaffordable
+## frame, answers the pointer with a lifted variant of that frame, and its
+## catalogue price clears ordinary contrast on the frame's own interior.
+## Requires the tile's per-frame affordability refresh to have settled.
+static func unaffordable_tile_error(button: Button) -> String:
+	if button == null:
+		return "the unaffordable command tile is missing"
+	if button.disabled:
+		return "%s is disabled; an unaffordable action must stay clickable" % button.name
+	if button.theme_type_variation != &"UnaffordableTile":
+		return "%s presents %s instead of the unaffordable state" % [
+			button.name, button.theme_type_variation]
+	var normal := button.get_theme_stylebox("normal") as StyleBoxTexture
+	var hover := button.get_theme_stylebox("hover") as StyleBoxTexture
+	if normal == null or normal.texture == null \
+			or not normal.texture.resource_path.ends_with("tile_unaffordable.png"):
+		return "%s does not paint the shipped unaffordable frame" % button.name
+	if hover == null or hover.texture == null \
+			or not hover.texture.resource_path.ends_with("tile_unaffordable.png") \
+			or linear_luminance(hover.modulate_color) <= linear_luminance(Color.WHITE):
+		return "%s hover does not lift off its unaffordable plate" % button.name
+	var cost := button.get_node_or_null("Cost") as RichTextLabel
+	if cost == null:
+		return "%s has no catalogue price label" % button.name
+	var image := normal.texture.get_image()
+	var interior := image.get_pixel(image.get_width() / 2, image.get_height() / 2)
+	var ratio := contrast_ratio(cost.get_theme_color("default_color"), interior)
+	if ratio < 4.5:
+		return "%s price contrast is %.2f:1 over the unaffordable frame" % [button.name, ratio]
+	return ""
+
 ## Fog overlay contract: the two MultiMesh layers are discrete tiles
 ## compacted in row-major order by state — Unexplored (opaque) and
 ## Explored (translucent); Visible cells draw no tile. The buffers must

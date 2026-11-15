@@ -286,7 +286,11 @@ func refresh_build_placement(placement_kind: String) -> void:
 func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 	for button in _build_grid.get_children():
 		# A build tile renders the controller's persistent placement kind, so
-		# its pressed plate is not just transient click focus.
+		# its pressed plate is not just transient click focus. The quiet
+		# CommandTile variation is scoped to the command grids: its repeated
+		# normal/hover plates are flat, while pressed/disabled keep the shipped
+		# painted frames, and the drawer's shared Tile art stays untouched.
+		button.theme_type_variation = &"CommandTile"
 		button.toggle_mode = true
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
@@ -306,6 +310,7 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 			button.tooltip_text += "\nUnlocks at %d research" % unlock_points
 		_add_counter_icon(button, entry)
 	for button in _train_grid.get_children():
+		button.theme_type_variation = &"CommandTile"
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = units.get(kind, {})
 		var unit_icon := HudHelpers.icon_for_kind("units", kind)
@@ -593,7 +598,9 @@ func refresh_economy(economy: Dictionary) -> void:
 
 ## Display-only affordability hint, derived from the catalogue prices already
 ## on each tile and the live economy snapshot. The tile stays enabled: Rust
-## remains the final validator and must surface InsufficientResources.
+## remains the final validator and must surface InsufficientResources. The
+## command grids swap between the quiet CommandTile plate and the painted
+## unaffordable one; no other HUD tile shares either variation.
 func _refresh_affordability(economy: Dictionary) -> void:
 	for grid in [_build_grid, _train_grid]:
 		for button in grid.get_children():
@@ -603,7 +610,7 @@ func _refresh_affordability(economy: Dictionary) -> void:
 				if int(cost.get(resource, 0)) > int(economy.get(resource, 0)):
 					affordable = false
 					break
-			var variation: StringName = &"UnaffordableTile" if not affordable else &"Tile"
+			var variation: StringName = &"UnaffordableTile" if not affordable else &"CommandTile"
 			if button.theme_type_variation != variation:
 				button.theme_type_variation = variation
 

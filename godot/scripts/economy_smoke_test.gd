@@ -2002,6 +2002,17 @@ func _run() -> void:
 		"blocked": _blocked_reason(barracks_id),
 		"buildings": get_tree().get_nodes_in_group("building_views").size(),
 	}
+	# HPA-698: the unaffordable Guard tile must present the painted unaffordable
+	# frame with its own hover lift while staying enabled, so this real click
+	# still reaches the Rust InsufficientResources gate below.
+	if not await _wait_until(func():
+			return guard_button.theme_type_variation == &"UnaffordableTile",
+			5.0, "unaffordable Guard tile never painted the unaffordable state"):
+		return
+	var unaffordable_tile := SmokeHelpers.unaffordable_tile_error(guard_button)
+	if not unaffordable_tile.is_empty():
+		_fail("unaffordable Guard tile: %s" % unaffordable_tile)
+		return
 	await _click_button(guard_button)
 	if not await _wait_until(
 			func(): return GrusBridge.command_feedback_revision() != reject_revision,
@@ -2028,6 +2039,13 @@ func _run() -> void:
 		return
 	if get_tree().get_nodes_in_group("building_views").size() != unaffordable_before["buildings"]:
 		_fail("rejected Guard enqueue still changed the building census")
+		return
+	# The refused click leaves the Guard tile focused, still enabled and still
+	# on its unaffordable plate: the real frame proves the clickable state.
+	var unaffordable_capture := await SmokeHelpers.capture_frame(
+		get_tree(), "command-tiles-unaffordable")
+	if not unaffordable_capture.is_empty():
+		_fail(unaffordable_capture)
 		return
 	if int(GrusBridge.economy_snapshot().get("idle_workers", 0)) < 1:
 		_fail("no idle workers before idle navigation")
