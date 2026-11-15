@@ -1035,5 +1035,5 @@ theme_override_font_sizes/normal_font_size = 14
 bbcode_enabled = true
 scroll_active = false
 autowrap_mode = 0
-text = "[center][img=18x18]res://assets/ui/icons/status/mouse_left.png[/img] Select: left click / drag / Shift   ·   [img=18x18]res://assets/ui/icons/status/mouse_right.png[/img] Command: right click   ·   Attack-move: A then right click   ·   Stop: S
-[img=18x18]res://assets/ui/icons/actions/pause.png[/img] Pause: Esc   ·   Underground: Tab   ·   [img=18x18]res://assets/ui/icons/status/mouse_wheel.png[/img] Camera: wheel / middle-drag   ·   Minimap: click to recenter[/center]"
+text = "[center][img=18x18 alt=\"Left mouse button\"]res://assets/ui/icons/status/mouse_left.png[/img] Select: left click / drag / Shift   ·   [img=18x18 alt=\"Right mouse button\"]res://assets/ui/icons/status/mouse_right.png[/img] Command: right click   ·   Attack-move: A then right click   ·   Stop: S
+[img=18x18 alt=\"Pause action\"]res://assets/ui/icons/actions/pause.png[/img] Pause: Esc   ·   Underground: Tab   ·   [img=18x18 alt=\"Mouse wheel\"]res://assets/ui/icons/status/mouse_wheel.png[/img] Camera: wheel / middle-drag   ·   Minimap: click to recenter[/center]"
