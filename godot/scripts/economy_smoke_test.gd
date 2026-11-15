@@ -308,6 +308,21 @@ func _queue_separation_error(sockets: Container, filled: int, where: String) -> 
 			or timer_backing.bg_color.get_luminance() > 0.25:
 		return "%s active queue timer has no dark backing chip: %s" % [
 			where, timer_backing.bg_color if timer_backing != null else null]
+	# The portrait itself must read: its ground is lifted above the empty
+	# recess so the dark unit art has a silhouette, and the timer chip keeps
+	# most of the portrait uncovered while still carrying the live seconds.
+	if head_plate.bg_color.get_luminance() < 0.16:
+		return "%s active portrait ground is too dark for its unit art: %s" % [
+			where, head_plate.bg_color]
+	var portrait := head.get_node_or_null("Icon") as TextureRect
+	if portrait == null or portrait.texture == null:
+		return "%s active portrait has no icon" % where
+	var portrait_rect := portrait.get_global_rect()
+	var covered := portrait_rect.intersection(timer.get_global_rect()).get_area()
+	var visible_fraction := 1.0 - covered / maxf(portrait_rect.get_area(), 1.0)
+	if visible_fraction < 0.68:
+		return "%s active portrait is %d%% covered by its timer chip" % [
+			where, roundi((1.0 - visible_fraction) * 100.0)]
 	var row := sockets.get_global_rect()
 	for index in 5:
 		var panel := sockets.get_child(index) as Panel
@@ -1738,6 +1753,30 @@ func _run() -> void:
 	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-barracks")
 	if not capture_error.is_empty():
 		_fail(capture_error)
+		return
+	# HPA-698 deferred gap: losing producer selection must clear the row only
+	# through the selection change itself. Exercise that while the live FIFO
+	# still names a job, then reselect the producer and keep the journey live;
+	# the drained check later can no longer stand in for a populated clear.
+	var populated_queue := _training_queue(barracks_id)
+	if populated_queue.is_empty() \
+			or (sockets.get_child(0) as Control).accessibility_name.is_empty():
+		_fail("populated selection-loss probe started without a named live job: %s" % [populated_queue])
+		return
+	if not await _select_unit(4):
+		return
+	if not await _wait_until(func():
+				return _selected_ids() == [4] and not sockets.is_visible_in_tree() \
+					and _queue_accessibility_error(sockets, [], "populated selection loss").is_empty(),
+			5.0, "selecting a non-producer with a populated FIFO did not clear the queue names"):
+		return
+	await _select_building(barracks)
+	if not await _wait_until(func():
+				return int((get_node("Main") as Node3D).get("selected_building_id")) == barracks_id \
+					and sockets.is_visible_in_tree() \
+					and _queue_accessibility_error(
+						sockets, _training_queue(barracks_id), "reselected Barracks").is_empty(),
+			5.0, "reselected Barracks did not restore its live queue row"):
 		return
 	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
 	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text
