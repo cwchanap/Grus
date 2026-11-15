@@ -1671,6 +1671,50 @@ func _run() -> void:
 					and int(framing_main.selected_building_id) == -1,
 				5.0, "left-click on starting worker %d did not select it at the opening framing" % worker_id):
 			return
+	# HPA-698 opening access: every live starting safe source stays on screen,
+	# clear of the HUD, and commandable through the real right-click path at
+	# the authored framing. Membership comes from the boot-explored live views
+	# (the fixture's six authored safe sources are what team 1 has explored
+	# before any scouting), never an id or coordinate table; a worker is still
+	# selected here, so the command panel is at its real in-match size.
+	var opening_safe_sources: Array[Node3D] = []
+	for node in get_tree().get_nodes_in_group("resource_views"):
+		var source := node as Node3D
+		if source != null and source.is_visible_in_tree():
+			opening_safe_sources.append(source)
+	if opening_safe_sources.size() != 6:
+		_fail("expected the six explored starting safe sources at the opening framing, found %d" % [
+			opening_safe_sources.size()])
+		return
+	var opening_clearance_report := PackedStringArray()
+	for source in opening_safe_sources:
+		var clearance := SmokeHelpers.default_view_clearance(
+			camera, get_node("Main/HUD"), source.global_position)
+		opening_clearance_report.append("id=%d %s screen=%s clear=%.1f" % [
+			int(source.get_meta("resource_id", -1)), str(source.get_meta("resource_kind", "")),
+			camera.unproject_position(source.global_position), clearance])
+		if clearance <= 0.0:
+			_fail("starting safe source %d is hidden behind the HUD at the opening framing: %s" % [
+				int(source.get_meta("resource_id", -1)), "; ".join(opening_clearance_report)])
+			return
+	# A real gather on each source proves the click reaches the world and Rust
+	# accepts it (not just that the point is uncovered). S then stops the last
+	# order so no gather task leaks into the later fixture and stockpile legs.
+	for source in opening_safe_sources:
+		var gather_revision := int(GrusBridge.command_feedback_revision())
+		_mouse_click(camera.unproject_position(source.global_position), MOUSE_BUTTON_RIGHT)
+		if not await _wait_until(_accepted_since.bind(gather_revision), 5.0,
+				"right-click on starting safe source %d was not accepted at the opening framing (screen %s)" % [
+					int(source.get_meta("resource_id", -1)),
+					camera.unproject_position(source.global_position)]):
+			return
+	_key_tap(KEY_S)
+	var gather_worker_id := int(framing_main.selected_ids[0])
+	if not await _wait_until(func():
+			return str(GrusBridge.unit_task_snapshot(gather_worker_id).get("task", "")) == "Idle",
+			5.0, "the opening safe-source gather probe did not stop worker %d" % gather_worker_id):
+		return
+	print("SMOKE_OPENING_SAFE_SOURCES %s" % " | ".join(opening_clearance_report))
 	var framing_clear := _clear_click_point(viewport_size, framing_main)
 	if framing_clear == Vector2.INF:
 		_fail("no empty pixel exists to clear selection at the opening framing")
