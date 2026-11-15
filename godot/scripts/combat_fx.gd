@@ -4,6 +4,10 @@ extends Node3D
 ## blip remains for combat events without a dedicated pilot sound.
 
 const CUE_THROTTLE_MS := 150
+## Quit drain tuning: two mixer ticks prove a whole mixer step ran after the
+## stop, and the deadline bounds a stalled audio driver.
+const DRAIN_MIX_TICKS := 2
+const DRAIN_TIMEOUT_MS := 500
 const CUES := {
 	"generic_blip": {"volume_db": -14.0, "max_polyphony": 1},
 	"gun_turret_fire": {"stream": preload("res://assets/audio/combat/gun_turret_fire.ogg"), "volume_db": -12.0, "max_polyphony": 2},
@@ -94,6 +98,25 @@ func clear_all() -> void:
 		(_players[cue_id] as AudioStreamPlayer).stop()
 	cue_counts.clear()
 	_last_cue_ms.clear()
+
+## Stops every cue, then waits until the audio mixer has processed the stops.
+## The AudioServer only queues a stopped playback for deletion from the mixer
+## thread, so exiting in that same frame leaves the playback and its Ogg stream
+## alive at ObjectDB cleanup (the verbose-shutdown leak warning). One observed
+## tick can land inside a mixer step that already passed the player; the second
+## tick's start proves that step completed after the stops.
+func stop_and_drain() -> void:
+	for cue_id in _players:
+		(_players[cue_id] as AudioStreamPlayer).stop()
+	var last_mix := AudioServer.get_time_since_last_mix()
+	var ticks := 0
+	var deadline := Time.get_ticks_msec() + DRAIN_TIMEOUT_MS
+	while ticks < DRAIN_MIX_TICKS and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+		var mix := AudioServer.get_time_since_last_mix()
+		if mix < last_mix:
+			ticks += 1
+		last_mix = mix
 
 func _flash(position: Vector3, color: Color, size: float, lifetime: float) -> void:
 	var mesh := SphereMesh.new()

@@ -373,4 +373,5 @@ func _run() -> void:
 		vendor,
 		DisplayServer.get_name(),
 	])
-	get_tree().quit(0)
+	var quit_controller = get_node("Main")
+	await quit_controller.request_quit()
