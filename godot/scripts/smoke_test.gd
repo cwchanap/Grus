@@ -27,6 +27,39 @@ func _fail(message: String) -> void:
 	push_error(message)
 	get_tree().quit(1)
 
+## The pinned RichTextLabel parser reads `alt="..."` from an image's opening
+## tag, unquotes it and uses it as the accessibility name of that ROLE_IMAGE.
+## GDScript cannot read the engine's accessibility tree or configuration
+## warnings (the public C++ warning accessor is not bound), so this checks the
+## exact BBCode the engine parses: each cue image must carry its own non-empty
+## alternative and no other image tag may appear.
+func _controls_cue_alt_error(controls: RichTextLabel, expected: Dictionary) -> String:
+	var text := controls.text
+	var cursor := 0
+	var seen := {}
+	while true:
+		var open := text.find("[img", cursor)
+		if open == -1:
+			break
+		var close := text.find("]", open)
+		if close == -1:
+			return "ControlsLabel has an unterminated image tag"
+		var tag := text.substr(open, close - open + 1)
+		var path_end := text.find("[", close)
+		if path_end == -1:
+			return "ControlsLabel has an unterminated image element: %s" % tag
+		var image_path := text.substr(close + 1, path_end - close - 1).strip_edges()
+		var alt := str(expected.get(image_path, ""))
+		if alt.is_empty():
+			return "ControlsLabel image %s has no expected alternative" % image_path
+		if not tag.contains("alt=\"%s\"" % alt):
+			return "ControlsLabel image %s is missing alt=\"%s\": %s" % [image_path, alt, tag]
+		seen[image_path] = true
+		cursor = path_end
+	if seen.size() != expected.size():
+		return "ControlsLabel has %d/%d cue images with alternatives" % [seen.size(), expected.size()]
+	return ""
+
 func _modifier_event(keycode: int, pressed: bool) -> void:
 	var event := InputEventKey.new()
 	event.keycode = keycode
@@ -991,13 +1024,41 @@ func _run() -> void:
 			_fail("ControlsLabel is missing standalone token '%s': %s" % [
 				token, controls_label.get_parsed_text()])
 			return
+	# Every documented action/key mapping must survive, not just a few tokens:
+	# a same-length wrong key (Underground: Tab -> Underground: Halt) would
+	# otherwise pass. The parsed text is whitespace-normalised so the painted
+	# separators and inline-image placeholders cannot hide a changed mapping.
+	var control_mappings := controls_text.replace("\n", " ").replace("·", " ")
+	while control_mappings.contains("  "):
+		control_mappings = control_mappings.replace("  ", " ")
+	control_mappings = control_mappings.strip_edges()
+	for mapping in [
+			"select: left click / drag / shift",
+			"command: right click",
+			"attack-move: a then right click",
+			"stop: s",
+			"pause: esc",
+			"underground: tab",
+			"camera: wheel / middle-drag",
+			"minimap: click to recenter"]:
+		if not control_mappings.contains(mapping):
+			_fail("ControlsLabel lost the documented mapping '%s': %s" % [
+				mapping, controls_label.get_parsed_text()])
+			return
 	if not controls_label.bbcode_enabled:
 		_fail("ControlsLabel does not render its inline control cues")
 		return
-	for cue_path in ["res://assets/ui/icons/status/mouse_left.png",
-			"res://assets/ui/icons/status/mouse_right.png",
-			"res://assets/ui/icons/status/mouse_wheel.png",
-			"res://assets/ui/icons/actions/pause.png"]:
+	var cue_alts := {
+		"res://assets/ui/icons/status/mouse_left.png": "Left mouse button",
+		"res://assets/ui/icons/status/mouse_right.png": "Right mouse button",
+		"res://assets/ui/icons/status/mouse_wheel.png": "Mouse wheel",
+		"res://assets/ui/icons/actions/pause.png": "Pause action",
+	}
+	var cue_alt_error := _controls_cue_alt_error(controls_label, cue_alts)
+	if not cue_alt_error.is_empty():
+		_fail(cue_alt_error)
+		return
+	for cue_path in cue_alts:
 		if not controls_label.text.contains(cue_path):
 			_fail("ControlsLabel lost the existing control cue %s" % cue_path)
 			return
