@@ -757,6 +757,21 @@ func _run() -> void:
 	scraps.sort_custom(func(a, b): return int(a.get_meta("resource_id")) < int(b.get_meta("resource_id")))
 	if not _check(scraps.size() == 3 and coals.size() == 1, "expected three explored Scrap and one Coal source"):
 		return
+	# HPA-698: the closer authored framing puts the southeast safe Scrap
+	# source behind the command card. Real wheel zoom-out restores the former
+	# coverage for this gather leg, then the authored framing returns before
+	# the drawer work; targets and the command path are unchanged.
+	var gather_click_points: Array = []
+	for view in workers:
+		gather_click_points.append(view.global_position)
+	gather_click_points.append(coals[0].global_position)
+	for view in scraps:
+		gather_click_points.append(view.global_position)
+	var authored_camera_size: float = await SmokeHelpers.zoom_until_visible(
+		get_tree(), _main.camera, _main.get_node("HUD"), gather_click_points)
+	if not _check(authored_camera_size >= 0.0,
+			"real wheel zoom never cleared the gather targets of the HUD"):
+		return
 	for index in workers.size():
 		await _click_view(workers[index], MOUSE_BUTTON_LEFT)
 		if not _check(_main.selected_ids == [int(workers[index].get_meta("unit_id"))], "worker UI selection failed"):
@@ -771,6 +786,9 @@ func _run() -> void:
 		if not _check(str(GrusBridge.command_feedback()) == "Command accepted for 1 unit(s)" \
 				and int(task.get("source", -1)) == int(source.get_meta("resource_id")), "worker did not acquire Gather source: %s" % task):
 			return
+	var restored := await SmokeHelpers.restore_camera_size(get_tree(), _main.camera, authored_camera_size)
+	if not _check(restored, "real wheel zoom never restored the authored camera framing"):
+		return
 
 	await _key(KEY_TAB)
 	if not await _wait(func(): return int(GrusBridge.underground_snapshot().depth) == 1, 5.0, "L1 never resumed"):

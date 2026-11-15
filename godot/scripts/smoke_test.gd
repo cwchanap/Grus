@@ -6,6 +6,13 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 ## at run time, never copied from the fixture into GDScript.
 const EXPANSION_SALVAGE_ID := 14
 
+## HPA-698 framing: the opening orthographic size is closer than the former
+## 72.0 default so the real starting base reads larger, and one player
+## wheel-zoom must still reach that former coverage. Both are contracts on
+## the authored scene, not on any copied fixture coordinates.
+const INITIAL_CAMERA_SIZE := 54.0
+const PRIOR_CAMERA_SIZE := 72.0
+
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 ## RejectReason discriminant values (declaration order in
 ## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
@@ -1381,6 +1388,96 @@ func _run() -> void:
 			return
 	if not research_rect.encloses(analyze_button.get_global_rect()):
 		_fail("Analyze button escapes the research panel")
+		return
+
+	# HPA-698 opening framing: a closer default view makes the real starting
+	# core and workers larger, while the player must still wheel back out to
+	# the former coverage. This leg runs before any unit command: its two
+	# opt-in captures share the fixture, camera transform and selection
+	# state; only the real wheel zoom (and the live countdown digits that
+	# advance while it settles) separates them.
+	var framing_capture := await SmokeHelpers.capture_frame(get_tree(), "framing-default")
+	if not framing_capture.is_empty():
+		_fail(framing_capture)
+		return
+	if not is_equal_approx(camera.size, INITIAL_CAMERA_SIZE):
+		_fail("initial camera size is %.1f, not the %.1f opening framing" % [
+			camera.size, INITIAL_CAMERA_SIZE])
+		return
+	var framing_main := get_node("Main")
+	var framing_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var starting_workers: Array[Node3D] = [unit_one, unit_two, unit_three, _unit_view(4)]
+	for worker in starting_workers:
+		if worker == null or int(worker.get_meta("team_id", -1)) != 1:
+			_fail("a starting worker view is missing at the opening framing")
+			return
+		var worker_screen := camera.unproject_position(worker.global_position)
+		if camera.is_position_behind(worker.global_position) \
+				or not Rect2(Vector2.ZERO, viewport_size).has_point(worker_screen) \
+				or framing_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(worker_screen)):
+			_fail("starting worker %s is not visible above the HUD at the opening framing: %s" % [
+				worker.get_meta("unit_id", -1), worker_screen])
+			return
+	var core_screen := camera.unproject_position(research_center_view.global_position)
+	if camera.is_position_behind(research_center_view.global_position) \
+			or not Rect2(Vector2.ZERO, viewport_size).has_point(core_screen) \
+			or framing_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(core_screen)):
+		_fail("starting Research Center is not visible above the HUD at the opening framing: %s" % core_screen)
+		return
+	# Selectable means the real click path, not a direct state poke.
+	_mouse_click(core_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(framing_main.selected_building_id) == 1 and framing_main.selected_ids.is_empty(),
+			5.0, "left-click on the starting Research Center selected nothing at the opening framing"):
+		return
+	for worker in starting_workers:
+		var worker_id := int(worker.get_meta("unit_id", -1))
+		_mouse_click(camera.unproject_position(worker.global_position), MOUSE_BUTTON_LEFT)
+		if not await _wait_until(func():
+				return framing_main.selected_ids.size() == 1 \
+					and int(framing_main.selected_ids[0]) == worker_id \
+					and int(framing_main.selected_building_id) == -1,
+				5.0, "left-click on starting worker %d did not select it at the opening framing" % worker_id):
+			return
+	var framing_clear := _clear_click_point(viewport_size, framing_main)
+	if framing_clear == Vector2.INF:
+		_fail("no empty pixel exists to clear selection at the opening framing")
+		return
+	_mouse_click(framing_clear, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(framing_main.selected_building_id) == -1 \
+				and (framing_main.selected_ids as Array).is_empty(),
+			5.0, "the opening-framing deselection click did not clear the selection"):
+		return
+	# Three real wheel steps from 54.0 reach the former 72.0 view and beyond;
+	# zooming must not pan or rotate the authored opening transform.
+	for _step in 3:
+		_mouse_click(viewport_size * 0.5, MOUSE_BUTTON_WHEEL_DOWN)
+		await get_tree().process_frame
+	if camera.size < PRIOR_CAMERA_SIZE:
+		_fail("three wheel-out steps from %.1f reached only %.1f, short of the prior %.1f view" % [
+			INITIAL_CAMERA_SIZE, camera.size, PRIOR_CAMERA_SIZE])
+		return
+	if not camera.global_transform.is_equal_approx(default_camera_transform):
+		_fail("wheel zoom-out moved the opening camera transform: %s" % camera.global_transform)
+		return
+	# The captured frame can trail the camera.size property by a few frames
+	# after buffered wheel input: a 3-frame settle still captured the 66.0
+	# view, while 10 frames captured the final 72.0 view. Settle frames so the
+	# opt-in capture shows the final zoom, not a transitional one.
+	for _frame in 10:
+		await get_tree().process_frame
+	var zoomout_capture := await SmokeHelpers.capture_frame(get_tree(), "framing-zoomout")
+	if not zoomout_capture.is_empty():
+		_fail(zoomout_capture)
+		return
+	for _step in 3:
+		_mouse_click(viewport_size * 0.5, MOUSE_BUTTON_WHEEL_UP)
+		await get_tree().process_frame
+	if not camera.global_transform.is_equal_approx(default_camera_transform) \
+			or not is_equal_approx(camera.size, default_camera_size):
+		_fail("wheel zoom never restored the opening framing: size=%.1f transform=%s" % [
+			camera.size, camera.global_transform])
 		return
 
 	# Imported art must stay inside the simulation's blocked rectangles.
@@ -3204,5 +3301,5 @@ func _run() -> void:
 		return
 	unready_view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
 	get_tree().quit(0)
