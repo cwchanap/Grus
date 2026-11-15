@@ -637,17 +637,23 @@ func refresh_wave(wave: Dictionary) -> void:
 			incoming_names.has(direction)
 	var wave_number := int(wave.get("wave", 0))
 	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
-	wave_label.text = "%s\n%sNext wave %d in %d:%02d\nAliens %d" % [
+	# The compact top-rail card cannot hold "Aliens 0" and the warning on one
+	# run without clipping, so the incoming zones own the fourth line exactly
+	# when the snapshot announces them.
+	var lines := PackedStringArray([
 		current_label,
-		_inline_icon("status", "WaveCountdown"),
-		int(wave.get("next_wave", 1)),
-		int(remaining / 60),
-		remaining % 60,
-		int(wave.get("live_aliens", 0)),
-	]
+		"%sNext wave %d in %d:%02d" % [
+			_inline_icon("status", "WaveCountdown"),
+			int(wave.get("next_wave", 1)),
+			int(remaining / 60),
+			remaining % 60,
+		],
+		"Aliens %d" % int(wave.get("live_aliens", 0)),
+	])
 	if warning:
-		wave_label.text += "   %sIncoming: %s" % [
-			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
+		lines.append("%sIncoming: %s" % [
+			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)])
+	wave_label.text = "\n".join(lines)
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
 		_minimap.set_wave_snapshot(wave)
 	_result_wave_text = "%sWave %d" % [
@@ -788,8 +794,8 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 	_hide_queue()
 	portrait_icon.texture = null
 	selection_panel.tooltip_text = ""
-	selection_label.text = ""
-	selection_name.text = "Nothing selected"
+	selection_name.text = ""
+	selection_label.text = "Nothing selected"
 	_set_train_producer("")
 
 ## One live unit/building health readout: clampi(round(ratio * max), 0, max),

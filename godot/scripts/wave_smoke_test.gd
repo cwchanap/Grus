@@ -43,6 +43,17 @@ func _wave_hud_fits(control: Control) -> bool:
 	rect.size = rect.size.max(content_size)
 	return Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).encloses(rect)
 
+## The compact card is narrower than the text it used to hold: every line must
+## stay inside the label's own rectangle, not merely inside the viewport.
+func _wave_text_fits(control: Control) -> bool:
+	var rich_label := control as RichTextLabel
+	if rich_label == null:
+		return false
+	if rich_label.get_visible_line_count() != rich_label.get_line_count():
+		return false
+	return rich_label.get_content_width() <= rich_label.size.x + 0.5 \
+			and rich_label.get_content_height() <= rich_label.size.y + 0.5
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -75,6 +86,17 @@ func _run() -> void:
 			wave_panel.get_global_rect() if wave_panel != null else "missing",
 			_wave_ring.get_global_rect(), wave_label.get_global_rect()])
 		return
+	# HPA-698 visual follow-up: the wave card reads as part of the top rail, not
+	# as a second floating bar far below it. The opening targets above the card
+	# keep the economy smoke's clearance probe; this pins the composition.
+	var top_bar := main.get_node_or_null("HUD/EconomyPanel") as Control
+	if top_bar == null:
+		_stage5_fail("top bar is missing for the wave-card rail check")
+		return
+	var rail_gap := wave_panel.get_global_rect().position.y - top_bar.get_global_rect().end.y
+	if rail_gap < 0.0 or rail_gap > 8.0:
+		_stage5_fail("wave card sits %.1f px below the top bar; the top rail gaps it 0..8 px" % [rail_gap])
+		return
 	# The countdown must be rendered from a live bridge read, not the
 	# scene's placeholder text: poll until the label shows the snapshot's
 	# next_wave, then require the snapshot's own remaining time on screen.
@@ -95,8 +117,10 @@ func _run() -> void:
 		_stage5_fail("wave HUD shows incoming-zone art before a warning")
 		return
 	if not start_text.contains("Next wave %d" % next_wave) \
-			or not start_text.contains(expected_time) or not _wave_hud_fits(wave_label):
-		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s'): %s" % [next_wave, expected_time, start_text])
+			or not start_text.contains(expected_time) or not _wave_hud_fits(wave_label) \
+			or not _wave_text_fits(wave_label) \
+			or wave_label.text.split("\n").size() != 3:
+		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s' on 3 lines): %s" % [next_wave, expected_time, start_text])
 		return
 	if not _ring_matches(live_wave) or bool(_wave_ring.warning):
 		_stage5_fail("idle wave ring does not render seconds_remaining/timer_total_seconds: ring=%s snapshot=%s" % [
@@ -207,12 +231,24 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	if not warning_text.contains("Prep") or not warning_text.contains("Next wave 1") \
 			or not warning_text.contains("Incoming: North") \
 			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png") \
-			or not _wave_hud_fits(wave_label):
+			or not _wave_hud_fits(wave_label) or not _wave_text_fits(wave_label):
 		_stage5_fail("HUD does not render the live warning snapshot and incoming icon without clipping: %s" % [warning_text])
 		return
-	# HPA-698 access follow-up: the card sits below the northwest corridor at
-	# the authored framing; its static tooltip must still answer the real
-	# pointer, not just exist as a property string.
+	# HPA-698 visual follow-up: in the compact card the warning owns a line of
+	# its own, so "Aliens 0" and the incoming zone never share a clipped run.
+	var warning_lines: PackedStringArray = wave_label.text.split("\n")
+	if warning_lines.size() != 4 or not str(warning_lines[3]).contains("Incoming: North"):
+		_stage5_fail("incoming warning did not get its own line in the compact wave card: %s" % [warning_lines])
+		return
+	# Real-render evidence of the compact card's warning state; writes nothing
+	# unless GRUS_CAPTURE_DIR names a directory.
+	var warning_capture := await SmokeHelpers.capture_frame(get_tree(), "wave-warning")
+	if not warning_capture.is_empty():
+		_stage5_fail(warning_capture)
+		return
+	# HPA-698 access follow-up: the card clears the northwest corridor to its
+	# right at the authored framing; its static tooltip must still answer the
+	# real pointer, not just exist as a property string.
 	var wave_card := main.get_node("HUD/WavePanel") as Control
 	var panel_hover := InputEventMouseMotion.new()
 	panel_hover.position = wave_card.get_global_rect().get_center()
