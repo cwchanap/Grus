@@ -19,9 +19,17 @@ scene="${GRUS_SHUTDOWN_SCENE:-res://scenes/smoke_test.tscn}"
 marker="${GRUS_SHUTDOWN_MARKER:-GRUS_GODOT_SMOKE_OK}"
 runs="${GRUS_RUNS-3}"
 base_dir="${GRUS_SHUTDOWN_LOG_DIR:-$repo_root/test_output/shutdown-audio}"
+# A run is a full scene process (seconds to minutes); 100 is far beyond any
+# practical shutdown audit and keeps the loop counter inside Bash's signed
+# 64-bit arithmetic, so an oversized decimal cannot wrap around.
+runs_max=100
 
 if ! [[ "$runs" =~ ^[1-9][0-9]*$ ]]; then
-    echo "FAIL: GRUS_RUNS must be a positive integer, got '$runs'" >&2
+    echo "FAIL: GRUS_RUNS must be a positive integer no greater than $runs_max, got '$runs'" >&2
+    exit 2
+fi
+if [ "${#runs}" -gt 3 ] || [ "$runs" -gt "$runs_max" ]; then
+    echo "FAIL: GRUS_RUNS must be a positive integer no greater than $runs_max, got '$runs'" >&2
     exit 2
 fi
 
