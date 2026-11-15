@@ -94,7 +94,11 @@ func _ready() -> void:
 		kind_button.toggle_mode = true
 		kind_button.add_theme_font_size_override("font_size", 14)
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		kind_button.custom_minimum_size = Vector2(52, 56)
+		# HPA-698 visual follow-up: the icon is the tile's dominant read. The
+		# 76 px tile keeps a 34 px icon on top and the unchanged 32 px clear
+		# name/price band at the bottom, so the icon no longer competes with
+		# the labels for the same pixels.
+		kind_button.custom_minimum_size = Vector2(52, 76)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
 		kind_button.set_meta("kind", kind)
@@ -106,7 +110,7 @@ func _ready() -> void:
 		var room_icon := _icon_for_kind("underground", kind)
 		if room_icon != null:
 			kind_button.icon = room_icon
-			kind_button.add_theme_constant_override("icon_max_width", 20)
+			kind_button.add_theme_constant_override("icon_max_width", 34)
 			kind_button.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			kind_button.vertical_icon_alignment = VERTICAL_ALIGNMENT_TOP
 			kind_button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
@@ -152,16 +156,31 @@ func _ready() -> void:
 		var level_label := Label.new()
 		level_label.name = "KindLevelLabel"
 		level_label.text = "L%d" % int(ug_entry.get("min_level", 1))
-		level_label.add_theme_font_size_override("font_size", 10)
+		level_label.add_theme_font_size_override("font_size", 11)
+		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		level_label.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
 		level_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		level_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		level_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		# The badge sits over the larger room icon, so it carries its own small
+		# dark plate: the required level stays readable without relying on the
+		# icon's colours underneath it.
+		var level_chip := StyleBoxFlat.new()
+		level_chip.bg_color = Color(0.03, 0.05, 0.07, 0.82)
+		level_chip.border_color = Color(0.98, 0.78, 0.45, 0.55)
+		level_chip.set_border_width_all(1)
+		level_chip.set_corner_radius_all(3)
+		level_chip.content_margin_left = 2.0
+		level_chip.content_margin_right = 3.0
+		level_chip.content_margin_top = 0.0
+		level_chip.content_margin_bottom = 0.0
+		level_label.add_theme_stylebox_override("normal", level_chip)
 		level_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		level_label.offset_left = -22.0
+		level_label.offset_left = -26.0
 		level_label.offset_right = -3.0
 		level_label.offset_top = 2.0
-		level_label.offset_bottom = 16.0
+		level_label.offset_bottom = 18.0
 		kind_button.add_child(level_label)
 		kind_button.tooltip_text = _kind_tooltip(ug_entry)
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
@@ -323,13 +342,12 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 			target, roundi(float(snap.get("progress", 0.0)) * 100.0), remaining_seconds]
 	else:
 		dig_line = "L%d dig · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
-	var lock_line := ""
-	if phase == "Paused":
-		lock_line = " · Paused — inspection only"
-	elif not playing:
-		lock_line = " · %s — inspection only" % phase
-	_header.text = "UNDERGROUND · depth %d · Esc closes\n%s%s" % [
-		depth, dig_line, lock_line]
+	# One digest line keeps the room-kind row's icon room. While playing the
+	# header names Esc; a non-playing drawer says it is inspection-only
+	# instead, the only suffix that also fits the deep L5 price on one line.
+	# The Pause/Result overlay already names the phase.
+	_header.text = "UNDERGROUND · depth %d · %s · %s" % [
+		depth, dig_line, "Esc closes" if playing else "inspection only"]
 	# The themed bar mirrors the snapshot's single active dig, never a timer
 	# of its own; it sits outside the clipped level rows and hides when idle.
 	_dig_progress.visible = excavating

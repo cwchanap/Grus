@@ -600,6 +600,35 @@ func _command_status_readability_error(status: Label, where: String) -> String:
 			where, shaped.x, shaped.y, outline_size, status.size.x, status.size.y]
 	return ""
 
+## HPA-698 visual follow-up: the empty selection card is a quiet placeholder,
+## not a second title bar. The oversized Header name dominated the lower panel
+## before anything was selected, so the empty state carries one body-size line
+## that must fit its own rectangle. Selecting a unit/building still owns the
+## Header name.
+func _assert_empty_selection_hierarchy() -> bool:
+	var name_label := get_node_or_null("Main/HUD/SelectionPanel/SelectionName") as Label
+	var hint := get_node_or_null("Main/HUD/SelectionPanel/SelectionLabel") as Label
+	if name_label == null or hint == null:
+		_fail("empty selection labels are missing under HUD/SelectionPanel")
+		return false
+	if not name_label.text.is_empty():
+		_fail("empty selection renders the heavy title \"%s\" instead of a quiet body hint" % [
+			name_label.text])
+		return false
+	if hint.text != "Nothing selected":
+		_fail("empty selection hint reads \"%s\"" % [hint.text])
+		return false
+	var font_size := hint.get_theme_font_size("font_size")
+	if font_size > 14:
+		_fail("empty selection hint is %d px; the empty state stays at body size" % [font_size])
+		return false
+	var shaped := SmokeHelpers.shaped_text_size(hint)
+	if shaped.x > hint.size.x + 0.5 or shaped.y > hint.size.y + 0.5:
+		_fail("empty selection hint %.1fx%.1f does not fit its %.1fx%.1f rectangle" % [
+			shaped.x, shaped.y, hint.size.x, hint.size.y])
+		return false
+	return true
+
 ## HPA-698 presentation contract: one project-wide Frostline theme using the
 ## bundled Barlow faces (never a system-font assumption), the 15 HPA-695 icons
 ## imported at 128 px into the existing icon tree, and the UI-kit/screen
@@ -1154,6 +1183,8 @@ func _run() -> void:
 	if not await _assert_command_tile_treatment():
 		return
 	if not _assert_command_status_above_selection():
+		return
+	if not _assert_empty_selection_hierarchy():
 		return
 	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
 		return
