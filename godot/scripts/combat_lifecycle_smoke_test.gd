@@ -215,7 +215,9 @@ func _button(path: String) -> Button:
 
 ## Prominent Resume: the Paused action must carry the same bright primary
 ## plate and 22 px label as Start/Restart, while keeping its node, wording,
-## connection, geometry and Esc path untouched.
+## connection, geometry and Esc path untouched. Its ink must stay readable on
+## that plate in every interactive state, and focus must be a spatially
+## distinct high-contrast ring rather than a recoloured edge.
 func _paused_primary_action_error() -> String:
 	var start := _button("HUD/SessionPanel/StartButton")
 	var resume := _button("HUD/SessionPanel/ResumeButton")
@@ -236,7 +238,47 @@ func _paused_primary_action_error() -> String:
 	if resume.get_theme_font_size("font_size") < 22:
 		return "Resume label is below the 22 px primary-action floor: %d" % [
 			resume.get_theme_font_size("font_size")]
+	# Resume is visible only while enabled, so disabled ink is not applicable;
+	# every reachable interactive state must stay above ordinary-text contrast.
+	for state in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color"]:
+		var ink := resume.get_theme_color(state)
+		var ratio := _contrast_ratio(ink, resume_style.bg_color)
+		if ratio < 4.5:
+			return "Resume %s contrast on the primary plate is %.2f:1" % [state, ratio]
+	var focus := resume.get_theme_stylebox("focus") as StyleBoxFlat
+	if focus == null or focus.draw_center \
+			or focus.border_width_left < 3 or focus.border_width_top < 3 \
+			or focus.border_width_right < 3 or focus.border_width_bottom < 3:
+		return "Resume focus is not a thick outline: %s" % focus
+	for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
+		if focus.get_expand_margin(side) < 2.0:
+			return "Resume focus does not expand outside the primary plate"
+	var focus_ratio := _contrast_ratio(focus.border_color, Color(0.05, 0.07, 0.09))
+	if focus_ratio < 4.5:
+		return "Resume focus ring contrast is %.2f:1" % focus_ratio
 	return ""
+
+## Test-only focus set-up: the global Tab handler owns focus navigation, so
+## the real-keyboard leg focuses Resume directly and then activates it with a
+## real Enter. Returns "" only when the viewport focus is actually on Resume.
+func _paused_focus_error() -> String:
+	var resume := _button("HUD/SessionPanel/ResumeButton")
+	if not resume.has_focus() or get_viewport().gui_get_focus_owner() != resume:
+		return "Resume did not receive keyboard focus"
+	return ""
+
+## Reference sRGB contrast for the two colours the renderer actually draws.
+func _contrast_ratio(a: Color, b: Color) -> float:
+	var la := _linear_luminance(a)
+	var lb := _linear_luminance(b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+func _linear_luminance(color: Color) -> float:
+	return 0.2126 * _linear_channel(color.r) \
+			+ 0.7152 * _linear_channel(color.g) + 0.0722 * _linear_channel(color.b)
+
+func _linear_channel(value: float) -> float:
+	return value / 12.92 if value <= 0.04045 else pow((value + 0.055) / 1.055, 2.4)
 
 ## Outside Playing neither input handler may reach the bridge: right-click
 ## is refused, A arms nothing, and the command feedback revision is stable.
@@ -931,6 +973,39 @@ func _run() -> void:
 	var resume_button := _button("HUD/SessionPanel/ResumeButton")
 	if not resume_button.visible or resume_button.disabled:
 		_fail("Resume button is not visible and enabled while Paused")
+		return
+	# Focused Pause evidence. The global Tab handler owns focus navigation, so
+	# this leg sets focus test-side and then activates with a real Enter; the
+	# unfocused/focused pair isolates the ring pixels from every other change.
+	var unfocused_capture := await SmokeHelpers.capture_frame(get_tree(), "pause-unfocused")
+	if not unfocused_capture.is_empty():
+		_fail(unfocused_capture)
+		return
+	resume_button.grab_focus()
+	if not await _wait_until(func(): return _paused_focus_error().is_empty(), 5.0,
+			"Resume did not take the test-set keyboard focus"):
+		return
+	var focused_capture := await SmokeHelpers.capture_frame(get_tree(), "pause-focused")
+	if not focused_capture.is_empty():
+		_fail(focused_capture)
+		return
+	await _key_tap(KEY_ENTER)
+	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,
+			"real Enter on focused Resume never resumed to Playing"):
+		return
+	# Re-enter Pause so the original real mouse Resume click remains covered:
+	# the open drawer closes on the first Esc, the second pauses, then Tab
+	# reopens the inspection drawer for the unchanged survive-Resume check.
+	await _key_tap(KEY_ESCAPE)
+	await _key_tap(KEY_ESCAPE)
+	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused", 5.0,
+			"second real Pause leg never reached Paused"):
+		return
+	await _key_tap(KEY_TAB)
+	if not await _wait_until(func():
+				return str(GrusBridge.session_snapshot().get("phase", "")) == "Paused" \
+					and ug_drawer.visible,
+			5.0, "second Pause leg did not reopen the inspection drawer"):
 		return
 	SmokeHelpers.push_mouse_click(get_tree(), resume_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Playing", 5.0,

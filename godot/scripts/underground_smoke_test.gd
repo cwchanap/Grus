@@ -203,6 +203,19 @@ func _shaped_text_size(text: String, font: Font, font_size: int) -> Vector2:
 	paragraph.add_string(text, font, font_size, "")
 	return paragraph.get_size()
 
+## Reference sRGB contrast for the two colours the renderer actually draws.
+func _contrast_ratio(a: Color, b: Color) -> float:
+	var la := _linear_luminance(a)
+	var lb := _linear_luminance(b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+func _linear_luminance(color: Color) -> float:
+	return 0.2126 * _linear_channel(color.r) \
+			+ 0.7152 * _linear_channel(color.g) + 0.0722 * _linear_channel(color.b)
+
+func _linear_channel(value: float) -> float:
+	return value / 12.92 if value <= 0.04045 else pow((value + 0.055) / 1.055, 2.4)
+
 ## `_button_text_rect` models one supported Button layout only: a left icon
 ## and centred, unwrapped, LTR text. Refuse to measure anything else rather
 ## than silently returning a rectangle for settings the model does not cover.
@@ -288,13 +301,20 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 		return "%s: %s" % [where, content_error]
 	if button.get_theme_font_size("font_size") < 13:
 		return "%s room name is smaller than 13 px" % where
-	# The name paints over the occupied room's painted frame: the dark outline
-	# alone still let the bright bevel through, so the contrast treatment adds
-	# a hard drop shadow as well.
-	if button.get_theme_color("font_shadow_color").a < 0.6 \
-			or button.get_theme_constant("shadow_offset_x") < 1 \
-			or button.get_theme_constant("shadow_offset_y") < 1:
-		return "%s room name has no readable drop shadow" % where
+	# Button draws `outline_size` and `font_outline_color`; the draft's
+	# Button shadow overrides were never consumed. The supported contrast
+	# treatment is a thicker dark outline over the painted frame.
+	var outline_size := button.get_theme_constant("outline_size")
+	if outline_size < 3:
+		return "%s room name outline is thinner than 3 px" % where
+	var outline_color := button.get_theme_color("font_outline_color")
+	if outline_color.a < 0.8 or outline_color.get_luminance() > 0.15:
+		return "%s room name outline is not a dark, opaque edge: %s" % [where, outline_color]
+	var name_color := button.get_theme_color(
+		"font_disabled_color" if button.disabled else "font_color")
+	if _contrast_ratio(name_color, outline_color) < 7.0:
+		return "%s room name ink/outline contrast is %.2f:1" % [
+			where, _contrast_ratio(name_color, outline_color)]
 	if button.text.contains("%"):
 		return "%s still puts the percentage in the room label: %s" % [where, button.text]
 	var percent := button.get_node_or_null("SlotPercent") as Label
@@ -306,6 +326,8 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 	var name_text := _button_text_rect(button)
 	if not tile_rect.encloses(name_text):
 		return "%s room name text leaves its tile" % where
+	if not tile_rect.encloses(name_text.grow(float(outline_size))):
+		return "%s room name outline leaves its tile" % where
 	if bool(slot.get("complete", false)):
 		var effect := str(slot.get("benefit", ""))
 		if percent.visible:
