@@ -663,9 +663,11 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	var marker_parts := PackedStringArray()
 	for marker in _research_marker_entries:
 		var reached := points >= float(marker["points"])
-		marker_parts.append("[color=%s][img=14x14]%s[/img] %s %d[/color]" % [
+		# The marker emitter bypasses _inline_icon, so its catalogue label is
+		# the image alternative (the visible short form stays unchanged).
+		marker_parts.append("[color=%s][img=14x14 alt=\"%s\"]%s[/img] %s %d[/color]" % [
 			"#8fd18f" if reached else "#aab7c2",
-			marker["icon"], marker["short"], int(marker["points"])])
+			marker["label"], marker["icon"], marker["short"], int(marker["points"])])
 	research_markers.text = "  ".join(marker_parts)
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is
@@ -806,22 +808,28 @@ func _render_queue(building: Dictionary) -> void:
 			# The head's timer chip must not linger as an empty rectangle.
 			time.visible = false
 			progress_bar.visible = false
+			# Neither may a finished job's accessible name linger.
+			panel.accessibility_name = ""
 			continue
 		var kind := str(queue[index])
 		panel.add_theme_stylebox_override("panel",
 			_socket_head_style if index == 0 else _socket_queued_style)
 		icon.texture = _icon_for_kind("units", kind)
 		time.visible = index == 0
+		# Icon-only row: each portrait names the live FIFO job it shows, and
+		# the head says its remaining seconds from the same progress readout.
 		if index == 0:
 			var seconds := float(_unit_entries.get(kind, {}).get("seconds", 0))
 			var remaining := maxi(ceili(seconds * (1.0 - progress)), 0)
 			time.text = "%ds" % remaining
+			panel.accessibility_name = "Training %s — %ds remaining" % [kind, remaining]
 			icon.modulate = Color(1, 1, 1, 1)
 			progress_bar.max_value = 100.0
 			progress_bar.value = clampf(progress * 100.0, 0.0, 100.0)
 			progress_bar.visible = true
 		else:
 			time.text = ""
+			panel.accessibility_name = "Queued %s" % kind
 			icon.modulate = Color(0.75, 0.82, 0.88, 0.95)
 			progress_bar.visible = false
 	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
@@ -834,6 +842,9 @@ func _clear_selection_detail() -> void:
 	carry_bar.visible = false
 	carry_label.visible = false
 	queue_sockets.visible = false
+	# A hidden row must not keep naming the previous producer's jobs.
+	for socket in _socket_panels:
+		socket.accessibility_name = ""
 	selection_panel.tooltip_text = ""
 	portrait_icon.texture = null
 	selection_label.text = ""
@@ -992,6 +1003,13 @@ func _icon_for_kind(group: String, kind: String) -> Texture2D:
 		_icon_cache[path] = ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
 	return _icon_cache[path] as Texture2D
 
+## Every inline icon is an accessible image, never a bare glyph: the pinned
+## RichTextLabel parser uses the tag's `alt` as that ROLE_IMAGE's name, and
+## the catalogue kind humanised is already the word the icon stands for
+## ("Population", "Surface Cold"). Art, size and visible text are unchanged.
 func _inline_icon(group: String, kind: String, size := 18) -> String:
 	var icon := _icon_for_kind(group, kind)
-	return "[img=%dx%d]%s[/img] " % [size, size, icon.resource_path] if icon != null else ""
+	if icon == null:
+		return ""
+	return "[img=%dx%d alt=\"%s\"]%s[/img] " % [
+		size, size, kind.capitalize(), icon.resource_path]

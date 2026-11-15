@@ -334,6 +334,36 @@ func _queue_separation_error(sockets: Container, filled: int, where: String) -> 
 			where, head.custom_minimum_size, queued.custom_minimum_size if queued != null else Vector2.ZERO]
 	return ""
 
+## HPA-698 finding 2: the queue row is icon-only, so each filled socket must
+## name the live ordered job it draws — the head also carries its rendered
+## remaining-time chip — and empty sockets must expose no stale name. The
+## comparison runs against the same live `training_queue` array the sockets
+## consume, so a shift or drain can never pass on an unchanged texture row.
+func _queue_accessibility_error(sockets: Container, queue: Array, where: String) -> String:
+	for index in 5:
+		var socket := sockets.get_child(index) as Control
+		var spoken := socket.accessibility_name
+		if index >= queue.size():
+			if not spoken.is_empty():
+				return "%s empty socket %d still names \"%s\"" % [where, index + 1, spoken]
+			continue
+		var kind := str(queue[index])
+		if not spoken.contains(kind):
+			return "%s socket %d does not name its live job %s: \"%s\"" % [
+				where, index + 1, kind, spoken]
+		for other in queue:
+			if str(other) != kind and spoken.contains(str(other)):
+				return "%s socket %d name \"%s\" also names the other job %s" % [
+					where, index + 1, spoken, other]
+	if queue.is_empty():
+		return ""
+	var head := sockets.get_child(0) as Control
+	var head_time := (head.get_node("Time") as Label).text
+	if head_time.is_empty() or not head.accessibility_name.contains(head_time):
+		return "%s head socket name does not carry its remaining time %s: \"%s\"" % [
+			where, head_time, head.accessibility_name]
+	return ""
+
 ## One-sample acceptance for the overflow capture. The bounded wait, the
 ## capture gate and the focused regression all judge this same state; the
 ## regression passes explicit selection/queue copies so stale, wrong-producer
@@ -993,19 +1023,19 @@ func _run() -> void:
 		var currency := str(resource[0])
 		var icon_path := "res://assets/ui/icons/resources/%s.png" % str(resource[2])
 		var shown := str(int(boot.get(str(resource[1]), -1)))
-		var expected_pair := "[img=28x28]%s[/img] %s" % [icon_path, shown]
+		var expected_pair := "[img=28x28 alt=\"%s\"]%s[/img] %s" % [currency, icon_path, shown]
 		var pair_position := economy_markup.find(expected_pair, previous_pair_end)
 		if pair_position < 0:
 			_fail("economy HUD does not pair the %s icon with its live value %s: \"%s\"" % [
 				currency, shown, economy_text])
 			return
 		previous_pair_end = pair_position + expected_pair.length()
-	var population_pair := "[img=28x28]res://assets/ui/icons/status/population.png[/img] %d / %d" % [
+	var population_pair := "[img=28x28 alt=\"Population\"]res://assets/ui/icons/status/population.png[/img] %d / %d" % [
 		int(boot.get("population_used", -1)), int(boot.get("population_cap", -1))]
 	if not economy_markup.contains(population_pair):
 		_fail("economy HUD population pair is not the live used/cap value: %s" % economy_markup)
 		return
-	var heat_pair := "[img=28x28]res://assets/ui/icons/resources/heat.png[/img] %d / %d" % [
+	var heat_pair := "[img=28x28 alt=\"Heat\"]res://assets/ui/icons/resources/heat.png[/img] %d / %d" % [
 		int(boot.get("heat_supply", -1)), int(boot.get("heat_demand", -1))]
 	if not economy_markup.contains(heat_pair):
 		_fail("economy HUD heat pair is not the live supply/demand value: %s" % economy_markup)
@@ -1111,6 +1141,7 @@ func _run() -> void:
 				and amount_text.is_valid_int() and int(amount_text) == int(carry_bar.value) \
 				and parsed.contains("/ %d" % limit) \
 				and absf(carry_bar.value - float(task.get("carry_amount", -1))) <= 3.0 \
+				and carry_label.text.contains("alt=\"%s\"" % str(task.get("carry_kind", ""))) \
 				and carry_label.text.contains("resources/%s.png" % str(task.get("carry_kind", "")).to_snake_case()),
 			10.0, "selected worker carry detail does not mirror the live Carry snapshot"):
 		return
@@ -1686,6 +1717,18 @@ func _run() -> void:
 	if not painted_error.is_empty():
 		_fail(painted_error)
 		return
+	# HPA-698 finding 2: the two painted portraits are named from the same live
+	# ordered FIFO, and the head's accessible name carries its live timer text.
+	if not await _wait_until(
+			func():
+				var fifo_queue := _training_queue(barracks_id)
+				return fifo_queue.size() == 2 \
+					and _queue_accessibility_error(sockets, fifo_queue, "Barracks FIFO").is_empty(),
+			5.0, "Barracks FIFO sockets do not name the live Guard then Rifleman jobs",
+			func(): return "queue=%s %s" % [
+				_training_queue(barracks_id),
+				_queue_accessibility_error(sockets, _training_queue(barracks_id), "Barracks FIFO")]):
+		return
 	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-barracks")
 	if not capture_error.is_empty():
 		_fail(capture_error)
@@ -1719,8 +1762,10 @@ func _run() -> void:
 			return (sockets.get_child(0).get_node("Icon") as TextureRect).texture != null \
 				and (sockets.get_child(0).get_node("Icon") as TextureRect).texture.resource_path \
 					== "res://assets/ui/icons/units/rifleman.png" \
-				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture == null,
-			5.0, "queue sockets did not shift to the Rifleman FIFO head"):
+				and (sockets.get_child(1).get_node("Icon") as TextureRect).texture == null \
+				and _queue_accessibility_error(
+					sockets, _training_queue(barracks_id), "Rifleman head").is_empty(),
+			5.0, "queue sockets did not shift to the named Rifleman FIFO head"):
 		return
 	var rifleman_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Rifleman", 5, rifleman_box), 35.0,
@@ -1732,6 +1777,22 @@ func _run() -> void:
 	if not _training_queue(barracks_id).is_empty():
 		_fail("Barracks training_queue did not empty after the Rifleman spawned: %s" % [
 			_training_queue(barracks_id)])
+		return
+	# HPA-698 finding 2: an emptied queue keeps the producer selected but must
+	# drop every job name, so the drained sockets cannot read as stale jobs.
+	if not await _wait_until(
+			func(): return _queue_accessibility_error(sockets, _training_queue(barracks_id), "Barracks drained").is_empty(),
+			5.0, "drained Barracks sockets still name a finished job",
+			func(): return _queue_accessibility_error(sockets, _training_queue(barracks_id), "Barracks drained")):
+		return
+	# ...and losing producer selection clears the row and its names: the parked
+	# worker is a real non-producer selection reached through real left clicks.
+	if not await _select_unit(4):
+		return
+	if not await _wait_until(func():
+			return _selected_ids() == [4] and not sockets.is_visible_in_tree() \
+				and _queue_accessibility_error(sockets, [], "cleared selection").is_empty(),
+			5.0, "losing producer selection did not clear the queue names"):
 		return
 	# Park both combatants at staging so their live views cannot intercept the
 	# Barracks-origin click below. Stable ids, never the captured view.
