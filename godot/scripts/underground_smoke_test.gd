@@ -656,6 +656,28 @@ func _run() -> void:
 	var pause_capture := await SmokeHelpers.capture_frame(get_tree(), "pause")
 	if not _check(pause_capture.is_empty(), pause_capture):
 		return
+	# HPA-698 visual polish: Pause is a compact, centered composition with a
+	# reachable Resume action, not the oversized Start card. Read after the
+	# real Paused render, so the captured frame shows the measured state.
+	var pause_panel := _main.get_node("HUD/SessionPanel") as Panel
+	var pause_resume := pause_panel.get_node("ResumeButton") as Button
+	var pause_rect := pause_panel.get_global_rect()
+	var viewport_rect := Rect2(Vector2.ZERO, VIEWPORT_SIZE)
+	if not _check(pause_rect.size.x <= 420.0 and pause_rect.size.y <= 280.0,
+			"Paused card is not compact: %s" % pause_rect):
+		return
+	if not _check(absf(pause_rect.get_center().x - viewport_rect.get_center().x) <= 1.0 \
+			and absf(pause_rect.get_center().y - viewport_rect.get_center().y) <= 1.0 \
+			and viewport_rect.encloses(pause_rect),
+			"Paused card is not centered at 1280x720: card=%s viewport=%s" % [
+				pause_rect, viewport_rect]):
+		return
+	if not _check(pause_resume.visible and not pause_resume.disabled \
+			and pause_rect.encloses(pause_resume.get_global_rect()) \
+			and pause_resume.get_global_rect().size.x >= 200.0,
+			"Paused Resume is not a visible, reachable action: resume=%s card=%s" % [
+				pause_resume.get_global_rect(), pause_rect]):
+		return
 	await _key(KEY_TAB)
 	var paused: Dictionary = GrusBridge.underground_snapshot()
 	if not _check(str(GrusBridge.session_snapshot().phase) == "Paused" \
@@ -730,8 +752,7 @@ func _run() -> void:
 		return
 	# Four painted Tile appearances (mockup-4 token sheet): an available kind
 	# paints the normal steel tile, a not-yet-unlocked kind paints the locked
-	# tile. Slots derived from the same read-only theme plates are asserted at
-	# L3 below.
+	# tile. The slot treatments are asserted at L3 below.
 	var tile_normal_path := _tile_path("normal")
 	var tile_selected_path := _tile_path("pressed")
 	var tile_locked_path := _tile_path("disabled")
@@ -897,11 +918,11 @@ func _run() -> void:
 					and button.get_theme_font_size("font_size") >= 12 \
 					and _icon_path(button) == "res://assets/ui/icons/status/locked.png" \
 					and button.get_theme_constant("icon_max_width") >= 22 \
-					and _plate_path(button, "disabled") == tile_locked_path,
-					"Lab armed shallow target is not the locked tile/lock icon/explanation: icon=%s size=%d font=%d plate=%s name=%s" % [
+					and button.get_theme_stylebox("disabled") is StyleBoxFlat,
+					"Lab armed shallow target is not the flat locked plate/lock icon/explanation: icon=%s size=%d font=%d plate=%s name=%s" % [
 						_icon_path(button), button.get_theme_constant("icon_max_width"),
 						button.get_theme_font_size("font_size"),
-						_plate_path(button, "disabled"), button.accessibility_name]):
+						button.get_theme_stylebox("disabled"), button.accessibility_name]):
 				return
 			SmokeHelpers.push_mouse_click(get_tree(), button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await _settle()
@@ -912,14 +933,16 @@ func _run() -> void:
 		for slot in 4:
 			if not _check(str(_slot_state(level, slot).kind) == "", "disabled shallow target built a room"):
 				return
-	# Armed eligible empty at L3: the selected plate while the disabled
-	# occupied/locked branches keep their own plate. Then discharge the kind
-	# to prove an unarmed empty is the flat recess, never a locked tile.
+	# Armed eligible empty at L3: the bright flat actionable plate while the
+	# disabled occupied/locked branches keep their own plates. Then discharge
+	# the kind to prove an unarmed empty is the dark flat recess, never the
+	# actionable plate or a locked tile.
 	var armed_empty := _slot(3, 2)
+	var armed_plate := armed_empty.get_theme_stylebox("normal")
 	if not _check(not armed_empty.disabled and armed_empty.text == "Empty" \
-			and armed_empty.icon == null \
-			and _plate_path(armed_empty, "normal") == tile_selected_path,
-			"armed eligible L3 slot is not the selected tile: %s" % _plate_path(armed_empty, "normal")):
+			and armed_empty.icon == null and armed_plate is StyleBoxFlat \
+			and (armed_plate as StyleBoxFlat).border_width_top == 2,
+			"armed eligible L3 slot is not the bright flat actionable plate: %s" % armed_plate):
 		return
 	await _click(_kind("Lab"))
 	if not _check(not _kind("Lab").button_pressed, "Lab did not discharge for the unarmed-slot check"):
@@ -927,8 +950,9 @@ func _run() -> void:
 	var unarmed_empty := _slot(3, 2)
 	var unarmed_plate := unarmed_empty.get_theme_stylebox("disabled")
 	if not _check(unarmed_empty.disabled and unarmed_empty.text == "Empty" \
-			and unarmed_empty.icon == null and unarmed_plate is StyleBoxFlat,
-			"unarmed empty L3 slot is not the flat recessed tile"):
+			and unarmed_empty.icon == null and unarmed_plate is StyleBoxFlat \
+			and unarmed_plate != armed_plate,
+			"unarmed empty L3 slot is not the flat recess, distinct from the actionable plate"):
 		return
 	await _click(_kind("Lab"))
 	if not _check(_kind("Lab").button_pressed, "Lab did not re-arm after the unarmed-slot check"):
@@ -1051,6 +1075,37 @@ func _run() -> void:
 			and is_equal_approx(float(warm.surface_efficiency), 1.0) \
 			and is_equal_approx(float(GrusBridge.research_snapshot().rate_per_second), base_rate + lab_rate),
 			"L3 Tap did not add its catalogue supply or warm Lab rate lost its additive share"):
+		return
+	# HPA-698 visual polish: the repeated slot frame detail stays quiet and all
+	# three live drawer states must be identifiable from treatment alone, not
+	# colour. Read the plates the controls paint: locked shallow slots are flat
+	# with the lock glyph and level text, occupied rooms keep the painted steel
+	# frame with their room name, and eligible empties carry a bright flat
+	# actionable outline plus "Empty". No state may lose its text.
+	var locked_slot := _slot(1, 0)
+	var occupied_slot := _slot(3, 0)
+	var actionable_slot := _slot(3, 2)
+	var locked_plate := locked_slot.get_theme_stylebox("disabled")
+	var occupied_plate := occupied_slot.get_theme_stylebox("disabled")
+	var actionable_plate := actionable_slot.get_theme_stylebox("normal") as StyleBoxFlat
+	if not _check(locked_plate is StyleBoxFlat \
+			and occupied_plate is StyleBoxTexture \
+			and actionable_plate != null \
+			and (locked_plate as StyleBoxFlat).border_width_top \
+					< actionable_plate.border_width_top \
+			and (locked_plate as StyleBoxFlat).border_color != actionable_plate.border_color \
+			and not locked_slot.text.is_empty() \
+			and not occupied_slot.text.is_empty() \
+			and not actionable_slot.text.is_empty() \
+			and not locked_slot.accessibility_name.is_empty() \
+			and not occupied_slot.accessibility_name.is_empty() \
+			and not actionable_slot.accessibility_name.is_empty() \
+			and _icon_path(locked_slot) == "res://assets/ui/icons/status/locked.png" \
+			and not _icon_path(occupied_slot).is_empty() \
+			and _icon_path(actionable_slot).is_empty(),
+			"locked/occupied/actionable slot treatments are not distinct or lost their state text: locked=%s occupied=%s actionable=%s texts=%s/%s/%s" % [
+				locked_plate, occupied_plate, actionable_plate, locked_slot.text,
+				occupied_slot.text, actionable_slot.text]):
 		return
 	# Opt-in final-head evidence: the paid L3 drawer with Lab/Tap complete and
 	# the Tap kind armed — locked, occupied and armed-eligible states together.

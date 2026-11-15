@@ -794,6 +794,10 @@ func _run() -> void:
 	# Defeat; the remaining wave still attacks the sole Research Center. Both
 	# transitions take the visible Button path (hit test, pressed signal and
 	# handler), not a direct bridge call.
+	# HPA-698 visual polish: the compact Pause composition must not permanently
+	# replace the Start/Result card. Capture the untouched Start geometry while
+	# Playing, then require the real Result transition to restore it.
+	var start_panel_rect := _session_panel().get_global_rect()
 	var pause_button := _button("HUD/PauseButton")
 	if not pause_button.visible or pause_button.disabled:
 		_fail("Pause button is not visible and enabled while Playing")
@@ -813,6 +817,21 @@ func _run() -> void:
 					and not _result_bar().visible \
 					and _session_label().text == "Paused",
 			5.0, "Paused overlay is not showing Resume with Pause/Quit hidden"):
+		return
+	# The Pause card is a compact, centered composition with Resume inside it
+	# and on screen; the Start/Result card geometry is restored on transition.
+	var paused_rect := _session_panel().get_global_rect()
+	var pause_viewport := Rect2(Vector2.ZERO, TEST_VIEWPORT_SIZE)
+	var paused_resume_rect := _button("HUD/SessionPanel/ResumeButton").get_global_rect()
+	if not await _wait_until(func():
+				var card := _session_panel().get_global_rect()
+				return card.size.x <= 420.0 and card.size.y <= 280.0 \
+					and absf(card.get_center().x - pause_viewport.get_center().x) <= 1.0 \
+					and absf(card.get_center().y - pause_viewport.get_center().y) <= 1.0 \
+					and pause_viewport.encloses(card) \
+					and card.encloses(_button("HUD/SessionPanel/ResumeButton").get_global_rect()),
+			5.0, "Paused overlay is not a compact, centered composition with a reachable Resume: card=%s resume=%s" % [
+				paused_rect, paused_resume_rect]):
 		return
 	var wind_player := (_fx.get("_players") as Dictionary).get("winter_wind") as AudioStreamPlayer
 	if not wind_player.stream_paused:
@@ -874,6 +893,12 @@ func _run() -> void:
 					and _button("HUD/SessionPanel/RestartButton").visible \
 					and _button("HUD/SessionPanel/QuitButton").visible,
 			5.0, "Result overlay is not showing Defeat with Restart/Quit"):
+		return
+	# Leaving Pause restores the Start/Result card exactly; otherwise Restart/
+	# Quit would inherit the compact Pause card's offsets.
+	if _session_panel().get_global_rect() != start_panel_rect:
+		_fail("Result did not restore the Start/Result session card geometry: result=%s start=%s" % [
+			_session_panel().get_global_rect(), start_panel_rect])
 		return
 	var result_banner := _main.get_node("HUD/SessionBackdrop/ResultBanner") as TextureRect
 	if result_banner == null or not result_banner.visible \
