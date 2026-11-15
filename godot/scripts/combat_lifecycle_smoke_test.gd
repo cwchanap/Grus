@@ -187,6 +187,29 @@ func _ug_drawer() -> Panel:
 func _session_label() -> Label:
 	return _main.get_node("HUD/SessionPanel/SessionLabel") as Label
 
+## The compact Pause card must follow the live root viewport, not only the
+## viewport it was entered with: centered in the named size, fully on screen,
+## and containing a visible, enabled Resume. Returns "" when it holds.
+func _paused_resize_error(target: Vector2i) -> String:
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Paused":
+		return "resize probe left Paused"
+	var view := Rect2(Vector2.ZERO, target)
+	var card := _session_panel().get_global_rect()
+	if not view.encloses(card):
+		return "Paused card leaves the %s viewport: card=%s" % [target, card]
+	if absf(card.get_center().x - view.get_center().x) > 1.0 \
+			or absf(card.get_center().y - view.get_center().y) > 1.0:
+		return "Paused card is not centered in the %s viewport: card=%s viewport=%s" % [
+			target, card, view]
+	var resume := _button("HUD/SessionPanel/ResumeButton") as Button
+	if resume == null or not resume.visible or resume.disabled:
+		return "Paused Resume is not visible and enabled in the %s viewport" % target
+	if not card.encloses(resume.get_global_rect()) \
+			or not view.encloses(resume.get_global_rect()):
+		return "Paused Resume leaves its card or the %s viewport: resume=%s card=%s" % [
+			target, resume.get_global_rect(), card]
+	return ""
+
 func _button(path: String) -> Button:
 	return _main.get_node(path) as Button
 
@@ -833,6 +856,22 @@ func _run() -> void:
 			5.0, "Paused overlay is not a compact, centered composition with a reachable Resume: card=%s resume=%s" % [
 				paused_rect, paused_resume_rect]):
 		return
+	# Live resize while Paused: the card must follow the viewport without
+	# locking window size, including when returning to the required 1280 x 720
+	# target, and must stay a usable composition throughout. Gameplay remains
+	# paused; only the root viewport size changes.
+	var resize_targets: Array[Vector2i] = [
+		Vector2i(1600, 900), Vector2i(960, 540), TEST_VIEWPORT_SIZE]
+	for resize_size in resize_targets:
+		get_tree().root.size = resize_size
+		if not await _wait_until(
+				func(): return get_viewport().get_visible_rect().size == Vector2(resize_size),
+				5.0, "root viewport did not resize to %s" % resize_size):
+			return
+		if not await _wait_until(
+				func(): return _paused_resize_error(resize_size).is_empty(), 5.0,
+				"Paused card did not follow the live %s viewport" % resize_size):
+			return
 	var wind_player := (_fx.get("_players") as Dictionary).get("winter_wind") as AudioStreamPlayer
 	if not wind_player.stream_paused:
 		_fail("Paused did not pause the pilot wind cue")

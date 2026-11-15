@@ -922,6 +922,10 @@ func refresh_session(phase: String, winner_team: int) -> void:
 ## wording and Esc path, and any other phase restores the captured rects.
 func _apply_pause_card(paused: bool) -> void:
 	if paused == _pause_layout:
+		# A live window/viewport resize keeps the same phase; the per-frame
+		# refresh must re-center the fixed-size card without a resize lock.
+		if paused:
+			_follow_pause_viewport()
 		return
 	_pause_layout = paused
 	if not paused:
@@ -934,7 +938,6 @@ func _apply_pause_card(paused: bool) -> void:
 		resume_button.position = _start_resume_rect.position
 		resume_button.size = _start_resume_rect.size
 		return
-	session_panel.position = ((get_viewport().get_visible_rect().size - PAUSE_CARD_SIZE) * 0.5).floor()
 	session_panel.size = PAUSE_CARD_SIZE
 	session_label.position = Vector2(20.0, 38.0)
 	session_label.size = Vector2(PAUSE_CARD_SIZE.x - 40.0, 40.0)
@@ -942,6 +945,15 @@ func _apply_pause_card(paused: bool) -> void:
 	session_label.add_theme_font_size_override("font_size", 26)
 	resume_button.position = Vector2(24.0, 112.0)
 	resume_button.size = Vector2(PAUSE_CARD_SIZE.x - 48.0, 60.0)
+	_follow_pause_viewport()
+
+## Center the fixed-size Pause card from the live viewport. The controller
+## refreshes every frame, so this simple comparison follows a resized window
+## (including back to 1280 × 720) while leaving a stable frame untouched.
+func _follow_pause_viewport() -> void:
+	var target := ((get_viewport().get_visible_rect().size - PAUSE_CARD_SIZE) * 0.5).floor()
+	if session_panel.position != target:
+		session_panel.position = target
 
 func _icon_for_kind(group: String, kind: String) -> Texture2D:
 	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
