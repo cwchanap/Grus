@@ -5,14 +5,14 @@ Fix evidence for the final whole-branch review's P2 finding 1: the shared
 Bunkhouse hint lost the end of "right-click or Esc to cancel" where the string
 crossed snow.
 
-**Implementation head:** `99d251c` (production), on top of `ce51f3b`.
+**Implementation content:** the source that became `99d251c`, on top of `ce51f3b`. The new raw capture was taken before that production commit was created.
 
 ## Frames
 
 | Frame | Provenance | UTC | SHA-256 |
 | --- | --- | --- | --- |
 | `command-tiles-armed.png` | Real Bunkhouse arming through the build button; real pointer click, separate Wall focus ring set by the test; 3 px dark Label outline at this head. Full unmodified 1280 × 720 viewport | 20:17:59 | `5391cac953e006355684556020de4de3b68d62fb321b6045d5b48149ab5cb528` |
-| `command-status-before-after-label-4x.png` | **Derived comparison, not a raw frame.** Top: `framing-2026-11-15/command-tiles-armed.png` at `ce51f3b`. Bottom: the frame above. Both cropped to x = 456–600, y = 472–506 and enlarged 4× with nearest-neighbour; a magenta separator was inserted. No other pixel changes | 20:18:26 | `160abf3ef7591daa4729e08ff04cea01f9d44939522d096b346b69cef01e34e7` |
+| `command-status-before-after-label-4x.png` | **Derived comparison, not a raw frame.** Top: `framing-2026-11-15/command-tiles-armed.png`, captured at implementation `7a66955` and published by `ce51f3b`. Bottom: the frame above. Both cropped to x = 456–600, y = 472–506 and enlarged 4× with nearest-neighbour; a magenta separator was inserted. No other pixel changes | 20:18:26 | `160abf3ef7591daa4729e08ff04cea01f9d44939522d096b346b69cef01e34e7` |
 
 The before frame is unchanged and still the one described by the review
 (`9d0bbb416f999e232659072141c524c508904b1b43905feecb1f8e6ad6969dc4`); it was
@@ -35,20 +35,22 @@ Measured on the two raw frames above, in the label band (x = 180–760,
 y = 470–499):
 
 - **Before:** bare ink over the snow. Nominal ink `(224, 237, 245)` against the
-  local ground under the newly edged pixels `(212, 217, 225)` is **1.19:1**;
+  mean local ground under the selected pixels is approximately **1.18:1**;
   the review's own background samples in that suffix were 1.10–1.13:1.
-- **After:** the same pixels now carry the outline. Mean edge colour
-  `(49, 52, 58)` gives **10.46:1** against the ink; the darkest edge pixels
+- **After:** the same pixels now carry the outline. Their mean edge colour
+  gives approximately **10.35:1** against the ink; the darkest edge pixels
   `(15, 17, 23)` give **15.82:1**. Because the edge is painted around every
   glyph, glyph contrast no longer depends on whether the ground is snow or fog.
 - **Extent:** 86 pixels that were bright ground (channel sum > 550) are dark
   (sum < 200) in the new frame; 0 move the other way. They cover x = 473–557,
   y = 481–490 — the suffix that previously disappeared, inside the label rect
   and 20 px above the selection card at y = 510.
-- **No clipping or covering:** in the same comparison there are zero newly dark
-  pixels below y = 500 across x = 180–760, zero left of x = 216 and zero right
-  of x = 720. The shaped string is 345 × 15 px; adding the 6 px edge leaves
-  351 × 21 inside the 504 × 24 label rectangle.
+- **Current fit:** in the same comparison there are zero threshold-selected
+  newly dark pixels below y = 500 across x = 180–760, left of x = 216 or right
+  of x = 720. Those counts are not bounds for every glyph or outline pixel.
+  The frame shows the current hint clear of adjacent controls. The implementer's
+  calibration measured a shaped string of 345 × 15 px; its size plus 6 px edge
+  fits the 504 × 24 label rectangle, but is not a glyph-bearing containment proof.
 
 These are local pixel samples chosen at the demonstrated suffix, not exhaustive
 per-glyph measurements, and they are not a formal accessibility certification.
@@ -61,9 +63,9 @@ per-glyph measurements, and they are not a formal accessibility certification.
   `outline_size = 2` fails as "2 px", and a light outline colour fails as "not
   a dark, opaque edge". The real Bunkhouse arming leg additionally asserts the
   controller's exact long hint before capturing.
-- All seven headless smoke scenes exit 0 at `99d251c` with their usual success
-  markers.
-- Both rendered main smoke journeys at `99d251c` exited 0; the second, run
+- All seven headless smoke scenes exited 0 with their usual success markers on
+  the source content that became `99d251c`.
+- Both rendered main smoke journeys on that source content exited 0; the second, run
   after the negative-control edits were reverted, wrote the raw frame above.
 
 ## Limitations
