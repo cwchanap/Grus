@@ -974,6 +974,11 @@ func _run() -> void:
 		_fail("Result dim is missing, hidden, or darker than the shared 0.55 cap: %s" % [
 			session_dim.color if session_dim != null else null])
 		return
+	# The tint follows the outcome cloth's own warm/cold vocabulary instead of
+	# the neutral Pause wash; the alpha cap above still governs legibility.
+	if not session_dim.color.r > session_dim.color.b + 0.05:
+		_fail("Defeat dim is not warm-tinted: %s" % [session_dim.color])
+		return
 	var fog_error := SmokeHelpers.fog_clear_color_error(_main.get_node("Battlefield/FogOfWar"))
 	if not fog_error.is_empty():
 		_fail(fog_error)
@@ -1010,6 +1015,30 @@ func _run() -> void:
 			or restart_button.disabled or quit_button.disabled \
 			or not restart_button.is_visible_in_tree() or not quit_button.is_visible_in_tree():
 		_fail("Result bar Restart/Quit are not distinct, reachable controls")
+		return
+	# Composition: the outcome stage is symmetric about the 1280 px viewport,
+	# both actions are vertically centred and inset from its right edge, and
+	# the snapshot statistics keep their own space clear of them.
+	var left_margin := bar_rect.position.x
+	var right_margin := float(TEST_VIEWPORT_SIZE.x) - bar_rect.end.x
+	if absf(left_margin - right_margin) > 1.0:
+		_fail("Result bar is not centered in the 1280 px stage: margins %.1f / %.1f" % [
+			left_margin, right_margin])
+		return
+	if absf(restart_rect.get_center().y - bar_rect.get_center().y) > 1.0 \
+			or absf(quit_rect.get_center().y - bar_rect.get_center().y) > 1.0:
+		_fail("Result actions are not vertically centered in the bar: restart=%s quit=%s bar=%s" % [
+			restart_rect, quit_rect, bar_rect])
+		return
+	if bar_rect.end.x - quit_rect.end.x < 16.0 or bar_rect.end.x - quit_rect.end.x > 40.0:
+		_fail("Result actions are not inset from the bar's right edge: quit=%s bar=%s" % [
+			quit_rect, bar_rect])
+		return
+	if not bar_rect.encloses(result_stats.get_global_rect()) \
+			or restart_rect.intersects(result_stats.get_global_rect()) \
+			or quit_rect.intersects(result_stats.get_global_rect()):
+		_fail("Result statistics do not keep their own space inside the bar: stats=%s restart=%s quit=%s" % [
+			result_stats.get_global_rect(), restart_rect, quit_rect])
 		return
 	var result_research: Dictionary = GrusBridge.research_snapshot()
 	var result_economy: Dictionary = GrusBridge.economy_snapshot()
@@ -1054,6 +1083,10 @@ func _run() -> void:
 		_main.set_process(true)
 		_fail("presentation probe did not render the Victory title on its own banner cloth height")
 		return
+	if not session_dim.color.b > session_dim.color.r + 0.03:
+		_main.set_process(true)
+		_fail("Victory probe dim did not follow the cold outcome tint: %s" % [session_dim.color])
+		return
 	var victory_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-victory-probe")
 	_main.set_process(true)
 	if not victory_capture.is_empty():
@@ -1065,6 +1098,9 @@ func _run() -> void:
 			or not result_banner.texture.resource_path.ends_with("screens/defeat_banner.png") \
 			or not result_bar.visible:
 		_fail("presentation probe did not restore the Defeat title/art")
+		return
+	if not session_dim.color.r > session_dim.color.b + 0.05:
+		_fail("presentation probe did not restore the warm Defeat tint: %s" % [session_dim.color])
 		return
 	var actual_result: Dictionary = GrusBridge.session_snapshot()
 	hud.call("refresh_session", str(actual_result.get("phase", "")), int(actual_result.get("winner_team", -1)))

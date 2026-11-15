@@ -39,7 +39,7 @@ extends CanvasLayer
 @onready var session_emblem: TextureRect = $SessionPanel/SessionEmblem
 @onready var session_title: Label = $SessionPanel/SessionTitle
 @onready var session_subtitle: Label = $SessionPanel/SessionSubtitle
-@onready var controls_label: Label = $SessionPanel/ControlsLabel
+@onready var controls_label: RichTextLabel = $SessionPanel/ControlsLabel
 @onready var objectives: VBoxContainer = $SessionPanel/Objectives
 @onready var survive_detail: Label = $SessionPanel/Objectives/Survive/Text/Detail
 @onready var research_detail: Label = $SessionPanel/Objectives/Research/Text/Detail
@@ -87,17 +87,26 @@ const RESULT_TITLE_ANCHORS := {
 	"victory": Vector2(0.5, 0.575),
 	"defeat": Vector2(0.5, 0.525),
 }
+## One shared backdrop alpha: Pause keeps the neutral wash, while Result tints
+## it with the outcome cloth's own warm/cold vocabulary.
+const SESSION_DIM_COLOR := Color(0.02, 0.03, 0.05, 0.5)
+const RESULT_DIM_TINTS := {
+	"victory": Color(0.03, 0.11, 0.14, 0.5),
+	"defeat": Color(0.16, 0.035, 0.03, 0.5),
+}
 var _socket_panels: Array[Panel] = []
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
 var _socket_progress: Array[ProgressBar] = []
 var _queue_overflow: Label
-## Socket plates: empties keep a hand-built recessed square; queued jobs and
-## the FIFO head reuse the theme's painted square Tile normal/pressed styles
-## (the round socket.png is not a square queue bezel).
+## Socket plates: empties keep a hand-built recessed square; queued jobs keep
+## the theme's painted square Tile normal style, while the active FIFO head
+## owns a flat bright-edged cell with its own dark timer backing so its
+## portrait never reads as one more queued frame.
 var _socket_empty_style := StyleBoxFlat.new()
 var _socket_queued_style: StyleBox
-var _socket_head_style: StyleBox
+var _socket_head_style := StyleBoxFlat.new()
+var _socket_time_chip := StyleBoxFlat.new()
 ## Last producer kind the train grid was filtered for, so visibility only
 ## changes when the selection context does.
 var _train_producer_kind := "<unset>"
@@ -375,19 +384,31 @@ func _add_counter_icon(button: Button, entry: Dictionary) -> void:
 
 ## Static queue sockets: five FIFO frames and a "+N" overflow chip built
 ## once, never per frame. The live icons/times/progress update on refresh.
-## Sockets are laid out at the mockup's prominent size (64 px minimum, the
-## head carrying a cyan glow) inside the selection panel's bottom strip.
+## Sockets are laid out at the mockup's prominent size (64 px minimum) inside
+## the selection panel's bottom strip; the active head is a wider, flat cyan
+## cell so its portrait separates from the painted queued frames.
 func _build_queue_sockets() -> void:
 	_socket_empty_style.bg_color = Color(0.05, 0.07, 0.09, 0.92)
 	_socket_empty_style.border_color = Color(0.24, 0.3, 0.35, 0.8)
 	_socket_empty_style.set_border_width_all(1)
 	_socket_empty_style.set_corner_radius_all(5)
 	_socket_queued_style = selection_panel.get_theme_stylebox("normal", "Tile")
-	_socket_head_style = selection_panel.get_theme_stylebox("pressed", "Tile")
+	_socket_head_style.bg_color = Color(0.05, 0.09, 0.11, 0.96)
+	_socket_head_style.border_color = Color(0.35, 0.9, 0.98, 1.0)
+	_socket_head_style.set_border_width_all(2)
+	_socket_head_style.set_corner_radius_all(5)
+	_socket_head_style.shadow_color = Color(0.3, 0.85, 0.95, 0.3)
+	_socket_head_style.shadow_size = 4
+	_socket_time_chip.bg_color = Color(0.02, 0.04, 0.06, 0.88)
+	_socket_time_chip.set_corner_radius_all(3)
+	_socket_time_chip.content_margin_left = 4.0
+	_socket_time_chip.content_margin_right = 4.0
+	_socket_time_chip.content_margin_top = 2.0
+	_socket_time_chip.content_margin_bottom = 2.0
 	for index in QUEUE_SOCKET_COUNT:
 		var socket := Panel.new()
 		socket.name = "Socket%d" % (index + 1)
-		socket.custom_minimum_size = Vector2(64, 64)
+		socket.custom_minimum_size = Vector2(72, 64) if index == 0 else Vector2(64, 64)
 		socket.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		socket.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		socket.add_theme_stylebox_override("panel", _socket_empty_style)
@@ -407,13 +428,11 @@ func _build_queue_sockets() -> void:
 		time.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		time.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		# The head timer is the one live number in the row: the theme's bold
-		# condensed face at 16 px with a bright frost tint, still on the
-		# socket's own top-right corner like the approved mockup.
+		# condensed face at 16 px with a bright frost tint on its own dark
+		# chip, so the digits never sit raw on the portrait art.
 		time.add_theme_font_override("font", selection_panel.get_theme_font("font", "Header"))
 		time.add_theme_font_size_override("font_size", 16)
 		time.add_theme_color_override("font_color", Color(0.93, 0.99, 1.0))
-		time.add_theme_color_override("font_outline_color", Color(0.02, 0.03, 0.05, 0.95))
-		time.add_theme_constant_override("outline_size", 4)
 		# Fixed box: the smoke measures the live text against it, so the timer
 		# can never silently grow over the socket artwork.
 		time.clip_text = true
@@ -421,7 +440,9 @@ func _build_queue_sockets() -> void:
 		time.offset_left = -52.0
 		time.offset_top = 4.0
 		time.offset_right = -4.0
-		time.offset_bottom = 26.0
+		time.offset_bottom = 32.0
+		if index == 0:
+			time.add_theme_stylebox_override("normal", _socket_time_chip)
 		socket.add_child(time)
 		var progress := ProgressBar.new()
 		progress.name = "Progress"
@@ -430,14 +451,17 @@ func _build_queue_sockets() -> void:
 		progress.visible = false
 		progress.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
 		progress.offset_left = 4.0
-		progress.offset_top = -7.0
+		progress.offset_top = -9.0
 		progress.offset_right = -4.0
 		progress.offset_bottom = -3.0
+		var track := StyleBoxFlat.new()
+		track.bg_color = Color(0.01, 0.03, 0.05, 0.9)
+		track.set_corner_radius_all(2)
+		progress.add_theme_stylebox_override("background", track)
 		var fill := StyleBoxFlat.new()
 		fill.bg_color = Color(0.35, 0.86, 0.94, 0.95)
 		fill.set_corner_radius_all(2)
 		progress.add_theme_stylebox_override("fill", fill)
-		progress.add_theme_stylebox_override("background", StyleBoxEmpty.new())
 		socket.add_child(progress)
 		queue_sockets.add_child(socket)
 		_socket_panels.append(socket)
@@ -779,12 +803,15 @@ func _render_queue(building: Dictionary) -> void:
 			panel.add_theme_stylebox_override("panel", _socket_empty_style)
 			icon.texture = null
 			time.text = ""
+			# The head's timer chip must not linger as an empty rectangle.
+			time.visible = false
 			progress_bar.visible = false
 			continue
 		var kind := str(queue[index])
 		panel.add_theme_stylebox_override("panel",
 			_socket_head_style if index == 0 else _socket_queued_style)
 		icon.texture = _icon_for_kind("units", kind)
+		time.visible = index == 0
 		if index == 0:
 			var seconds := float(_unit_entries.get(kind, {}).get("seconds", 0))
 			var remaining := maxi(ceili(seconds * (1.0 - progress)), 0)
@@ -865,6 +892,10 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	pause_button.visible = playing
 	start_art.visible = start
 	session_dim.visible = paused or result
+	# Result follows the winner's cloth (warm Defeat, cold Victory); every
+	# other phase restores the neutral Pause wash on the one shared node.
+	var dim_key := "victory" if winner_team == 1 else "defeat"
+	session_dim.color = RESULT_DIM_TINTS[dim_key] if result else SESSION_DIM_COLOR
 	session_emblem.visible = start
 	session_title.visible = start
 	session_subtitle.visible = start

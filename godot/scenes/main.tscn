@@ -836,16 +836,16 @@ vertical_alignment = 1
 visible = false
 offset_left = 116.0
 offset_top = 594.0
-offset_right = 1268.0
+offset_right = 1164.0
 offset_bottom = 702.0
 mouse_filter = 2
 
 [node name="ResultStats" type="RichTextLabel" parent="HUD/ResultBar"]
 layout_mode = 0
 offset_left = 24.0
-offset_top = 32.0
-offset_right = 704.0
-offset_bottom = 80.0
+offset_top = 36.0
+offset_right = 680.0
+offset_bottom = 72.0
 mouse_filter = 2
 theme_override_font_sizes/normal_font_size = 20
 bbcode_enabled = true
@@ -1010,29 +1010,30 @@ text = "Resume"
 
 [node name="RestartButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 856.0
-offset_top = 550.0
-offset_right = 1048.0
-offset_bottom = 610.0
+offset_left = 792.0
+offset_top = 554.0
+offset_right = 984.0
+offset_bottom = 614.0
 text = "Restart"
 
 [node name="QuitButton" type="Button" parent="HUD/SessionPanel"]
 layout_mode = 0
-offset_left = 1072.0
-offset_top = 550.0
-offset_right = 1152.0
-offset_bottom = 610.0
+offset_left = 1000.0
+offset_top = 554.0
+offset_right = 1080.0
+offset_bottom = 614.0
 text = "Quit"
 
-[node name="ControlsLabel" type="Label" parent="HUD/SessionPanel"]
+[node name="ControlsLabel" type="RichTextLabel" parent="HUD/SessionPanel"]
 layout_mode = 0
 offset_left = 60.0
 offset_top = 530.0
 offset_right = 1100.0
-offset_bottom = 582.0
-theme_override_font_sizes/font_size = 14
-clip_text = true
-text = "Select: left click / drag / Shift   ·   Command: right click   ·   Attack-move: A then right click   ·   Stop: S
-Pause: Esc   ·   Underground: Tab   ·   Camera: wheel / middle-drag   ·   Minimap: click to recenter"
-horizontal_alignment = 1
-vertical_alignment = 1
+offset_bottom = 586.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 14
+bbcode_enabled = true
+scroll_active = false
+autowrap_mode = 0
+text = "[center][img=18x18]res://assets/ui/icons/status/mouse_left.png[/img] Select: left click / drag / Shift   ·   [img=18x18]res://assets/ui/icons/status/mouse_right.png[/img] Command: right click   ·   Attack-move: A then right click   ·   Stop: S
+[img=18x18]res://assets/ui/icons/actions/pause.png[/img] Pause: Esc   ·   Underground: Tab   ·   [img=18x18]res://assets/ui/icons/status/mouse_wheel.png[/img] Camera: wheel / middle-drag   ·   Minimap: click to recenter[/center]"
