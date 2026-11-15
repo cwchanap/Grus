@@ -14,6 +14,10 @@ Unretouched 1280 × 720 viewport captures from implementation head `7a66955`, ta
 | `underground-synthetic-l4-benefits.png` | **Synthetic presentation-only L4** benefits; not paid L4 gameplay | 19:59:31 | `7ef7f962e417d8dff4ad2c6c93b9f0e41b684300042c45cbd833bd2f2ce75d30` |
 | `underground-long-name.png` | **Synthetic presentation-only L4** long-name/construction probe | 19:59:31 | `cf2c631c6f32308917de04b4164d9a456b2cdbfb3ae3ce94a7e0b3638726a9c5` |
 
+These frames predate the follow-up that edged the battlefield command hint with
+a dark outline; `command-tiles-armed.png` here is the retained before frame. See
+[the command-hint contrast fix](../command-status-2026-11-15/README.md).
+
 ## Comparison and tradeoffs
 
 The 54 and 72 frames show the same fixture and camera position/orientation in one run; live countdown and research advance between captures, so they are not frozen-state images. The closer view increases projected cell size by one third; wheel-out restores the former framing. Compared with mockups 1–3, the actual starting base remains much sparser than the illustrated city. No fixture buildings, models or fog were fabricated or resized.
