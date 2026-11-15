@@ -210,6 +210,19 @@ func _verify_warning_presentation(main: Node3D) -> void:
 			or not _wave_hud_fits(wave_label):
 		_stage5_fail("HUD does not render the live warning snapshot and incoming icon without clipping: %s" % [warning_text])
 		return
+	# HPA-698 access follow-up: the card sits below the northwest corridor at
+	# the authored framing; its static tooltip must still answer the real
+	# pointer, not just exist as a property string.
+	var wave_card := main.get_node("HUD/WavePanel") as Control
+	var panel_hover := InputEventMouseMotion.new()
+	panel_hover.position = wave_card.get_global_rect().get_center()
+	get_tree().root.push_input(panel_hover)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if get_viewport().gui_get_hovered_control() != wave_card:
+		_stage5_fail("wave card tooltip surface is not the real hover target: %s" % [
+			get_viewport().gui_get_hovered_control()])
+		return
 	var minimap := main.get_node("HUD/Minimap") as Control
 	var pings: PackedVector2Array = minimap.get("incoming_ping_points")
 	if pings.size() != zones.size():

@@ -209,6 +209,28 @@ static func hud_rects(hud_root: Node) -> Array[Rect2]:
 			rects.append(control.get_global_rect())
 	return rects
 
+## HPA-698 opening access: the per-axis distance from a world target's
+## projected point to the nearest viewport edge or visible clickable HUD
+## surface, under the given camera. -1.0 when the point is behind the camera,
+## off screen, or under a HUD surface — the number a click probe needs, not
+## just "not covered". HUD rects come from the live Controls, never a table.
+static func default_view_clearance(camera: Camera3D, hud: Node, world_point: Vector3) -> float:
+	if camera.is_position_behind(world_point):
+		return -1.0
+	var screen := camera.unproject_position(world_point)
+	var viewport := Rect2(Vector2.ZERO, camera.get_viewport().get_visible_rect().size)
+	if not viewport.has_point(screen):
+		return -1.0
+	var clearance := minf(minf(screen.x, viewport.end.x - screen.x),
+		minf(screen.y, viewport.end.y - screen.y))
+	for rect in hud_rects(hud):
+		if rect.has_point(screen):
+			return -1.0
+		clearance = minf(clearance, maxf(
+			maxf(rect.position.x - screen.x, screen.x - rect.end.x),
+			maxf(rect.position.y - screen.y, screen.y - rect.end.y)))
+	return clearance
+
 ## HPA-698: the closer authored framing can leave a far world target behind a
 ## HUD card. Real wheel zoom-out at the viewport center restores the former
 ## coverage until every world point projects off the HUD, without panning.
