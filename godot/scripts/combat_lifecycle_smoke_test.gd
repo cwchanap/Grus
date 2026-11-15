@@ -213,6 +213,31 @@ func _paused_resize_error(target: Vector2i) -> String:
 func _button(path: String) -> Button:
 	return _main.get_node(path) as Button
 
+## Prominent Resume: the Paused action must carry the same bright primary
+## plate and 22 px label as Start/Restart, while keeping its node, wording,
+## connection, geometry and Esc path untouched.
+func _paused_primary_action_error() -> String:
+	var start := _button("HUD/SessionPanel/StartButton")
+	var resume := _button("HUD/SessionPanel/ResumeButton")
+	var restart := _button("HUD/SessionPanel/RestartButton")
+	var primary := start.get_theme_stylebox("normal") as StyleBoxFlat
+	var resume_style := resume.get_theme_stylebox("normal") as StyleBoxFlat
+	var restart_style := restart.get_theme_stylebox("normal") as StyleBoxFlat
+	if primary == null or resume_style == null or restart_style == null:
+		return "primary action plate is missing"
+	if resume_style.bg_color != primary.bg_color \
+			or resume_style.border_color != primary.border_color \
+			or restart_style.bg_color != primary.bg_color:
+		return "Resume does not share the bright primary plate: resume=%s/%s primary=%s/%s" % [
+			resume_style.bg_color, resume_style.border_color,
+			primary.bg_color, primary.border_color]
+	if resume_style.bg_color.get_luminance() < 0.3:
+		return "Resume primary plate is not bright: %s" % resume_style.bg_color
+	if resume.get_theme_font_size("font_size") < 22:
+		return "Resume label is below the 22 px primary-action floor: %d" % [
+			resume.get_theme_font_size("font_size")]
+	return ""
+
 ## Outside Playing neither input handler may reach the bridge: right-click
 ## is refused, A arms nothing, and the command feedback revision is stable.
 func _assert_input_gated(where: String) -> bool:
@@ -855,6 +880,11 @@ func _run() -> void:
 					and card.encloses(_button("HUD/SessionPanel/ResumeButton").get_global_rect()),
 			5.0, "Paused overlay is not a compact, centered composition with a reachable Resume: card=%s resume=%s" % [
 				paused_rect, paused_resume_rect]):
+		return
+	# Prominent Resume: the same real Pause entry must show the bright primary
+	# action, not a neutral secondary plate.
+	if not await _wait_until(func(): return _paused_primary_action_error().is_empty(), 5.0,
+			"Resume is not a clear primary action: %s" % _paused_primary_action_error()):
 		return
 	# Live resize while Paused: the card must follow the viewport without
 	# locking window size, including when returning to the required 1280 x 720

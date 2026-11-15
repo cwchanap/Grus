@@ -199,8 +199,8 @@ func _ready() -> void:
 	pause_button.text = ""
 	idle_button.icon = HudHelpers.icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
-	# The Start and Result primary actions read as the mockup's bright cyan
-	# call to action instead of the neutral steel button.
+	# The Start, Paused and Result primary actions read as the mockup's bright
+	# cyan call to action instead of the neutral steel button.
 	var start_style := StyleBoxFlat.new()
 	start_style.bg_color = Color(0.09, 0.62, 0.72, 1.0)
 	start_style.border_color = Color(0.68, 0.98, 1.0, 1.0)
@@ -209,7 +209,7 @@ func _ready() -> void:
 	start_style.shadow_color = Color(0.01, 0.03, 0.05, 0.9)
 	start_style.shadow_size = 3
 	start_style.shadow_offset = Vector2(0.0, 3.0)
-	for button in [start_button, restart_button]:
+	for button in [start_button, resume_button, restart_button]:
 		for state in ["normal", "hover", "pressed"]:
 			button.add_theme_stylebox_override(state, start_style)
 	# One painted band behind the documented key instructions; the label stays
@@ -226,6 +226,7 @@ func _ready() -> void:
 	controls_label.add_theme_stylebox_override("normal", controls_strip)
 	start_button.add_theme_font_size_override("font_size", 22)
 	start_button.text = "START"
+	resume_button.add_theme_font_size_override("font_size", 22)
 	restart_button.add_theme_font_size_override("font_size", 22)
 	restart_button.text = "RESTART"
 	quit_button.add_theme_font_size_override("font_size", 18)
@@ -376,7 +377,7 @@ func _build_queue_sockets() -> void:
 	_socket_empty_style.set_border_width_all(1)
 	_socket_empty_style.set_corner_radius_all(5)
 	_socket_queued_style = selection_panel.get_theme_stylebox("normal", "Tile")
-	_socket_head_style.bg_color = Color(0.05, 0.09, 0.11, 0.96)
+	_socket_head_style.bg_color = Color(0.15, 0.24, 0.27, 0.98)
 	_socket_head_style.border_color = Color(0.35, 0.9, 0.98, 1.0)
 	_socket_head_style.set_border_width_all(2)
 	_socket_head_style.set_corner_radius_all(5)
@@ -401,10 +402,14 @@ func _build_queue_sockets() -> void:
 		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-		icon.offset_left = 4.0
-		icon.offset_top = 4.0
-		icon.offset_right = -4.0
-		icon.offset_bottom = -4.0
+		# The active portrait is the widest object in the row: a 3 px inset
+		# (one less than the queued frames) gives its art a little more room
+		# over the lifted head plate without touching the timer chip.
+		var icon_inset := 3.0 if index == 0 else 4.0
+		icon.offset_left = icon_inset
+		icon.offset_top = icon_inset
+		icon.offset_right = -icon_inset
+		icon.offset_bottom = -icon_inset
 		socket.add_child(icon)
 		var time := Label.new()
 		time.name = "Time"
@@ -417,13 +422,14 @@ func _build_queue_sockets() -> void:
 		time.add_theme_font_size_override("font_size", 16)
 		time.add_theme_color_override("font_color", Color(0.93, 0.99, 1.0))
 		# Fixed box: the smoke measures the live text against it, so the timer
-		# can never silently grow over the socket artwork.
+		# can never silently grow over the socket artwork. The head chip stays
+		# compact so it covers less of the portrait than the queued frames.
 		time.clip_text = true
 		time.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-		time.offset_left = -52.0
-		time.offset_top = 4.0
+		time.offset_left = -46.0 if index == 0 else -52.0
+		time.offset_top = 3.0 if index == 0 else 4.0
 		time.offset_right = -4.0
-		time.offset_bottom = 32.0
+		time.offset_bottom = 29.0 if index == 0 else 32.0
 		if index == 0:
 			time.add_theme_stylebox_override("normal", _socket_time_chip)
 		socket.add_child(time)

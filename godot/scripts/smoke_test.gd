@@ -1070,8 +1070,8 @@ func _run() -> void:
 			session_emblem.get_global_rect().size, session_title.get_theme_font_size("font_size")])
 		return
 	# HPA-698 visual fidelity Start layout: three painted-icon objectives, a
-	# compact horizontal controls strip and the bright shared Start/Restart
-	# action, all fully on screen and non-overlapping.
+	# compact horizontal controls strip and the bright shared primary action,
+	# all fully on screen and non-overlapping.
 	var session_panel := get_node_or_null("Main/HUD/SessionPanel") as Panel
 	var objectives := get_node_or_null("Main/HUD/SessionPanel/Objectives") as VBoxContainer
 	var start_button := get_node_or_null("Main/HUD/SessionPanel/StartButton") as Button
@@ -1153,8 +1153,11 @@ func _run() -> void:
 			or restart_style == null or restart_style.bg_color != start_style.bg_color:
 		_fail("Start does not carry the shared bright Frostline action style")
 		return
-	if is_same(resume_button.get_theme_stylebox("normal"), start_style):
-		_fail("Resume inherited the Start-only bright action style")
+	var resume_style := resume_button.get_theme_stylebox("normal") as StyleBoxFlat
+	if resume_style == null or resume_style.bg_color != start_style.bg_color \
+			or resume_style.border_color != start_style.border_color \
+			or resume_button.get_theme_font_size("font_size") < 22:
+		_fail("Resume does not carry the shared bright primary action style")
 		return
 	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "smoke-start")
 	if not start_capture.is_empty():

@@ -286,8 +286,15 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 	var content_error := _button_content_error(button)
 	if not content_error.is_empty():
 		return "%s: %s" % [where, content_error]
-	if button.get_theme_font_size("font_size") < 12:
-		return "%s room name is smaller than 12 px" % where
+	if button.get_theme_font_size("font_size") < 13:
+		return "%s room name is smaller than 13 px" % where
+	# The name paints over the occupied room's painted frame: the dark outline
+	# alone still let the bright bevel through, so the contrast treatment adds
+	# a hard drop shadow as well.
+	if button.get_theme_color("font_shadow_color").a < 0.6 \
+			or button.get_theme_constant("shadow_offset_x") < 1 \
+			or button.get_theme_constant("shadow_offset_y") < 1:
+		return "%s room name has no readable drop shadow" % where
 	if button.text.contains("%"):
 		return "%s still puts the percentage in the room label: %s" % [where, button.text]
 	var percent := button.get_node_or_null("SlotPercent") as Label
@@ -309,8 +316,11 @@ func _slot_readout_error(button: Button, slot: Dictionary, where: String) -> Str
 		if not benefit_backing.visible \
 				or not benefit_backing.get_global_rect().encloses(benefit.get_global_rect()):
 			return "%s benefit readout has no clear band" % where
-		if benefit.get_theme_font_size("font_size") < 11:
-			return "%s benefit readout is smaller than 11 px" % where
+		if benefit_backing.color.a < 0.85:
+			return "%s benefit band is too translucent for the painted frame: %.2f" % [
+				where, benefit_backing.color.a]
+		if benefit.get_theme_font_size("font_size") < 12:
+			return "%s benefit readout is smaller than 12 px" % where
 		var benefit_font := benefit.get_theme_font("font")
 		var benefit_width := benefit_font.get_string_size(benefit.text,
 				HORIZONTAL_ALIGNMENT_LEFT, -1, benefit.get_theme_font_size("font_size")).x
