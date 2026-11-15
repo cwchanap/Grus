@@ -148,9 +148,28 @@ func _dig_view_error(where: String, tolerance := 0.001, slack := 0) -> String:
 		return "%s header does not repeat the dig label %s" % [where, time_label.text]
 	return ""
 
+## HPA-698 visual follow-up: the drawer header is one digest line — depth,
+## next/current dig and the Esc or inspection note share it — so the room-kind
+## row keeps enough vertical room for a full-size icon above its label band.
+func _header_line_error() -> String:
+	var header := _panel.get_node_or_null("HeaderLabel") as Label
+	if header == null:
+		return "drawer header is missing"
+	if header.text.contains("\n"):
+		return "drawer header is %d lines; it must stay one digest line: %s" % [
+			header.text.count("\n") + 1, header.text]
+	var shaped := _shaped_text_size(header.text, header.get_theme_font("font"),
+		header.get_theme_font_size("font_size"))
+	if shaped.x > header.size.x + 0.5:
+		return "drawer header needs %.1f px but has %.1f" % [shaped.x, header.size.x]
+	return ""
+
 ## The 152 px level viewport keeps showing three complete rows; the dig bar
 ## and its readout live below Excavate, never inside the clipped rows.
 func _dig_layout_error(scroll: ScrollContainer) -> String:
+	var header_error := _header_line_error()
+	if not header_error.is_empty():
+		return header_error
 	var bar := _panel.get_node_or_null("DigProgress") as ProgressBar
 	var time_label := _panel.get_node_or_null("DigTime") as Label
 	if bar == null or time_label == null:
@@ -392,6 +411,19 @@ func _kind_layout_error(button: Button, room_entry: Dictionary, where: String) -
 	if not backing.get_global_rect().encloses(name_label.get_global_rect()) \
 			or not backing.get_global_rect().encloses(cost_label.get_global_rect()):
 		return "%s kind name/price leave their clear band" % where
+	# HPA-698 visual follow-up: the kind icon is the tile's dominant read, and
+	# the clear band must leave it a full 32+ px square above the band with the
+	# Button's 4 px style margin. A 56 px tile cannot hold both.
+	var icon_cap := float(button.get_theme_constant("icon_max_width"))
+	if button.size.y < 70.0:
+		return "%s kind tile is only %.1f px tall; icon + clear band need 70" % [
+			where, button.size.y]
+	if icon_cap < 32.0:
+		return "%s kind icon cap is %.0f px, smaller than the readable 32 px" % [where, icon_cap]
+	var icon_room := tile_rect.size.y - backing.size.y - 4.0
+	if icon_room < icon_cap + 4.0:
+		return "%s kind label band leaves %.1f px for a %.0f px icon" % [
+			where, icon_room, icon_cap]
 	if name_label.get_minimum_size().x > backing.size.x - 4.0:
 		return "%s kind name is wider than its clear band" % where
 	if cost_label.get_content_width() > backing.size.x - 4.0:
