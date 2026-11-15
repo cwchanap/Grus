@@ -4,9 +4,11 @@ extends Node3D
 ## blip remains for combat events without a dedicated pilot sound.
 
 const CUE_THROTTLE_MS := 150
-## Quit drain tuning: two mixer ticks prove a whole mixer step ran after the
-## stop, and the deadline bounds a stalled audio driver.
-const DRAIN_MIX_TICKS := 2
+## Best-effort shutdown drain tuning. Two internal mixer blocks (the pinned
+## engine mixes in 512-frame blocks) of observed driver-callback time is the
+## target, and the deadline bounds a stalled or never-started driver.
+const DRAIN_TARGET_FRAMES := 1024
+const DRAIN_MIN_CALLBACKS := 2
 const DRAIN_TIMEOUT_MS := 500
 const CUES := {
 	"generic_blip": {"volume_db": -14.0, "max_polyphony": 1},
@@ -99,24 +101,38 @@ func clear_all() -> void:
 	cue_counts.clear()
 	_last_cue_ms.clear()
 
-## Stops every cue, then waits until the audio mixer has processed the stops.
-## The AudioServer only queues a stopped playback for deletion from the mixer
-## thread, so exiting in that same frame leaves the playback and its Ogg stream
-## alive at ObjectDB cleanup (the verbose-shutdown leak warning). One observed
-## tick can land inside a mixer step that already passed the player; the second
-## tick's start proves that step completed after the stops.
-func stop_and_drain() -> void:
+## Best-effort audio quiesce before quitting. Godot exposes no acknowledgement
+## that a stopped playback was reclaimed: the mixer thread only queues it for
+## deletion on a mixer-block boundary, and the only observable signal is the
+## audio driver's per-callback clock. Each observed clock reset is one driver
+## callback; the audio time sampled between callbacks is credited until two
+## 512-frame mixer blocks have passed. This is a bounded mitigation, not proof:
+## callbacks can be missed, a stalled driver cannot be drained, and devices
+## whose callbacks are far smaller than a mixer block can still hit the
+## deadline. The caller quits either way and reports the fallback.
+## `clock`/`timeout_ms` are injectable for the focused shutdown test.
+func stop_and_drain(clock: Callable = Callable(), timeout_ms := DRAIN_TIMEOUT_MS) -> bool:
 	for cue_id in _players:
 		(_players[cue_id] as AudioStreamPlayer).stop()
-	var last_mix := AudioServer.get_time_since_last_mix()
-	var ticks := 0
-	var deadline := Time.get_ticks_msec() + DRAIN_TIMEOUT_MS
-	while ticks < DRAIN_MIX_TICKS and Time.get_ticks_msec() < deadline:
+	var read_clock: Callable = clock if clock.is_valid() else AudioServer.get_time_since_last_mix
+	var mix_rate := float(AudioServer.get_mix_rate())
+	var last: float = read_clock.call()
+	var callbacks := 0
+	var credited := 0
+	var deadline := Time.get_ticks_msec() + timeout_ms
+	while Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
-		var mix := AudioServer.get_time_since_last_mix()
-		if mix < last_mix:
-			ticks += 1
-		last_mix = mix
+		var mix: float = read_clock.call()
+		if mix < last:
+			callbacks += 1
+			# The first reset only syncs the window: its interval may start
+			# before the stop, so it is never credited.
+			if callbacks >= DRAIN_MIN_CALLBACKS:
+				credited += int(last * mix_rate)
+				if credited >= DRAIN_TARGET_FRAMES:
+					return true
+		last = mix
+	return false
 
 func _flash(position: Vector3, color: Color, size: float, lifetime: float) -> void:
 	var mesh := SphereMesh.new()

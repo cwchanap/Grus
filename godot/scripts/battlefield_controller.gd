@@ -173,9 +173,10 @@ func _refresh_session() -> void:
 	for event in events:
 		_dispatch_combat_event(event)
 
-## Gameplay orders only ever leave Godot while the session is Playing.
+## Gameplay orders only ever leave Godot while the session is Playing and no
+## quit is pending.
 func _playing() -> bool:
-	return _session_phase == "Playing"
+	return not _shutting_down and _session_phase == "Playing"
 
 ## Cosmetics only: reads the event payload, never touches combat state.
 func _dispatch_combat_event(event: Dictionary) -> void:
@@ -285,6 +286,8 @@ func _refresh_hud() -> void:
 ## otherwise walk GUI focus onto the panel's buttons. Every other key
 ## keeps its existing `_unhandled_input` route.
 func _input(event: InputEvent) -> void:
+	if _shutting_down:
+		return
 	if not event is InputEventKey:
 		return
 	var key := event as InputEventKey
@@ -300,6 +303,8 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if _shutting_down:
+		return
 	if event is InputEventKey:
 		_handle_key(event as InputEventKey)
 		return
@@ -695,28 +700,42 @@ func _building_view(building_id: int) -> Node3D:
 	return null
 
 func _on_start_pressed() -> void:
+	if _shutting_down:
+		return
 	GrusBridge.start_match()
 
 func _on_pause_pressed() -> void:
+	if _shutting_down:
+		return
 	GrusBridge.set_paused(true)
 
 func _on_resume_pressed() -> void:
+	if _shutting_down:
+		return
 	GrusBridge.set_paused(false)
 
 func _on_restart_pressed() -> void:
+	if _shutting_down:
+		return
 	_restart_match()
 
 func _on_quit_pressed() -> void:
 	request_quit()
 
 ## The single quit path (OS window close and the Result button): stop the
-## ambience/cues and let the audio mixer reclaim their playbacks before the
-## engine tears down (see CombatFx.stop_and_drain).
+## ambience/cues and give the audio mixer a bounded best-effort window before
+## the engine tears down (see CombatFx.stop_and_drain). A Playing match is
+## frozen through the existing Rust pause seam so the final frames cannot
+## mutate the authoritative session; engine and audio processing keep running.
 func request_quit() -> void:
 	if _shutting_down:
 		return
 	_shutting_down = true
-	await _fx.stop_and_drain()
+	if _session_phase == "Playing":
+		GrusBridge.set_paused(true)
+	var drained = await _fx.stop_and_drain()
+	if not drained:
+		push_warning("audio shutdown drain hit its deadline; playbacks may still be live")
 	get_tree().quit(0)
 
 func _notification(what: int) -> void:
@@ -728,6 +747,8 @@ func _notification(what: int) -> void:
 ## underground room kind, and live combat effects. No dead stable ids
 ## survive the reset.
 func _restart_match() -> void:
+	if _shutting_down:
+		return
 	GrusBridge.restart_match()
 	selected_ids.clear()
 	selected_building_id = -1
@@ -991,6 +1012,8 @@ func _on_analyze_pressed() -> void:
 		command_status.text = "Analyze rejected"
 
 func _on_idle_pressed() -> void:
+	if _shutting_down:
+		return
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	var ids: PackedInt32Array = economy.get("idle_worker_ids", PackedInt32Array())
 	if ids.is_empty():
