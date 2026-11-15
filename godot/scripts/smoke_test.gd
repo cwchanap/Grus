@@ -561,7 +561,44 @@ func _assert_command_status_above_selection() -> bool:
 		_fail("CommandStatus is not wholly above the selection card: status=%s card=%s" % [
 			status_rect, card_rect])
 		return false
+	# The dark-edge treatment must not move or resize the feedback surface.
+	if status_rect.position != Vector2(216.0, 478.0) \
+			or status_rect.size != Vector2(504.0, 24.0):
+		_fail("CommandStatus geometry changed: %s" % status_rect)
+		return false
+	var readability := _command_status_readability_error(status, "opening hint")
+	if not readability.is_empty():
+		_fail(readability)
+		return false
 	return true
+
+## The feedback label is 12 px light ink drawn straight over the battlefield;
+## the shared Label theme supplies ink only, so bare glyphs reach about 1.1:1
+## where the string crosses snow. Require the engine-drawn Label outline to be
+## that scoped dark edge, and require the glyphs plus the edge to fit the
+## label's own rectangle so the treatment can neither clip nor reach a control.
+func _command_status_readability_error(status: Label, where: String) -> String:
+	if status == null:
+		return "%s: CommandStatus is missing" % where
+	var outline_size := status.get_theme_constant("outline_size")
+	if outline_size < 3:
+		return "%s: CommandStatus dark edge is %d px, not a thick outline" % [
+			where, outline_size]
+	var outline := status.get_theme_color("font_outline_color")
+	if outline.a < 0.85 or outline.get_luminance() > 0.15:
+		return "%s: CommandStatus outline is not a dark, opaque edge: %s" % [where, outline]
+	var ink_contrast := SmokeHelpers.contrast_ratio(
+		status.get_theme_color("font_color"), outline)
+	if ink_contrast < 7.0:
+		return "%s: CommandStatus ink/outline contrast is %.2f:1" % [where, ink_contrast]
+	if status.mouse_filter != Control.MOUSE_FILTER_IGNORE:
+		return "%s: CommandStatus no longer ignores the mouse" % where
+	var shaped := SmokeHelpers.shaped_text_size(status)
+	var edge := float(outline_size) * 2.0
+	if shaped.x + edge > status.size.x or shaped.y + edge > status.size.y:
+		return "%s: CommandStatus text %.1fx%.1f plus a %d px edge does not fit its %.1fx%.1f rect" % [
+			where, shaped.x, shaped.y, outline_size, status.size.x, status.size.y]
+	return ""
 
 ## HPA-698 presentation contract: one project-wide Frostline theme using the
 ## bundled Barlow faces (never a system-font assumption), the 15 HPA-695 icons
@@ -2378,6 +2415,18 @@ func _run() -> void:
 			or SmokeHelpers.linear_luminance(focus_ring.border_color) < 0.8 \
 			or not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
 		_fail("command focus is not a bright ring outside the plate or disturbed the armed tile: %s" % focus_ring)
+		return
+	# Rendered evidence case: the controller's real long armed hint must keep
+	# its scoped dark edge and fit while it crosses snowy ground above the card.
+	var armed_status := crossover_main.get("command_status") as Label
+	if armed_status == null \
+			or armed_status.text != "Placing Bunkhouse — left-click to place, right-click or Esc to cancel":
+		_fail("armed hint is not the controller's real placement text: %s" % [
+			armed_status.text if armed_status != null else "<missing>"])
+		return
+	var armed_readability := _command_status_readability_error(armed_status, "armed hint")
+	if not armed_readability.is_empty():
+		_fail(armed_readability)
 		return
 	var armed_tile_capture := await SmokeHelpers.capture_frame(get_tree(), "command-tiles-armed")
 	if not armed_tile_capture.is_empty():
