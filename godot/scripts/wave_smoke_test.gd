@@ -383,6 +383,58 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	if not probe_errors.is_empty():
 		_stage5_fail(probe_errors[0])
 		return
+	# R1: the controller's frame order is `_refresh_session` then `_refresh_hud`
+	# (so `refresh_session` then `refresh_wave`). A frozen warning must not
+	# outlive the Result hide-list, and the same order must restore it while
+	# Playing/Paused and clear it after a restart-shaped surface. Presentation-
+	# only copied snapshots; no command, sim state or gameplay data changes.
+	var session_errors := PackedStringArray()
+	var frozen_warning := _wave_warning_probe(warning, 19, 20, ["West", "North", "East"])
+	var hud := main.get_node("HUD") as Node
+	var warning_control := main.get_node("HUD/WaveWarning") as RichTextLabel
+	var readout_control := main.get_node("HUD/WaveLabel") as RichTextLabel
+	main.set_process(false)
+	for order_case in [["Result", 1, false], ["Playing", -1, true], ["Paused", -1, true]]:
+		var order_phase := str(order_case[0])
+		var want_visible: bool = order_case[2]
+		hud.call("refresh_session", order_phase, int(order_case[1]))
+		hud.call("refresh_wave", frozen_warning)
+		await get_tree().process_frame
+		await get_tree().process_frame
+		if warning_control.is_visible_in_tree() != want_visible:
+			session_errors.append("%s after the session→wave order: warning visible=%s, want %s" % [
+				order_phase, warning_control.is_visible_in_tree(), want_visible])
+		if not want_visible:
+			if wave_card.is_visible_in_tree() or readout_control.is_visible_in_tree():
+				session_errors.append("%s still exposes the wave card/readout" % order_phase)
+			for description_owner in [readout_control, wave_card]:
+				if str(description_owner.accessibility_description).to_lower().contains("incoming"):
+					session_errors.append("%s kept an incoming accessible description" % order_phase)
+			# Opt-in evidence of the fixed Result composition with a frozen
+			# warning; synthetic presentation-only Result, never a real win.
+			var result_capture := await SmokeHelpers.capture_frame(get_tree(),
+				"wave-result-warning-probe")
+			if not result_capture.is_empty():
+				session_errors.append(result_capture)
+		elif not _wave_text_fits(warning_control):
+			session_errors.append("%s: restored warning names do not fit" % order_phase)
+	# Restart-shaped cleared surface through the same production order.
+	hud.call("refresh_session", "Playing", -1)
+	hud.call("refresh_wave", _wave_idle_probe(warning, 0, 1))
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if warning_control.is_visible_in_tree() or not _visible_text(warning_control).is_empty():
+		session_errors.append("restart-shaped wave surface still shows the warning")
+	if str(readout_control.accessibility_description).to_lower().contains("incoming"):
+		session_errors.append("restart-shaped wave surface kept an incoming description")
+	# Restore the live Playing warning exactly as the next controller frame does.
+	hud.call("refresh_session", "Playing", -1)
+	hud.call("refresh_wave", warning)
+	main.set_process(true)
+	await get_tree().process_frame
+	if not session_errors.is_empty():
+		_stage5_fail(session_errors[0])
+		return
 	# Real-render evidence of the compact card's warning state; writes nothing
 	# unless GRUS_CAPTURE_DIR names a directory.
 	var warning_capture := await SmokeHelpers.capture_frame(get_tree(), "wave-warning")

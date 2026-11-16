@@ -662,8 +662,8 @@ func refresh_wave(wave: Dictionary) -> void:
 	# Wave indices are projected as i64; the compact card cannot show every
 	# digit. Show the exact index while the composed line fits the readout, then
 	# a short scientific form; the exact indices stay in the readout's
-	# accessible description and the card tooltip, never only in a pointer
-	# surface.
+	# accessible description (the card tooltip carries the full incoming names
+	# as a second pointer surface, not the indices).
 	var current_text := "Prep"
 	if wave_number != 0:
 		current_text = "Wave %d" % wave_number
@@ -680,17 +680,21 @@ func refresh_wave(wave: Dictionary) -> void:
 	]))
 	# The incoming directions own a visible readout of their own, so the full
 	# names never become tooltip-only. The card tooltip keeps them as a second
-	# pointer surface and the edge glows mark the same directions.
-	wave_warning.visible = warning
+	# pointer surface and the edge glows mark the same directions. The row is a
+	# HUD sibling of the card, so the session gate must also bound it: Result
+	# hides the card first, then this refresh runs with frozen warning zones.
+	var in_match_hud := wave_panel.visible
+	wave_warning.visible = warning and in_match_hud
 	wave_warning.text = ""
 	if warning:
 		wave_warning.text = "%sIncoming: %s" % [
 			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
 	# Full snapshot semantics without hover: the exact indices always, plus the
-	# full direction names while announced. These are the properties an
-	# accessibility consumer reads; this project tests the values, not a reader.
+	# full direction names while announced and the in-match HUD is visible.
+	# These are the properties an accessibility consumer reads; this project
+	# tests the values, not a reader.
 	var description := "Wave %d, next wave %d, %d aliens" % [wave_number, next_wave, live_aliens]
-	if warning:
+	if warning and in_match_hud:
 		description += ", incoming from %s" % ", ".join(incoming_names)
 	wave_label.accessibility_name = "Wave status"
 	wave_label.accessibility_description = description
@@ -716,7 +720,7 @@ func _wave_line_width(text: String) -> float:
 ## A deterministic short display for wave indices that no longer fit the
 ## compact readout. K/M/G/T cover reachable ranges; the exponent form keeps
 ## every projected i64 index bounded. The exact index always remains in the
-## readout's accessible description and the card tooltip.
+## readout's accessible description.
 func _compact_wave_index(value: int) -> String:
 	if value >= 1_000_000_000_000_000:
 		var exponent := int(floor(log(float(value)) / log(10.0)))
