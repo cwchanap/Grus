@@ -94,6 +94,12 @@ const RESULT_DIM_TINTS := {
 	"victory": Color(0.03, 0.11, 0.14, 0.5),
 	"defeat": Color(0.16, 0.035, 0.03, 0.5),
 }
+## The compact wave card shows the incoming zones as the mockup's compass tag
+## (N/E/S/W): the authored three-zone warning cannot fit its full names, and
+## the edge glows plus the full names on the card tooltip keep the direction
+## explicit without relying on colour alone.
+const ZONE_SHORT := {"North": "N", "East": "E", "South": "S", "West": "W"}
+const WAVE_TOOLTIP := "Wave prep, live aliens and the next wave countdown"
 var _socket_panels: Array[Panel] = []
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
@@ -663,10 +669,18 @@ func refresh_wave(wave: Dictionary) -> void:
 		],
 		"Aliens %d" % int(wave.get("live_aliens", 0)),
 	])
+	var short_names := PackedStringArray()
+	for name in incoming_names:
+		short_names.append(str(ZONE_SHORT.get(name, name)))
 	if warning:
 		lines.append("%sIncoming: %s" % [
-			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)])
+			_inline_icon("status", "IncomingZone"), ", ".join(short_names)])
 	wave_label.text = "\n".join(lines)
+	# The compact line abbreviates; the tooltip keeps the full zone names the
+	# wave snapshot authored, and the edge glows mark the same directions.
+	wave_panel.tooltip_text = WAVE_TOOLTIP
+	if warning:
+		wave_panel.tooltip_text = "Incoming: %s\n%s" % [", ".join(incoming_names), WAVE_TOOLTIP]
 	if _minimap != null and _minimap.has_method("set_wave_snapshot"):
 		_minimap.set_wave_snapshot(wave)
 	_result_wave_text = "%sWave %d" % [

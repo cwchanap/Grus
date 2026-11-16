@@ -54,6 +54,18 @@ func _wave_text_fits(control: Control) -> bool:
 	return rich_label.get_content_width() <= rich_label.size.x + 0.5 \
 			and rich_label.get_content_height() <= rich_label.size.y + 0.5
 
+## The three authored warning zones, copied onto the live snapshot so the
+## presentation probe renders the same shape the wave director produces from
+## wave 20. Never sent to the sim.
+func three_zone_warning(snapshot: Dictionary) -> Dictionary:
+	var probe: Dictionary = snapshot.duplicate(true)
+	probe["incoming_zones"] = [
+		{"name": "West", "anchor_x": 0, "anchor_y": 0},
+		{"name": "North", "anchor_x": 0, "anchor_y": 0},
+		{"name": "East", "anchor_x": 0, "anchor_y": 0},
+	]
+	return probe
+
 func _run() -> void:
 	var window := get_window()
 	window.content_scale_size = TEST_VIEWPORT_SIZE
@@ -229,16 +241,48 @@ func _verify_warning_presentation(main: Node3D) -> void:
 		return
 	var warning_text := _visible_text(wave_label)
 	if not warning_text.contains("Prep") or not warning_text.contains("Next wave 1") \
-			or not warning_text.contains("Incoming: North") \
+			or not warning_text.contains("Incoming: N") \
 			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png") \
 			or not _wave_hud_fits(wave_label) or not _wave_text_fits(wave_label):
 		_stage5_fail("HUD does not render the live warning snapshot and incoming icon without clipping: %s" % [warning_text])
 		return
+	# HPA-698 visual follow-up: the compact card abbreviates the zone line to
+	# the mockup's compass tag; the full name stays on the card tooltip, which
+	# the pointer leg below also hovers for real.
+	var wave_card_early := main.get_node("HUD/WavePanel") as Control
+	if not str(wave_card_early.tooltip_text).contains("Incoming: North"):
+		_stage5_fail("wave card tooltip lost the full warning zone name: %s" % [
+			wave_card_early.tooltip_text])
+		return
 	# HPA-698 visual follow-up: in the compact card the warning owns a line of
 	# its own, so "Aliens 0" and the incoming zone never share a clipped run.
 	var warning_lines: PackedStringArray = wave_label.text.split("\n")
-	if warning_lines.size() != 4 or not str(warning_lines[3]).contains("Incoming: North"):
+	if warning_lines.size() != 4 or not str(warning_lines[3]).contains("Incoming: N"):
 		_stage5_fail("incoming warning did not get its own line in the compact wave card: %s" % [warning_lines])
+		return
+	# Multi-direction warnings must stay readable in the compact card; the wave
+	# director authors three zones from wave 20. Presentation-only probe on a
+	# copied snapshot: the controller's per-frame refresh is suspended, the HUD
+	# is asked to render the probe and then restored from the same live
+	# snapshot. No command, sim state or gameplay data changes.
+	var wave_card_control := main.get_node("HUD/WavePanel") as Control
+	main.set_process(false)
+	(main.get_node("HUD") as Node).call("refresh_wave", three_zone_warning(warning))
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var three_short := _visible_text(wave_label)
+	var three_lines: PackedStringArray = wave_label.text.split("\n")
+	var three_fits := _wave_text_fits(wave_label)
+	var three_tooltip := str(wave_card_control.tooltip_text)
+	(main.get_node("HUD") as Node).call("refresh_wave", warning)
+	main.set_process(true)
+	await get_tree().process_frame
+	if not three_short.contains("Incoming: W, N, E") or three_lines.size() != 4 or not three_fits:
+		_stage5_fail("three-zone warning does not fit the compact card: %s" % [three_short])
+		return
+	if not three_tooltip.contains("West") or not three_tooltip.contains("North") \
+			or not three_tooltip.contains("East"):
+		_stage5_fail("three-zone tooltip lost the full zone names: %s" % [three_tooltip])
 		return
 	# Real-render evidence of the compact card's warning state; writes nothing
 	# unless GRUS_CAPTURE_DIR names a directory.
@@ -284,7 +328,7 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	await get_tree().process_frame
 	var expired_pings: PackedVector2Array = minimap.get("incoming_ping_points")
 	if not expired_pings.is_empty() \
-			or not _visible_text(wave_label).contains("Incoming: North") \
+			or not _visible_text(wave_label).contains("Incoming: N") \
 			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
 		_stage5_fail("short-lived border ping did not expire while the authoritative HUD warning remained")
 		return
