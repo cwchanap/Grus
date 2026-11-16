@@ -129,6 +129,11 @@ func _dig_view_error(where: String, tolerance := 0.001, slack := 0) -> String:
 	var time_label := _panel.get_node_or_null("DigTime") as Label
 	if bar == null or time_label == null:
 		return "%s dig progress bar/label are missing" % where
+	# HPA-698 fix round: the active-dig and paused callers now check the bounded
+	# header too (the old check was reached only from the idle layout path).
+	var header_error := _header_error(where)
+	if not header_error.is_empty():
+		return header_error
 	var excavating := bool(snap.get("excavating", false))
 	if bar.visible != excavating or time_label.visible != excavating:
 		return "%s dig progress visibility %s/%s does not match excavating=%s" % [
@@ -148,26 +153,75 @@ func _dig_view_error(where: String, tolerance := 0.001, slack := 0) -> String:
 		return "%s header does not repeat the dig label %s" % [where, time_label.text]
 	return ""
 
-## HPA-698 visual follow-up: the drawer header is one digest line — depth,
-## next/current dig and the Esc or inspection note share it — so the room-kind
-## row keeps enough vertical room for a full-size icon above its label band.
-func _header_line_error() -> String:
+## HPA-698 fix round: the header must be bounded by the fixed padded drawer
+## (and the viewport), not by its own possibly self-expanded Label. Wrapped
+## text is measured with the label's own font against the fixed box width, so
+## a long snapshot value cannot pass by growing the box it is measured against.
+func _header_layout_error(where: String) -> String:
 	var header := _panel.get_node_or_null("HeaderLabel") as Label
 	if header == null:
-		return "drawer header is missing"
-	if header.text.contains("\n"):
-		return "drawer header is %d lines; it must stay one digest line: %s" % [
-			header.text.count("\n") + 1, header.text]
-	var shaped := _shaped_text_size(header.text, header.get_theme_font("font"),
-		header.get_theme_font_size("font_size"))
-	if shaped.x > header.size.x + 0.5:
-		return "drawer header needs %.1f px but has %.1f" % [shaped.x, header.size.x]
+		return "%s drawer header is missing" % where
+	var padded: Rect2 = _panel.get_global_rect().grow(-10.0)
+	var header_rect := header.get_global_rect()
+	if not padded.encloses(header_rect):
+		return "%s header %s leaves the padded drawer %s" % [where, header_rect, padded]
+	if not Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).encloses(header_rect):
+		return "%s header %s leaves the viewport" % [where, header_rect]
+	if header.get_line_count() > 2:
+		return "%s header wraps to %d lines at %.1f px" % [
+			where, header.get_line_count(), header_rect.size.x]
+	if header.get_visible_line_count() != header.get_line_count():
+		return "%s header clips: %d of %d lines visible" % [
+			where, header.get_visible_line_count(), header.get_line_count()]
+	var font := header.get_theme_font("font")
+	var font_size := header.get_theme_font_size("font_size")
+	var shaped := font.get_multiline_string_size(header.text, HORIZONTAL_ALIGNMENT_LEFT,
+		header_rect.size.x, font_size)
+	if shaped.x > header_rect.size.x + 0.5 or shaped.y > header_rect.size.y + 0.5:
+		return "%s header text %.1fx%.1f does not fit %.1fx%.1f" % [
+			where, shaped.x, shaped.y, header_rect.size.x, header_rect.size.y]
 	return ""
+
+## The header must spell the snapshot's own full values — depth, dig target,
+## price/time or live progress/remaining — plus its phase note. Long values are
+## required to stay visible, not shortened to a self-fitting variant.
+func _header_payload_error(where: String) -> String:
+	var header := _panel.get_node_or_null("HeaderLabel") as Label
+	var snap: Dictionary = _panel.get("_snapshot")
+	var phase := str(_panel.get("_phase"))
+	if header == null or snap.is_empty():
+		return "%s drawer header or snapshot is missing" % where
+	var text := header.text
+	if not text.contains("depth %d" % int(snap.get("depth", 0))):
+		return "%s header lost the snapshot depth: %s" % [where, text]
+	if not text.contains("L%d dig" % int(snap.get("target", 0))):
+		return "%s header lost the snapshot dig target: %s" % [where, text]
+	if bool(snap.get("excavating", false)):
+		if not text.contains("%d%%" % roundi(float(snap.get("progress", 0.0)) * 100.0)):
+			return "%s header lost the live dig percent: %s" % [where, text]
+		if not text.contains("%ds left" % ceili(float(snap.get("remaining", 0.0)))):
+			return "%s header lost the live dig remaining: %s" % [where, text]
+	else:
+		var cost: Dictionary = snap.get("next_cost", {})
+		for resource in ["scrap", "coal"]:
+			var amount := int(cost.get(resource, 0))
+			if amount > 0 and not text.contains(str(amount)):
+				return "%s header lost the snapshot %s price: %s" % [where, resource, text]
+		if not text.contains("%ds" % int(snap.get("next_seconds", -1))):
+			return "%s header lost the snapshot dig seconds: %s" % [where, text]
+	var note := "Esc closes" if phase == "Playing" else "inspection only"
+	if not text.contains(note):
+		return "%s header lost the %s note: %s" % [where, phase, text]
+	return ""
+
+func _header_error(where: String) -> String:
+	var layout := _header_layout_error(where)
+	return layout if not layout.is_empty() else _header_payload_error(where)
 
 ## The 152 px level viewport keeps showing three complete rows; the dig bar
 ## and its readout live below Excavate, never inside the clipped rows.
 func _dig_layout_error(scroll: ScrollContainer) -> String:
-	var header_error := _header_line_error()
+	var header_error := _header_error("idle drawer")
 	if not header_error.is_empty():
 		return header_error
 	var bar := _panel.get_node_or_null("DigProgress") as ProgressBar
@@ -421,7 +475,7 @@ func _kind_layout_error(button: Button, room_entry: Dictionary, where: String) -
 	if icon_cap < 32.0:
 		return "%s kind icon cap is %.0f px, smaller than the readable 32 px" % [where, icon_cap]
 	var icon_room := tile_rect.size.y - backing.size.y - 4.0
-	if icon_room < icon_cap + 4.0:
+	if icon_room < icon_cap + 2.0:
 		return "%s kind label band leaves %.1f px for a %.0f px icon" % [
 			where, icon_room, icon_cap]
 	if name_label.get_minimum_size().x > backing.size.x - 4.0:
@@ -556,6 +610,16 @@ func _run() -> void:
 	var catalogue_base := float(_catalogue.research.base_per_second)
 	if not _check(is_equal_approx(base_rate, catalogue_base),
 			"wrong full-heat surface research baseline"):
+		return
+	# HPA-698 fix round: Tab opens the drawer during Start too; the bounded
+	# header must say the drawer is inspection-only there without escaping.
+	await _key(KEY_TAB)
+	var start_header_error := _header_error("Start drawer")
+	if not _check(_panel.visible and start_header_error.is_empty(),
+			"Start drawer header is not bounded: %s" % start_header_error):
+		return
+	await _key(KEY_TAB)
+	if not _check(not _panel.visible, "Start-phase drawer probe did not close"):
 		return
 	await _click(_main.get_node("HUD/SessionPanel/StartButton"))
 	if not _check(str(GrusBridge.session_snapshot().phase) == "Playing", "Start UI failed"):
@@ -1209,6 +1273,75 @@ func _run() -> void:
 	if not _check(GrusBridge.set_sim_speed(1.0), "could not slow the synthetic probe"):
 		return
 	await _settle()
+	# HPA-698 fix round: deeper and saturated header snapshots are
+	# presentation-only copies of the live drawer read. Every case must stay
+	# inside the padded drawer and show the snapshot's own complete price/time
+	# (or live dig progress), including the bridge's saturated projection
+	# (depth 38 / target 39 / u32-max Scrap / 600 s) and the documented L5
+	# price. No command, spend or sim write; the live read is restored.
+	var header_cases := [
+		["L5 idle Playing", "Playing", {
+			"depth": 4, "target": 5, "excavating": false,
+			"next_cost": {"food": 0, "scrap": 655, "coal": 328, "crystals": 0},
+			"next_seconds": 90,
+		}, ["655", "328", "90s", "Esc closes"]],
+		["L5 idle Paused", "Paused", {
+			"depth": 4, "target": 5, "excavating": false,
+			"next_cost": {"food": 0, "scrap": 655, "coal": 328, "crystals": 0},
+			"next_seconds": 90,
+		}, ["655", "328", "90s", "inspection only"]],
+		["L5 idle Start", "Start", {
+			"depth": 4, "target": 5, "excavating": false,
+			"next_cost": {"food": 0, "scrap": 655, "coal": 328, "crystals": 0},
+			"next_seconds": 90,
+		}, ["655", "328", "90s", "inspection only"]],
+		["saturated idle Playing", "Playing", {
+			"depth": 38, "target": 39, "excavating": false,
+			"next_cost": {"food": 0, "scrap": 4294967295, "coal": 2147483648, "crystals": 0},
+			"next_seconds": 600,
+		}, ["4294967295", "2147483648", "600s", "Esc closes"]],
+		["L5 active dig", "Playing", {
+			"depth": 4, "target": 5, "excavating": true,
+			"progress": 0.37, "remaining": 37.0,
+		}, ["37%", "37s left", "Esc closes"]],
+		["saturated active dig", "Paused", {
+			"depth": 38, "target": 39, "excavating": true,
+			"progress": 0.99, "remaining": 600.0,
+		}, ["99%", "600s left", "inspection only"]],
+	]
+	var header_errors := PackedStringArray()
+	var header_base: Dictionary = _panel.get("_snapshot")
+	var live_phase := str(GrusBridge.session_snapshot().phase)
+	for header_case in header_cases:
+		var header_probe: Dictionary = header_base.duplicate(true)
+		for key in header_case[2]:
+			header_probe[key] = header_case[2][key]
+		_main.set_process(false)
+		_panel.refresh(header_probe, header_case[1])
+		await _settle()
+		var header_error := _header_error("header probe %s" % header_case[0])
+		if header_error.is_empty():
+			var header_text := (_panel.get_node("HeaderLabel") as Label).text
+			for needle in header_case[3]:
+				if not header_text.contains(str(needle)):
+					header_error = "header probe %s lost visible \"%s\": %s" % [
+						header_case[0], needle, header_text]
+					break
+		if not header_error.is_empty():
+			header_errors.append(header_error)
+		# Opt-in evidence of the saturated bounded header; presentation-only
+		# copied snapshot, not a paid dig.
+		if str(header_case[0]) == "saturated idle Playing":
+			var header_capture := await SmokeHelpers.capture_frame(get_tree(),
+				"underground-header-saturated-probe")
+			if not header_capture.is_empty():
+				header_errors.append(header_capture)
+		_main.set_process(true)
+		_panel.refresh(header_base, live_phase)
+		await _settle()
+	if not _check(header_errors.is_empty(),
+			header_errors[0] if not header_errors.is_empty() else ""):
+		return
 	await _click(_kind("GeothermalTap"))
 	if not _check(not _kind("GeothermalTap").button_pressed,
 			"deeper-row probe could not disarm the live Tap kind"):

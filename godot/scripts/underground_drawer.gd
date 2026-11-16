@@ -95,10 +95,10 @@ func _ready() -> void:
 		kind_button.add_theme_font_size_override("font_size", 14)
 		kind_button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		# HPA-698 visual follow-up: the icon is the tile's dominant read. The
-		# 76 px tile keeps a 34 px icon on top and the unchanged 32 px clear
+		# 72 px tile keeps a 34 px icon on top and the unchanged 32 px clear
 		# name/price band at the bottom, so the icon no longer competes with
 		# the labels for the same pixels.
-		kind_button.custom_minimum_size = Vector2(52, 76)
+		kind_button.custom_minimum_size = Vector2(52, 72)
 		kind_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		var kind := str(ug_entry.get("name", ""))
 		kind_button.set_meta("kind", kind)
@@ -342,12 +342,13 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 			target, roundi(float(snap.get("progress", 0.0)) * 100.0), remaining_seconds]
 	else:
 		dig_line = "L%d dig · %s · %ds" % [target, cost_text, int(snap.get("next_seconds", 0))]
-	# One digest line keeps the room-kind row's icon room. While playing the
-	# header names Esc; a non-playing drawer says it is inspection-only
-	# instead, the only suffix that also fits the deep L5 price on one line.
-	# The Pause/Result overlay already names the phase.
-	_header.text = "UNDERGROUND · depth %d · %s · %s" % [
-		depth, dig_line, "Esc closes" if playing else "inspection only"]
+	# Two bounded lines keep the room-kind row's icon room while giving the
+	# snapshot's full price/time its own line: the fixed 404 px header holds
+	# every u32 depth, price and duration this snapshot can project. While
+	# playing the header names Esc; a non-playing drawer says it is
+	# inspection-only instead (the Pause/Result overlay names the phase).
+	_header.text = "UNDERGROUND · depth %d · %s\n%s" % [
+		depth, "Esc closes" if playing else "inspection only", dig_line]
 	# The themed bar mirrors the snapshot's single active dig, never a timer
 	# of its own; it sits outside the clipped level rows and hides when idle.
 	_dig_progress.visible = excavating
