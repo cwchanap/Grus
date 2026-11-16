@@ -10,6 +10,7 @@ extends CanvasLayer
 const HudHelpers := preload("res://scripts/hud_helpers.gd")
 
 @onready var wave_label: RichTextLabel = $WaveLabel
+@onready var wave_warning: RichTextLabel = $WaveWarning
 @onready var wave_ring: Control = $WaveRing
 @onready var wave_clock: TextureRect = $WaveRing/ClockIcon
 @onready var incoming_glow: Control = $IncomingGlow
@@ -96,12 +97,13 @@ const RESULT_DIM_TINTS := {
 	"victory": Color(0.03, 0.11, 0.14, 0.5),
 	"defeat": Color(0.16, 0.035, 0.03, 0.5),
 }
-## The compact wave card shows the incoming zones as the mockup's compass tag
-## (N/E/S/W): the authored three-zone warning cannot fit its full names, and
-## the edge glows plus the full names on the card tooltip keep the direction
-## explicit without relying on colour alone.
-const ZONE_SHORT := {"North": "N", "East": "E", "South": "S", "West": "W"}
+## The wave card's tooltip keeps the full incoming names as a second pointer
+## surface. The visible warning row and the readout's accessible description
+## carry the same snapshot-derived wording without hover.
 const WAVE_TOOLTIP := "Wave prep, live aliens and the next wave countdown"
+## The inline clock icon plus its trailing space, for the exact/compact wave
+## index decision only.
+const WAVE_ICON_WIDTH := 22.0
 var _socket_panels: Array[Panel] = []
 var _socket_icons: Array[TextureRect] = []
 var _socket_times: Array[Label] = []
@@ -642,29 +644,44 @@ func refresh_wave(wave: Dictionary) -> void:
 		(incoming_glow.get_node(direction) as TextureRect).visible = \
 			incoming_names.has(direction)
 	var wave_number := int(wave.get("wave", 0))
-	var current_label := "Prep" if wave_number == 0 else "Wave %d" % wave_number
-	# The compact top-rail card cannot hold "Aliens 0" and the warning on one
-	# run without clipping, so the incoming zones own the fourth line exactly
-	# when the snapshot announces them.
-	var lines := PackedStringArray([
-		current_label,
-		"%sNext wave %d in %d:%02d" % [
-			_inline_icon("status", "WaveCountdown"),
-			int(wave.get("next_wave", 1)),
-			int(remaining / 60),
-			remaining % 60,
-		],
-		"Aliens %d" % int(wave.get("live_aliens", 0)),
-	])
-	var short_names := PackedStringArray()
-	for name in incoming_names:
-		short_names.append(str(ZONE_SHORT.get(name, name)))
+	var next_wave := int(wave.get("next_wave", 1))
+	var live_aliens := int(wave.get("live_aliens", 0))
+	# Wave indices are projected as i64; the compact card cannot show every
+	# digit. Show the exact index while the composed line fits the readout, then
+	# a short scientific form; the exact indices stay in the readout's
+	# accessible description and the card tooltip, never only in a pointer
+	# surface.
+	var current_text := "Prep"
+	if wave_number != 0:
+		current_text = "Wave %d" % wave_number
+		if _wave_line_width(current_text) > wave_label.size.x:
+			current_text = "Wave %s" % _compact_wave_index(wave_number)
+	var next_text := "Next wave %d in %d:%02d" % [next_wave, int(remaining / 60), remaining % 60]
+	if _wave_line_width(next_text) + WAVE_ICON_WIDTH > wave_label.size.x:
+		next_text = "Next wave %s in %d:%02d" % [
+			_compact_wave_index(next_wave), int(remaining / 60), remaining % 60]
+	wave_label.text = "\n".join(PackedStringArray([
+		current_text,
+		"%s%s" % [_inline_icon("status", "WaveCountdown"), next_text],
+		"Aliens %d" % live_aliens,
+	]))
+	# The incoming directions own a visible readout of their own, so the full
+	# names never become tooltip-only. The card tooltip keeps them as a second
+	# pointer surface and the edge glows mark the same directions.
+	wave_warning.visible = warning
+	wave_warning.text = ""
 	if warning:
-		lines.append("%sIncoming: %s" % [
-			_inline_icon("status", "IncomingZone"), ", ".join(short_names)])
-	wave_label.text = "\n".join(lines)
-	# The compact line abbreviates; the tooltip keeps the full zone names the
-	# wave snapshot authored, and the edge glows mark the same directions.
+		wave_warning.text = "%sIncoming: %s" % [
+			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
+	# Full snapshot semantics without hover: the exact indices always, plus the
+	# full direction names while announced. These are the properties an
+	# accessibility consumer reads; this project tests the values, not a reader.
+	var description := "Wave %d, next wave %d, %d aliens" % [wave_number, next_wave, live_aliens]
+	if warning:
+		description += ", incoming from %s" % ", ".join(incoming_names)
+	wave_label.accessibility_name = "Wave status"
+	wave_label.accessibility_description = description
+	wave_panel.accessibility_description = description
 	wave_panel.tooltip_text = WAVE_TOOLTIP
 	if warning:
 		wave_panel.tooltip_text = "Incoming: %s\n%s" % [", ".join(incoming_names), WAVE_TOOLTIP]
@@ -675,6 +692,31 @@ func refresh_wave(wave: Dictionary) -> void:
 		wave_number,
 	]
 	_render_result_stats()
+
+## The shaped width of one plain wave line in the readout's own font. Used only
+## to choose the exact or compact index display, never to assert layout.
+func _wave_line_width(text: String) -> float:
+	var font := wave_label.get_theme_font("normal_font")
+	var font_size := wave_label.get_theme_font_size("normal_font_size")
+	return font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+
+## A deterministic short display for wave indices that no longer fit the
+## compact readout. K/M/G/T cover reachable ranges; the exponent form keeps
+## every projected i64 index bounded. The exact index always remains in the
+## readout's accessible description and the card tooltip.
+func _compact_wave_index(value: int) -> String:
+	if value >= 1_000_000_000_000_000:
+		var exponent := int(floor(log(float(value)) / log(10.0)))
+		var mantissa := int(floor(float(value) / pow(10.0, float(exponent))))
+		return "%de%d" % [mantissa, exponent]
+	for unit in [[1_000_000_000_000, "T"], [1_000_000_000, "G"],
+			[1_000_000, "M"], [1_000, "K"]]:
+		if value >= int(unit[0]):
+			var scaled := float(value) / float(unit[0])
+			if scaled >= 100.0:
+				return "%d%s" % [roundi(scaled), str(unit[1])]
+			return "%.1f%s" % [scaled, str(unit[1])]
+	return str(value)
 
 ## Per-frame research refresh behind the one dynamic snapshot: the bar and
 ## label track live points/rate/ETA, and every catalogue-bound lock state
@@ -961,7 +1003,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	session_backdrop.visible = not playing
 	# Result is a full-screen outcome composition: hide the in-match HUD so the
 	# bottom bar never obscures or exposes live controls behind the art.
-	for node in [wave_panel, wave_ring, wave_label, incoming_glow, research_panel,
+	for node in [wave_panel, wave_ring, wave_label, wave_warning, incoming_glow, research_panel,
 			economy_panel, selection_panel, command_panel, command_status,
 			minimap_frame, _minimap, frost_overlay]:
 		node.visible = not result
