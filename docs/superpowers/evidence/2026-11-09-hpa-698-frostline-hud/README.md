@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+**Latest visual comparison follow-up:** see [the 2026-11-15 composition captures](visual-comparison-2026-11-15/README.md): compact top-rail wave card, enlarged room-kind icons and a quieter empty selection card.
+
 **Latest opening access and audio shutdown:** see [the 2026-11-15 access captures and verification](access-shutdown-2026-11-15/README.md).
 
 **Latest framing and command tiles:** see [the 2026-11-15 framing captures](framing-2026-11-15/README.md).
