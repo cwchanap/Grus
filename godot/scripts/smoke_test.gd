@@ -559,6 +559,153 @@ func _assert_command_tile_treatment() -> bool:
 		return false
 	return true
 
+## HPA-698 fix round: one geometry assertion for the live research card and
+## every labelled synthetic boundary state. The shaped label lines and the
+## milestone row's own content must fit their fixed rectangles, and the four
+## card rows must not overlap each other.
+func _research_geometry_error(card: Control, bar: ProgressBar, label: Label,
+		markers: RichTextLabel, analyze: Button, where: String) -> String:
+	if card == null or bar == null or label == null or markers == null or analyze == null:
+		return "%s research controls are missing" % where
+	if label.get_theme_font_size("font_size") < 16 \
+			or markers.get_theme_font_size("normal_font_size") < 13 \
+			or bar.size.y < 28:
+		return "%s research type/progress is too small: label=%d px markers=%d px bar=%.1f px" % [
+			where, label.get_theme_font_size("font_size"),
+			markers.get_theme_font_size("normal_font_size"), bar.size.y]
+	var card_rect := card.get_global_rect()
+	var label_rect := label.get_global_rect()
+	var markers_rect := markers.get_global_rect()
+	var bar_rect := bar.get_global_rect()
+	var analyze_rect := analyze.get_global_rect()
+	if not card_rect.encloses(label_rect) or not card_rect.encloses(markers_rect) \
+			or not card_rect.encloses(bar_rect) or not card_rect.encloses(analyze_rect):
+		return "%s research readout leaves its card: label=%s markers=%s bar=%s analyze=%s card=%s" % [
+			where, label_rect, markers_rect, bar_rect, analyze_rect, card_rect]
+	var lines := label.text.split("\n")
+	var label_width := 0.0
+	for line in lines:
+		label_width = maxf(label_width, label.get_theme_font("font").get_string_size(
+			line, HORIZONTAL_ALIGNMENT_LEFT, -1,
+			label.get_theme_font_size("font_size")).x)
+	var label_height := label.get_theme_font("font").get_height(
+		label.get_theme_font_size("font_size")) * lines.size()
+	if label_width > label_rect.size.x + 0.5 or label_height > label_rect.size.y + 0.5:
+		return "%s research label shaped text does not fit: text=%sx%s rect=%s" % [
+			where, label_width, label_height, label_rect.size]
+	if markers.get_content_width() > markers_rect.size.x - 20.0 \
+			or markers.get_content_height() > markers_rect.size.y + 0.5:
+		return "%s research milestones clip their own content: content=%s rect=%s" % [
+			where, Vector2(markers.get_content_width(), markers.get_content_height()),
+			markers_rect.size]
+	if label_rect.intersects(analyze_rect) or markers_rect.intersects(analyze_rect) \
+			or label_rect.intersects(markers_rect) or bar_rect.intersects(label_rect) \
+			or bar_rect.intersects(analyze_rect) or markers_rect.intersects(bar_rect):
+		return "%s research card rows overlap: bar=%s label=%s markers=%s analyze=%s" % [
+			where, bar_rect, label_rect, markers_rect, analyze_rect]
+	return ""
+
+## Exact milestone readout for a probe: every catalogue short name/value must
+## be present, and exactly the expected set carries the non-colour check mark.
+func _research_reached_error(text: String, points: float, expected_marks: int,
+		flame_points: int, lance_points: int, wave_points: int) -> String:
+	var thresholds := {
+		"Flame": flame_points,
+		"Lance": lance_points,
+		"Wave": wave_points,
+	}
+	var marks := 0
+	for short in thresholds:
+		var threshold := int(thresholds[short])
+		if not text.contains("%s %d" % [short, threshold]):
+			return "milestone %s %d is missing from %s" % [short, threshold, text]
+		var should_reach := points >= float(threshold)
+		var has_mark := text.contains("✓ %s %d" % [short, threshold])
+		if should_reach and not has_mark:
+			return "reached milestone %s has no check mark: %s" % [short, text]
+		if not should_reach and has_mark:
+			return "unreached milestone %s is marked reached: %s" % [short, text]
+		if has_mark:
+			marks += 1
+	if marks != expected_marks:
+		return "expected %d reached milestones, found %d: %s" % [expected_marks, marks, text]
+	return ""
+
+## Test-local display grouping for exact expected label text; independent of
+## the HUD's formatter so a format change cannot silently bless itself.
+func _grouped_int(value: int) -> String:
+	var digits := str(value)
+	var grouped := ""
+	for index in digits.length():
+		if index > 0 and (digits.length() - index) % 3 == 0:
+			grouped += ","
+		grouped += digits[index]
+	return grouped
+
+func _eta_text(seconds: float) -> String:
+	var total := maxi(ceili(seconds), 0)
+	return "%d:%02d" % [total / 60, total % 60]
+
+## The probe's synthetic points temporarily unlock research-gated build tiles
+## through the production refresh. Put the live opening lock state back before
+## the capture so the frame never presents a fabricated unlock as its subject.
+func _restore_build_locks(points: float) -> void:
+	for button in get_node("Main/HUD/CommandPanel/BuildGrid").get_children():
+		if button is Button:
+			var required := float(button.get_meta("unlock_points", 0))
+			button.disabled = required > 0.0 and points < required
+
+## HPA-698 fix round: rendered focus evidence where a real renderer exists.
+## The focus style expands beyond the plate, so its bright border must appear
+## in the 4 px band just outside the focused rect; the unfocused comparison
+## tile's same band is the card's dark field. Headless runs cannot read pixels
+## and print an explicit skip instead of treating the semantic checks as proof.
+func _rendered_focus_error(focused: Control, unfocused: Control, where: String) -> String:
+	if DisplayServer.get_name() == "headless":
+		print("RENDERED_FOCUS_SKIP %s (headless viewport has no readable pixels)" % where)
+		return ""
+	await RenderingServer.frame_post_draw
+	var image := get_viewport().get_texture().get_image()
+	if image == null or image.is_empty():
+		return "%s rendered-focus check could not read the viewport image" % where
+	var focus_count := _outside_band_bright_pixels(image, focused.get_global_rect())
+	var unfocused_count := _outside_band_bright_pixels(image, unfocused.get_global_rect())
+	print("RENDERED_FOCUS %s focused_band=%d unfocused_band=%d" % [
+		where, focus_count, unfocused_count])
+	if focus_count < 80 or focus_count <= unfocused_count * 2:
+		return "%s visible focus ring is missing or not distinct: focused band=%d, unfocused band=%d" % [
+			where, focus_count, unfocused_count]
+	return ""
+
+## Count near-white pixels in the 4 px band just outside a control's rect. The
+## ring is drawn by StyleBoxFlat's 2 px expand margin plus a 2 px border.
+func _outside_band_bright_pixels(image: Image, rect: Rect2) -> int:
+	var count := 0
+	# The control rect is in logical viewport pixels; a HiDPI viewport texture
+	# may be larger. Scale the probe rect to the image's own pixel grid.
+	var viewport_size := get_viewport().get_visible_rect().size
+	var scale := Vector2(image.get_width(), image.get_height()) / viewport_size
+	var image_rect := Rect2(rect.position * scale, rect.size * scale)
+	var left := int(round(image_rect.position.x))
+	var right := int(round(image_rect.end.x))
+	var top := int(round(image_rect.position.y))
+	var bottom := int(round(image_rect.end.y))
+	for x in range(left + 4, right - 4):
+		for offset in [1, 2, 3, 4]:
+			count += _bright_pixel(image, x, top - offset)
+			count += _bright_pixel(image, x, bottom + offset)
+	for y in range(top + 4, bottom - 4):
+		for offset in [1, 2, 3, 4]:
+			count += _bright_pixel(image, left - offset, y)
+			count += _bright_pixel(image, right + offset, y)
+	return count
+
+func _bright_pixel(image: Image, x: int, y: int) -> int:
+	if x < 0 or y < 0 or x >= image.get_width() or y >= image.get_height():
+		return 0
+	var color := image.get_pixel(x, y)
+	return 1 if minf(color.r, minf(color.g, color.b)) > 0.65 else 0
+
 ## HPA-698 final review: command feedback (rejected orders, armed targets) is
 ## drawn before the bottom selection card, so it must sit wholly above it.
 func _assert_command_status_above_selection() -> bool:
@@ -1636,82 +1783,108 @@ func _run() -> void:
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
 		return
-	# HPA-698 readability follow-up: the live research readout must be legible
-	# at 1280 × 720, contain its own shaped text, and keep the progress tube,
-	# milestone row and Analyze in separate card rows. Font sizes alone are not
-	# enough: the measured glyph box must fit the fixed label rect.
-	var research_label_rect := research_label.get_global_rect()
-	var research_label_lines := research_label.text.split("\n")
-	var research_label_width := 0.0
-	for line in research_label_lines:
-		research_label_width = maxf(research_label_width,
-			research_label.get_theme_font("font").get_string_size(line,
-				HORIZONTAL_ALIGNMENT_LEFT, -1,
-				research_label.get_theme_font_size("font_size")).x)
-	var research_label_height := research_label.get_theme_font("font").get_height(
-		research_label.get_theme_font_size("font_size")) * research_label_lines.size()
-	var research_markers_rect := research_markers.get_global_rect()
-	var research_bar_rect := research_bar.get_global_rect()
-	var analyze_rect := analyze_button.get_global_rect()
-	if research_label.get_theme_font_size("font_size") < 16 \
-			or research_markers.get_theme_font_size("normal_font_size") < 13 \
-			or research_bar.size.y < 28:
-		_fail("research card type/progress is too small: label=%d px markers=%d px bar=%.1f px" % [
-			research_label.get_theme_font_size("font_size"),
-			research_markers.get_theme_font_size("normal_font_size"), research_bar.size.y])
+	# HPA-698 fix round: one geometry assertion covers the live card and the
+	# labelled presentation-only boundary probes below. It measures the shaped
+	# label lines and milestone content against the fixed column, not only the
+	# opening value.
+	var research_geometry := _research_geometry_error(research_panel, research_bar,
+		research_label, research_markers, analyze_button, "live opening research card")
+	if not research_geometry.is_empty():
+		_fail(research_geometry)
 		return
-	if not research_rect.encloses(research_label_rect) \
-			or not research_rect.encloses(research_markers_rect) \
-			or not research_rect.encloses(research_bar_rect) \
-			or not research_rect.encloses(analyze_rect):
-		_fail("research readout leaves its card: label=%s markers=%s bar=%s analyze=%s card=%s" % [
-			research_label_rect, research_markers_rect, research_bar_rect, analyze_rect, research_rect])
-		return
-	if research_label_width > research_label_rect.size.x + 0.5 \
-			or research_label_height > research_label_rect.size.y + 0.5:
-		_fail("research label shaped text does not fit: text=%sx%s rect=%s" % [
-			research_label_width, research_label_height, research_label_rect.size])
-		return
-	if research_markers.get_content_width() > research_markers_rect.size.x - 20.0 \
-			or research_markers.get_content_height() > research_markers_rect.size.y + 0.5:
-		_fail("research milestones clip their own content: content=%s rect=%s" % [
-			Vector2(research_markers.get_content_width(), research_markers.get_content_height()),
-			research_markers_rect.size])
-		return
-	if research_label_rect.intersects(analyze_rect) \
-			or research_markers_rect.intersects(analyze_rect) \
-			or research_label_rect.intersects(research_markers_rect) \
-			or research_bar_rect.intersects(research_label_rect) \
-			or research_bar_rect.intersects(analyze_rect) \
-			or research_markers_rect.intersects(research_bar_rect):
-		_fail("research card rows overlap: bar=%s label=%s markers=%s analyze=%s" % [
-			research_bar_rect, research_label_rect, research_markers_rect, analyze_rect])
-		return
-	# HPA-698 readability follow-up: a reached milestone must not read by
-	# colour alone. This is a presentation-only snapshot probe (no command,
-	# spend or simulation state); the controller's next frame restores the
-	# live read.
+	# Explicitly labelled presentation-only boundary probes across the bounded
+	# research domain: 4-digit near-target/target values, the longest legitimate
+	# cold-base ETA (9,000 points / 0.5 s), and 0/1/2/3 reached milestones. No
+	# command, spend, sim or Rust value changes. Main._process pauses so the
+	# real-render capture sees the probe; the live refresh restores it below.
 	var research_hud := get_node("Main/HUD")
 	if not research_hud.has_method("refresh_research_controls"):
-		_fail("HUD does not expose the researched refresh used by the milestone probe")
+		_fail("HUD does not expose the research refresh used by the boundary probes")
 		return
-	research_hud.refresh_research_controls({"points": float(wave_points), "eta_seconds": 1.0}, true, true)
-	var reached_text := research_markers.get_parsed_text()
-	if reached_text.count("✓") != 3 \
-			or not reached_text.contains(str(flame_points)) \
-			or not reached_text.contains(str(lance_points)) \
-			or not reached_text.contains(str(wave_points)):
-		_fail("reached research milestones have no non-colour cue: %s" % reached_text)
+	var research_target := int(round(research_bar.max_value))
+	if research_target <= 0 or flame_points <= 0 or lance_points <= 0 or wave_points <= 0:
+		_fail("catalogue research target/thresholds are missing for the boundary probes")
 		return
-	if research_markers.get_content_width() > research_markers_rect.size.x - 20.0 \
-			or research_markers.get_content_height() > research_markers_rect.size.y + 0.5:
-		_fail("reached research milestones overflow their row: content=%s rect=%s" % [
-			Vector2(research_markers.get_content_width(), research_markers.get_content_height()),
-			research_markers_rect.size])
+	var research_probes := [
+		{"name": "near-target", "points": float(research_target - 1),
+			"eta": 2.0, "reached": 3},
+		{"name": "target", "points": float(research_target), "eta": 0.0, "reached": 3},
+		{"name": "longest cold-base ETA", "points": 0.0, "eta": 18000.0, "reached": 0},
+		{"name": "Flame reached", "points": float(flame_points),
+			"eta": 13500.0, "reached": 1},
+		{"name": "Flame+Lance reached", "points": float(lance_points),
+			"eta": 9000.0, "reached": 2},
+		{"name": "all reached", "points": float(wave_points),
+			"eta": 4500.0, "reached": 3, "capture": true},
+	]
+	var research_main := get_node("Main") as Node3D
+	var live_research: Dictionary = GrusBridge.research_snapshot()
+	research_main.set_process(false)
+	var probe_error := ""
+	for probe in research_probes:
+		var points := float(probe["points"])
+		var eta := float(probe["eta"])
+		var percent := floori(clampf(points, 0.0, float(research_target)) / float(research_target) * 100.0)
+		var expected_label := "Research %s/%s\n%d%% · ETA %s" % [
+			_grouped_int(floori(points)), _grouped_int(research_target), percent, _eta_text(eta)]
+		research_hud.refresh_research_controls({"points": points, "eta_seconds": eta}, true, true)
+		if research_label.text != expected_label:
+			probe_error = "synthetic %s research label is %s; expected %s" % [
+				probe["name"], research_label.text, expected_label]
+			break
+		var reached_error := _research_reached_error(research_markers.get_parsed_text(),
+			points, int(probe["reached"]), flame_points, lance_points, wave_points)
+		if not reached_error.is_empty():
+			probe_error = "synthetic %s %s" % [probe["name"], reached_error]
+			break
+		var probe_geometry := _research_geometry_error(research_panel, research_bar,
+			research_label, research_markers, analyze_button,
+			"synthetic %s research card" % probe["name"])
+		if not probe_geometry.is_empty():
+			probe_error = probe_geometry
+			break
+		if bool(probe.get("capture", false)):
+			# Keep the capture's build-grid research locks on the live opening
+			# state while only the research card carries the probe points; no
+			# gameplay command or resource changes, and Main restores the whole
+			# HUD on the next live frame.
+			_restore_build_locks(float(live_research.get("points", 0.0)))
+			var probe_capture := await SmokeHelpers.capture_frame(get_tree(),
+				"research-all-reached-probe")
+			if not probe_capture.is_empty():
+				probe_error = probe_capture
+				break
+	research_main.set_process(true)
+	if not probe_error.is_empty():
+		_fail(probe_error)
 		return
+	# Restore and verify the live read before the journey continues. The probe
+	# values must be gone and the displayed point total must track the live
+	# snapshot on the restored frame (one point of tick-boundary tolerance).
 	await get_tree().process_frame
-	if research_markers.get_parsed_text().count("✓") != 0:
-		_fail("live research snapshot did not restore unreached milestone cues")
+	await get_tree().process_frame
+	var restored_points := -1
+	var restored_first_line := research_label.text.split("\n")[0]
+	if restored_first_line.begins_with("Research "):
+		var restored_digits := restored_first_line.trim_prefix(
+			"Research ").split("/")[0].replace(",", "")
+		if restored_digits.is_valid_int():
+			restored_points = int(restored_digits)
+	var live_after_points := floori(float(
+		GrusBridge.research_snapshot().get("points", -1.0)))
+	if research_markers.get_parsed_text().count("✓") != 0 \
+			or research_label.text.split("\n").size() != 2 \
+			or not research_label.text.contains(_grouped_int(research_target)) \
+			or not research_label.text.contains("ETA ") \
+			or restored_points < 0 or live_after_points < 0 \
+			or absi(restored_points - live_after_points) > 1:
+		_fail("live research read was not restored after the boundary probes: label=%s live=%d markers=%s" % [
+			research_label.text, live_after_points, research_markers.get_parsed_text()])
+		return
+	var restored_geometry := _research_geometry_error(research_panel, research_bar,
+		research_label, research_markers, analyze_button, "restored live research card")
+	if not restored_geometry.is_empty():
+		_fail(restored_geometry)
 		return
 	var research_icon_rect := research_icon.get_global_rect()
 	var research_icon_minimum := research_icon.get_combined_minimum_size()
@@ -2577,18 +2750,29 @@ func _run() -> void:
 		return
 	# Focus must read as its own bright ring outside the plate — never as the
 	# armed cyan frame or the quiet hover edge — while the Bunkhouse stays the
-	# one armed tile.
-	wall_tile.grab_focus()
+	# one armed tile. HPA-698 fix round: Wall's focus is reached with real
+	# keyboard navigation, not grab_focus. Return focus to the armed Bunkhouse
+	# (the real click's focus was moved by the placement check above), then
+	# walk the build grid with real KEY_RIGHT events.
+	bunkhouse_tile.grab_focus()
 	await get_tree().process_frame
-	await get_tree().process_frame
+	var focus_owner: Control = get_viewport().gui_get_focus_owner()
+	for _step in 4:
+		if focus_owner == wall_tile:
+			break
+		_key_tap(KEY_RIGHT)
+		await get_tree().process_frame
+		focus_owner = get_viewport().gui_get_focus_owner()
 	var focus_ring := wall_tile.get_theme_stylebox("focus") as StyleBoxFlat
-	if get_viewport().gui_get_focus_owner() != wall_tile \
+	if focus_owner != wall_tile \
 			or focus_ring == null or focus_ring.draw_center \
 			or focus_ring.border_width_left < 2 \
 			or focus_ring.get_expand_margin(SIDE_LEFT) < 2.0 \
 			or SmokeHelpers.linear_luminance(focus_ring.border_color) < 0.8 \
-			or not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
-		_fail("command focus is not a bright ring outside the plate or disturbed the armed tile: %s" % focus_ring)
+			or not bunkhouse_tile.button_pressed or wall_tile.button_pressed \
+			or str(crossover_main.get("_placement_kind")) != "Bunkhouse":
+		_fail("real keyboard navigation did not reach Wall with a bright ring while Bunkhouse stayed armed: owner=%s ring=%s placement=%s" % [
+			focus_owner, focus_ring, str(crossover_main.get("_placement_kind"))])
 		return
 	# HPA-698 readability follow-up: the price band stays legible in the armed
 	# and keyboard-focused tile states, not only the normal field.
@@ -2599,6 +2783,23 @@ func _run() -> void:
 	var focused_price := SmokeHelpers.command_price_error(wall_tile, "focused Wall")
 	if not focused_price.is_empty():
 		_fail(focused_price)
+		return
+	# HPA-698 fix round: where a real renderer exists, prove the configured
+	# focus ring is actually painted outside the Wall plate while an unfocused
+	# tile's same outside band stays dark. Headless has no viewport pixels; the
+	# windowed run prints the counts. The focused tile's price band was checked
+	# above, so the ring and the price are evidence of the same state.
+	var depot_compare := get_node("Main/HUD/CommandPanel/BuildGrid/DepotButton") as Button
+	var rendered_focus := await _rendered_focus_error(wall_tile, depot_compare,
+		"keyboard-focused Wall")
+	if not rendered_focus.is_empty():
+		_fail(rendered_focus)
+		return
+	# Opt-in labelled evidence of the real keyboard-navigation focus state.
+	var keyboard_focus_capture := await SmokeHelpers.capture_frame(get_tree(),
+		"command-tiles-keyboard-focus")
+	if not keyboard_focus_capture.is_empty():
+		_fail(keyboard_focus_capture)
 		return
 	# Rendered evidence case: the controller's real long armed hint must keep
 	# its scoped dark edge and fit while it crosses snowy ground above the card.
