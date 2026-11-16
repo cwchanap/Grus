@@ -197,6 +197,38 @@ static func shaped_text_size(label: Label) -> Vector2:
 		label.get_theme_font_size("font_size"), "")
 	return paragraph.get_size()
 
+## HPA-698 readability follow-up: every command tile keeps its catalogue price
+## on the mockup's dark bottom band, with the shaped price inside that band and
+## the band clear of the icon. The tile's own plate still carries the state.
+static func command_price_error(button: Button, where: String) -> String:
+	var cost := button.get_node_or_null("Cost") as RichTextLabel
+	if cost == null:
+		return "%s lost its price label" % where
+	var font_size := cost.get_theme_font_size("normal_font_size")
+	if font_size < 15:
+		return "%s price is %d px, smaller than 15" % [where, font_size]
+	var band := cost.get_theme_stylebox("normal") as StyleBoxFlat
+	if band == null or band.bg_color.a < 0.8 \
+			or linear_luminance(band.bg_color) > 0.02:
+		return "%s price has no dark quiet band: %s" % [where, band]
+	var tile_rect := button.get_global_rect()
+	var cost_rect := cost.get_global_rect()
+	if not tile_rect.encloses(cost_rect):
+		return "%s price band leaves its tile" % where
+	if cost_rect.position.y < tile_rect.position.y + tile_rect.size.y * 0.6:
+		return "%s price band competes with the tile icon" % where
+	if cost.get_content_width() > cost_rect.size.x + 0.5 \
+			or cost.get_content_height() > cost_rect.size.y + 0.5:
+		return "%s price text does not fit its band: content=%s band=%s" % [
+			where, Vector2(cost.get_content_width(), cost.get_content_height()), cost_rect.size]
+	var cost_entry: Dictionary = button.get_meta("cost", {})
+	var parsed := cost.get_parsed_text()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var amount := int(cost_entry.get(resource, 0))
+		if amount > 0 and not parsed.contains(str(amount)):
+			return "%s price lost its catalogue %s amount" % [where, resource]
+	return ""
+
 ## Clickable HUD rectangles from visible Controls with non-ignore mouse filter.
 static func hud_rects(hud_root: Node) -> Array[Rect2]:
 	var rects: Array[Rect2] = []

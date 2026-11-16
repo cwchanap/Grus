@@ -2038,6 +2038,12 @@ func _run() -> void:
 	if not unaffordable_tile.is_empty():
 		_fail("unaffordable Guard tile: %s" % unaffordable_tile)
 		return
+	# HPA-698 readability follow-up: the clickable unaffordable state keeps its
+	# catalogue price on the same readable band as the normal tiles.
+	var unaffordable_price := SmokeHelpers.command_price_error(guard_button, "unaffordable Guard")
+	if not unaffordable_price.is_empty():
+		_fail(unaffordable_price)
+		return
 	await _click_button(guard_button)
 	if not await _wait_until(
 			func(): return GrusBridge.command_feedback_revision() != reject_revision,

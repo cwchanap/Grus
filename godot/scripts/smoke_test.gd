@@ -516,6 +516,10 @@ func _assert_command_tile_treatment() -> bool:
 			if price_ratio < 7.0:
 				_fail("%s price contrast on the quiet plate is %.2f:1" % [button.name, price_ratio])
 				return false
+			var price_band_error := SmokeHelpers.command_price_error(button, button.name)
+			if not price_band_error.is_empty():
+				_fail(price_band_error)
+				return false
 			# 2.5:1 over the mean glyph colour is a floor for a metric that
 			# averages dark outlines into the icon body; the bright core is
 			# far above it.
@@ -542,6 +546,16 @@ func _assert_command_tile_treatment() -> bool:
 				!= "res://assets/ui/frostline/ui/tile_locked.png":
 		_fail("CrystalLance does not present both its unaffordable and locked frames: %s" % [
 			lance.theme_type_variation])
+		return false
+	# The price band is state-independent: the true lock and the live
+	# unaffordable action must keep the same readable catalogue price.
+	var flame_price := SmokeHelpers.command_price_error(flame, "locked FlameTower")
+	if not flame_price.is_empty():
+		_fail(flame_price)
+		return false
+	var lance_price := SmokeHelpers.command_price_error(lance, "unaffordable CrystalLance")
+	if not lance_price.is_empty():
+		_fail(lance_price)
 		return false
 	return true
 
@@ -1622,6 +1636,83 @@ func _run() -> void:
 	if not Rect2(Vector2.ZERO, viewport_size).encloses(research_rect):
 		_fail("research panel escapes the viewport: %s" % research_rect)
 		return
+	# HPA-698 readability follow-up: the live research readout must be legible
+	# at 1280 × 720, contain its own shaped text, and keep the progress tube,
+	# milestone row and Analyze in separate card rows. Font sizes alone are not
+	# enough: the measured glyph box must fit the fixed label rect.
+	var research_label_rect := research_label.get_global_rect()
+	var research_label_lines := research_label.text.split("\n")
+	var research_label_width := 0.0
+	for line in research_label_lines:
+		research_label_width = maxf(research_label_width,
+			research_label.get_theme_font("font").get_string_size(line,
+				HORIZONTAL_ALIGNMENT_LEFT, -1,
+				research_label.get_theme_font_size("font_size")).x)
+	var research_label_height := research_label.get_theme_font("font").get_height(
+		research_label.get_theme_font_size("font_size")) * research_label_lines.size()
+	var research_markers_rect := research_markers.get_global_rect()
+	var research_bar_rect := research_bar.get_global_rect()
+	var analyze_rect := analyze_button.get_global_rect()
+	if research_label.get_theme_font_size("font_size") < 16 \
+			or research_markers.get_theme_font_size("normal_font_size") < 13 \
+			or research_bar.size.y < 28:
+		_fail("research card type/progress is too small: label=%d px markers=%d px bar=%.1f px" % [
+			research_label.get_theme_font_size("font_size"),
+			research_markers.get_theme_font_size("normal_font_size"), research_bar.size.y])
+		return
+	if not research_rect.encloses(research_label_rect) \
+			or not research_rect.encloses(research_markers_rect) \
+			or not research_rect.encloses(research_bar_rect) \
+			or not research_rect.encloses(analyze_rect):
+		_fail("research readout leaves its card: label=%s markers=%s bar=%s analyze=%s card=%s" % [
+			research_label_rect, research_markers_rect, research_bar_rect, analyze_rect, research_rect])
+		return
+	if research_label_width > research_label_rect.size.x + 0.5 \
+			or research_label_height > research_label_rect.size.y + 0.5:
+		_fail("research label shaped text does not fit: text=%sx%s rect=%s" % [
+			research_label_width, research_label_height, research_label_rect.size])
+		return
+	if research_markers.get_content_width() > research_markers_rect.size.x - 20.0 \
+			or research_markers.get_content_height() > research_markers_rect.size.y + 0.5:
+		_fail("research milestones clip their own content: content=%s rect=%s" % [
+			Vector2(research_markers.get_content_width(), research_markers.get_content_height()),
+			research_markers_rect.size])
+		return
+	if research_label_rect.intersects(analyze_rect) \
+			or research_markers_rect.intersects(analyze_rect) \
+			or research_label_rect.intersects(research_markers_rect) \
+			or research_bar_rect.intersects(research_label_rect) \
+			or research_bar_rect.intersects(analyze_rect) \
+			or research_markers_rect.intersects(research_bar_rect):
+		_fail("research card rows overlap: bar=%s label=%s markers=%s analyze=%s" % [
+			research_bar_rect, research_label_rect, research_markers_rect, analyze_rect])
+		return
+	# HPA-698 readability follow-up: a reached milestone must not read by
+	# colour alone. This is a presentation-only snapshot probe (no command,
+	# spend or simulation state); the controller's next frame restores the
+	# live read.
+	var research_hud := get_node("Main/HUD")
+	if not research_hud.has_method("refresh_research_controls"):
+		_fail("HUD does not expose the researched refresh used by the milestone probe")
+		return
+	research_hud.refresh_research_controls({"points": float(wave_points), "eta_seconds": 1.0}, true, true)
+	var reached_text := research_markers.get_parsed_text()
+	if reached_text.count("✓") != 3 \
+			or not reached_text.contains(str(flame_points)) \
+			or not reached_text.contains(str(lance_points)) \
+			or not reached_text.contains(str(wave_points)):
+		_fail("reached research milestones have no non-colour cue: %s" % reached_text)
+		return
+	if research_markers.get_content_width() > research_markers_rect.size.x - 20.0 \
+			or research_markers.get_content_height() > research_markers_rect.size.y + 0.5:
+		_fail("reached research milestones overflow their row: content=%s rect=%s" % [
+			Vector2(research_markers.get_content_width(), research_markers.get_content_height()),
+			research_markers_rect.size])
+		return
+	await get_tree().process_frame
+	if research_markers.get_parsed_text().count("✓") != 0:
+		_fail("live research snapshot did not restore unreached milestone cues")
+		return
 	var research_icon_rect := research_icon.get_global_rect()
 	var research_icon_minimum := research_icon.get_combined_minimum_size()
 	if not research_rect.encloses(research_icon_rect) \
@@ -2498,6 +2589,16 @@ func _run() -> void:
 			or SmokeHelpers.linear_luminance(focus_ring.border_color) < 0.8 \
 			or not bunkhouse_tile.button_pressed or wall_tile.button_pressed:
 		_fail("command focus is not a bright ring outside the plate or disturbed the armed tile: %s" % focus_ring)
+		return
+	# HPA-698 readability follow-up: the price band stays legible in the armed
+	# and keyboard-focused tile states, not only the normal field.
+	var armed_price := SmokeHelpers.command_price_error(bunkhouse_tile, "armed Bunkhouse")
+	if not armed_price.is_empty():
+		_fail(armed_price)
+		return
+	var focused_price := SmokeHelpers.command_price_error(wall_tile, "focused Wall")
+	if not focused_price.is_empty():
+		_fail(focused_price)
 		return
 	# Rendered evidence case: the controller's real long armed hint must keep
 	# its scoped dark edge and fit while it crosses snowy ground above the card.
