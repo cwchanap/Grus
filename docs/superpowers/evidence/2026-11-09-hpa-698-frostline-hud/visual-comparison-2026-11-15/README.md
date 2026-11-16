@@ -56,9 +56,10 @@ compared directly; those frames show the prior head (`0d522d9`).
   begins flush under the top bar and its header is a bounded two-line block
   (title/depth/Esc line plus the snapshot's own complete price/time, or the
   live dig percent/remaining). Word wrap and `clip_text` bound the block; the
-  saturated probe shows the longest projected u32 price/time inside the padded
-  drawer. The room-kind tiles are 72 px tall with 34 px icons, the unchanged
-  32 px clear name/price band and the level badge chip; the 152 px viewport
+  saturated-price / 600-second probe stays inside the padded drawer; it does
+  not cover the maximum projected duration. The room-kind tiles are 72 px tall
+  with 34 px icons, the unchanged 32 px clear name/price band and the level
+  badge chip; the 152 px viewport
   still shows three complete rows. Names and prices still come from the
   catalogue/snapshots.
 - **Lower panels (mockups 1–3, prior `framing-default.png`).** The empty
