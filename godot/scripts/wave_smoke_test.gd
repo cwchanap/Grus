@@ -54,17 +54,87 @@ func _wave_text_fits(control: Control) -> bool:
 	return rich_label.get_content_width() <= rich_label.size.x + 0.5 \
 			and rich_label.get_content_height() <= rich_label.size.y + 0.5
 
-## The three authored warning zones, copied onto the live snapshot so the
-## presentation probe renders the same shape the wave director produces from
-## wave 20. Never sent to the sim.
-func three_zone_warning(snapshot: Dictionary) -> Dictionary:
+## Plausible minimap anchors for copied warning probes; the live fixture's own
+## anchors are asserted separately below.
+const ZONE_ANCHORS := {
+	"North": Vector2i(64, 0), "East": Vector2i(128, 48),
+	"South": Vector2i(64, 96), "West": Vector2i(0, 48),
+}
+
+## A copied warning snapshot that matches the wave director's own rotation: the
+## authored wave 20 is three zones and the regular interval is 100 s, so the
+## probe keeps wave/next/timer internally consistent instead of "wave 1 with
+## wave-20 zones". Never sent to the sim.
+func _wave_warning_probe(snapshot: Dictionary, wave: int, next_wave: int,
+		zone_names: Array) -> Dictionary:
 	var probe: Dictionary = snapshot.duplicate(true)
-	probe["incoming_zones"] = [
-		{"name": "West", "anchor_x": 0, "anchor_y": 0},
-		{"name": "North", "anchor_x": 0, "anchor_y": 0},
-		{"name": "East", "anchor_x": 0, "anchor_y": 0},
-	]
+	probe["wave"] = wave
+	probe["next_wave"] = next_wave
+	probe["timer_total_seconds"] = 100.0
+	probe["seconds_remaining"] = 29.0
+	probe["live_aliens"] = 0
+	var zones: Array = []
+	for zone_name in zone_names:
+		var anchor: Vector2i = ZONE_ANCHORS[zone_name]
+		zones.append({"name": zone_name, "anchor_x": anchor.x, "anchor_y": anchor.y})
+	probe["incoming_zones"] = zones
 	return probe
+
+## A copied non-warning snapshot for one wave index. `zone_names` empty leaves
+## the incoming warning cleared.
+func _wave_idle_probe(snapshot: Dictionary, wave: int, next_wave: int) -> Dictionary:
+	return _wave_warning_probe(snapshot, wave, next_wave, [])
+
+## The wave readout contract for one rendered (live or copied) snapshot: the
+## countdown text fits its own rectangle, the warning's full direction names are
+## visible in the readout, and the same names are in the card/label accessible
+## descriptions rather than only in a pointer tooltip. When the warning is
+## cleared, the warning readout and its semantic names must be cleared too.
+func _wave_readout_error(main: Node3D, expected: Array, zones: Array, exact: Array,
+		where: String) -> String:
+	var wave_label := main.get_node("HUD/WaveLabel") as RichTextLabel
+	var warning := main.get_node_or_null("HUD/WaveWarning") as RichTextLabel
+	var card := main.get_node("HUD/WavePanel") as Control
+	if warning == null:
+		return "%s has no WaveWarning readout node" % where
+	var text := _visible_text(wave_label)
+	for needle in expected:
+		if not text.contains(str(needle)):
+			return "%s wave readout lost \"%s\": %s" % [where, needle, text]
+	if not _wave_text_fits(wave_label) or wave_label.text.split("\n").size() != 3:
+		return "%s main wave readout does not fit its rectangle on 3 lines: %s" % [where, text]
+	var warning_text := _visible_text(warning)
+	if zones.is_empty():
+		if warning.is_visible_in_tree() or not warning_text.is_empty():
+			return "%s cleared warning still reads \"%s\"" % [where, warning_text]
+		for description in [wave_label.accessibility_description, card.accessibility_description]:
+			if str(description).to_lower().contains("incoming"):
+				return "%s cleared warning kept an incoming description: %s" % [
+					where, description]
+	else:
+		if not warning.is_visible_in_tree():
+			return "%s warning readout is hidden" % where
+		if not card.get_global_rect().encloses(warning.get_global_rect()):
+			return "%s warning readout escapes the card: %s / %s" % [
+				where, warning.get_global_rect(), card.get_global_rect()]
+		if not _wave_text_fits(warning):
+			return "%s warning readout does not fit its rectangle: %s" % [
+				where, warning_text]
+		for zone_name in zones:
+			if not warning.text.contains("Incoming: ") \
+					or not warning.text.contains(str(zone_name)):
+				return "%s visible warning lost the full direction \"%s\": %s" % [
+					where, zone_name, warning.text]
+			for description in [wave_label.accessibility_description,
+					card.accessibility_description]:
+				if not str(description).contains(str(zone_name)):
+					return "%s accessible description lost \"%s\": %s" % [
+						where, zone_name, description]
+	for value in exact:
+		if not str(wave_label.accessibility_description).contains(str(value)):
+			return "%s accessible description lost the exact value \"%s\": %s" % [
+				where, value, wave_label.accessibility_description]
+	return ""
 
 func _run() -> void:
 	var window := get_window()
@@ -82,6 +152,13 @@ func _run() -> void:
 	var wave_label := main.get_node_or_null("HUD/WaveLabel") as Control
 	if wave_label == null:
 		_stage5_fail("wave HUD label is missing")
+		return
+	# HPA-698 fix round: the incoming directions get a readout of their own so
+	# their full names stay visible; the label's accessible description carries
+	# the exact wave indices for non-hover access.
+	var wave_warning := main.get_node_or_null("HUD/WaveWarning") as RichTextLabel
+	if wave_warning == null:
+		_stage5_fail("wave HUD has no separate incoming-warning readout")
 		return
 	_wave_ring = main.get_node_or_null("HUD/WaveRing")
 	_incoming_glow = main.get_node_or_null("HUD/IncomingGlow")
@@ -125,7 +202,8 @@ func _run() -> void:
 	if not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/wave_countdown.png"):
 		_stage5_fail("wave HUD is missing status/wave_countdown.png")
 		return
-	if _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
+	if _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png") \
+			or _rich_text_has_icon(wave_warning, "res://assets/ui/icons/status/incoming_zone.png"):
 		_stage5_fail("wave HUD shows incoming-zone art before a warning")
 		return
 	if not start_text.contains("Next wave %d" % next_wave) \
@@ -133,6 +211,13 @@ func _run() -> void:
 			or not _wave_text_fits(wave_label) \
 			or wave_label.text.split("\n").size() != 3:
 		_stage5_fail("wave HUD does not render the live snapshot countdown without clipping (want 'Next wave %d' + '%s' on 3 lines): %s" % [next_wave, expected_time, start_text])
+		return
+	# The warning readout is cleared before any zone; the readout's accessible
+	# description still names the exact live wave index without hover.
+	var initial_readout := _wave_readout_error(main, ["Prep", "Next wave %d" % next_wave],
+		[], [str(next_wave)], "initial wave readout")
+	if not initial_readout.is_empty():
+		_stage5_fail(initial_readout)
 		return
 	if not _ring_matches(live_wave) or bool(_wave_ring.warning):
 		_stage5_fail("idle wave ring does not render seconds_remaining/timer_total_seconds: ring=%s snapshot=%s" % [
@@ -239,50 +324,64 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	if not bool(glow["North"]) or bool(glow["East"]) or bool(glow["South"]) or bool(glow["West"]):
 		_stage5_fail("directional edge glow does not match the North warning zone: %s" % [glow])
 		return
-	var warning_text := _visible_text(wave_label)
-	if not warning_text.contains("Prep") or not warning_text.contains("Next wave 1") \
-			or not warning_text.contains("Incoming: N") \
-			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png") \
-			or not _wave_hud_fits(wave_label) or not _wave_text_fits(wave_label):
-		_stage5_fail("HUD does not render the live warning snapshot and incoming icon without clipping: %s" % [warning_text])
+	# HPA-698 fix round: the incoming directions own a visible readout, so the
+	# full names stay readable and are also in the accessible descriptions
+	# without hover. The pointer tooltip remains a second surface.
+	var wave_warning := main.get_node("HUD/WaveWarning") as RichTextLabel
+	var wave_card := main.get_node("HUD/WavePanel") as Control
+	var live_readout := _wave_readout_error(main, ["Prep", "Next wave 1"],
+		["North"], ["1"], "live single-zone warning")
+	if not live_readout.is_empty():
+		_stage5_fail(live_readout)
 		return
-	# HPA-698 visual follow-up: the compact card abbreviates the zone line to
-	# the mockup's compass tag; the full name stays on the card tooltip, which
-	# the pointer leg below also hovers for real.
-	var wave_card_early := main.get_node("HUD/WavePanel") as Control
-	if not str(wave_card_early.tooltip_text).contains("Incoming: North"):
+	if not _rich_text_has_icon(wave_warning, "res://assets/ui/icons/status/incoming_zone.png"):
+		_stage5_fail("incoming icon is not in the warning readout")
+		return
+	if not str(wave_card.tooltip_text).contains("Incoming: North"):
 		_stage5_fail("wave card tooltip lost the full warning zone name: %s" % [
-			wave_card_early.tooltip_text])
+			wave_card.tooltip_text])
 		return
-	# HPA-698 visual follow-up: in the compact card the warning owns a line of
-	# its own, so "Aliens 0" and the incoming zone never share a clipped run.
-	var warning_lines: PackedStringArray = wave_label.text.split("\n")
-	if warning_lines.size() != 4 or not str(warning_lines[3]).contains("Incoming: N"):
-		_stage5_fail("incoming warning did not get its own line in the compact wave card: %s" % [warning_lines])
-		return
-	# Multi-direction warnings must stay readable in the compact card; the wave
-	# director authors three zones from wave 20. Presentation-only probe on a
-	# copied snapshot: the controller's per-frame refresh is suspended, the HUD
-	# is asked to render the probe and then restored from the same live
-	# snapshot. No command, sim state or gameplay data changes.
-	var wave_card_control := main.get_node("HUD/WavePanel") as Control
+	# Presentation-only copied snapshots: wave 20's authored three-zone
+	# rotation, its cleared state, a realistic three-digit wave, the display
+	# fallback boundary and the i64 index bound. The controller's per-frame
+	# refresh is suspended so each probe survives its frames; the exact full
+	# values must stay in the readout's accessible description. No command,
+	# sim state or gameplay data changes.
+	var probe_errors := PackedStringArray()
+	var probes := [
+		["wave-20 three-zone warning", _wave_warning_probe(warning, 19, 20,
+			["West", "North", "East"]),
+			["Wave 19", "Next wave 20"], ["West", "North", "East"], ["19", "20"]],
+		["cleared warning", _wave_idle_probe(warning, 19, 20),
+			["Wave 19", "Next wave 20"], [], ["19", "20"]],
+		["three-digit wave", _wave_idle_probe(warning, 123, 124),
+			["Wave 123", "Next wave 124"], [], ["123", "124"]],
+		["large wave fallback", _wave_idle_probe(warning, 999999, 1000000),
+			[], [], ["999999", "1000000"]],
+		["i64 wave boundary", _wave_idle_probe(warning, 9223372036854775806,
+			9223372036854775807), [], [],
+			["9223372036854775806", "9223372036854775807"]],
+	]
 	main.set_process(false)
-	(main.get_node("HUD") as Node).call("refresh_wave", three_zone_warning(warning))
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var three_short := _visible_text(wave_label)
-	var three_lines: PackedStringArray = wave_label.text.split("\n")
-	var three_fits := _wave_text_fits(wave_label)
-	var three_tooltip := str(wave_card_control.tooltip_text)
+	for probe in probes:
+		(main.get_node("HUD") as Node).call("refresh_wave", probe[1])
+		await get_tree().process_frame
+		await get_tree().process_frame
+		var probe_error := _wave_readout_error(main, probe[2], probe[3], probe[4], probe[0])
+		if not probe_error.is_empty():
+			probe_errors.append(probe_error)
+		# Opt-in evidence of the authored wave-20 three-zone readout; synthetic
+		# copied snapshot, never a real wave 20.
+		if str(probe[0]) == "wave-20 three-zone warning":
+			var probe_capture := await SmokeHelpers.capture_frame(get_tree(),
+				"wave-warning-three-zone-probe")
+			if not probe_capture.is_empty():
+				probe_errors.append(probe_capture)
 	(main.get_node("HUD") as Node).call("refresh_wave", warning)
 	main.set_process(true)
 	await get_tree().process_frame
-	if not three_short.contains("Incoming: W, N, E") or three_lines.size() != 4 or not three_fits:
-		_stage5_fail("three-zone warning does not fit the compact card: %s" % [three_short])
-		return
-	if not three_tooltip.contains("West") or not three_tooltip.contains("North") \
-			or not three_tooltip.contains("East"):
-		_stage5_fail("three-zone tooltip lost the full zone names: %s" % [three_tooltip])
+	if not probe_errors.is_empty():
+		_stage5_fail(probe_errors[0])
 		return
 	# Real-render evidence of the compact card's warning state; writes nothing
 	# unless GRUS_CAPTURE_DIR names a directory.
@@ -293,7 +392,6 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	# HPA-698 access follow-up: the card clears the northwest corridor to its
 	# right at the authored framing; its static tooltip must still answer the
 	# real pointer, not just exist as a property string.
-	var wave_card := main.get_node("HUD/WavePanel") as Control
 	var panel_hover := InputEventMouseMotion.new()
 	panel_hover.position = wave_card.get_global_rect().get_center()
 	get_tree().root.push_input(panel_hover)
@@ -328,8 +426,8 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	await get_tree().process_frame
 	var expired_pings: PackedVector2Array = minimap.get("incoming_ping_points")
 	if not expired_pings.is_empty() \
-			or not _visible_text(wave_label).contains("Incoming: N") \
-			or not _rich_text_has_icon(wave_label, "res://assets/ui/icons/status/incoming_zone.png"):
+			or not _visible_text(wave_warning).contains("North") \
+			or not _rich_text_has_icon(wave_warning, "res://assets/ui/icons/status/incoming_zone.png"):
 		_stage5_fail("short-lived border ping did not expire while the authoritative HUD warning remained")
 		return
 	var still_warning: Dictionary = GrusBridge.wave_snapshot()

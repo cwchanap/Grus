@@ -198,9 +198,9 @@ tooltip_text = "Wave prep, live aliens and the next wave countdown"
 [node name="WaveRing" type="Control" parent="HUD"]
 layout_mode = 0
 offset_left = 24.0
-offset_top = 70.0
+offset_top = 63.0
 offset_right = 80.0
-offset_bottom = 126.0
+offset_bottom = 119.0
 mouse_filter = 2
 script = ExtResource("9_wave_ring")
 
@@ -215,16 +215,28 @@ expand_mode = 1
 stretch_mode = 5
 
 [node name="WaveLabel" type="RichTextLabel" parent="HUD"]
-offset_left = 88.0
-offset_top = 62.0
+offset_left = 84.0
+offset_top = 64.0
 offset_right = 258.0
-offset_bottom = 142.0
+offset_bottom = 120.0
 mouse_filter = 2
-theme_override_font_sizes/normal_font_size = 15
+theme_override_font_sizes/normal_font_size = 14
 bbcode_enabled = true
 scroll_active = false
 autowrap_mode = 0
 text = "Wave"
+
+[node name="WaveWarning" type="RichTextLabel" parent="HUD"]
+visible = false
+offset_left = 20.0
+offset_top = 122.0
+offset_right = 258.0
+offset_bottom = 142.0
+mouse_filter = 2
+theme_override_font_sizes/normal_font_size = 14
+bbcode_enabled = true
+scroll_active = false
+autowrap_mode = 0
 
 [node name="ResearchPanel" type="Panel" parent="HUD"]
 offset_left = 460.0
@@ -674,36 +686,39 @@ tooltip_text = "Pause (Esc)"
 [node name="UndergroundPanel" type="Panel" parent="HUD"]
 visible = false
 offset_left = 848.0
-offset_top = 64.0
+offset_top = 56.0
 offset_right = 1272.0
 offset_bottom = 398.0
 script = ExtResource("6_underground")
 
 [node name="HeaderLabel" type="Label" parent="HUD/UndergroundPanel"]
 layout_mode = 0
-offset_left = 14.0
+offset_left = 10.0
 offset_top = 12.0
-offset_right = 410.0
-offset_bottom = 34.0
+offset_right = 414.0
+offset_bottom = 46.0
 mouse_filter = 2
 theme_type_variation = &"Header"
-theme_override_font_sizes/font_size = 14
+theme_override_constants/line_spacing = 0
+theme_override_font_sizes/font_size = 13
+autowrap_mode = 3
+clip_text = true
 text = "UNDERGROUND"
 
 [node name="KindsBox" type="HBoxContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
 offset_left = 10.0
-offset_top = 36.0
+offset_top = 48.0
 offset_right = 414.0
-offset_bottom = 112.0
+offset_bottom = 120.0
 theme_override_constants/separation = 4
 
 [node name="ArmedDetail" type="RichTextLabel" parent="HUD/UndergroundPanel"]
 layout_mode = 0
 offset_left = 10.0
-offset_top = 112.0
+offset_top = 120.0
 offset_right = 414.0
-offset_bottom = 128.0
+offset_bottom = 136.0
 mouse_filter = 2
 theme_override_font_sizes/normal_font_size = 11
 bbcode_enabled = true
@@ -713,9 +728,9 @@ text = "Arm a room kind"
 [node name="ExcavateButton" type="Button" parent="HUD/UndergroundPanel"]
 layout_mode = 0
 offset_left = 10.0
-offset_top = 130.0
+offset_top = 138.0
 offset_right = 414.0
-offset_bottom = 158.0
+offset_bottom = 166.0
 disabled = true
 text = "Excavate"
 
@@ -723,9 +738,9 @@ text = "Excavate"
 visible = false
 layout_mode = 0
 offset_left = 10.0
-offset_top = 160.0
+offset_top = 168.0
 offset_right = 320.0
-offset_bottom = 176.0
+offset_bottom = 184.0
 mouse_filter = 2
 max_value = 1.0
 step = 0.001
@@ -735,9 +750,9 @@ show_percentage = false
 visible = false
 layout_mode = 0
 offset_left = 322.0
-offset_top = 160.0
+offset_top = 168.0
 offset_right = 414.0
-offset_bottom = 176.0
+offset_bottom = 184.0
 mouse_filter = 2
 theme_override_colors/font_color = Color(0.95, 0.82, 0.55, 1)
 theme_override_font_sizes/font_size = 12
@@ -748,9 +763,9 @@ vertical_alignment = 1
 [node name="ScrollContainer" type="ScrollContainer" parent="HUD/UndergroundPanel"]
 layout_mode = 0
 offset_left = 10.0
-offset_top = 178.0
+offset_top = 186.0
 offset_right = 414.0
-offset_bottom = 330.0
+offset_bottom = 338.0
 clip_contents = true
 horizontal_scroll_mode = 0
 
