@@ -484,18 +484,31 @@ func _kind_layout_error(button: Button, room_entry: Dictionary, where: String) -
 		return "%s kind price is wider than its clear band" % where
 	if not tile_rect.encloses(level_label.get_global_rect()):
 		return "%s kind level badge leaves the tile" % where
-	if name_label.get_theme_font_size("font_size") < 12:
-		return "%s kind name is smaller than 12 px" % where
-	if cost_label.get_theme_font_size("normal_font_size") < 11:
-		return "%s kind price is smaller than 11 px" % where
+	if name_label.get_theme_font_size("font_size") < 13:
+		return "%s kind name is smaller than 13 px" % where
+	if cost_label.get_theme_font_size("normal_font_size") < 13:
+		return "%s kind price is smaller than 13 px" % where
+	if level_label.get_theme_font_size("font_size") < 12:
+		return "%s kind level badge is smaller than 12 px" % where
 	if name_label.get_global_rect().intersects(cost_label.get_global_rect()):
 		return "%s kind name and price rectangles overlap" % where
 	if name_label.size.y < name_label.get_theme_font("font").get_height(
 			name_label.get_theme_font_size("font_size")):
 		return "%s kind name has less height than its font needs" % where
-	if cost_label.get_content_height() > cost_label.size.y:
+	var name_text := SmokeHelpers.shaped_text_size(name_label)
+	if name_text.x > name_label.size.x + 0.5 or name_text.y > name_label.size.y + 0.5:
+		return "%s kind name shaped text does not fit its clear area: text=%s rect=%s" % [
+			where, name_text, name_label.size]
+	if cost_label.get_content_height() > cost_label.size.y + 0.5:
 		return "%s kind price content (%s px) is taller than its area" % [
 			where, cost_label.get_content_height()]
+	var level_text := SmokeHelpers.shaped_text_size(level_label)
+	if level_text.x > level_label.size.x + 0.5 or level_text.y > level_label.size.y + 0.5:
+		return "%s kind level badge text does not fit its chip: text=%s rect=%s" % [
+			where, level_text, level_label.size]
+	if level_label.get_global_rect().intersects(name_label.get_global_rect()) \
+			or level_label.get_global_rect().intersects(cost_label.get_global_rect()):
+		return "%s kind level badge overlaps its name/price band" % where
 	if not name_label.has_theme_constant_override("outline_size") \
 			or name_label.get_theme_constant("outline_size") < 2:
 		return "%s kind name has no readable outline" % where
