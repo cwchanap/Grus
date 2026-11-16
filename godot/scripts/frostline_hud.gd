@@ -336,7 +336,7 @@ func _set_tile_cost(button: Button, cost: Dictionary) -> void:
 	for resource in ["food", "scrap", "coal", "crystals"]:
 		var amount := int(cost.get(resource, 0))
 		if amount > 0:
-			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 14).strip_edges(), amount])
+			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 15).strip_edges(), amount])
 	label.text = "[center]%s[/center]" % " ".join(parts)
 
 ## Full text of the four-currency catalogue price, one spelling for the
@@ -751,17 +751,24 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	if eta >= 0.0:
 		var total := maxi(ceili(eta), 0)
 		eta_text = "%d:%02d" % [total / 60, total % 60]
-	research_label.text = "Research %d/%d · %d%% · ETA %s" % [
-		floori(points), _research_target_points, percent, eta_text,
+	# Two larger lines keep every snapshot value inside the card's left column
+	# beside Analyze; grouped thousands match the Start objective and the
+	# approved mockups' numeric readout.
+	research_label.text = "Research %s/%s\n%d%% · ETA %s" % [
+		_grouped_thousands(floori(points)), _grouped_thousands(_research_target_points),
+		percent, eta_text,
 	]
 	var marker_parts := PackedStringArray()
 	for marker in _research_marker_entries:
 		var reached := points >= float(marker["points"])
-		# The marker emitter bypasses _inline_icon, so its catalogue label is
-		# the image alternative (the visible short form stays unchanged).
-		marker_parts.append("[color=%s][img=14x14 alt=\"%s\"]%s[/img] %s %d[/color]" % [
-			"#8fd18f" if reached else "#aab7c2",
-			marker["label"], marker["icon"], marker["short"], int(marker["points"])])
+		# A reached milestone adds the ✓ prefix, so its state never depends on
+		# colour alone. The marker emitter bypasses _inline_icon, so its
+		# catalogue label is the image alternative (the visible short form
+		# stays unchanged).
+		marker_parts.append("[color=%s][img=16x16 alt=\"%s\"]%s[/img] %s%s %d[/color]" % [
+			"#8fd18f" if reached else "#c3ced6",
+			marker["label"], marker["icon"], "✓ " if reached else "",
+			marker["short"], int(marker["points"])])
 	research_markers.text = "  ".join(marker_parts)
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is

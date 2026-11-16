@@ -65,7 +65,7 @@ func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var underground_catalogue: Dictionary = catalogue.get("underground", {})
 	var ug_rooms: Dictionary = underground_catalogue.get("rooms", {})
-	_tile_normal = _slot_plate(get_theme_stylebox("normal", "Tile"), Color(0.72, 0.76, 0.8))
+	_tile_normal = _slot_plate(get_theme_stylebox("normal", "Tile"), Color(0.62, 0.67, 0.72))
 	_locked_plate.bg_color = Color(0.04, 0.05, 0.06, 0.94)
 	_locked_plate.border_color = Color(0.3, 0.32, 0.34, 0.85)
 	_locked_plate.set_border_width_all(1)
@@ -120,7 +120,7 @@ func _ready() -> void:
 			# stays on the untouched tile art.
 			var label_backing := ColorRect.new()
 			label_backing.name = "KindLabelBacking"
-			label_backing.color = Color(0.03, 0.05, 0.07, 0.7)
+			label_backing.color = Color(0.03, 0.05, 0.07, 0.82)
 			label_backing.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			label_backing.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 			label_backing.offset_top = -32.0
@@ -130,13 +130,13 @@ func _ready() -> void:
 			name_label.name = "KindLabel"
 			name_label.text = short_name
 			name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-			name_label.add_theme_font_size_override("font_size", 12)
+			name_label.add_theme_font_size_override("font_size", 13)
 			name_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 			name_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 			name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			name_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 			name_label.offset_top = -32.0
-			name_label.offset_bottom = -17.0
+			name_label.offset_bottom = -16.0
 			kind_button.add_child(name_label)
 		# Catalogue price and min-level badge: the mockup's readable kind
 		# tiles without a second price table.
@@ -145,18 +145,18 @@ func _ready() -> void:
 		cost_label.bbcode_enabled = true
 		cost_label.scroll_active = false
 		cost_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cost_label.add_theme_font_size_override("normal_font_size", 11)
+		cost_label.add_theme_font_size_override("normal_font_size", 13)
 		cost_label.add_theme_color_override("font_outline_color", TEXT_OUTLINE)
 		cost_label.add_theme_constant_override("outline_size", TEXT_OUTLINE_SIZE)
 		cost_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 		cost_label.offset_top = -16.0
-		cost_label.offset_bottom = -1.0
+		cost_label.offset_bottom = 0.0
 		cost_label.text = "[center]%s[/center]" % _cost_short(ug_entry)
 		kind_button.add_child(cost_label)
 		var level_label := Label.new()
 		level_label.name = "KindLevelLabel"
 		level_label.text = "L%d" % int(ug_entry.get("min_level", 1))
-		level_label.add_theme_font_size_override("font_size", 11)
+		level_label.add_theme_font_size_override("font_size", 12)
 		level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		level_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		level_label.add_theme_color_override("font_color", Color(0.98, 0.78, 0.45))
@@ -177,10 +177,10 @@ func _ready() -> void:
 		level_chip.content_margin_bottom = 0.0
 		level_label.add_theme_stylebox_override("normal", level_chip)
 		level_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-		level_label.offset_left = -26.0
+		level_label.offset_left = -28.0
 		level_label.offset_right = -3.0
 		level_label.offset_top = 2.0
-		level_label.offset_bottom = 18.0
+		level_label.offset_bottom = 19.0
 		kind_button.add_child(level_label)
 		kind_button.tooltip_text = _kind_tooltip(ug_entry)
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
