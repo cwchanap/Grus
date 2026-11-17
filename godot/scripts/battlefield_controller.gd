@@ -843,8 +843,9 @@ func _on_build_pressed(kind: String) -> void:
 	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
 
 ## A real order-tile click arms the one modal order after checking its
-## context; Stop runs immediately and Cancel clears placement/order without
-## enqueueing a gameplay command.
+## context — clicking the armed tile again disarms it; Stop runs
+## immediately and Cancel clears placement/order without enqueueing a
+## gameplay command.
 func _on_order_pressed(order: String) -> void:
 	if order == "cancel":
 		if _placement_kind != "":
@@ -856,6 +857,10 @@ func _on_order_pressed(order: String) -> void:
 		return
 	if not _playing():
 		command_status.text = "Match is not playing"
+		return
+	if _armed_order == order:
+		_armed_order = ""
+		command_status.text = "Order canceled"
 		return
 	if order == "stop":
 		_armed_order = ""
