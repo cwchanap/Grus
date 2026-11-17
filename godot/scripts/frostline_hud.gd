@@ -7,6 +7,8 @@ extends CanvasLayer
 ## caches no snapshot and never issues a command; the one static catalogue
 ## read in _ready exists only to render fixed display text and tooltips.
 
+const HudHelpers := preload("res://scripts/hud_helpers.gd")
+
 @onready var wave_label: RichTextLabel = $WaveLabel
 @onready var wave_ring: Control = $WaveRing
 @onready var wave_clock: TextureRect = $WaveRing/ClockIcon
@@ -63,7 +65,7 @@ extends CanvasLayer
 ## for the bar's maximum; live points/rate/ETA arrive per frame through
 ## refresh_research_controls — never a mirrored mutable copy.
 var _research_target_points := 0
-var _icon_cache: Dictionary = {}
+var _banner_cache: Dictionary = {}
 ## Static catalogue milestones: the two tower unlock thresholds plus the
 ## `RESEARCH_WAVE_BOOST_PERCENT` wave-growth point total. Live reached state
 ## is a per-frame comparison, never a stored flag.
@@ -101,7 +103,7 @@ var _result_population_text := ""
 var _result_crystals_text := ""
 
 func _ready() -> void:
-	var research_progress_icon := _icon_for_kind("status", "ResearchProgress")
+	var research_progress_icon := HudHelpers.icon_for_kind("status", "ResearchProgress")
 	research_icon.texture = research_progress_icon
 	research_icon.visible = research_progress_icon != null
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
@@ -118,14 +120,15 @@ func _ready() -> void:
 	_build_common_tiles(buildings, units)
 	_build_order_tiles()
 	_build_queue_sockets()
-	wave_clock.texture = _icon_for_kind("status", "WaveCountdown")
+	wave_clock.texture = HudHelpers.icon_for_kind("status", "WaveCountdown")
 	_build_glow_textures()
 	_build_vignette()
 	_research_target_points = int(research_catalogue.get("target_points", 0))
+	research_panel.tooltip_text = "Research points toward the %s-point victory target" % _format_int(_research_target_points)
 	for marker_kind in ["FlameTower", "CrystalLance"]:
 		var marker_entry: Dictionary = buildings.get(marker_kind, {})
 		var points := int(marker_entry.get("unlock_points", 0))
-		var icon := _icon_for_kind("buildings", marker_kind)
+		var icon := HudHelpers.icon_for_kind("buildings", marker_kind)
 		if points > 0 and icon != null:
 			_research_marker_entries.append({
 				"label": marker_kind,
@@ -134,7 +137,7 @@ func _ready() -> void:
 				"icon": icon.resource_path,
 			})
 	var wave_growth_points := int(research_catalogue.get("wave_growth_points", 0))
-	var wave_icon := _icon_for_kind("status", "IncomingZone")
+	var wave_icon := HudHelpers.icon_for_kind("status", "IncomingZone")
 	if wave_growth_points > 0 and wave_icon != null:
 		_research_marker_entries.append({
 			"label": "Wave growth",
@@ -155,12 +158,12 @@ func _ready() -> void:
 	analyze_button.text = "Analyze\n%d→+%d" % [analyze_crystals, analyze_gain]
 	analyze_button.add_theme_font_size_override("font_size", 12)
 	analyze_button.tooltip_text = "Convert %d Crystals into %d research points" % [analyze_crystals, analyze_gain]
-	analyze_button.icon = _icon_for_kind("status", "ResearchRate")
+	analyze_button.icon = HudHelpers.icon_for_kind("status", "ResearchRate")
 	analyze_button.add_theme_constant_override("icon_max_width", 20)
-	pause_button.icon = _icon_for_kind("actions", "Pause")
+	pause_button.icon = HudHelpers.icon_for_kind("actions", "Pause")
 	pause_button.add_theme_constant_override("icon_max_width", 30)
 	pause_button.text = ""
-	idle_button.icon = _icon_for_kind("status", "IdleWorkers")
+	idle_button.icon = HudHelpers.icon_for_kind("status", "IdleWorkers")
 	idle_button.add_theme_constant_override("icon_max_width", 22)
 	# The Start and Result primary actions read as the mockup's cyan call to
 	# action instead of the neutral steel button.
@@ -188,7 +191,7 @@ func _build_order_tiles() -> void:
 			button.text = "✕"
 			button.add_theme_font_size_override("font_size", 22)
 			continue
-		var icon := _icon_for_kind("actions", order)
+		var icon := HudHelpers.icon_for_kind("actions", order)
 		button.icon = icon
 		button.add_theme_constant_override("icon_max_width", 26)
 
@@ -218,7 +221,7 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 		button.toggle_mode = true
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = buildings.get(kind, {})
-		var building_icon := _icon_for_kind("buildings", kind)
+		var building_icon := HudHelpers.icon_for_kind("buildings", kind)
 		if building_icon != null:
 			button.icon = building_icon
 			button.add_theme_constant_override("icon_max_width", 44)
@@ -236,7 +239,7 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 	for button in _train_grid.get_children():
 		var kind := str(button.get_meta("kind"))
 		var entry: Dictionary = units.get(kind, {})
-		var unit_icon := _icon_for_kind("units", kind)
+		var unit_icon := HudHelpers.icon_for_kind("units", kind)
 		if unit_icon != null:
 			button.icon = unit_icon
 			button.add_theme_constant_override("icon_max_width", 44)
@@ -261,16 +264,6 @@ func _set_tile_cost(button: Button, cost: Dictionary) -> void:
 			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 14).strip_edges(), amount])
 	label.text = "[center]%s[/center]" % " ".join(parts)
 
-## Full text of the four-currency catalogue price, one spelling for the
-## tooltip and the underground rows.
-func _cost_text(cost: Dictionary) -> String:
-	var parts := PackedStringArray()
-	for resource in ["food", "scrap", "coal", "crystals"]:
-		var amount := int(cost.get(resource, 0))
-		if amount > 0:
-			parts.append("%d %s" % [amount, resource.capitalize()])
-	return ", ".join(parts) if not parts.is_empty() else "free"
-
 ## Optional combat/counter row shared by unit and building tooltips.
 func _combat_line(entry: Dictionary) -> String:
 	if not entry.has("damage"):
@@ -287,12 +280,12 @@ func _number(value: float) -> String:
 
 func _unit_tooltip(entry: Dictionary) -> String:
 	return "Cost: %s\nTrain: %ds\nHP: %d%s" % [
-		_cost_text(entry), int(entry.get("seconds", 0)),
+		HudHelpers.cost_text(entry), int(entry.get("seconds", 0)),
 		int(entry.get("max_health", 0)), _combat_line(entry)]
 
 func _building_tooltip(kind: String, entry: Dictionary) -> String:
 	var text := "Cost: %s\nBuild: %ds\nHP: %d" % [
-		_cost_text(entry), int(entry.get("seconds", 0)), int(entry.get("max_health", 0))]
+		HudHelpers.cost_text(entry), int(entry.get("seconds", 0)), int(entry.get("max_health", 0))]
 	var supply := int(entry.get("heat_supply", 0))
 	var demand := int(entry.get("heat_demand", 0))
 	if supply > 0 or demand > 0:
@@ -306,7 +299,7 @@ func _add_counter_icon(button: Button, entry: Dictionary) -> void:
 	var target := str(entry.get("counter_target", ""))
 	if target == "" or not entry.has("damage"):
 		return
-	var icon := _icon_for_kind("units", target)
+	var icon := HudHelpers.icon_for_kind("units", target)
 	if icon == null:
 		return
 	var rect := TextureRect.new()
@@ -614,21 +607,25 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 func refresh_selection(selected_ids: Array[int], selected_building_id: int, building: Dictionary,
 		unit_kinds: Dictionary, unit_task: Dictionary, unit_health: float,
 		building_health: float) -> void:
-	_clear_selection_detail()
 	if selected_ids.size() == 1:
 		var id := selected_ids[0]
 		var kind := str(unit_kinds.get(id, ""))
 		var entry: Dictionary = _unit_entries.get(kind, {})
 		selection_name.text = "%s #%d" % [kind if kind != "" else "Unit", id]
-		portrait_icon.texture = _icon_for_kind("units", kind)
+		portrait_icon.texture = HudHelpers.icon_for_kind("units", kind)
 		_render_health(unit_health, int(entry.get("max_health", 0)))
-		selection_panel.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
+		if entry.is_empty():
+			selection_panel.tooltip_text = "%s (Enemy)" % kind if kind != "" else "Enemy unit"
+		else:
+			selection_panel.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
 		var status := _task_text(unit_task)
 		selection_label.text = status if status != "" else "Ready"
 		_set_train_producer("")
-		if kind == "Worker":
-			carry_bar.visible = true
-			carry_label.visible = true
+		queue_sockets.visible = false
+		var is_worker := kind == "Worker"
+		carry_bar.visible = is_worker
+		carry_label.visible = is_worker
+		if is_worker:
 			var amount := int(unit_task.get("carry_amount", 0))
 			var carried := str(unit_task.get("carry_kind", ""))
 			carry_bar.max_value = maxf(float(_carry_limit), 1.0)
@@ -636,12 +633,19 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 			var icon := _inline_icon("resources", carried, 14) if carried != "" else ""
 			carry_label.text = "%s%d / %d" % [icon, amount, _carry_limit]
 		return
+	carry_bar.visible = false
+	carry_label.visible = false
 	if selected_ids.size() > 1:
 		var common := str(unit_kinds.get(selected_ids[0], ""))
 		for id in selected_ids:
 			if str(unit_kinds.get(id, "")) != common:
 				common = ""
 				break
+		health_bar.visible = false
+		health_label.visible = false
+		queue_sockets.visible = false
+		portrait_icon.texture = null
+		selection_panel.tooltip_text = ""
 		selection_name.text = "%s ×%d" % [common if common != "" else "Units", selected_ids.size()]
 		selection_label.text = "Multiple units selected"
 		_set_train_producer("")
@@ -649,13 +653,16 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 	if selected_building_id > 0 and not building.is_empty():
 		var kind := str(building.get("kind", "?"))
 		var entry: Dictionary = _building_entries.get(kind, {})
-		_set_train_producer(kind)
+		var complete := bool(building.get("complete", false))
+		var friendly := int(building.get("team_id", -1)) == 1
+		var can_train := complete and friendly
+		_set_train_producer(kind if can_train else "")
 		selection_name.text = "%s #%d" % [kind, selected_building_id]
-		portrait_icon.texture = _icon_for_kind("buildings", kind)
+		portrait_icon.texture = HudHelpers.icon_for_kind("buildings", kind)
 		_render_health(building_health, int(entry.get("max_health", 0)))
 		selection_panel.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
 		var lines := PackedStringArray()
-		if bool(building.get("complete", false)):
+		if complete:
 			lines.append("Construction complete")
 		else:
 			lines.append("Construction %d%%" % roundi(float(building.get("construction_progress", 0.0)) * 100.0))
@@ -665,9 +672,17 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		if int(building.get("rally_x", -1)) >= 0:
 			lines.append("Rally (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))])
 		selection_label.text = "\n".join(lines)
-		if _producer_kinds.has(kind):
+		if can_train and _producer_kinds.has(kind):
 			_render_queue(building)
+		else:
+			queue_sockets.visible = false
 		return
+	health_bar.visible = false
+	health_label.visible = false
+	queue_sockets.visible = false
+	portrait_icon.texture = null
+	selection_panel.tooltip_text = ""
+	selection_label.text = ""
 	selection_name.text = "Nothing selected"
 	_set_train_producer("")
 
@@ -675,6 +690,8 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 ## hidden whenever there is no single live view or no catalogue maximum.
 func _render_health(ratio: float, max_health: int) -> void:
 	if ratio < 0.0 or max_health <= 0:
+		health_bar.visible = false
+		health_label.visible = false
 		return
 	var current := clampi(roundi(ratio * max_health), 0, max_health)
 	health_bar.visible = true
@@ -709,9 +726,8 @@ func _task_text(task: Dictionary) -> String:
 		text += " · building #%d" % int(task.get("building", -1))
 	return text
 
-## First five FIFO jobs in sockets, head remaining seconds from the
-## catalogue train seconds and live head progress, and the +N chip for
-## anything beyond the fifth socket.
+## First five FIFO jobs in sockets, heat-scaled head remaining seconds from the
+## Rust building snapshot, and the +N chip for anything beyond the fifth socket.
 func _render_queue(building: Dictionary) -> void:
 	var queue: Array = building.get("training_queue", [])
 	var progress := float(building.get("queue_progress", 0.0))
@@ -721,18 +737,19 @@ func _render_queue(building: Dictionary) -> void:
 		var time := _socket_times[index]
 		var progress_bar := _socket_progress[index]
 		if index >= queue.size():
-			panel.add_theme_stylebox_override("panel", _socket_empty_style)
+			if panel.get_theme_stylebox("panel") != _socket_empty_style:
+				panel.add_theme_stylebox_override("panel", _socket_empty_style)
 			icon.texture = null
 			time.text = ""
 			progress_bar.visible = false
 			continue
 		var kind := str(queue[index])
-		panel.add_theme_stylebox_override("panel",
-			_socket_head_style if index == 0 else _socket_queued_style)
-		icon.texture = _icon_for_kind("units", kind)
+		var style := _socket_head_style if index == 0 else _socket_queued_style
+		if panel.get_theme_stylebox("panel") != style:
+			panel.add_theme_stylebox_override("panel", style)
+		icon.texture = HudHelpers.icon_for_kind("units", kind)
 		if index == 0:
-			var seconds := float(_unit_entries.get(kind, {}).get("seconds", 0))
-			var remaining := maxi(ceili(seconds * (1.0 - progress)), 0)
+			var remaining := maxi(ceili(float(building.get("queue_remaining", 0.0))), 0)
 			time.text = "%ds" % remaining
 			icon.modulate = Color(1, 1, 1, 1)
 			progress_bar.max_value = 100.0
@@ -745,16 +762,6 @@ func _render_queue(building: Dictionary) -> void:
 	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
 	_queue_overflow.text = "+%d" % (queue.size() - QUEUE_SOCKET_COUNT)
 	queue_sockets.visible = true
-
-func _clear_selection_detail() -> void:
-	health_bar.visible = false
-	health_label.visible = false
-	carry_bar.visible = false
-	carry_label.visible = false
-	queue_sockets.visible = false
-	selection_panel.tooltip_text = ""
-	portrait_icon.texture = null
-	selection_label.text = ""
 
 ## Contextual train tiles: visible exactly when the selected building's
 ## catalogue producer matches the unit row. No selection hides the whole row.
@@ -819,15 +826,16 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	if result:
 		var banner_path := "res://assets/ui/frostline/screens/%s_banner.png" % (
 			"victory" if winner_team == 1 else "defeat")
-		result_banner.texture = load(banner_path) as Texture2D
+		if not _banner_cache.has(banner_path):
+			_banner_cache[banner_path] = load(banner_path) as Texture2D
+		result_banner.texture = _banner_cache[banner_path] as Texture2D
 		# The shipped banner art is intentionally textless: the readable
 		# outcome title is drawn from the same session winner field.
 		result_title.text = "Victory" if winner_team == 1 else "Defeat"
 		_render_result_stats()
-	# Restart/Quit belong to Result only.
 	match phase:
 		"Start":
-			session_label.text = "Survive the alien waves\nProtect the Research Center\nReach 9,000 research"
+			session_label.text = "Survive the alien waves\nProtect the Research Center\nReach %s research" % _format_int(_research_target_points)
 			start_button.visible = true
 			resume_button.visible = false
 			restart_button.visible = false
@@ -839,7 +847,6 @@ func refresh_session(phase: String, winner_team: int) -> void:
 			restart_button.visible = false
 			quit_button.visible = false
 		"Result":
-			session_label.text = "Victory" if winner_team == 1 else "Defeat"
 			start_button.visible = false
 			resume_button.visible = false
 			restart_button.visible = true
@@ -848,12 +855,17 @@ func refresh_session(phase: String, winner_team: int) -> void:
 			# Playing: panel hidden.
 			pass
 
-func _icon_for_kind(group: String, kind: String) -> Texture2D:
-	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
-	if not _icon_cache.has(path):
-		_icon_cache[path] = ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
-	return _icon_cache[path] as Texture2D
+func _format_int(value: int) -> String:
+	var raw := str(value)
+	var out := ""
+	var count := 0
+	for i in range(raw.length() - 1, -1, -1):
+		if count > 0 and count % 3 == 0 and raw[i] != "-":
+			out = "," + out
+		out = raw[i] + out
+		count += 1
+	return out
 
 func _inline_icon(group: String, kind: String, size := 18) -> String:
-	var icon := _icon_for_kind(group, kind)
+	var icon := HudHelpers.icon_for_kind(group, kind)
 	return "[img=%dx%d]%s[/img] " % [size, size, icon.resource_path] if icon != null else ""
