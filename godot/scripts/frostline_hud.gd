@@ -136,6 +136,9 @@ func _ready() -> void:
 	_start_label_rect = Rect2(session_label.position, session_label.size)
 	_start_resume_rect = Rect2(resume_button.position, resume_button.size)
 	_start_label_font = session_label.get_theme_font_size("font_size")
+	# The controller refreshes the session HUD only when the phase or winner
+	# changes, so a live resize reaches the Pause card through the viewport.
+	get_viewport().size_changed.connect(_on_viewport_resized)
 	var research_progress_icon := HudHelpers.icon_for_kind("status", "ResearchProgress")
 	research_icon.texture = research_progress_icon
 	research_icon.visible = research_progress_icon != null
@@ -997,10 +1000,6 @@ func _format_int(value: int) -> String:
 ## wording and Esc path, and any other phase restores the captured rects.
 func _apply_pause_card(paused: bool) -> void:
 	if paused == _pause_layout:
-		# A live window/viewport resize keeps the same phase; the per-frame
-		# refresh must re-center the fixed-size card without a resize lock.
-		if paused:
-			_follow_pause_viewport()
 		return
 	_pause_layout = paused
 	if not paused:
@@ -1022,14 +1021,18 @@ func _apply_pause_card(paused: bool) -> void:
 	resume_button.size = Vector2(PAUSE_CARD_SIZE.x - 48.0, 60.0)
 	_follow_pause_viewport()
 
-## Center the fixed-size Pause card from the live viewport. The controller
-## refreshes every frame, so this simple comparison follows a resized window
-## (including back to 1280 × 720) while leaving a stable frame untouched.
+## Center the fixed-size Pause card from the live viewport, so the card follows
+## a resized window (including back to 1280 × 720) without a resize lock.
 func _follow_pause_viewport() -> void:
 	var target := ((get_viewport().get_visible_rect().size - PAUSE_CARD_SIZE) * 0.5).floor()
 	if session_panel.position != target:
 		session_panel.position = target
 
+## A live window/viewport resize keeps the session phase, so the controller's
+## phase-change refresh never re-runs: only an open Pause card must follow it.
+func _on_viewport_resized() -> void:
+	if _pause_layout:
+		_follow_pause_viewport()
 
 ## Every inline icon is an accessible image, never a bare glyph: the pinned
 ## RichTextLabel parser uses the tag's `alt` as that ROLE_IMAGE's name, and
