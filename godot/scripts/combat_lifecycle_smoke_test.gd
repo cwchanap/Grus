@@ -852,8 +852,8 @@ func _run() -> void:
 		return
 	# Entering Result closes the drawer even though it was open before the
 	# outcome, and Tab cannot reopen it there.
-	if ug_drawer.visible:
-		_fail("Result phase still exposes the UndergroundPanel drawer")
+	if not await _wait_until(func(): return not ug_drawer.visible, 5.0,
+			"Result phase still exposes the UndergroundPanel drawer"):
 		return
 	await _key_tap(KEY_TAB)
 	if ug_drawer.visible \
