@@ -976,6 +976,16 @@ func _research_center_id() -> int:
 		if cached_id > 0:
 			return cached_id
 	_research_center_view = null
+	# Skip the group scan entirely when this frame's kind map holds no
+	# Research Center (destroyed, or a fixture without one): otherwise the
+	# rescan would repeat every frame until one appears.
+	var any_center := false
+	for id in _building_kinds:
+		if _building_kinds[id] == "ResearchCenter":
+			any_center = true
+			break
+	if not any_center:
+		return -1
 	for node in get_tree().get_nodes_in_group("building_views"):
 		var view := node as Node3D
 		if view == null or not view.is_visible_in_tree():
