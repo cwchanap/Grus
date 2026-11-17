@@ -121,6 +121,10 @@ var _result_wave_text := ""
 var _result_research_text := ""
 var _result_population_text := ""
 var _result_crystals_text := ""
+## Settled Result phase flag from refresh_session: per-frame refreshers that
+## re-assert visibility (the frost overlay) gate on it so the outcome
+## composition stays uncovered.
+var _result_phase := false
 ## Pause owns a compact, centered card; Start and Result keep the scene's full
 ## composition. The untouched rects are captured once so every non-Paused
 ## phase restores them exactly.
@@ -564,7 +568,7 @@ func refresh_economy(economy: Dictionary) -> void:
 	var deficit := surface < 1.0
 	heat_bar.visible = deficit
 	cold_chip.visible = deficit
-	frost_overlay.visible = deficit
+	frost_overlay.visible = deficit and not _result_phase
 	if deficit:
 		var denominator := maxi(demand, 1)
 		heat_bar.max_value = float(denominator)
@@ -924,6 +928,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	var start := phase == "Start"
 	var paused := phase == "Paused"
 	var result := phase == "Result"
+	_result_phase = result
 	_apply_pause_card(paused)
 	session_panel.visible = not playing
 	session_backdrop.visible = not playing
@@ -931,7 +936,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	# bottom bar never obscures or exposes live controls behind the art.
 	for node in [wave_panel, wave_ring, wave_label, incoming_glow, research_panel,
 			economy_panel, selection_panel, command_panel, command_status,
-			minimap_frame, _minimap]:
+			minimap_frame, _minimap, frost_overlay]:
 		node.visible = not result
 	pause_button.visible = playing
 	start_art.visible = start
