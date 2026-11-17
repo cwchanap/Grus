@@ -851,9 +851,17 @@ func _render_queue(building: Dictionary) -> void:
 		# Icon-only row: each portrait names the live FIFO job it shows, and
 		# the head says its remaining seconds from the same progress readout.
 		if index == 0:
-			var remaining := maxi(ceili(float(building.get("queue_remaining", 0.0))), 0)
-			time.text = "%ds" % remaining
-			panel.accessibility_name = "Training %s — %ds remaining" % [kind, remaining]
+			# queue_remaining is -1 while the head cannot advance (blocked
+			# population/spawn or a frozen phase): show no countdown, never
+			# a "0s" that implies imminent completion.
+			var remaining := float(building.get("queue_remaining", 0.0))
+			if remaining < 0.0:
+				time.text = "—"
+				panel.accessibility_name = "Training %s — stalled" % kind
+			else:
+				var seconds := maxi(ceili(remaining), 0)
+				time.text = "%ds" % seconds
+				panel.accessibility_name = "Training %s — %ds remaining" % [kind, seconds]
 			icon.modulate = Color(1, 1, 1, 1)
 			progress_bar.max_value = 100.0
 			progress_bar.value = clampf(progress * 100.0, 0.0, 100.0)

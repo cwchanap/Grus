@@ -771,9 +771,11 @@ impl GrusBridgeNode {
 
     /// One building's state by stable id: completion, construction and queue
     /// progress (0..1), heat-scaled queue head remaining seconds
-    /// (`queue_remaining`), queue head label, the full ordered
-    /// `training_queue`, blocked code (0 = none), and rally cell (-1/-1 when
-    /// unset). A producer with no queue reports an empty array. Empty dict
+    /// (`queue_remaining`; -1 when the head cannot advance — blocked
+    /// population/spawn or a non-Playing phase — so no countdown renders),
+    /// queue head label, the full ordered `training_queue`, blocked code
+    /// (0 = none), and rally cell (-1/-1 when unset). A producer with no
+    /// queue reports an empty array. Empty dict
     /// when the building does not exist or is a hidden enemy — fog must not
     /// leak health/queue/construction through stale ids.
     #[func]
@@ -838,13 +840,21 @@ impl GrusBridgeNode {
                             0.0
                         }),
                     );
+                    // A stalled head reports no countdown: blocked jobs sit
+                    // at 100% forever, and a frozen phase never advances.
+                    let stalled = queue.and_then(|queue| queue.blocked).is_some()
+                        || !matches!(active_phase(world), MatchPhase::Playing);
                     dict.set(
                         "queue_remaining",
-                        f64::from(queue_head_remaining_seconds(
-                            required,
-                            progress,
-                            surface_efficiency(world),
-                        )),
+                        f64::from(if stalled {
+                            -1.0
+                        } else {
+                            queue_head_remaining_seconds(
+                                required,
+                                progress,
+                                surface_efficiency(world),
+                            )
+                        }),
                     );
                 }
                 None => {
