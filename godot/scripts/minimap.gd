@@ -128,7 +128,10 @@ func _point_of(view: Node3D) -> Vector2:
 func _draw() -> void:
 	if _texture != null:
 		draw_texture_rect(_texture, Rect2(Vector2.ZERO, size), false)
-	var unit := maxf(size.x / float(MAP_WIDTH), 0.1)
+	# Markers are circles while positions stretch per axis, so the radius
+	# follows the smaller of the two cell scales — a non-4:3 frame can
+	# never draw a dot that spills its cell on the tight axis.
+	var unit := maxf(minf(size.x / float(MAP_WIDTH), size.y / float(MAP_HEIGHT)), 0.1)
 	for point in _resource_points:
 		draw_circle(_cell_to_local(point), 1.5 * unit, RESOURCE_COLOR)
 	for point in _enemy_points:
