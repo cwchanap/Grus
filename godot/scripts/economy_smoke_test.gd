@@ -1394,7 +1394,8 @@ func _run() -> void:
 			_fail("queue socket %d does not carry the Worker FIFO icon" % (socket_index + 1))
 			return
 	var head_time := (sockets.get_child(0).get_node("Time") as Label).text
-	if head_time.is_empty() or not head_time.ends_with("s") \
+	# A blocked/frozen head renders the stalled marker instead of a countdown.
+	if head_time.is_empty() or (head_time != "—" and not head_time.ends_with("s")) \
 			or not (sockets.get_child(1).get_node("Time") as Label).text.is_empty():
 		_fail("queue sockets do not show the head remaining time only: %s" % [head_time])
 		return
