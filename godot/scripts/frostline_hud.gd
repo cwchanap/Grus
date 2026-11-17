@@ -78,7 +78,7 @@ var _research_marker_entries: Array[Dictionary] = []
 var _unit_entries: Dictionary = {}
 var _building_entries: Dictionary = {}
 var _carry_limit := 0
-var _producer_kinds: Dictionary = {}
+var _producer_kinds: Array[String] = []
 ## Five queue sockets plus one overflow chip, built once and reused; the
 ## live FIFO arrives through the selected building's read-only snapshot.
 const QUEUE_SOCKET_COUNT := 5
@@ -149,10 +149,7 @@ func _ready() -> void:
 	_building_entries = buildings
 	_unit_entries = units
 	_carry_limit = int(catalogue.get("carry_limit", 0))
-	for kind in units:
-		var producer := str(units[kind].get("producer", ""))
-		if producer != "":
-			_producer_kinds[producer] = true
+	_producer_kinds = HudHelpers.producer_kinds(units)
 	_build_common_tiles(buildings, units)
 	_build_order_tiles()
 	_build_queue_sockets()
@@ -752,7 +749,8 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		var friendly := int(building.get("team_id", -1)) == 1
 		var can_train := complete and friendly
 		_set_train_producer(kind if can_train else "")
-		selection_name.text = "%s #%d" % [kind, selected_building_id]
+		selection_name.text = "%s #%d (team %d)" % [
+			kind, selected_building_id, int(building.get("team_id", 0))]
 		portrait_icon.texture = HudHelpers.icon_for_kind("buildings", kind)
 		_render_health(building_health, int(entry.get("max_health", 0)))
 		selection_panel.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
@@ -765,7 +763,9 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		if blocked != 0:
 			lines.append("Blocked (code %d)" % blocked)
 		if int(building.get("rally_x", -1)) >= 0:
-			lines.append("Rally (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))])
+			lines.append("Rally: (%d, %d)" % [int(building.get("rally_x", -1)), int(building.get("rally_y", -1))])
+		else:
+			lines.append("Rally: none")
 		selection_label.text = "\n".join(lines)
 		if can_train and _producer_kinds.has(kind):
 			_render_queue(building)
