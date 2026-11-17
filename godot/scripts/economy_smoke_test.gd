@@ -875,7 +875,10 @@ func _run() -> void:
 		return
 	# HPA-698 five-socket FIFO projection: six real Worker clicks fill all
 	# five sockets and surface the +1 overflow chip. The queue is asserted
-	# before the 20x head job (15 s) can finish.
+	# before the head job (15 s) can finish at 1x.
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("failed to slow Bevy virtual time for the overflow enqueue")
+		return
 	for _job in 6:
 		await _click_button(worker_button)
 	if not await _wait_until(func(): return _training_queue(research_center_id).size() == 6,
@@ -911,6 +914,9 @@ func _run() -> void:
 			return head_progress.visible and not next_progress.visible \
 				and absf(head_progress.value - _queue_progress(research_center_id) * 100.0) <= 12.0,
 			5.0, "head socket progress does not track the live queue_progress"):
+		return
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("failed to resume accelerated Bevy virtual time")
 		return
 	var rally_worker_box := {}
 	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
