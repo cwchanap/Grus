@@ -1759,6 +1759,11 @@ func _run() -> void:
 	# through the selection change itself. Exercise that while the live FIFO
 	# still names a job, then reselect the producer and keep the journey live;
 	# the drained check later can no longer stand in for a populated clear.
+	# Both selection changes run on the 1x clock and each observation requires
+	# a still-queued job, so a 20x drain can never pass for a selection clear.
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("failed to slow Bevy virtual time for the populated selection-loss probe")
+		return
 	var populated_queue := _training_queue(barracks_id)
 	if populated_queue.is_empty() \
 			or (sockets.get_child(0) as Control).accessibility_name.is_empty():
@@ -1768,6 +1773,7 @@ func _run() -> void:
 		return
 	if not await _wait_until(func():
 				return _selected_ids() == [4] and not sockets.is_visible_in_tree() \
+					and not _training_queue(barracks_id).is_empty() \
 					and _queue_accessibility_error(sockets, [], "populated selection loss").is_empty(),
 			5.0, "selecting a non-producer with a populated FIFO did not clear the queue names"):
 		return
@@ -1775,9 +1781,13 @@ func _run() -> void:
 	if not await _wait_until(func():
 				return int((get_node("Main") as Node3D).get("selected_building_id")) == barracks_id \
 					and sockets.is_visible_in_tree() \
+					and not _training_queue(barracks_id).is_empty() \
 					and _queue_accessibility_error(
 						sockets, _training_queue(barracks_id), "reselected Barracks").is_empty(),
 			5.0, "reselected Barracks did not restore its live queue row"):
+		return
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("failed to restore the 20x clock after the populated selection-loss probe")
 		return
 	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
 	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text
