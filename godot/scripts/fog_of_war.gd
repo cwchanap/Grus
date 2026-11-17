@@ -19,14 +19,22 @@ const EXPLORED_ALPHA := 0.45
 var _revision := -1
 var _unexplored: MultiMeshInstance3D
 var _explored: MultiMeshInstance3D
+## The process-wide clear color is ours only while this scene lives;
+## whatever was set before _ready is restored on the way out so a later
+## scene never inherits the fog dark.
+var _previous_clear_color := Color.BLACK
 
 func unexplored_color() -> Color:
 	return UNEXPLORED_COLOR
 
 func _ready() -> void:
+	_previous_clear_color = RenderingServer.get_default_clear_color()
 	RenderingServer.set_default_clear_color(UNEXPLORED_COLOR)
 	_unexplored = _make_layer(UNEXPLORED_COLOR)
 	_explored = _make_layer(Color(UNEXPLORED_COLOR, EXPLORED_ALPHA))
+
+func _exit_tree() -> void:
+	RenderingServer.set_default_clear_color(_previous_clear_color)
 
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.visibility_revision())
