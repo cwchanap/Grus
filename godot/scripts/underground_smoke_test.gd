@@ -654,8 +654,8 @@ func _run() -> void:
 		return
 	await _settle()
 	var early_bar := (_panel.get_node("DigProgress") as ProgressBar).value
-	if not await _wait(func(): return float(GrusBridge.underground_snapshot().progress) \
-			> float(early_dig.progress) + 0.05, 3.0, "L1 dig progress did not advance"):
+	if not await _wait(func(): return (_panel.get_node("DigProgress") as ProgressBar).value > early_bar, \
+			3.0, "L1 dig bar did not advance"):
 		return
 	await _settle()
 	var partial_dig: Dictionary = GrusBridge.underground_snapshot()
