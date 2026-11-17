@@ -1,5 +1,7 @@
 extends Node3D
 
+const HudHelpers := preload("res://scripts/hud_helpers.gd")
+
 const CLICK_RADIUS := 20.0
 const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
@@ -55,6 +57,11 @@ var _armed_order := ""
 ## Producer building kinds come from the Rust catalogue via
 ## catalogue_snapshot — GDScript hardcodes no gameplay data.
 var _producer_kinds: Array[String] = []
+## The selected building's snapshot, fetched once per frame by _refresh_hud
+## and shared with _selected_producer_kind; a mid-frame selection change
+## refetches once so clicks never read the previous building.
+var _selected_building_snap: Dictionary = {}
+var _selected_building_snap_id := -1
 ## Tick/phase markers behind the per-tick refresh gate: the snapshot can
 ## only change inside a fixed tick, and the lock line only on a phase
 ## change, so anything fresher is a wasted rebuild.
@@ -63,12 +70,8 @@ var _ug_last_phase := ""
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
-	var producers := {}
 	var units: Dictionary = catalogue.get("units", {})
-	for kind in units:
-		producers[str(units[kind].get("producer", ""))] = true
-	_producer_kinds.assign(producers.keys())
-	_producer_kinds.sort()
+	_producer_kinds = HudHelpers.producer_kinds(units)
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
 	_ug_drawer.room_requested.connect(_on_room_requested)
@@ -260,6 +263,8 @@ func _refresh_hud() -> void:
 		var building_view := _building_view(selected_building_id)
 		if building_view != null:
 			building_health = float(building_view.call("health_ratio"))
+	_selected_building_snap = building
+	_selected_building_snap_id = selected_building_id
 	var unit_task: Dictionary = {}
 	var unit_health := -1.0
 	if selected_ids.size() == 1:
@@ -714,6 +719,8 @@ func _restart_match() -> void:
 	GrusBridge.restart_match()
 	selected_ids.clear()
 	selected_building_id = -1
+	_selected_building_snap = {}
+	_selected_building_snap_id = -1
 	_research_center_view = null
 	_control_groups.clear()
 	_idle_cursor = 0
@@ -811,10 +818,19 @@ func _building_complete(building_id: int) -> bool:
 		return true
 	return bool(snapshot.get("complete", true))
 
+## The selected building's kind only while it can take rally/train context:
+## friendly (team 1), construction complete, and alive in the shared
+## per-frame snapshot. An enemy, hidden or unfinished producer reports "".
 func _selected_producer_kind() -> String:
 	if selected_building_id <= 0:
 		return ""
-	return str(GrusBridge.building_snapshot(selected_building_id).get("kind", ""))
+	if _selected_building_snap_id != selected_building_id:
+		_selected_building_snap = GrusBridge.building_snapshot(selected_building_id)
+		_selected_building_snap_id = selected_building_id
+	if int(_selected_building_snap.get("team_id", -1)) != 1 \
+			or not bool(_selected_building_snap.get("complete", false)):
+		return ""
+	return str(_selected_building_snap.get("kind", ""))
 
 func _on_build_pressed(kind: String) -> void:
 	if not _playing():
