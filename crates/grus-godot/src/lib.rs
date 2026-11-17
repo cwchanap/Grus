@@ -770,11 +770,12 @@ impl GrusBridgeNode {
     }
 
     /// One building's state by stable id: completion, construction and queue
-    /// progress (0..1), queue head label, the full ordered `training_queue`,
-    /// blocked code (0 = none), and rally cell (-1/-1 when unset). A
-    /// producer with no queue reports an empty array. Empty dict when the
-    /// building does not exist or is a hidden enemy — fog must not leak
-    /// health/queue/construction through stale ids.
+    /// progress (0..1), heat-scaled queue head remaining seconds
+    /// (`queue_remaining`), queue head label, the full ordered
+    /// `training_queue`, blocked code (0 = none), and rally cell (-1/-1 when
+    /// unset). A producer with no queue reports an empty array. Empty dict
+    /// when the building does not exist or is a hidden enemy — fog must not
+    /// leak health/queue/construction through stale ids.
     #[func]
     fn building_snapshot(&self, building_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -837,12 +838,21 @@ impl GrusBridgeNode {
                             0.0
                         }),
                     );
+                    dict.set(
+                        "queue_remaining",
+                        f64::from(queue_head_remaining_seconds(
+                            required,
+                            progress,
+                            surface_efficiency(world),
+                        )),
+                    );
                 }
                 None => {
                     // Seeded producers have no queue component until the first
                     // accepted enqueue heals it; report an empty queue.
                     dict.set("queue_label", &GString::from(""));
                     dict.set("queue_progress", 0.0_f64);
+                    dict.set("queue_remaining", 0.0_f64);
                 }
             }
             dict.set(
@@ -2327,6 +2337,14 @@ fn job_seconds(job: &ProductionJob) -> f32 {
     }
 }
 
+fn queue_head_remaining_seconds(required: f32, progress: f32, efficiency: f32) -> f32 {
+    if required <= 0.0 || efficiency <= 0.0 {
+        0.0
+    } else {
+        (required - progress).max(0.0) / efficiency
+    }
+}
+
 fn queue_head_label(job: &ProductionJob) -> String {
     match job.kind {
         ProductionKind::Unit(kind) => format!("{kind:?}"),
@@ -3693,6 +3711,15 @@ mod tests {
             0,
             "a rejected Analyze spends nothing"
         );
+    }
+
+    #[test]
+    fn queue_head_remaining_seconds_scales_by_surface_efficiency() {
+        assert_eq!(queue_head_remaining_seconds(10.0, 0.0, 1.0), 10.0);
+        assert_eq!(queue_head_remaining_seconds(10.0, 5.0, 0.5), 10.0);
+        assert_eq!(queue_head_remaining_seconds(10.0, 0.0, 0.5), 20.0);
+        assert_eq!(queue_head_remaining_seconds(10.0, 12.0, 0.5), 0.0);
+        assert_eq!(queue_head_remaining_seconds(0.0, 0.0, 0.5), 0.0);
     }
 
     #[test]

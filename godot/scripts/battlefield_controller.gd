@@ -24,12 +24,12 @@ const ZOOM_STEP := 6.0
 @onready var quit_button: Button = $HUD/SessionPanel/QuitButton
 @onready var pause_button: Button = $HUD/PauseButton
 ## The drawer script on the existing panel owns its visual arming state and
-## emits the two action intents; Tab/Esc, the Playing gate, dispatch and the
+## emits `room_requested`; Tab/Esc, the Playing gate, dispatch and the
 ## command status stay here.
 @onready var _ug_drawer = $HUD/UndergroundPanel
-## The Excavate button is static scene content, so the controller owns its
-## pressed wiring like every other static Button: it connects straight to the
-## drawer's existing intent signal.
+## The Excavate button is static scene content, so the controller connects its
+## pressed signal straight to `_on_excavate_requested` like every other static
+## Button.
 @onready var _underground_excavate: Button = $HUD/UndergroundPanel/ExcavateButton
 
 var selected_ids: Array[int] = []
@@ -43,6 +43,8 @@ var _placement_generation := 0
 var _pending_placement_requests: Array[Dictionary] = []
 var _idle_cursor := 0
 var _session_phase := ""
+var _session_winner := -2
+var _research_center_view: Node3D = null
 var _unit_kinds: Dictionary = {}
 var _previous_unit_kinds: Dictionary = {}
 var _building_kinds: Dictionary = {}
@@ -69,9 +71,8 @@ func _ready() -> void:
 	_producer_kinds.sort()
 	_feedback_revision = int(GrusBridge.command_feedback_revision())
 	command_status.text = str(GrusBridge.command_feedback())
-	_ug_drawer.excavate_requested.connect(_on_excavate_requested)
 	_ug_drawer.room_requested.connect(_on_room_requested)
-	_underground_excavate.pressed.connect(_ug_drawer.excavate_requested.emit)
+	_underground_excavate.pressed.connect(_on_excavate_requested)
 	# The drawer creates its kind toggles in its own _ready (children ready
 	# before this node), so observe them here for the controller-owned hint —
 	# no third drawer signal and no duplicated armed state.
@@ -156,8 +157,12 @@ func _refresh_session() -> void:
 		_close_underground_panel()
 	if _session_phase != "Playing":
 		_armed_order = ""
-	_fx.set_wind_phase(_session_phase)
-	_hud.refresh_session(_session_phase, int(snap.get("winner_team", -1)))
+	var winner_team := int(snap.get("winner_team", -1))
+	if _session_phase != previous_phase:
+		_fx.set_wind_phase(_session_phase)
+	if _session_phase != previous_phase or winner_team != _session_winner:
+		_session_winner = winner_team
+		_hud.refresh_session(_session_phase, winner_team)
 	var result_frame := _session_phase == "Result" and previous_phase != "Result"
 	if _session_phase != "Playing" and not result_frame:
 		return
@@ -709,6 +714,7 @@ func _restart_match() -> void:
 	GrusBridge.restart_match()
 	selected_ids.clear()
 	selected_building_id = -1
+	_research_center_view = null
 	_control_groups.clear()
 	_idle_cursor = 0
 	_armed_order = ""
@@ -937,8 +943,18 @@ func _on_train_pressed(kind: String) -> void:
 		command_status.text = "Training rejected"
 
 ## The live friendly Research Center view id, resolved from the existing
-## building_views metadata (kind/team/id) — never a hardcoded building id.
+## building_views metadata (kind/team/id) and cached until the view becomes
+## invalid or hidden — never a hardcoded building id and never a per-frame scan.
 func _research_center_id() -> int:
+	if is_instance_valid(_research_center_view) \
+			and _research_center_view.is_inside_tree() \
+			and _research_center_view.is_visible_in_tree() \
+			and int(_research_center_view.get_meta("team_id", -1)) == 1 \
+			and str(_research_center_view.get_meta("building_kind", "")) == "ResearchCenter":
+		var cached_id := int(_research_center_view.get_meta("building_id", -1))
+		if cached_id > 0:
+			return cached_id
+	_research_center_view = null
 	for node in get_tree().get_nodes_in_group("building_views"):
 		var view := node as Node3D
 		if view == null or not view.is_visible_in_tree():
@@ -948,6 +964,7 @@ func _research_center_id() -> int:
 			continue
 		var id := int(view.get_meta("building_id", -1))
 		if id > 0:
+			_research_center_view = view
 			return id
 	return -1
 

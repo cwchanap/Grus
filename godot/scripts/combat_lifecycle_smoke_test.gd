@@ -865,7 +865,8 @@ func _run() -> void:
 		_fail("alien-caused Result is not Team 2 Defeat: %s" % [result])
 		return
 	if not await _wait_until(
-			func(): return _session_panel().visible and _session_label().text == "Defeat" \
+			func(): return _session_panel().visible and not _session_label().visible \
+					and (_main.get_node("HUD/SessionBackdrop/ResultTitle") as Label).text == "Defeat" \
 					and _button("HUD/SessionPanel/RestartButton").visible \
 					and _button("HUD/SessionPanel/QuitButton").visible,
 			5.0, "Result overlay is not showing Defeat with Restart/Quit"):

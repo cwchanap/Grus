@@ -3,12 +3,12 @@ extends Panel
 ## Underground drawer view attached directly to the existing UndergroundPanel.
 ## It is the single owner of the panel's visual arming state and of the
 ## runtime-created room/slot Buttons. The battlefield controller keeps Tab/Esc
-## input, the Playing gate, bridge dispatch and command feedback; it also owns
-## the static Excavate button's pressed wiring straight to `excavate_requested`.
-## This script resolves the armed room kind and exposes only the two action
-## intents below.
+## input, the Playing gate, bridge dispatch and command feedback; it also wires
+## the static Excavate button directly. This script resolves the armed room
+## kind and emits `room_requested` for slot builds.
 
-signal excavate_requested
+const HudHelpers := preload("res://scripts/hud_helpers.gd")
+
 signal room_requested(level: int, slot: int, kind: String)
 
 ## Cosmetic button labels only — the authoritative kind wire names ride the
@@ -41,7 +41,6 @@ var _kind_buttons: Array[Button] = []
 ## second bridge read or a gameplay copy.
 var _snapshot: Dictionary = {}
 var _phase := ""
-var _icon_cache: Dictionary = {}
 
 func _ready() -> void:
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
@@ -69,7 +68,7 @@ func _ready() -> void:
 		kind_button.set_meta("kind", kind)
 		var short_name := display_name(kind)
 		kind_button.text = short_name
-		var room_icon := _icon_for_kind("underground", kind)
+		var room_icon := HudHelpers.icon_for_kind("underground", kind)
 		if room_icon != null:
 			kind_button.icon = room_icon
 			kind_button.add_theme_constant_override("icon_max_width", 20)
@@ -117,7 +116,7 @@ func _ready() -> void:
 		kind_button.toggled.connect(_on_kind_toggled.bind(index))
 		_kinds.add_child(kind_button)
 		_kind_buttons.append(kind_button)
-	var excavate_icon := _icon_for_kind("underground", "Excavate")
+	var excavate_icon := HudHelpers.icon_for_kind("underground", "Excavate")
 	if excavate_icon != null:
 		_excavate.icon = excavate_icon
 		_excavate.add_theme_constant_override("icon_max_width", 20)
@@ -186,7 +185,7 @@ func _refresh_header(snap: Dictionary, phase: String) -> void:
 	var playing := phase == "Playing"
 	var depth := int(snap.get("depth", 0))
 	var target := int(snap.get("target", 1))
-	var cost_text := _cost_text(snap.get("next_cost", {}))
+	var cost_text := HudHelpers.cost_text(snap.get("next_cost", {}))
 	var dig_line := ""
 	if bool(snap.get("excavating", false)):
 		dig_line = "L%d dig · %d%% · %ds left" % [
@@ -259,7 +258,7 @@ func _refresh_slots(snap: Dictionary, phase: String) -> void:
 					button.disabled = true
 				continue
 			var display := display_name(kind)
-			button.icon = _icon_for_kind("underground", kind)
+			button.icon = HudHelpers.icon_for_kind("underground", kind)
 			if button.icon != null:
 				button.add_theme_constant_override("icon_max_width", 20)
 				button.add_theme_color_override("icon_disabled_color", Color(1, 1, 1, 0.85))
@@ -306,16 +305,6 @@ func _refresh_armed_detail() -> void:
 		display_name(str(entry.get("name", ""))), str(entry.get("effect", "")),
 		int(entry.get("seconds", 0))]
 
-## Formats a cost dictionary carried by a snapshot or catalogue entry;
-## GDScript renders, Rust computes.
-func _cost_text(cost: Dictionary) -> String:
-	var parts := PackedStringArray()
-	for resource in ["food", "scrap", "coal", "crystals"]:
-		var amount := int(cost.get(resource, 0))
-		if amount > 0:
-			parts.append("%d %s" % [amount, resource.capitalize()])
-	return " + ".join(parts)
-
 ## Terse catalogue price for the kind tile. Room kinds are Scrap-funded, so
 ## the one number fits the tile; the full four-currency line stays in the
 ## tooltip and the header Excavate row.
@@ -327,11 +316,5 @@ func _cost_short(cost: Dictionary) -> String:
 ## never retyped here.
 func _kind_tooltip(entry: Dictionary) -> String:
 	return "%s — Requires L%d\nCost: %s · Build: %ds\n%s" % [
-		str(entry.get("name", "")), int(entry.get("min_level", 1)), _cost_text(entry),
+		str(entry.get("name", "")), int(entry.get("min_level", 1)), HudHelpers.cost_text(entry),
 		int(entry.get("seconds", 0)), str(entry.get("effect", ""))]
-
-func _icon_for_kind(group: String, kind: String) -> Texture2D:
-	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
-	if not _icon_cache.has(path):
-		_icon_cache[path] = ResourceLoader.load(path) as Texture2D if ResourceLoader.exists(path) else null
-	return _icon_cache[path] as Texture2D
