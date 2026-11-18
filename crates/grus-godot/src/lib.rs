@@ -20,10 +20,10 @@ use grus_sim::{
     TeamEconomy, TeamId, Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex,
     UnitKind, VisibilityMap, WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS, WaveState,
     WorkerTask, active_phase, apply_player_command, benchmark_building_count, clear_match_world,
-    explored_by, extend_with_benchmark_workload, idle_worker_ids, live_alien_ids, population_cap,
-    population_used, produces, refresh_visibility, research_points, research_rate, resolve_target,
-    seed_skirmish, set_paused, start_match, step_tick, surface_efficiency, target_eligible,
-    unlock_points, validate_placement, visible_to,
+    explored_by, extend_with_benchmark_workload, gameplay_active, idle_worker_ids, live_alien_ids,
+    population_cap, population_used, produces, refresh_visibility, research_points, research_rate,
+    resolve_target, seed_skirmish, set_paused, start_match, step_tick, surface_efficiency,
+    target_eligible, unlock_points, validate_placement, visible_to,
 };
 
 #[cfg(feature = "e2e")]
@@ -842,8 +842,8 @@ impl GrusBridgeNode {
                     );
                     // A stalled head reports no countdown: blocked jobs sit
                     // at 100% forever, and a frozen phase never advances.
-                    let stalled = queue.and_then(|queue| queue.blocked).is_some()
-                        || !matches!(active_phase(world), MatchPhase::Playing);
+                    let stalled =
+                        queue.and_then(|queue| queue.blocked).is_some() || !gameplay_active(world);
                     dict.set(
                         "queue_remaining",
                         f64::from(if stalled {
