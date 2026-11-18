@@ -742,7 +742,7 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	# beside Analyze; grouped thousands match the Start objective and the
 	# approved mockups' numeric readout.
 	research_label.text = "Research %s/%s\n%d%% · ETA %s" % [
-		_grouped_thousands(floori(points)), _grouped_thousands(_research_target_points),
+		_format_int(floori(points)), _format_int(_research_target_points),
 		percent, eta_text,
 	]
 	var marker_parts := PackedStringArray()
