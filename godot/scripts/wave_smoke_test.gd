@@ -341,6 +341,23 @@ func _verify_warning_presentation(main: Node3D) -> void:
 		_stage5_fail("wave card tooltip lost the full warning zone name: %s" % [
 			wave_card.tooltip_text])
 		return
+	# Live pings read before the synthetic probes: the parent holds a 5x
+	# clock, and the probe/session frame waits must not age the warning past
+	# the ping window (minimap.gd shows pings only at seconds_remaining >= 24).
+	var minimap := main.get_node("HUD/Minimap") as Control
+	var pings: PackedVector2Array = minimap.get("incoming_ping_points")
+	if pings.size() != zones.size():
+		_stage5_fail("minimap ping count differs from announced zones: pings=%s zones=%s" % [pings, zones])
+		return
+	for index in zones.size():
+		var zone: Dictionary = zones[index]
+		var anchor := Vector2(float(zone.get("anchor_x", -1)), float(zone.get("anchor_y", -1)))
+		if not pings[index].is_equal_approx(anchor):
+			_stage5_fail("minimap ping did not use the fixture anchor: got=%s expected=%s" % [pings[index], anchor])
+			return
+	if int(warning.get("live_aliens", -1)) != 0 or int(minimap.get("enemy_marker_count")) != 0:
+		_stage5_fail("public zone ping was conflated with individual enemy markers: snapshot=%s" % [warning])
+		return
 	# Presentation-only copied snapshots: wave 20's authored three-zone
 	# rotation, its cleared state, a realistic three-digit wave, the display
 	# fallback boundary and the i64 index bound. The controller's per-frame
@@ -452,20 +469,6 @@ func _verify_warning_presentation(main: Node3D) -> void:
 	if get_viewport().gui_get_hovered_control() != wave_card:
 		_stage5_fail("wave card tooltip surface is not the real hover target: %s" % [
 			get_viewport().gui_get_hovered_control()])
-		return
-	var minimap := main.get_node("HUD/Minimap") as Control
-	var pings: PackedVector2Array = minimap.get("incoming_ping_points")
-	if pings.size() != zones.size():
-		_stage5_fail("minimap ping count differs from announced zones: pings=%s zones=%s" % [pings, zones])
-		return
-	for index in zones.size():
-		var zone: Dictionary = zones[index]
-		var anchor := Vector2(float(zone.get("anchor_x", -1)), float(zone.get("anchor_y", -1)))
-		if not pings[index].is_equal_approx(anchor):
-			_stage5_fail("minimap ping did not use the fixture anchor: got=%s expected=%s" % [pings[index], anchor])
-			return
-	if int(warning.get("live_aliens", -1)) != 0 or int(minimap.get("enemy_marker_count")) != 0:
-		_stage5_fail("public zone ping was conflated with individual enemy markers: snapshot=%s" % [warning])
 		return
 	if not await _wait_until(func():
 			var snapshot: Dictionary = GrusBridge.wave_snapshot()

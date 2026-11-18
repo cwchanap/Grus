@@ -223,9 +223,21 @@ static func command_price_error(button: Button, where: String) -> String:
 			where, Vector2(cost.get_content_width(), cost.get_content_height()), cost_rect.size]
 	var cost_entry: Dictionary = button.get_meta("cost", {})
 	var parsed := cost.get_parsed_text()
+	# Whole digit runs only: a catalogue 50 must not pass on a displayed 150.
+	var amount_tokens := PackedStringArray()
+	var run := ""
+	for index in parsed.length():
+		var character := parsed.substr(index, 1)
+		if character >= "0" and character <= "9":
+			run += character
+		elif not run.is_empty():
+			amount_tokens.append(run)
+			run = ""
+	if not run.is_empty():
+		amount_tokens.append(run)
 	for resource in ["food", "scrap", "coal", "crystals"]:
 		var amount := int(cost_entry.get(resource, 0))
-		if amount > 0 and not parsed.contains(str(amount)):
+		if amount > 0 and not amount_tokens.has(str(amount)):
 			return "%s price lost its catalogue %s amount" % [where, resource]
 	return ""
 
