@@ -13,6 +13,7 @@ const EXPANSION_SALVAGE_ID := 14
 const INITIAL_CAMERA_SIZE := 54.0
 const PRIOR_CAMERA_SIZE := 72.0
 
+const HudHelpers := preload("res://scripts/hud_helpers.gd")
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 ## RejectReason discriminant values (declaration order in
 ## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
@@ -556,6 +557,45 @@ func _assert_command_tile_treatment() -> bool:
 	var lance_price := SmokeHelpers.command_price_error(lance, "unaffordable CrystalLance")
 	if not lance_price.is_empty():
 		_fail(lance_price)
+		return false
+	# The price check must tie each amount to its own resource icon, not to
+	# any digit run in the label: the synthetic cases below feed the real
+	# cost_markup output through the validator, and the live-tile probe moves
+	# one charged amount onto an icon the catalogue does not charge — the
+	# parsed token set never changes, so only pair validation catches it.
+	var even_cost := {"food": 50, "scrap": 50}
+	if not SmokeHelpers.price_markup_error(
+			HudHelpers.cost_markup(even_cost), even_cost, "synthetic pair").is_empty():
+		_fail("price validation rejects matching icon/amount pairs")
+		return false
+	for wrong_cost in [{"food": 50, "scrap": 150}, {"food": 50}, {"food": 150, "scrap": 50}]:
+		if SmokeHelpers.price_markup_error(
+				HudHelpers.cost_markup(wrong_cost), even_cost, "synthetic pair").is_empty():
+			_fail("price validation misses %s against catalogue %s" % [wrong_cost, even_cost])
+			return false
+	var split_cost := {"food": 50, "scrap": 30}
+	if SmokeHelpers.price_markup_error(
+			HudHelpers.cost_markup({"food": 30, "scrap": 50}), split_cost, "synthetic swap").is_empty():
+		_fail("price validation misses amounts swapped between icons")
+		return false
+	var probe_cost: Dictionary = flame.get_meta("cost")
+	var probe_label := flame.get_node("Cost") as RichTextLabel
+	var tampered := probe_cost.duplicate()
+	for resource in ["food", "scrap", "coal", "crystals"]:
+		var moved := int(tampered.get(resource, 0))
+		if moved > 0:
+			tampered.erase(resource)
+			for other in ["food", "scrap", "coal", "crystals"]:
+				if int(probe_cost.get(other, 0)) <= 0:
+					tampered[other] = moved
+					break
+			break
+	var original_text := probe_label.text
+	probe_label.text = "[center]%s[/center]" % HudHelpers.cost_markup(tampered)
+	var tampered_error := SmokeHelpers.command_price_error(flame, "misiconned FlameTower")
+	probe_label.text = original_text
+	if tampered_error.is_empty():
+		_fail("price validation accepts an amount shown under the wrong resource icon")
 		return false
 	return true
 
