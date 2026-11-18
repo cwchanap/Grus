@@ -339,12 +339,7 @@ func _set_tile_cost(button: Button, cost: Dictionary) -> void:
 	var label := button.get_node_or_null("Cost") as RichTextLabel
 	if label == null:
 		return
-	var parts := PackedStringArray()
-	for resource in ["food", "scrap", "coal", "crystals"]:
-		var amount := int(cost.get(resource, 0))
-		if amount > 0:
-			parts.append("%s%d" % [_inline_icon("resources", resource.capitalize(), 15).strip_edges(), amount])
-	label.text = "[center]%s[/center]" % " ".join(parts)
+	_set_bbcode(label, "[center]%s[/center]" % HudHelpers.cost_markup(cost, 15))
 
 ## Optional combat/counter row shared by unit and building tooltips.
 func _combat_line(entry: Dictionary) -> String:
@@ -557,7 +552,7 @@ func refresh_economy(economy: Dictionary) -> void:
 	# value down to 99 while the sim reports any efficiency shortfall.
 	if surface_percent >= 100 and surface < 1.0:
 		surface_percent = 99
-	economy_label.text = "%s%d   %s%d   %s%d   %s%d   %s%d / %d   %s%d / %d · surface %d%%" % [
+	_set_bbcode(economy_label, "%s%d   %s%d   %s%d   %s%d   %s%d / %d   %s%d / %d · surface %d%%" % [
 		_inline_icon("resources", "Food", 28),
 		int(economy.get("food", 0)),
 		_inline_icon("resources", "Scrap", 28),
@@ -573,7 +568,7 @@ func refresh_economy(economy: Dictionary) -> void:
 		int(economy.get("heat_supply", 0)),
 		int(economy.get("heat_demand", 0)),
 		surface_percent,
-	]
+	])
 	# The supply-versus-demand bar and cold chip are display-only projections
 	# of the same live snapshot; both are hidden at full surface efficiency.
 	var supply := int(economy.get("heat_supply", 0))
@@ -590,8 +585,8 @@ func refresh_economy(economy: Dictionary) -> void:
 			supply, demand, surface_percent]
 		heat_bar.tooltip_text = detail
 		cold_chip.tooltip_text = detail
-		cold_chip.text = "%s %d%%" % [
-			_inline_icon("status", "SurfaceCold", 20).strip_edges(), surface_percent]
+		_set_bbcode(cold_chip, "%s %d%%" % [
+			_inline_icon("status", "SurfaceCold", 20).strip_edges(), surface_percent])
 	idle_button.text = "Idle: %d — Next" % int(economy.get("idle_workers", 0))
 	_result_population_text = "%sPop %d" % [
 		_inline_icon("status", "Population", 26),
@@ -613,12 +608,7 @@ func _refresh_affordability(economy: Dictionary) -> void:
 	for grid in [_build_grid, _train_grid]:
 		for button in grid.get_children():
 			var cost: Dictionary = button.get_meta("cost", {})
-			var affordable := true
-			for resource in ["food", "scrap", "coal", "crystals"]:
-				if int(cost.get(resource, 0)) > int(economy.get(resource, 0)):
-					affordable = false
-					break
-			var variation: StringName = &"UnaffordableTile" if not affordable else &"CommandTile"
+			var variation: StringName = &"CommandTile" if HudHelpers.can_afford(cost, economy) else &"UnaffordableTile"
 			if button.theme_type_variation != variation:
 				button.theme_type_variation = variation
 
@@ -660,11 +650,11 @@ func refresh_wave(wave: Dictionary) -> void:
 	if _wave_line_width(next_text) + WAVE_ICON_WIDTH > wave_label.size.x:
 		next_text = "Next wave %s in %d:%02d" % [
 			_compact_wave_index(next_wave), int(remaining / 60), remaining % 60]
-	wave_label.text = "\n".join(PackedStringArray([
+	_set_bbcode(wave_label, "\n".join(PackedStringArray([
 		current_text,
 		"%s%s" % [_inline_icon("status", "WaveCountdown"), next_text],
 		"Aliens %d" % live_aliens,
-	]))
+	])))
 	# The incoming directions own a visible readout of their own, so the full
 	# names never become tooltip-only. The card tooltip keeps them as a second
 	# pointer surface and the edge glows mark the same directions. The row is a
@@ -672,10 +662,9 @@ func refresh_wave(wave: Dictionary) -> void:
 	# hides the card first, then this refresh runs with frozen warning zones.
 	var in_match_hud := wave_panel.visible
 	wave_warning.visible = warning and in_match_hud
-	wave_warning.text = ""
-	if warning:
-		wave_warning.text = "%sIncoming: %s" % [
-			_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)]
+	var warning_text := "%sIncoming: %s" % [
+		_inline_icon("status", "IncomingZone"), ", ".join(incoming_names)] if warning else ""
+	_set_bbcode(wave_warning, warning_text)
 	# Full snapshot semantics without hover: the exact indices always, plus the
 	# full direction names while announced and the in-match HUD is visible.
 	# These are the properties an accessibility consumer reads; this project
@@ -709,18 +698,24 @@ func _wave_line_width(text: String) -> float:
 ## every projected i64 index bounded. The exact index always remains in the
 ## readout's accessible description.
 func _compact_wave_index(value: int) -> String:
-	if value >= 1_000_000_000_000_000:
-		var exponent := int(floor(log(float(value)) / log(10.0)))
-		var mantissa := int(floor(float(value) / pow(10.0, float(exponent))))
-		return "%de%d" % [mantissa, exponent]
-	for unit in [[1_000_000_000_000, "T"], [1_000_000_000, "G"],
-			[1_000_000, "M"], [1_000, "K"]]:
-		if value >= int(unit[0]):
-			var scaled := float(value) / float(unit[0])
-			if scaled >= 100.0:
-				return "%d%s" % [roundi(scaled), str(unit[1])]
-			return "%.1f%s" % [scaled, str(unit[1])]
-	return str(value)
+	if value < 1_000:
+		return str(value)
+	var units := [[1_000, "K"], [1_000_000, "M"], [1_000_000_000, "G"],
+			[1_000_000_000_000, "T"]]
+	for i in units.size():
+		var divisor := int(units[i][0])
+		if value < divisor * 1_000:
+			var scaled := float(value) / float(divisor)
+			if roundi(scaled * 10.0) < 1_000:
+				return "%.1f%s" % [scaled, str(units[i][1])]
+			var whole := roundi(scaled)
+			if whole < 1_000:
+				return "%d%s" % [whole, str(units[i][1])]
+			if i + 1 < units.size():
+				return "1.0%s" % str(units[i + 1][1])
+			return "1e15"
+	var digits := str(value)
+	return "%se%d" % [digits[0], digits.length() - 1]
 
 ## Per-frame research refresh behind the one dynamic snapshot: the bar and
 ## label track live points/rate/ETA, and every catalogue-bound lock state
@@ -756,7 +751,7 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 			"#8fd18f" if reached else "#c3ced6",
 			marker["label"], marker["icon"], "✓ " if reached else "",
 			marker["short"], int(marker["points"])])
-	research_markers.text = "  ".join(marker_parts)
+	_set_bbcode(research_markers, "  ".join(marker_parts))
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is
 	# deliberately NOT checked here, because Rust reports
@@ -768,10 +763,10 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 	for button in _build_grid.get_children():
 		var required := float(button.get_meta("unlock_points", 0))
 		button.disabled = required > 0.0 and points < required
-	_result_research_text = "%sResearch %d/%d" % [
+	_result_research_text = "%sResearch %s/%s" % [
 		_inline_icon("status", "ResearchProgress", 26),
-		floori(points),
-		_research_target_points,
+		_format_int(floori(points)),
+		_format_int(_research_target_points),
 	]
 	_render_result_stats()
 
@@ -807,7 +802,7 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 			carry_bar.max_value = maxf(float(_carry_limit), 1.0)
 			carry_bar.value = float(amount)
 			var icon := _inline_icon("resources", carried, 14) if carried != "" else ""
-			carry_label.text = "%s%d / %d" % [icon, amount, _carry_limit]
+			_set_bbcode(carry_label, "%s%d / %d" % [icon, amount, _carry_limit])
 		return
 	carry_bar.visible = false
 	carry_label.visible = false
@@ -990,7 +985,7 @@ func _render_result_stats() -> void:
 			_result_population_text, _result_crystals_text]:
 		if text != "":
 			parts.append(text)
-	result_stats.text = "   ".join(parts)
+	_set_bbcode(result_stats, "   ".join(parts))
 
 ## Each winner's banner cloth sits at a different place in its PNG, so the
 ## title follows the measured normalized cloth center instead of a shared box.
@@ -1077,15 +1072,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 			pass
 
 func _format_int(value: int) -> String:
-	var raw := str(value)
-	var out := ""
-	var count := 0
-	for i in range(raw.length() - 1, -1, -1):
-		if count > 0 and count % 3 == 0 and raw[i] != "-":
-			out = "," + out
-		out = raw[i] + out
-		count += 1
-	return out
+	return HudHelpers.format_int(value)
 
 ## Centered Pause card: the Start card is 580 × 592 at its fixed top-left
 ## offsets, so Paused would otherwise read as an oversized empty plate. Only
@@ -1132,8 +1119,8 @@ func _on_viewport_resized() -> void:
 ## the catalogue kind humanised is already the word the icon stands for
 ## ("Population", "Surface Cold"). Art, size and visible text are unchanged.
 func _inline_icon(group: String, kind: String, size := 18) -> String:
-	var icon := HudHelpers.icon_for_kind(group, kind)
-	if icon == null:
-		return ""
-	return "[img=%dx%d alt=\"%s\"]%s[/img] " % [
-		size, size, kind.capitalize(), icon.resource_path]
+	return HudHelpers.inline_icon(group, kind, size)
+
+func _set_bbcode(label: RichTextLabel, markup: String) -> void:
+	if label.text != markup:
+		label.text = markup
