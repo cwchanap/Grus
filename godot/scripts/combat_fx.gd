@@ -21,6 +21,7 @@ var cue_counts: Dictionary = {}
 var _live: Array[Node] = []
 var _players: Dictionary = {}
 var _last_cue_ms: Dictionary = {}
+var _has_played_audio := false
 
 func _ready() -> void:
 	add_to_group("combat_fx")
@@ -52,6 +53,7 @@ func play_cue(cue_id: String) -> void:
 		return
 	_last_cue_ms[cue_id] = now
 	player.play()
+	_has_played_audio = true
 	cue_counts[cue_id] = int(cue_counts.get(cue_id, 0)) + 1
 
 ## Plays at most one cue per drain batch, throttled so a fast tick burst
@@ -66,6 +68,7 @@ func set_wind_phase(phase: String) -> void:
 			player.stream_paused = false
 			if not player.playing:
 				player.play()
+				_has_played_audio = true
 				cue_counts["winter_wind"] = int(cue_counts.get("winter_wind", 0)) + 1
 		"Paused":
 			player.stream_paused = true
@@ -116,8 +119,22 @@ func clear_all() -> void:
 ## await and clock read, so a resumed iteration past it returns the fallback
 ## instead of reporting success.
 func stop_and_drain(clock: Callable = Callable(), timeout_ms := DRAIN_TIMEOUT_MS, mix_rate := 0.0) -> bool:
+	var any_playing := false
 	for cue_id in _players:
-		(_players[cue_id] as AudioStreamPlayer).stop()
+		var player := _players[cue_id] as AudioStreamPlayer
+		if player.playing or player.has_stream_playback():
+			any_playing = true
+		player.stop()
+	# Dummy/headless drivers have no mixer thread resetting get_time_since_last_mix(),
+	# and an untouched audio setup has no stopped playback to reclaim. Injected-clock
+	# tests bypass this shortcut so all drain branches remain testable.
+	if not clock.is_valid() and (AudioServer.get_driver_name() == "Dummy" \
+			or (not any_playing and not _has_played_audio)):
+		_has_played_audio = false
+		var tree := get_tree()
+		if tree != null:
+			await tree.process_frame
+		return true
 	var read_clock: Callable = clock if clock.is_valid() else AudioServer.get_time_since_last_mix
 	var rate := mix_rate if mix_rate > 0.0 else float(AudioServer.get_mix_rate())
 	var last: float = read_clock.call()

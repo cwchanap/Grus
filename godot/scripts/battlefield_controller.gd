@@ -47,9 +47,15 @@ var _idle_cursor := 0
 var _session_phase := ""
 var _session_winner := -2
 var _research_center_view: Node3D = null
+const QUIT_FALLBACK_SECONDS := 1.0
+
 var _unit_kinds: Dictionary = {}
 var _previous_unit_kinds: Dictionary = {}
 var _building_kinds: Dictionary = {}
+var _unit_views: Dictionary = {}
+var _building_views: Dictionary = {}
+var _friendly_unit_views: Array[Node3D] = []
+var _views_indexed := false
 ## One controller-owned modal order: "", "attack_move", "move", "gather",
 ## "rally". Build placement stays a separate `_placement_kind` because it has
 ## its own preview/queued-placement lifecycle.
@@ -70,11 +76,15 @@ var _ug_last_phase := ""
 ## One-way flag for the single quit path; it also freezes session refreshes so
 ## no cue or the ambience restarts during the audio drain.
 var _shutting_down := false
+var _quit_finished := false
+var _previous_auto_accept_quit := true
 
 func _ready() -> void:
 	# Quit must go through request_quit so the audio drain runs; the OS close
 	# request is handled below instead of SceneTree's implicit quit.
-	get_tree().auto_accept_quit = false
+	var tree := get_tree()
+	_previous_auto_accept_quit = tree.auto_accept_quit
+	tree.auto_accept_quit = false
 	var catalogue: Dictionary = GrusBridge.catalogue_snapshot()
 	var units: Dictionary = catalogue.get("units", {})
 	_producer_kinds = HudHelpers.producer_kinds(units)
@@ -102,9 +112,13 @@ func _ready() -> void:
 	restart_button.pressed.connect(_on_restart_pressed)
 	quit_button.pressed.connect(_on_quit_pressed)
 
+func _exit_tree() -> void:
+	var tree := get_tree()
+	if tree != null:
+		tree.auto_accept_quit = _previous_auto_accept_quit
+
 func _process(_delta: float) -> void:
-	_unit_kinds = _view_kinds("unit_views", "unit_id", "unit_kind")
-	_building_kinds = _view_kinds("building_views", "building_id", "building_kind")
+	_index_views()
 	var placement_feedback_handled := _consume_placement_results()
 	var revision := int(GrusBridge.command_feedback_revision())
 	if revision != _feedback_revision:
@@ -119,11 +133,32 @@ func _process(_delta: float) -> void:
 			and (int(GrusBridge.sim_tick()) != _ug_last_tick or _session_phase != _ug_last_phase):
 		_refresh_underground_panel()
 
-func _view_kinds(group: String, id_key: String, kind_key: String) -> Dictionary:
-	var kinds := {}
-	for view in get_tree().get_nodes_in_group(group):
-		kinds[int(view.get_meta(id_key, -1))] = str(view.get_meta(kind_key, ""))
-	return kinds
+func _index_views() -> void:
+	var unit_kinds := {}
+	var unit_views := {}
+	var friendly_units: Array[Node3D] = []
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		var id := int(node.get_meta("unit_id", -1))
+		unit_kinds[id] = str(node.get_meta("unit_kind", ""))
+		var view := node as Node3D
+		if view != null:
+			unit_views[id] = view
+			if int(view.get_meta("team_id", -1)) == 1:
+				friendly_units.append(view)
+	var building_kinds := {}
+	var building_views := {}
+	for node in get_tree().get_nodes_in_group("building_views"):
+		var id := int(node.get_meta("building_id", -1))
+		building_kinds[id] = str(node.get_meta("building_kind", ""))
+		var view := node as Node3D
+		if view != null:
+			building_views[id] = view
+	_unit_kinds = unit_kinds
+	_unit_views = unit_views
+	_friendly_unit_views = friendly_units
+	_building_kinds = building_kinds
+	_building_views = building_views
+	_views_indexed = true
 
 func _consume_placement_results() -> bool:
 	var unresolved: Array[Dictionary] = []
@@ -492,10 +527,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	if not workers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
 		if resource_id > 0:
-			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
-				command_status.text = "Gather command queued"
-			else:
-				command_status.text = "Gather command rejected"
+			_issue_gather(workers, resource_id)
 			return
 		var building := _building_at(screen_position)
 		if building != null and int(building.get_meta("team_id", -1)) == 1:
@@ -520,10 +552,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)
 		if target != null:
-			if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):
-				command_status.text = "Rally point queued"
-			else:
-				command_status.text = "Rally point rejected"
+			_issue_rally(target)
 			return
 	_issue_move(screen_position)
 
@@ -548,21 +577,27 @@ func _dispatch_armed_order(order: String, screen_position: Vector2) -> void:
 			if workers.is_empty() or resource_id <= 0:
 				command_status.text = "Gather command rejected"
 				return
-			if GrusBridge.gather(PackedInt32Array(workers), resource_id):
-				command_status.text = "Gather command queued"
-			else:
-				command_status.text = "Gather command rejected"
+			_issue_gather(workers, resource_id)
 		"rally":
 			var target = _ground_target(screen_position)
 			if target == null or not _producer_kinds.has(_selected_producer_kind()):
 				command_status.text = "Rally point rejected"
 				return
-			if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):
-				command_status.text = "Rally point queued"
-			else:
-				command_status.text = "Rally point rejected"
+			_issue_rally(target)
 		_:
 			command_status.text = "Order canceled"
+
+func _issue_gather(workers: Array[int], resource_id: int) -> void:
+	if GrusBridge.gather(PackedInt32Array(workers), resource_id):
+		command_status.text = "Gather command queued"
+	else:
+		command_status.text = "Gather command rejected"
+
+func _issue_rally(target: Vector2) -> void:
+	if GrusBridge.set_rally(selected_building_id, floori(target.x), floori(target.y)):
+		command_status.text = "Rally point queued"
+	else:
+		command_status.text = "Rally point rejected"
 
 func _issue_move(screen_position: Vector2) -> void:
 	if not _playing():
@@ -687,6 +722,12 @@ func _model_ray_hit_depth(model: Node3D, ray_origin: Vector3, ray_dir: Vector3) 
 	return min_depth if min_depth < INF else -1.0
 
 func _friendly_units() -> Array[Node3D]:
+	if _views_indexed:
+		var live: Array[Node3D] = []
+		for view in _friendly_unit_views:
+			if is_instance_valid(view):
+				live.append(view)
+		return live
 	var result: Array[Node3D] = []
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		if int(node.get_meta("team_id", -1)) == 1:
@@ -694,18 +735,26 @@ func _friendly_units() -> Array[Node3D]:
 	return result
 
 func _unit_kind(unit_id: int) -> String:
+	if _views_indexed:
+		return str(_unit_kinds.get(unit_id, ""))
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		if int(node.get_meta("unit_id", -1)) == unit_id:
 			return str(node.get_meta("unit_kind", ""))
 	return ""
 
 func _unit_view(unit_id: int) -> Node3D:
+	if _views_indexed:
+		var cached := _unit_views.get(unit_id, null) as Node3D
+		return cached if is_instance_valid(cached) else null
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		if int(node.get_meta("unit_id", -1)) == unit_id:
 			return node as Node3D
 	return null
 
 func _building_view(building_id: int) -> Node3D:
+	if _views_indexed:
+		var cached := _building_views.get(building_id, null) as Node3D
+		return cached if is_instance_valid(cached) else null
 	for node in get_tree().get_nodes_in_group("building_views"):
 		if int(node.get_meta("building_id", -1)) == building_id:
 			return node as Node3D
@@ -743,14 +792,29 @@ func request_quit() -> void:
 	if _shutting_down:
 		return
 	_shutting_down = true
+	var tree := get_tree()
+	if tree == null:
+		return
 	# Unconditional: Rust leaves Start/Paused/Result and a session-free
 	# benchmark unchanged, and this also covers a Start/Resume whose phase the
 	# frame cache has not seen yet.
 	GrusBridge.set_paused(true)
-	var drained = await _fx.stop_and_drain()
-	if not drained:
-		push_warning("audio shutdown drain hit its deadline; playbacks may still be live")
-	get_tree().quit(0)
+	# Guarantee quit and auto_accept_quit restoration even if the drain coroutine fails.
+	var fallback := tree.create_timer(QUIT_FALLBACK_SECONDS, true, false, true)
+	fallback.timeout.connect(_finish_quit.bind(tree), CONNECT_ONE_SHOT)
+	if is_instance_valid(_fx):
+		var drained = await _fx.stop_and_drain()
+		if not drained:
+			push_warning("audio shutdown drain hit its deadline; playbacks may still be live")
+	_finish_quit(tree)
+
+func _finish_quit(tree: SceneTree) -> void:
+	if _quit_finished:
+		return
+	_quit_finished = true
+	if tree != null:
+		tree.auto_accept_quit = _previous_auto_accept_quit
+		tree.quit(0)
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
@@ -769,6 +833,10 @@ func _restart_match() -> void:
 	_selected_building_snap = {}
 	_selected_building_snap_id = -1
 	_research_center_view = null
+	_unit_views = {}
+	_building_views = {}
+	_friendly_unit_views = []
+	_views_indexed = false
 	_control_groups.clear()
 	_idle_cursor = 0
 	_armed_order = ""
@@ -1079,13 +1147,10 @@ func _on_idle_pressed() -> void:
 	selected_ids.append(worker_id)
 	selected_building_id = -1
 	_apply_selection()
-	for node in get_tree().get_nodes_in_group("unit_views"):
-		if int(node.get_meta("unit_id", -1)) != worker_id:
-			continue
-		var view := node as Node3D
+	var view := _unit_view(worker_id)
+	if view != null:
 		camera.position.x = view.global_position.x
 		camera.position.z = view.global_position.z
-		break
 	command_status.text = "Selected idle worker #%d" % worker_id
 
 ## Tab toggles the underground panel; the panel itself consumes mouse input
