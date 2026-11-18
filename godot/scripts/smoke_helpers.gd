@@ -222,23 +222,48 @@ static func command_price_error(button: Button, where: String) -> String:
 		return "%s price text does not fit its band: content=%s band=%s" % [
 			where, Vector2(cost.get_content_width(), cost.get_content_height()), cost_rect.size]
 	var cost_entry: Dictionary = button.get_meta("cost", {})
-	var parsed := cost.get_parsed_text()
-	# Whole digit runs only: a catalogue 50 must not pass on a displayed 150.
-	var amount_tokens := PackedStringArray()
-	var run := ""
-	for index in parsed.length():
-		var character := parsed.substr(index, 1)
-		if character >= "0" and character <= "9":
-			run += character
-		elif not run.is_empty():
-			amount_tokens.append(run)
-			run = ""
-	if not run.is_empty():
-		amount_tokens.append(run)
+	return price_markup_error(cost.text, cost_entry, where)
+
+## A cost label's markup is one `[img]<icon path>[/img]<amount>` part per
+## charged resource, and the icon path basename names that resource. Checking
+## the raw BBCode pairs — not the parsed text — keeps a shared amount from
+## covering a sibling: a catalogue 50 must fail on a shown 150, on a Scrap
+## icon that never appears, and on amounts swapped between icons.
+static func price_markup_error(text: String, cost_entry: Dictionary, where: String) -> String:
+	var shown := {}
+	var cursor := 0
+	while true:
+		var open := text.find("[img", cursor)
+		if open == -1:
+			break
+		var close := text.find("]", open)
+		if close == -1:
+			break
+		var tag_end := text.find("[/img]", close)
+		if tag_end == -1:
+			break
+		var resource := text.substr(close + 1, tag_end - close - 1).get_file().get_basename()
+		var amount_start := tag_end + 6
+		var amount_end := amount_start
+		while amount_end < text.length() \
+				and text.substr(amount_end, 1) >= "0" \
+				and text.substr(amount_end, 1) <= "9":
+			amount_end += 1
+		if amount_end > amount_start:
+			shown[resource] = int(text.substr(amount_start, amount_end - amount_start))
+		cursor = amount_end
 	for resource in ["food", "scrap", "coal", "crystals"]:
 		var amount := int(cost_entry.get(resource, 0))
-		if amount > 0 and not amount_tokens.has(str(amount)):
-			return "%s price lost its catalogue %s amount" % [where, resource]
+		if amount <= 0:
+			continue
+		if not shown.has(resource):
+			return "%s price is missing its %s icon" % [where, resource]
+		if int(shown[resource]) != amount:
+			return "%s price shows %s %d, not the catalogue %d" % [
+				where, resource, int(shown[resource]), amount]
+	for resource in shown:
+		if int(cost_entry.get(resource, 0)) <= 0:
+			return "%s price charges %s the catalogue does not" % [where, resource]
 	return ""
 
 ## Clickable HUD rectangles from visible Controls with non-ignore mouse filter.
