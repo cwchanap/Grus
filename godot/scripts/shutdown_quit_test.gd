@@ -266,8 +266,15 @@ func _run() -> void:
 		barracks.pressed.emit()
 		_note(str(_main.get("_placement_kind")) == "",
 			"a build tile armed placement during pending shutdown")
+	# Clearing first proves the rejection text came from this press: an
+	# earlier "Match is not playing" leftover cannot satisfy the check, and a
+	# missing guard would leave a different status behind instead.
+	var analyze_status := _main.get_node("HUD/CommandStatus") as Label
+	analyze_status.text = ""
 	_main.call("_on_analyze_pressed")
 	_note(not _playing(), "an Analyze attempt re-enabled Playing")
+	_note(analyze_status.text == "Match is not playing",
+		"an Analyze attempt during pending shutdown did not report rejection (status %s)" % analyze_status.text)
 
 	var drawer := _main.get_node("HUD/UndergroundPanel") as Control
 	var drawer_visible := drawer.visible
