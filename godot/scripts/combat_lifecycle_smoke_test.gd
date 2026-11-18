@@ -14,6 +14,7 @@ const TEST_VIEWPORT_SIZE := Vector2i(1280, 720)
 const REJECT_INSUFFICIENT_RESOURCES := 8
 const REJECT_SESSION_LOCKED := 17
 const ALIEN_KINDS := ["Swarmer", "Spitter", "Brute", "Behemoth"]
+const HudHelpers := preload("res://scripts/hud_helpers.gd")
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
 
 var _main: Node3D
@@ -1159,7 +1160,10 @@ func _run() -> void:
 	var result_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
 	for expected in [
 			"Wave %d" % int(result_wave.get("wave", 0)),
-			"Research %d/%d" % [floori(float(result_research.get("points", 0.0))), result_target],
+			"Research %s/%s" % [
+				HudHelpers.format_int(floori(float(result_research.get("points", 0.0)))),
+				HudHelpers.format_int(result_target),
+			],
 			"Pop %d" % int(result_economy.get("population_used", 0)),
 			"Crystals %d" % int(result_economy.get("crystals", 0))]:
 		if not result_stats.text.contains(expected):

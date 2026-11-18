@@ -498,11 +498,10 @@ func _refresh_armed_detail() -> void:
 		display_name(str(entry.get("name", ""))), str(entry.get("effect", "")),
 		int(entry.get("seconds", 0))]
 
-## Terse catalogue price for the kind tile. Room kinds are Scrap-funded, so
-## the one number fits the tile; the full four-currency line stays in the
-## tooltip and the header Excavate row.
+## Terse catalogue price for the kind tile across all four currencies; the
+## full named currency line stays in the tooltip and the header Excavate row.
 func _cost_short(cost: Dictionary) -> String:
-	return "%d" % int(cost.get("scrap", 0))
+	return HudHelpers.cost_short(cost)
 
 ## The full kind tooltip: catalogue name, cost, build time and the
 ## Rust-computed effect line — straight off the static catalogue row,
