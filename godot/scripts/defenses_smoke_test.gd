@@ -153,10 +153,10 @@ func _run() -> void:
 		_fail("completed Gate view disappeared before the wave")
 		return
 
-	# Every completed defense carries a visible Model — the kind's own
-	# catalogue GLB once finished, the construction site only while the
-	# snapshot reports incomplete — scaled and grounded inside its
-	# catalogue footprint.
+	# Every completed defense carries a visible Model in its finished
+	# representation — the retained GLB for Wall/Gate, the painted kind
+	# sprite for everything else — never the construction site, scaled and
+	# grounded inside its catalogue footprint.
 	for id in _defense_ids:
 		var defense_view := _building_view(id)
 		if defense_view == null:
@@ -166,18 +166,17 @@ func _run() -> void:
 		if not await _wait_until(func():
 				var model := defense_view.get_node_or_null("Model") as Node3D
 				return model != null and model.is_visible_in_tree() \
-						and model.scene_file_path.ends_with("%s.glb" % defense_kind.to_snake_case()),
+						and SmokeHelpers.building_model_error(defense_view, defense_kind, true).is_empty(),
 				10.0, "completed %s %d never displayed its final model" % [defense_kind, id]):
 			return
 		var defense_model := defense_view.get_node_or_null("Model") as Node3D
-		if defense_model == null or not defense_model.is_visible_in_tree() \
-				or defense_model.scene_file_path.ends_with("construction_site.glb"):
-			_fail("completed defense %d has no finished model: %s" % [
-				id, defense_model.scene_file_path if defense_model != null else "missing"])
+		if defense_model == null or not defense_model.is_visible_in_tree():
+			_fail("completed defense %d has no visible model" % id)
 			return
-		if not defense_model.scene_file_path.ends_with("%s.glb" % defense_kind.to_snake_case()):
-			_fail("completed %s %d does not render its catalogue GLB: %s" % [
-				defense_kind, id, defense_model.scene_file_path])
+		var defense_model_error := SmokeHelpers.building_model_error(defense_view, defense_kind, true)
+		if not defense_model_error.is_empty():
+			_fail("completed %s %d does not render its finished representation: %s" % [
+				defense_kind, id, defense_model_error])
 			return
 		var defense_art_error := SmokeHelpers.view_art_error(defense_view)
 		if not defense_art_error.is_empty():
@@ -232,14 +231,14 @@ func _run() -> void:
 	if not await _wait_until(func():
 			var model := done_turret_view.get_node_or_null("Model") as Node3D
 			return model != null and model.is_visible_in_tree() \
-					and model.scene_file_path.ends_with("gun_turret.glb"),
+					and SmokeHelpers.building_model_error(done_turret_view, "GunTurret", true).is_empty(),
 			10.0, "completed Gun Turret never displayed its final model"):
 		return
 	var turret_model := done_turret_view.get_node_or_null("Model") as Node3D
-	if turret_model == null or not turret_model.is_visible_in_tree() \
-			or not turret_model.scene_file_path.ends_with("gun_turret.glb"):
-		_fail("completed Gun Turret does not render its catalogue GLB: %s" % [
-			turret_model.scene_file_path if turret_model != null else "missing"])
+	var turret_model_error := SmokeHelpers.building_model_error(done_turret_view, "GunTurret", true)
+	if turret_model == null or not turret_model.is_visible_in_tree() or not turret_model_error.is_empty():
+		_fail("completed Gun Turret does not render its painted sprite: %s" % [
+			turret_model_error if not turret_model_error.is_empty() else "invisible"])
 		return
 	var turret_art_error := SmokeHelpers.view_art_error(done_turret_view)
 	if not turret_art_error.is_empty():
@@ -363,7 +362,7 @@ func _run() -> void:
 		_fail("defense journey exceeded its post-wave time budget: %.1fs" % elapsed)
 		return
 	GrusBridge.set_sim_speed(1.0)
-	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=catalogue_glb_grounded setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
+	print("GRUS_DEFENSE_SMOKE_OK wall_ring=%d concurrent_gatherer=%d builder=%d gather_source=%d gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=representation_aware setup_s=%.1f post_wave_s=%.1f" % [ring_cells.size(), gatherer_id, builder_id, scrap_source_id, float(first_launch_msec - journey_start_msec) / 1000.0, elapsed])
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
 

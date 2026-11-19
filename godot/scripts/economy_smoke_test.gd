@@ -492,24 +492,31 @@ func _heat_stage_ok(supply: int, demand: int, efficiency: float, hud_line: Strin
 			return false
 	return _visible_text(label).contains(hud_line)
 
-## Every mesh of a building view's active Model carries the shared
-## translucent ice material_overlay exactly while its Rust-pushed cold
-## state is set — the material itself is read off the view's script, never
-## re-typed, and multiple views must share the one immutable resource.
+## Cold reads off the live representation (HPA-697): painted Sprite3D kinds
+## carry the script's shared icy tint exactly while cold and return to
+## WHITE when warm; the retained Wall/Gate GLBs have no frost path and must
+## stay verifiably warm — no material overlay, no tint. The tint itself is
+## read off the view's script, never re-typed.
 func _overlay_is(view: Node3D, cold: bool) -> bool:
 	var model := view.get_node_or_null("Model") as Node3D
 	var building_script: Script = view.get_script()
 	if model == null or building_script == null:
 		return false
-	var ice: Material = building_script.get("ICE_OVERLAY")
-	if ice == null:
-		return false
-	var want: Material = ice if cold else null
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if not sprites.is_empty():
+		var tint: Variant = building_script.get("COLD_TINT")
+		if not (tint is Color):
+			return false
+		var want: Color = (tint as Color) if cold else Color.WHITE
+		for node in sprites:
+			if (node as SpriteBase3D).modulate != want:
+				return false
+		return true
 	var meshes := model.find_children("*", "MeshInstance3D", true, false)
 	if meshes.is_empty():
 		return false
 	for node in meshes:
-		if (node as MeshInstance3D).material_overlay != want:
+		if (node as MeshInstance3D).material_overlay != null:
 			return false
 	return true
 
@@ -1204,12 +1211,11 @@ func _run() -> void:
 	if bunkhouse == null:
 		return
 	var bunkhouse_id := int(bunkhouse.get_meta("building_id"))
-	# HPA-291: the unfinished Bunkhouse renders the generic construction
-	# site until the bridge's pushed state says complete.
+	# HPA-291/HPA-697: the unfinished Bunkhouse renders the shared painted
+	# construction-site sprite until the bridge's pushed state says complete.
 	if not await _wait_until(func():
-			var model := bunkhouse.get_node_or_null("Model") as Node3D
 			return not _building_complete_at(bunkhouse_id) \
-				and model != null and model.scene_file_path.ends_with("construction_site.glb"),
+				and SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", false).is_empty(),
 			20.0, "incomplete Bunkhouse never showed the construction site"):
 		return
 	if not await _wait_until(func(): return _construction_progress(bunkhouse_id) > 0.0, 20.0,
@@ -1229,13 +1235,12 @@ func _run() -> void:
 	if int(GrusBridge.economy_snapshot().get("population_cap", -1)) != 20:
 		_fail("completed Bunkhouse did not raise the population cap to 20")
 		return
-	# The completion push swaps the construction site for the kind's final
-	# GLB exactly once; the geometry must still sit inside the normalized
-	# ±0.5 footprint the 2x2 root scale blows up to world size.
+	# The completion push swaps the construction-site sprite for the kind's
+	# painted sprite exactly once; the geometry must still sit inside the
+	# normalized ±0.5 footprint the 2x2 root scale blows up to world size.
 	if not await _wait_until(func():
-			var model := bunkhouse.get_node_or_null("Model") as Node3D
-			return model != null and model.scene_file_path.ends_with("bunkhouse.glb"),
-			10.0, "completed Bunkhouse never swapped to its final model"):
+			return SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", true).is_empty(),
+			10.0, "completed Bunkhouse never swapped to its painted sprite"):
 		return
 	var art_err := SmokeHelpers.view_art_error(bunkhouse)
 	if art_err != "":
@@ -1630,6 +1635,11 @@ func _run() -> void:
 	if not await _wait_until(_all_overlaid.bind(heat_views, true), 10.0,
 			"cold overlay never reached the completed demand-bearing views"):
 		return
+	# Opt-in real-render evidence of the icy tint on cold painted sprites.
+	var cold_capture := await SmokeHelpers.capture_frame(get_tree(), "economy-cold")
+	if not cold_capture.is_empty():
+		_fail(cold_capture)
+		return
 	var heat_bunkhouse_anchor := SmokeHelpers.ring_anchor(4, "Bunkhouse", research_center)
 	if heat_bunkhouse_anchor.x < 0:
 		_fail("no valid heat-leg Bunkhouse anchor near the Research Center")
@@ -1682,6 +1692,11 @@ func _run() -> void:
 	if not await _wait_until(_all_overlaid.bind(heat_views, false), 10.0,
 			"cold overlay never cleared after the Coal Furnace completed"):
 		return
+	# Opt-in real-render evidence of the restored warm WHITE modulate.
+	var warm_capture := await SmokeHelpers.capture_frame(get_tree(), "economy-warm")
+	if not warm_capture.is_empty():
+		_fail(warm_capture)
+		return
 	if not _overlay_is(heat_furnace, false):
 		_fail("the Coal Furnace (zero heat demand) took the cold overlay")
 		return
@@ -1692,15 +1707,15 @@ func _run() -> void:
 		return
 
 	# Every live view placed this leg — RC, Barracks, Depot, Turret,
-	# Bunkhouse, Wall, Gate, Furnace — renders its finished kind GLB scaled
-	# and grounded by the catalogue footprint, whatever the heat stage did.
+	# Bunkhouse, Wall, Gate, Furnace — renders its finished representation
+	# (painted sprite, retained Wall/Gate GLB) scaled and grounded by the
+	# catalogue footprint, whatever the heat stage did.
 	for node in get_tree().get_nodes_in_group("building_views"):
 		var view := node as Node3D
 		var kind := str(view.get_meta("building_kind", ""))
-		var model := view.get_node_or_null("Model") as Node3D
-		if model == null or not model.scene_file_path.ends_with("%s.glb" % kind.to_snake_case()):
-			_fail("completed %s does not render its catalogue GLB: %s" % [
-				kind, model.scene_file_path if model != null else "missing"])
+		var model_error := SmokeHelpers.building_model_error(view, kind, true)
+		if not model_error.is_empty():
+			_fail("completed %s does not render its finished representation: %s" % [kind, model_error])
 			return
 		var art_error := SmokeHelpers.view_art_error(view)
 		if not art_error.is_empty():
@@ -2095,7 +2110,7 @@ func _run() -> void:
 		return
 
 	var end: Dictionary = GrusBridge.economy_snapshot()
-	print("GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_glb overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=%d scrap=%d coal=%d cap=%d units=%d buildings=%d unaffordable_reject=%d elapsed_ms=%d" % [
+	print("GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=%d scrap=%d coal=%d cap=%d units=%d buildings=%d unaffordable_reject=%d elapsed_ms=%d" % [
 		int(end.get("food", 0)),
 		int(end.get("scrap", 0)),
 		int(end.get("coal", 0)),
