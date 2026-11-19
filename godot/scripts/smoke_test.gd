@@ -993,6 +993,42 @@ func _assert_structure_import(path: String) -> bool:
 	model.free()
 	return true
 
+## Painted-texture import check (HPA-697): the runtime texture must load
+## with generated mipmaps, an alpha channel, and a CPU-readable uncompressed
+## (lossless) image, and — under an editor binary, where raw sources are
+## readable — base-mip pixels byte-identical to the committed PNG. Exports
+## remap textures into the PCK, so the source half is gated like the GLB
+## byte audit below.
+func _assert_painted_import(path: String) -> bool:
+	if not ResourceLoader.exists(path):
+		_fail("painted texture import is missing: %s" % path)
+		return false
+	var texture := load(path) as Texture2D
+	if texture == null:
+		_fail("painted texture did not load as a Texture2D: %s" % path)
+		return false
+	var image := texture.get_image()
+	if image == null:
+		_fail("painted texture carries no CPU-readable image: %s" % path)
+		return false
+	if image.is_compressed():
+		_fail("painted texture import is not lossless: %s format=%s" % [path, image.get_format()])
+		return false
+	if not image.has_mipmaps():
+		_fail("painted texture import generated no mipmaps: %s" % path)
+		return false
+	if not image.detect_alpha():
+		_fail("painted texture lost its alpha channel: %s" % path)
+		return false
+	if OS.has_feature("editor"):
+		var source := Image.new()
+		var source_error := source.load_png_from_buffer(FileAccess.get_file_as_bytes(path))
+		if source_error != OK or source.get_size() != image.get_size() \
+				or source.get_data() != image.get_data().slice(0, image.get_mipmap_offset(1)):
+			_fail("imported painted texture diverges from its committed source: %s" % path)
+			return false
+	return true
+
 ## Source-byte half of _assert_structure_import, reachable only under an
 ## editor binary (see the call-site gate): parses the committed GLB's own
 ## header and JSON chunk. A packaged build never reaches this — the PCK
@@ -1208,6 +1244,12 @@ func _roof_pick_point(view: Node3D, camera: Camera3D, viewport_size: Vector2, ma
 	if model == null:
 		return Vector2.INF
 	var screen_center := camera.unproject_position(view.global_position)
+	# Painted kinds sample opaque artwork texels through the live sprite
+	# transform instead of GLB roof faces; retained Wall/Gate GLBs keep the
+	# mesh triangle scan below.
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if not sprites.is_empty():
+		return _sprite_pick_point(view, sprites[0] as SpriteBase3D, camera, viewport_size, main)
 	var roof_faces: Array[Array] = []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
@@ -1256,6 +1298,37 @@ func _roof_pick_point(view: Node3D, camera: Camera3D, viewport_size: Vector2, ma
 			return candidate
 	return Vector2.INF
 
+## Painted-silhouette pick points (HPA-697): project opaque artwork texels
+## on a coarse grid through the live sprite transform, keeping the GLB
+## roof path's guards — inside the viewport, beyond the legacy center
+## radius, no unit on the point, and the alpha-aware building picker must
+## resolve the point to this view. Farthest valid point wins.
+func _sprite_pick_point(view: Node3D, sprite: SpriteBase3D, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
+	var view_script: Script = view.get_script()
+	var mask: BitMap = view_script.alpha_mask(sprite.texture)
+	if mask == null:
+		return Vector2.INF
+	var screen_center := camera.unproject_position(view.global_position)
+	var size := mask.get_size()
+	var best := Vector2.INF
+	var best_distance := -1.0
+	for row in range(0, int(size.y), 16):
+		for col in range(0, int(size.x), 16):
+			if not mask.get_bitv(Vector2i(col, row)):
+				continue
+			var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, Vector2(col, row))
+			var candidate := camera.unproject_position(world)
+			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+					or screen_center.distance_to(candidate) <= main.CLICK_RADIUS + 5.0 \
+					or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null \
+					or (main.call("_building_at", candidate, 1) as Node3D) != view:
+				continue
+			var distance := screen_center.distance_to(candidate)
+			if distance > best_distance:
+				best = candidate
+				best_distance = distance
+	return best
+
 func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
 	var model := view.get_node_or_null("Model") as Node3D
 	var neighbor_model := neighbor.get_node_or_null("Model") as Node3D
@@ -1266,6 +1339,39 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 	var view_screen := camera.unproject_position(view.global_position)
 	var neighbor_screen := camera.unproject_position(neighbor.global_position)
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	# Painted kinds: opaque texel samples on the live sprite plane carry the
+	# same rect/HUD/unit/margin guards; retained Wall/Gate GLBs keep the
+	# upward roof-face interior-point scan below.
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if not sprites.is_empty():
+		var view_script: Script = view.get_script()
+		var sprite := sprites[0] as SpriteBase3D
+		var mask: BitMap = view_script.alpha_mask(sprite.texture)
+		if mask == null:
+			return Vector2.INF
+		var mask_size := mask.get_size()
+		var sprite_best := Vector2.INF
+		var sprite_best_margin := 0.0
+		for row in range(0, int(mask_size.y), 16):
+			for col in range(0, int(mask_size.x), 16):
+				if not mask.get_bitv(Vector2i(col, row)):
+					continue
+				var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, Vector2(col, row))
+				var candidate := camera.unproject_position(world)
+				if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+						or not view_rect.has_point(candidate) \
+						or neighbor_rect.has_point(candidate) \
+						or hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)) \
+						or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
+					continue
+				var neighbor_distance := neighbor_screen.distance_to(candidate)
+				if neighbor_distance > main.CLICK_RADIUS:
+					continue
+				var margin := view_screen.distance_to(candidate) - neighbor_distance
+				if margin > sprite_best_margin:
+					sprite_best = candidate
+					sprite_best_margin = margin
+		return sprite_best
 	var roof_faces: Array[Array] = []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
@@ -2182,8 +2288,9 @@ func _run() -> void:
 		return
 	retry_view._process(0.0)
 	var retry_model := retry_view.get_node_or_null("Model") as Node3D
-	if retry_view.is_processing() or retry_model == null or not retry_model.scene_file_path.ends_with("depot.glb"):
-		_fail("building view did not finish the retried completion swap")
+	var retry_error := SmokeHelpers.building_model_error(retry_view, "Depot", true)
+	if retry_view.is_processing() or retry_model == null or not retry_error.is_empty():
+		_fail("building view did not finish the retried completion swap: %s" % retry_error)
 		return
 	retry_view.free()
 	var pending_view := building_view_scene.instantiate() as Node3D
@@ -2193,33 +2300,46 @@ func _run() -> void:
 	pending_view._process(0.0)
 	pending_view.set_state(true, false)
 	var pending_model := pending_view.get_node_or_null("Model") as Node3D
-	if pending_view.is_processing() or pending_model == null or not pending_model.scene_file_path.ends_with("depot.glb"):
+	var pending_error := SmokeHelpers.building_model_error(pending_view, "Depot", true)
+	if pending_view.is_processing() or pending_model == null or not pending_error.is_empty():
 		_fail("a successful completion push did not finish the pending initial attachment")
 		return
 	pending_view.free()
 	print("SMOKE_STRUCTURE_AUDIT source_bytes=%s" % ("editor" if OS.has_feature("editor") else "skipped_packaged"))
+	# HPA-697 painted-texture imports: every non-Wall/Gate catalogue kind's
+	# PNG sits at the same to_snake_case-derived path building_view.gd
+	# resolves, audited for mipmaps, alpha, lossless CPU-readable pixels and
+	# source identity; Wall/Gate keep their GLB import checks. The shared
+	# site texture is the only non-catalogue art.
+	if not _assert_painted_import("res://assets/structures/painted/construction_site.png"):
+		return
 	for kind in GrusBridge.catalogue_snapshot().get("buildings", {}):
-		var kind_path := "res://assets/structures/%s.glb" % str(kind).to_snake_case()
-		if not _assert_structure_import(kind_path):
-			return
+		var kind_name := str(kind)
+		if kind_name == "Wall" or kind_name == "Gate":
+			if not _assert_structure_import("res://assets/structures/%s.glb" % kind_name.to_snake_case()):
+				return
+		else:
+			if not _assert_painted_import("res://assets/structures/painted/%s.png" % kind_name.to_snake_case()):
+				return
 		var hookup_view := building_view_scene.instantiate() as Node3D
-		hookup_view.set_meta("building_kind", kind)
+		hookup_view.set_meta("building_kind", kind_name)
 		add_child(hookup_view)
 		await get_tree().process_frame
-		var hookup_model := hookup_view.get_node_or_null("Model") as Node3D
-		if hookup_model == null \
-				or not hookup_model.scene_file_path.ends_with("construction_site.glb"):
-			_fail("%s view did not attach the construction site before completion" % kind)
-			return
-		hookup_view.set_state(true, false)
-		hookup_model = hookup_view.get_node_or_null("Model") as Node3D
-		if hookup_model == null \
-				or not hookup_model.scene_file_path.ends_with("%s.glb" % str(kind).to_snake_case()):
-			_fail("%s view did not swap to its catalogue GLB on completion: %s" % [
-				kind, hookup_model.scene_file_path if hookup_model != null else "missing"])
+		var site_error := SmokeHelpers.building_model_error(hookup_view, kind_name, false)
+		if site_error.is_empty():
+			hookup_view.set_state(true, false)
+			site_error = SmokeHelpers.building_model_error(hookup_view, kind_name, true)
+			if not site_error.is_empty():
+				site_error = "no finished-presentation swap: %s" % site_error
+		else:
+			site_error = "no construction-site attach: %s" % site_error
+		if not site_error.is_empty():
+			_fail("%s view failed the site/finished hookup: %s" % [kind_name, site_error])
+			hookup_view.free()
 			return
 		hookup_view.free()
-	if not _assert_structure_import("res://assets/structures/construction_site.glb"):
+	if not _assert_structure_import("res://assets/structures/wall.glb") \
+			or not _assert_structure_import("res://assets/structures/gate.glb"):
 		return
 	if not _assert_gate_corridor("res://assets/structures/gate.glb"):
 		return
@@ -2244,17 +2364,20 @@ func _run() -> void:
 	early_view.set_meta("building_kind", "Depot")
 	await get_tree().process_frame
 	var early_model := early_view.get_node_or_null("Model") as Node3D
-	var shared_ice: Material = early_view.get_script().get("ICE_OVERLAY")
-	if shared_ice == null:
-		_fail("building view has no shared cold overlay material")
+	var cold_tint: Variant = early_view.get_script().get("COLD_TINT")
+	if not (cold_tint is Color):
+		_fail("building view has no shared cold tint constant")
 		return
-	if early_model == null or not early_model.scene_file_path.ends_with("depot.glb"):
-		_fail("state pushed before kind metadata did not style the completed Depot: %s" % [
-			early_model.scene_file_path if early_model != null else "missing"])
+	if early_model == null:
+		_fail("state pushed before kind metadata did not style the completed Depot: model missing")
 		return
-	for node in early_model.find_children("*", "MeshInstance3D", true, false):
-		if (node as MeshInstance3D).material_overlay != shared_ice:
-			_fail("the early cold push did not reach the attached Depot meshes")
+	var early_sprites := early_model.find_children("*", "SpriteBase3D", true, false)
+	if early_sprites.is_empty():
+		_fail("the completed Depot did not attach a painted sprite under its Model")
+		return
+	for node in early_sprites:
+		if (node as SpriteBase3D).modulate != (cold_tint as Color):
+			_fail("the early cold push did not tint the attached Depot sprite")
 			return
 	if early_view.is_processing():
 		_fail("building view still polls _process after metadata styling")
@@ -2268,42 +2391,71 @@ func _run() -> void:
 	if early_view.get_node("Model") != early_model:
 		_fail("a cold -> warm push re-swapped the Depot model")
 		return
-	for node in early_model.find_children("*", "MeshInstance3D", true, false):
-		if (node as MeshInstance3D).material_overlay != null:
-			_fail("a warm push left the cold overlay on the Depot model")
+	for node in early_sprites:
+		if (node as SpriteBase3D).modulate != Color.WHITE:
+			_fail("a warm push left the cold tint on the Depot sprite")
 			return
 	early_view.set_state(true, true)
-	for node in early_model.find_children("*", "MeshInstance3D", true, false):
-		if (node as MeshInstance3D).material_overlay != shared_ice:
-			_fail("a later cold push did not restore the shared overlay")
+	for node in early_sprites:
+		if (node as SpriteBase3D).modulate != (cold_tint as Color):
+			_fail("a later cold push did not restore the shared cold tint")
 			return
 	early_view.free()
 
+	# The site→finished swap probe (HPA-697): a standalone Depot view at the
+	# real bridge footprint transform must style the shared site sprite,
+	# swap the whole Model node exactly once on completion, and both sprites
+	# must answer a real camera ray through the alpha-aware picker — opaque
+	# art hits, transparent corners miss.
 	var site_view := building_view_scene.instantiate() as Node3D
 	site_view.set_meta("building_kind", "Depot")
+	var depot_spec: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get("Depot", {})
+	var depot_width := float(depot_spec.get("width", 0))
+	var depot_depth := float(depot_spec.get("height", 0))
+	if depot_width <= 0.0 or depot_depth <= 0.0:
+		_fail("catalogue exposes no Depot footprint for the swap probe")
+		return
+	site_view.scale = Vector3(depot_width, 1.0, depot_depth)
+	site_view.position = Vector3(4.5, 0.0, 4.5)
 	add_child(site_view)
 	await get_tree().process_frame
 	var site_model := site_view.get_node_or_null("Model") as Node3D
-	if site_model == null or not site_model.scene_file_path.ends_with("construction_site.glb") \
-			or site_view.is_processing():
-		_fail("a fresh Depot view did not style the site then stop processing")
+	var site_style_error := SmokeHelpers.building_model_error(site_view, "Depot", false)
+	if site_model == null or site_view.is_processing() or not site_style_error.is_empty():
+		_fail("a fresh Depot view did not style the site sprite then stop processing: %s" % site_style_error)
 		return
-	var pick_controller := get_node("Main") as Node3D
-	var swap_origin := site_view.global_transform * Vector3(-2.0, 0.94, 0.0)
-	var swap_direction := (site_view.global_basis * Vector3.RIGHT).normalized()
-	var site_bounds: AABB = pick_controller.call("_view_art_bounds", site_view, site_model)
-	if site_bounds.end.y >= 0.9 or float(pick_controller.call("_model_ray_hit_depth", site_model, swap_origin, swap_direction)) >= 0.0:
-		_fail("construction site unexpectedly reaches the Depot canopy probe")
+	var swap_controller := get_node("Main") as Node3D
+	var view_script: Script = site_view.get_script()
+	var ray_depth := func(sprite: SpriteBase3D, pixel: Vector2) -> float:
+		var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, pixel)
+		var screen := camera.unproject_position(world)
+		return float(swap_controller.call("_model_ray_hit_depth", sprite.get_parent(),
+				camera.project_ray_origin(screen), camera.project_ray_normal(screen)))
+	var site_sprite: SpriteBase3D = site_model.find_children("*", "SpriteBase3D", true, false)[0]
+	var opaque_top: Vector2 = view_script.opaque_top_pixels(site_sprite.texture)
+	if opaque_top == Vector2.INF or float(ray_depth.call(site_sprite, opaque_top)) < 0.0:
+		_fail("camera-ray alpha picking missed the site sprite's opaque art")
+		return
+	var transparent_pixel := Vector2.INF
+	for pixel in [Vector2(0, 0), Vector2(511, 0), Vector2(0, 511), Vector2(511, 511), Vector2(255, 0)]:
+		if not view_script.pixel_opaque(site_sprite.texture, pixel):
+			transparent_pixel = pixel
+			break
+	if transparent_pixel == Vector2.INF:
+		_fail("site sprite exposes no transparent corner for the alpha-miss probe")
+		return
+	if float(ray_depth.call(site_sprite, transparent_pixel)) >= 0.0:
+		_fail("camera-ray picking counted a transparent site-sprite pixel")
 		return
 	site_view.set_state(true, false)
 	var finished_model := site_view.get_node_or_null("Model") as Node3D
-	if finished_model == null or finished_model == site_model \
-			or not finished_model.scene_file_path.ends_with("depot.glb"):
-		_fail("a post-styling set_state did not swap the site to the Depot GLB")
+	var finished_error := SmokeHelpers.building_model_error(site_view, "Depot", true)
+	if finished_model == null or finished_model == site_model or not finished_error.is_empty():
+		_fail("a post-styling set_state did not swap the site sprite for the Depot sprite: %s" % finished_error)
 		return
-	var finished_bounds: AABB = pick_controller.call("_view_art_bounds", site_view, finished_model)
-	if finished_bounds.end.y < 0.9 or float(pick_controller.call("_model_ray_hit_depth", finished_model, swap_origin, swap_direction)) < 0.0:
-		_fail("building picking retained the construction-site bounds or geometry after the Depot swap")
+	var finished_sprite: SpriteBase3D = finished_model.find_children("*", "SpriteBase3D", true, false)[0]
+	if float(ray_depth.call(finished_sprite, view_script.opaque_top_pixels(finished_sprite.texture))) < 0.0:
+		_fail("building picking lost the Depot's opaque art after the swap")
 		return
 	site_view.set_state(true, false)
 	if site_view.get_node("Model") != finished_model:
@@ -2318,9 +2470,10 @@ func _run() -> void:
 	if twin_model == null:
 		_fail("the repeated same-kind view attached no model")
 		return
-	for node in twin_model.find_children("*", "MeshInstance3D", true, false):
-		if (node as MeshInstance3D).material_overlay != shared_ice:
-			_fail("a repeated same-kind view does not share the one ICE_OVERLAY resource")
+	var twin_tint: Variant = twin_view.get_script().get("COLD_TINT")
+	for node in twin_model.find_children("*", "SpriteBase3D", true, false):
+		if (node as SpriteBase3D).modulate != (twin_tint as Color):
+			_fail("a repeated same-kind view does not read the one shared cold tint")
 			return
 	twin_view.free()
 	site_view.free()
@@ -3288,9 +3441,9 @@ func _run() -> void:
 				_fail("right-click while placing did not cancel without a contextual command")
 				return
 
-	# HPA-291: an unfinished building renders the generic construction
-	# site until Rust pushes complete — the freshest Gate (8s build) is
-	# still mid-construction here, so its model must be the site GLB.
+	# HPA-291/HPA-697: an unfinished building renders the shared painted
+	# construction-site sprite until Rust pushes complete — the freshest
+	# Gate (8s build) is still mid-construction here.
 	var freshest_gate: Node3D = null
 	for node in get_tree().get_nodes_in_group("building_views"):
 		if str(node.get_meta("building_kind", "")) == "Gate":
@@ -3303,11 +3456,15 @@ func _run() -> void:
 			"placed Gate view never attached its construction model"):
 		return
 	var freshest_gate_id := int(freshest_gate.get_meta("building_id"))
-	var gate_model := freshest_gate.get_node("Model") as Node3D
+	var gate_site_error := SmokeHelpers.building_model_error(freshest_gate, "Gate", false)
 	if bool(GrusBridge.building_snapshot(freshest_gate_id).get("complete", false)) \
-			or not gate_model.scene_file_path.ends_with("construction_site.glb"):
-		_fail("unfinished Gate does not show the generic construction site: %s" % [
-			gate_model.scene_file_path])
+				or not gate_site_error.is_empty():
+		_fail("unfinished Gate does not show the generic construction site: %s" % gate_site_error)
+		return
+	# Opt-in real-render evidence of the shared construction-site sprite.
+	var site_capture := await SmokeHelpers.capture_frame(get_tree(), "construction-site")
+	if not site_capture.is_empty():
+		_fail(site_capture)
 		return
 
 	# Each preview is affordable against the current stockpile. Queue one
@@ -3716,9 +3873,8 @@ func _run() -> void:
 		_fail("no placed Bunkhouse exists for the roof silhouette pick")
 		return
 	if not await _wait_until(func():
-			var model := roof_bunkhouse.get_node_or_null("Model") as Node3D
-			return model != null and model.scene_file_path.ends_with("bunkhouse.glb"),
-			10.0, "completed Bunkhouse never displayed its model for the roof pick"):
+			return SmokeHelpers.building_model_error(roof_bunkhouse, "Bunkhouse", true).is_empty(),
+			10.0, "completed Bunkhouse never displayed its painted sprite"):
 		return
 	# The 2x2 cabin is too small at the default framing to probe a point
 	# past the old 20 px center radius, so frame it like the resource-pick
@@ -3743,7 +3899,7 @@ func _run() -> void:
 	bunkhouse_screen = camera.unproject_position(roof_bunkhouse.global_position)
 	var roof_point := _roof_pick_point(roof_bunkhouse, camera, viewport_size, main)
 	if roof_point == Vector2.INF:
-		_fail("Bunkhouse roof mesh exposes no upward triangle projecting beyond the old center radius")
+		_fail("Bunkhouse painted silhouette exposes no opaque art pixel beyond the old center radius")
 		return
 	_mouse_click(roof_point, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
@@ -3785,7 +3941,7 @@ func _run() -> void:
 		return
 	var rc_roof_point := _roof_pick_point(rc_view, camera, viewport_size, main)
 	if rc_roof_point == Vector2.INF:
-		_fail("Research Center roof mesh exposes no upward triangle projecting beyond the old center radius")
+		_fail("Research Center painted silhouette exposes no opaque art pixel beyond the old center radius")
 		return
 	var clear_point := _clear_click_point(viewport_size, main)
 	if clear_point == Vector2.INF:
@@ -3814,13 +3970,13 @@ func _run() -> void:
 		_fail("wheel zoom never restored the pre-pick camera size: %s" % camera.size)
 		return
 
-	# HPA-291 model state leg: every building view carries a Model — the
-	# generic construction site exactly while the snapshot reports
-	# incomplete, the kind's to_snake_case GLB once complete. The
-	# seeded-complete Research Center guarantees a finished-model proof
-	# regardless of how far the construction queue drained before the
-	# clear-out move leg; economy_smoke owns the full site→GLB
-	# completion-swap journey.
+	# HPA-291/HPA-697 model state leg: every building view carries a Model
+	# — the shared painted construction-site sprite exactly while the
+	# snapshot reports incomplete, its painted kind sprite once complete
+	# except the retained Wall/Gate GLBs. The seeded-complete Research
+	# Center guarantees a finished-model proof regardless of how far the
+	# construction queue drained before the clear-out move leg;
+	# economy_smoke owns the full site→sprite completion-swap journey.
 	var model_offender := ["none"]
 	if not await _wait_until(func():
 			model_offender[0] = "a building view has no Model"
@@ -3829,23 +3985,16 @@ func _run() -> void:
 				var view := node as Node3D
 				var id := int(view.get_meta("building_id", -1))
 				var kind := str(view.get_meta("building_kind", ""))
-				var model := view.get_node_or_null("Model") as Node3D
-				if model == null:
+				if view.get_node_or_null("Model") == null:
 					model_offender[0] = "%s %d has no Model" % [kind, id]
 					return false
 				if view.is_processing():
 					model_offender[0] = "%s %d still polls _process after styling" % [kind, id]
 					return false
 				var complete := bool(GrusBridge.building_snapshot(id).get("complete", false))
-				var is_site := model.scene_file_path.ends_with("construction_site.glb")
-				if complete == is_site:
-					model_offender[0] = "%s %d complete=%s but model is %s" % [
-						kind, id, complete, model.scene_file_path]
-					return false
-				if complete and not model.scene_file_path.ends_with(
-						"%s.glb" % kind.to_snake_case()):
-					model_offender[0] = "completed %s %d model is %s" % [
-						kind, id, model.scene_file_path]
+				var model_error := SmokeHelpers.building_model_error(view, kind, complete)
+				if not model_error.is_empty():
+					model_offender[0] = "%s %d complete=%s: %s" % [kind, id, complete, model_error]
 					return false
 				var art_error := SmokeHelpers.view_art_error(view)
 				if not art_error.is_empty():
@@ -3871,10 +4020,9 @@ func _run() -> void:
 		return
 	if not await _wait_until(func():
 			var restarted_view := get_tree().get_nodes_in_group("building_views")[0] as Node3D
-			var restarted_model := restarted_view.get_node_or_null("Model") as Node3D
-			return restarted_model != null \
-				and restarted_model.scene_file_path.ends_with("research_center.glb"),
-			5.0, "restart left the new Research Center without its finished GLB"):
+			return restarted_view != null \
+				and SmokeHelpers.building_model_error(restarted_view, "ResearchCenter", true).is_empty(),
+			5.0, "restart left the new Research Center without its painted sprite"):
 		return
 	# Restart wipes banked research with the match: the dynamic snapshot and
 	# the HUD both read zero, and Analyze disables outside Playing.
@@ -3981,7 +4129,7 @@ func _run() -> void:
 		return
 	var steal_point := _radius_steal_pick_point(steal_rc, steal_wall, camera, viewport_size, main)
 	if steal_point == Vector2.INF:
-		_fail("no Research Center roof triangle lands inside the Wall's center radius while staying outside its art rect")
+		_fail("no Research Center opaque art pixel lands inside the Wall's center radius while staying outside its art rect")
 		return
 	var wall_screen := camera.unproject_position(steal_wall.global_position)
 	var rc_screen_steal := camera.unproject_position(steal_rc.global_position)
@@ -3990,6 +4138,11 @@ func _run() -> void:
 		_fail("a Research Center roof pixel %.2fpx from the Wall center and %.2fpx from the Research Center center picked %s — the legacy center radius let the neighbor steal the click" % [
 			wall_screen.distance_to(steal_point), rc_screen_steal.distance_to(steal_point),
 			str(radius_hit.get_meta("building_kind", radius_hit)) if radius_hit != null else "nothing"])
+		return
+	# Opt-in real-render evidence of the unit/building overlap framing.
+	var steal_capture := await SmokeHelpers.capture_frame(get_tree(), "radius-steal-framing")
+	if not steal_capture.is_empty():
+		_fail(steal_capture)
 		return
 	var deselect_screen := _clear_click_point(viewport_size, main)
 	if deselect_screen == Vector2.INF:
@@ -4031,6 +4184,6 @@ func _run() -> void:
 		return
 	unready_view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=roof_triangle_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()

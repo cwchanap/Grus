@@ -4,6 +4,10 @@ extends RefCounted
 ## Coordinates come from live views and read-only bridge probes — fixture
 ## cells are never re-typed into test scripts.
 
+## Static access to building_view.gd's shared sprite alpha helpers and
+## art-geometry predicate — the same cache the live picking uses.
+const BuildingView := preload("res://scripts/building_view.gd")
+
 ## The grid cell under a live view's origin — the sim's world_to_cell.
 static func cell_of(view: Node3D) -> Vector2i:
 	return Vector2i(int(view.global_position.x), int(view.global_position.z))
@@ -375,12 +379,40 @@ static func fog_clear_color_error(fog: Node) -> String:
 		return "default clear color %s does not match the unexplored fog color %s" % [clear_color, fog_color]
 	return ""
 
+## Representation-aware model identity (HPA-697): painted kinds render their
+## preloaded painted PNG through a Sprite3D under the Model, completed
+## Wall/Gate keep their GLBs, and every incomplete kind — including
+## Wall/Gate — shows the shared construction-site sprite. Returns "" when
+## the view matches its representation, else the failure message.
+static func building_model_error(view: Node3D, kind: String, complete: bool) -> String:
+	var model := view.get_node_or_null("Model") as Node3D
+	if model == null:
+		return "%s view has no Model" % kind
+	var expected: String
+	if not complete:
+		expected = "painted/construction_site.png"
+	elif kind == "Wall" or kind == "Gate":
+		expected = "%s.glb" % kind.to_snake_case()
+	else:
+		expected = "painted/%s.png" % kind.to_snake_case()
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if not sprites.is_empty():
+		var texture: Texture2D = (sprites[0] as SpriteBase3D).texture
+		var path: String = texture.resource_path if texture != null else ""
+		if not path.ends_with(expected):
+			return "%s sprite texture %s does not end with %s" % [kind, path, expected]
+		return ""
+	if not model.scene_file_path.ends_with(expected):
+		return "%s model %s does not end with %s" % [kind, model.scene_file_path, expected]
+	return ""
+
 ## The live-view geometry contract behind `building_view_transform`: the
 ## bridge scales the view to the catalogue footprint and centers it, and
-## the attached Model — construction site or finished GLB — must sit inside
-## that footprint with its base on the ground plane (a floating base fails
-## just like one sunk below it). All sizes come from `catalogue_snapshot`,
-## never a copied table. Returns "" on success, else the failure message.
+## the attached Model — construction-site or painted sprite, or a retained
+## Wall/Gate GLB — must sit inside that footprint with its base on the
+## ground plane (a floating base fails just like one sunk below it). All
+## sizes come from `catalogue_snapshot`, never a copied table. Returns ""
+## on success, else the failure message.
 static func view_art_error(view: Node3D) -> String:
 	var kind := str(view.get_meta("building_kind", ""))
 	var spec: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get(kind, {})
@@ -396,11 +428,11 @@ static func view_art_error(view: Node3D) -> String:
 		return "%s has no Model" % kind
 	var bounds := AABB()
 	var first := true
-	for node in model.find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		if mesh == null or mesh.mesh == null:
+	for node in model.find_children("*", "GeometryInstance3D", true, false):
+		var art: GeometryInstance3D = BuildingView.art_geometry(node)
+		if art == null:
 			continue
-		var world_bounds: AABB = mesh.global_transform * mesh.get_aabb()
+		var world_bounds: AABB = art.global_transform * art.get_aabb()
 		bounds = world_bounds if first else bounds.merge(world_bounds)
 		first = false
 	if first:

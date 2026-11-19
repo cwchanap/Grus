@@ -1,26 +1,49 @@
 extends Node3D
 
-## The bridge pushes building state on first sight and transitions: `complete` flips the
-## generic construction site for the kind's final GLB exactly once, `cold`
-## toggles one shared pale overlay on the active model's meshes. Neither
-## flag is polled — Rust is authoritative — and pushes arriving before the
-## stamped building_kind metadata just cache until _process first sees it.
-const ICE_OVERLAY := preload("res://assets/structures/ice_overlay.tres")
-const SITE_MODEL := preload("res://assets/structures/construction_site.glb")
+## The bridge pushes building state on first sight and transitions: `complete`
+## flips the shared painted construction-site sprite for the kind's finished
+## presentation — a painted Sprite3D for eight kinds, the retained GLB
+## PackedScene for Wall/Gate — exactly once, `cold` toggles a reversible icy
+## tint on sprite kinds. Neither flag is polled — Rust is authoritative — and
+## pushes arriving before the stamped building_kind metadata just cache until
+## _process first sees it.
+const SITE_TEXTURE := preload("res://assets/structures/painted/construction_site.png")
+const PAINTED := {
+	"ResearchCenter": preload("res://assets/structures/painted/research_center.png"),
+	"Bunkhouse": preload("res://assets/structures/painted/bunkhouse.png"),
+	"Depot": preload("res://assets/structures/painted/depot.png"),
+	"Barracks": preload("res://assets/structures/painted/barracks.png"),
+	"GunTurret": preload("res://assets/structures/painted/gun_turret.png"),
+	"CoalFurnace": preload("res://assets/structures/painted/coal_furnace.png"),
+	"FlameTower": preload("res://assets/structures/painted/flame_tower.png"),
+	"CrystalLance": preload("res://assets/structures/painted/crystal_lance.png"),
+}
+## Finished Wall/Gate keep their 3D models for the 1×1 seam/corridor
+## contract; they never render a sprite.
 const MODELS := {
-	"ResearchCenter": preload("res://assets/structures/research_center.glb"),
-	"Bunkhouse": preload("res://assets/structures/bunkhouse.glb"),
-	"Depot": preload("res://assets/structures/depot.glb"),
-	"Barracks": preload("res://assets/structures/barracks.glb"),
 	"Wall": preload("res://assets/structures/wall.glb"),
 	"Gate": preload("res://assets/structures/gate.glb"),
-	"GunTurret": preload("res://assets/structures/gun_turret.glb"),
-	"CoalFurnace": preload("res://assets/structures/coal_furnace.glb"),
-	"FlameTower": preload("res://assets/structures/flame_tower.glb"),
-	"CrystalLance": preload("res://assets/structures/crystal_lance.glb"),
 }
+## Sprite presentation: the fixed orthographic camera pitches −54°, so the
+## quad tilts to face it and its bottom image edge sits on the camera-side
+## (+z) footprint edge a hair above the ground (the painted PNG already
+## carries its baked contact shadow, so the sun must not cast a second one).
+const SPRITE_PITCH_DEGREES := 54.0
+const GROUND_LIFT := 0.01
+## Shared alpha threshold for the opaque-pixel cache (health bar seat and
+## silhouette picking read the same mask).
+const ALPHA_THRESHOLD := 0.1
+## Cold reads as a subtle reversible icy tint on painted sprite kinds;
+## warm returns to WHITE. Wall/Gate GLBs never take it.
+const COLD_TINT := Color(0.72, 0.83, 1.0, 1.0)
 
 @onready var health_bar: MeshInstance3D = $HealthBar
+
+## One shared per-texture opaque-pixel cache (HPA-697): health-bar seating
+## here and camera-ray hit-testing in battlefield_controller both read the
+## same thresholded BitMap instead of scanning raw pixels per query.
+static var _alpha_masks := {}
+static var _opaque_tops := {}
 var _styled_kind := ""
 var _complete := false
 var _cold := false
@@ -28,6 +51,91 @@ var _health_ratio := 1.0
 
 func _ready() -> void:
 	add_to_group("building_views")
+
+## The valid art geometry under a model for bounds/picking scanners: a
+## mesh with geometry or a textured SpriteBase3D — both expose get_aabb().
+static func art_geometry(node: Node) -> GeometryInstance3D:
+	if node is MeshInstance3D:
+		var mesh_instance := node as MeshInstance3D
+		return null if mesh_instance.mesh == null else mesh_instance
+	if node is SpriteBase3D:
+		var sprite := node as SpriteBase3D
+		return null if sprite.texture == null else sprite
+	return null
+
+## Thresholded opaque mask for a texture, cached per texture resource.
+static func alpha_mask(texture: Texture2D) -> BitMap:
+	if texture == null:
+		return null
+	if _alpha_masks.has(texture):
+		return _alpha_masks[texture]
+	var image := texture.get_image()
+	if image == null:
+		return null
+	if image.is_compressed():
+		image.decompress()
+	var mask := BitMap.new()
+	mask.create_from_image_alpha(image, ALPHA_THRESHOLD)
+	_alpha_masks[texture] = mask
+	return mask
+
+## Topmost opaque row's horizontal center, in texture pixel coordinates
+## (x = column, y = row from the top) — the visually opaque artwork top,
+## not the full quad top with its near-transparent halo pixels. Returns
+## Vector2.INF when the texture has no opaque pixel at all.
+static func opaque_top_pixels(texture: Texture2D) -> Vector2:
+	if texture == null:
+		return Vector2.INF
+	if _opaque_tops.has(texture):
+		return _opaque_tops[texture]
+	var top := Vector2.INF
+	var mask := alpha_mask(texture)
+	if mask != null:
+		var size := mask.get_size()
+		for row in int(size.y):
+			var first := -1
+			var last := -1
+			for col in int(size.x):
+				if mask.get_bitv(Vector2i(col, row)):
+					if first < 0:
+						first = col
+					last = col
+			if first >= 0:
+				top = Vector2((first + last) * 0.5, row)
+				break
+	_opaque_tops[texture] = top
+	return top
+
+## Sprite-local 3D point of a texture pixel (coordinates as returned by
+## opaque_top_pixels; image rows run top-down, sprite-local +y is up).
+static func sprite_local_from_pixel(sprite: SpriteBase3D, pixel: Vector2) -> Vector3:
+	var rect := sprite.get_item_rect()
+	return Vector3(
+		sprite.pixel_size * (rect.position.x + pixel.x),
+		sprite.pixel_size * (rect.position.y + rect.size.y - pixel.y),
+		0.0)
+
+## Texture pixel under a sprite-local point (the picking ray's triangle
+## hit), image rows top-down. Returns Vector2.INF outside the drawn rect.
+static func sprite_pixel_from_local(sprite: SpriteBase3D, local: Vector3) -> Vector2:
+	if sprite.pixel_size <= 0.0:
+		return Vector2.INF
+	var rect := sprite.get_item_rect()
+	var col := local.x / sprite.pixel_size - rect.position.x
+	var row := rect.size.y - (local.y / sprite.pixel_size - rect.position.y)
+	if col < 0.0 or row < 0.0 or col >= rect.size.x or row >= rect.size.y:
+		return Vector2.INF
+	return Vector2(col, row)
+
+## Whether the texel at a texture pixel coordinate is opaque under the
+## shared threshold — the same mask that seats the health bar.
+static func pixel_opaque(texture: Texture2D, pixel: Vector2) -> bool:
+	if texture == null or pixel == Vector2.INF:
+		return false
+	var mask := alpha_mask(texture)
+	if mask == null:
+		return false
+	return mask.get_bitv(Vector2i(int(pixel.x), int(pixel.y)))
 
 func _process(_delta: float) -> void:
 	if not has_meta("building_kind"):
@@ -57,21 +165,25 @@ func set_state(complete: bool, cold: bool) -> void:
 		set_process(not _attach_model())
 
 func _attach_model() -> bool:
-	var instance: Node
+	var instance: Node = null
 	if not _complete:
-		instance = SITE_MODEL.instantiate()
+		instance = _painted_sprite_node(SITE_TEXTURE)
+	elif PAINTED.has(_styled_kind):
+		instance = _painted_sprite_node(PAINTED[_styled_kind])
+	elif MODELS.has(_styled_kind):
+		instance = (MODELS[_styled_kind] as PackedScene).instantiate()
 	else:
-		if MODELS.has(_styled_kind):
-			instance = (MODELS[_styled_kind] as PackedScene).instantiate()
-		else:
-			# A kind whose GLB has not landed yet must still render and be
-			# debuggable — an invisible building would silently stand.
-			push_warning("building_view: no model for building_kind '%s', using placeholder" % _styled_kind)
-			instance = _placeholder()
+		# A kind whose art has not landed yet must still render and be
+		# debuggable — an invisible building would silently stand.
+		push_warning("building_view: no model for building_kind '%s', using placeholder" % _styled_kind)
+		instance = _placeholder()
+	if instance == null:
+		# The bridge root transform (footprint scale) has not landed yet;
+		# keep polling and retry the attach once it has.
+		return false
 	var model := instance as Node3D
 	if model == null:
-		if instance != null:
-			instance.free()
+		instance.free()
 		push_error("building_view: failed to instantiate model for '%s'" % _styled_kind)
 		return false
 	var previous := get_node_or_null("Model")
@@ -83,6 +195,36 @@ func _attach_model() -> bool:
 	_apply_cold()
 	_seat_health_bar()
 	return true
+
+## Build the painted-sprite presentation under a wrapper that cancels the
+## Rust root's nonuniform X/Z footprint scale, so the sprite plane renders
+## width world units wide (pixel_size = width / texture width) and stays
+## square. It pitches to face the fixed −54° camera with billboard off, and
+## the wrapper-local center coordinates equal world-relative ones because
+## the wrapper and root scales cancel exactly. Returns null while the root
+## scale is not yet usable (the attach retries next _process).
+func _painted_sprite_node(texture: Texture2D) -> Node3D:
+	var width := scale.x
+	var depth := scale.z
+	if width <= 0.001 or depth <= 0.001 or not is_finite(width) or not is_finite(depth):
+		return null
+	var holder := Node3D.new()
+	holder.scale = Vector3(1.0 / width, 1.0, 1.0 / depth)
+	var sprite := Sprite3D.new()
+	sprite.texture = texture
+	sprite.pixel_size = width / float(texture.get_width())
+	sprite.rotation_degrees = Vector3(-SPRITE_PITCH_DEGREES, 0.0, 0.0)
+	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	sprite.shaded = false
+	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_OPAQUE_PREPASS
+	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	sprite.position = Vector3(
+		0.0,
+		0.5 * width * cos(deg_to_rad(SPRITE_PITCH_DEGREES)) + GROUND_LIFT,
+		0.5 * depth - 0.5 * width * sin(deg_to_rad(SPRITE_PITCH_DEGREES)))
+	sprite.modulate = COLD_TINT if _cold else Color.WHITE
+	holder.add_child(sprite)
+	return holder
 
 func _placeholder() -> Node3D:
 	var holder := Node3D.new()
@@ -98,22 +240,37 @@ func _placeholder() -> Node3D:
 	holder.add_child(mesh_instance)
 	return holder
 
-## The one shared translucent ice material sits on the active model's
-## meshes while cold — multiplying vertex-colored albedo would only
-## darken, so a pale overlay whitens instead. HealthBar never takes it.
+## Cold reaches only the painted sprites, as the shared reversible icy
+## tint (warm == WHITE); the retained Wall/Gate GLBs keep their plain
+## shading — Rust never marks them cold and they must not gain a fake
+## frost effect.
 func _apply_cold() -> void:
 	var model := get_node_or_null("Model") as Node3D
 	if model == null:
 		return
-	var overlay: Material = ICE_OVERLAY if _cold else null
-	for node in model.find_children("*", "MeshInstance3D", true, false):
-		(node as MeshInstance3D).material_overlay = overlay
+	for node in model.find_children("*", "SpriteBase3D", true, false):
+		(node as SpriteBase3D).modulate = COLD_TINT if _cold else Color.WHITE
 
-## The bar seats just above the active model's real AABB each time the
-## model swaps, so a flat site and a tall final GLB both read correctly.
+## The bar seats just above the active model's real visual top each time
+## the model swaps: painted kinds use the shared opaque-pixel cache — the
+## topmost opaque texture row's horizontal center, never the transparent
+## halo the raw quad top or Image.get_used_rect() would give — converted
+## from sprite-local into this view's local space (the root scales X/Z by
+## the footprint, so world-space coordinates must not be written directly).
+## Retained Wall/Gate GLBs keep the mesh AABB path.
 func _seat_health_bar() -> void:
 	var model := get_node_or_null("Model") as Node3D
 	if model == null:
+		return
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if not sprites.is_empty():
+		var sprite := sprites[0] as SpriteBase3D
+		var top := opaque_top_pixels(sprite.texture)
+		if top == Vector2.INF:
+			return
+		var view_local: Vector3 = global_transform.affine_inverse() \
+				* (sprite.global_transform * sprite_local_from_pixel(sprite, top))
+		health_bar.position = Vector3(view_local.x, view_local.y + 0.15, view_local.z)
 		return
 	var bounds := AABB()
 	var first := true

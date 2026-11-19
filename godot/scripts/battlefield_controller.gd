@@ -1,6 +1,10 @@
 extends Node3D
 
 const HudHelpers := preload("res://scripts/hud_helpers.gd")
+## Static access to building_view.gd's shared sprite alpha cache and
+## art-geometry predicate — the one cache used by both health-bar seating
+## and camera-ray silhouette picking.
+const BuildingView := preload("res://scripts/building_view.gd")
 
 const CLICK_RADIUS := 20.0
 const DRAG_THRESHOLD := 6.0
@@ -707,18 +711,36 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 
 func _model_ray_hit_depth(model: Node3D, ray_origin: Vector3, ray_dir: Vector3) -> float:
 	var min_depth := INF
-	for node in model.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := node as MeshInstance3D
-		if mesh_instance == null or mesh_instance.mesh == null:
+	for node in model.find_children("*", "GeometryInstance3D", true, false):
+		var art: GeometryInstance3D = BuildingView.art_geometry(node)
+		if art == null:
 			continue
-		var triangles := mesh_instance.mesh.generate_triangle_mesh()
+		# Both paths yield a TriangleMesh with intersect_ray: painted sprites
+		# generate their quad directly, meshes go through Mesh.generate_triangle_mesh.
+		var triangles: Variant = null
+		if art is SpriteBase3D:
+			triangles = (art as SpriteBase3D).generate_triangle_mesh()
+		else:
+			var mesh_instance := art as MeshInstance3D
+			if mesh_instance.mesh != null:
+				triangles = mesh_instance.mesh.generate_triangle_mesh()
 		if triangles == null:
 			continue
-		var inverse := mesh_instance.global_transform.affine_inverse()
-		var hit := triangles.intersect_ray(inverse * ray_origin, (inverse.basis * ray_dir).normalized())
-		if not hit.is_empty():
-			var world_hit: Vector3 = mesh_instance.global_transform * hit["position"]
-			min_depth = minf(min_depth, (world_hit - ray_origin).dot(ray_dir))
+		var inverse := art.global_transform.affine_inverse()
+		var hit: Variant = triangles.intersect_ray(inverse * ray_origin, (inverse.basis * ray_dir).normalized())
+		if hit.is_empty():
+			continue
+		if art is SpriteBase3D:
+			# Painted silhouette: the quad triangle only counts when the
+			# texel under the hit is opaque — transparent corners must not
+			# pick the building. Hit-local point → image row (top-down
+			# flip) → the same shared BitMap the health bar used.
+			var sprite := art as SpriteBase3D
+			var pixel: Vector2 = BuildingView.sprite_pixel_from_local(sprite, hit["position"])
+			if not BuildingView.pixel_opaque(sprite.texture, pixel):
+				continue
+		var world_hit: Vector3 = art.global_transform * hit["position"]
+		min_depth = minf(min_depth, (world_hit - ray_origin).dot(ray_dir))
 	return min_depth if min_depth < INF else -1.0
 
 func _friendly_units() -> Array[Node3D]:
@@ -903,19 +925,20 @@ func _projected_art_rect(view: Node3D, art_root: Node3D = null) -> Rect2:
 				first = false
 	return rect
 
-## art_root scopes the mesh scan — passing a building view's active Model
+## art_root scopes the art scan — passing a building view's active Model
 ## keeps its sibling HealthBar out of the pick silhouette, while a missing
-## root still walks the whole view (resource models are the view).
+## root still walks the whole view (resource models are the view). Meshes
+## and painted sprites both count; both expose get_aabb().
 func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 	if art_root != null and art_root.has_meta("_cached_art_bounds"):
 		return art_root.get_meta("_cached_art_bounds") as AABB
 	var bounds := AABB()
 	var first := true
-	for node in (art_root if art_root != null else view).find_children("*", "MeshInstance3D", true, false):
-		var mesh := node as MeshInstance3D
-		if mesh == null or mesh.mesh == null:
+	for node in (art_root if art_root != null else view).find_children("*", "GeometryInstance3D", true, false):
+		var art: GeometryInstance3D = BuildingView.art_geometry(node)
+		if art == null:
 			continue
-		var local: AABB = view.global_transform.affine_inverse() * mesh.global_transform * mesh.get_aabb()
+		var local: AABB = view.global_transform.affine_inverse() * art.global_transform * art.get_aabb()
 		bounds = local if first else bounds.merge(local)
 		first = false
 	if bounds.size.length() < 0.001:
