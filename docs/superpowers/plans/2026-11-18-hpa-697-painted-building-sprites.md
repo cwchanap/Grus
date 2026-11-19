@@ -72,7 +72,7 @@ From repo root, using Godot 4.7.1 and a **freshly built/copied** `grus-godot` li
 ```sh
 godot --headless --path godot --editor --quit-after 120
 for scene in smoke_test reset_test economy_smoke_test combat_lifecycle_smoke_test wave_smoke_test defenses_smoke_test underground_smoke_test; do
-  godot --headless --path godot "res://scenes/\${scene}.tscn" || exit 1
+  godot --headless --path godot "res://scenes/${scene}.tscn" || exit 1
 done
 
 # Replay with a real display/renderer and opt-in captured images:
