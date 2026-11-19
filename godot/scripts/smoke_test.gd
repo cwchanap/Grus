@@ -3196,8 +3196,10 @@ func _run() -> void:
 	var step_deltas: Array[float] = []
 	var step_elapsed_s: Array[float] = []
 	var visual_changes := 0
+	var frames_observed := 0
 	while Time.get_ticks_msec() - cadence_started_ms < 1000:
 		await get_tree().process_frame
+		frames_observed += 1
 		var visual_position := unit_three.global_position
 		var visual_step := visual_position.distance_to(previous_visual)
 		if visual_step > 0.0001:
@@ -3225,6 +3227,22 @@ func _run() -> void:
 			step_deltas[i] - (cadence_distance * step_elapsed_s[i] + cadence_distance * 0.05) * 1.25)
 	if max_visual_step > 0.25 or visual_changes < 2:
 		_fail("20 Hz presentation is not interpolated: worst step excess %.3f across %d visual changes" % [max_visual_step, visual_changes])
+		return
+
+	# Pacing alone cannot reject interpolation loss: its per-step allowance
+	# includes a full 20 Hz tick of travel, so a view that snaps the whole
+	# tick displacement (speed 6 → 0.30 units per tick, no lerp) always slips
+	# under it. When rendering is fast enough to observe sub-tick motion (mean
+	# frame well under half a tick), an interpolated view advances on every
+	# frame while a tick-snapped view moves on at most one frame per tick —
+	# ~1/3 of frames at 60 FPS — so require motion on most observed frames.
+	# Slow rendering cannot resolve sub-tick snapping and stays on the
+	# wall-clock pacing bound above.
+	var window_elapsed_s := float(Time.get_ticks_msec() - cadence_started_ms) / 1000.0
+	var mean_frame_s := window_elapsed_s / maxf(1.0, float(frames_observed))
+	print("GRUS_CADENCE_MOTION frames=%d changes=%d mean_frame_s=%.4f worst_excess=%.3f" % [frames_observed, visual_changes, mean_frame_s, max_visual_step])
+	if mean_frame_s < 0.025 and visual_changes * 5 < frames_observed * 3:
+		_fail("20 Hz view snaps between ticks without interpolation: %d of %d rendered frames showed motion (mean frame %.4fs)" % [visual_changes, frames_observed, mean_frame_s])
 		return
 
 	# A human scout — worker 4, untouched by the choreography above — reveals
