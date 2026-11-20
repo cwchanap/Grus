@@ -4715,21 +4715,23 @@ func _run() -> void:
 			5.0, "the completed Gate stole the click from the Worker inside its corridor (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
 		return
 
-	# HPA-697 fix rounds 1–2: the enemy overlap rules must also hold through
+	# HPA-697 fix rounds 1–3: the enemy overlap rules must also hold through
 	# real right-clicks — the dispatched attack must carry the winning view's
 	# target kind and id, and hidden or team-filtered candidates must never
-	# become the dispatched target. The fixture is pre-wave (workers only):
-	# every dispatched attack receipts as the selected Worker's NotCombatant
-	# rejection and no sim surface can read a synthetic target id back, so
-	# the dispatched identity is observed at the bridge's own parse gate
-	# (parse_target_kind rejects ids <= 0). The LOSING view always carries a
-	# negative id, so a router that dispatches the wrong view is
-	# bridge-rejected ("Attack command rejected") while the correct route
-	# queues and reaches the sim. The in-front leg pins the unit target
-	# ("unit", 9002); once the unit slips behind the opaque silhouette the
-	# metas flip and the leg pins the building target ("building", 9101).
-	# Real-enemy kind+id read-back through a combat-capable selection is the
-	# combat lifecycle smoke's visible-alien right-click leg.
+	# become the dispatched target. Sim receipts cannot pin the dispatched
+	# tuple: the pre-wave fixture is workers-only, a Worker's NotCombatant
+	# rejection precedes target resolution (any positive id receipts alike),
+	# and the game has no foreign buildings, so no building dispatch can
+	# ever be sim-accepted. The legs therefore read the controller's own
+	# last-dispatch record — the exact (kind, id) tuple handed to
+	# GrusBridge.attack_units — after each real click, and keep the queued
+	# text plus NotCombatant receipt as the end-to-end proof the dispatched
+	# command crossed into the sim. The in-front leg pins ("unit", 9002);
+	# once the unit slips behind the opaque silhouette the leg pins
+	# ("building", 9101); the fall-through legs pin that no new attack
+	# dispatch happened. Real-enemy kind+id read-back through a
+	# combat-capable selection is the combat lifecycle smoke's visible-alien
+	# right-click leg.
 	if (main.selected_ids as Array).is_empty() \
 			or int(main.selected_ids[0]) != int(gate_worker.get_meta("unit_id", -1)):
 		_fail("the right-click dispatch leg expected the corridor click's Worker selection: %s" % str(main.selected_ids))
@@ -4770,9 +4772,7 @@ func _run() -> void:
 	dispatch_views.append(enemy_unit)
 	var enemy_block := Node3D.new()
 	enemy_block.set_meta("team_id", 2)
-	# Parse-invalid while the unit is the expected winner: a router that
-	# dispatches the box here is rejected at the bridge, never queued.
-	enemy_block.set_meta("building_id", -9101)
+	enemy_block.set_meta("building_id", 9101)
 	var block_model := Node3D.new()
 	block_model.name = "Model"
 	var block_mesh := MeshInstance3D.new()
@@ -4800,15 +4800,16 @@ func _run() -> void:
 			view.free()
 		return
 	# Real right-click where the enemy unit overlaps the opaque building in
-	# front of it: the attack must dispatch (and reach the sim, receipting
-	# as the Worker's NotCombatant rejection).
+	# front of it: the attack must dispatch exactly the unit target, queue,
+	# and reach the sim (receipting as the Worker's NotCombatant rejection).
 	var dispatch_revision := int(GrusBridge.command_feedback_revision())
 	# push_input's synchronous dispatch keeps the immediate command_status
 	# read exact (the buffered parse_input_event path only lands next frame,
 	# where the verdict mirror may already have replaced it).
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
-	if str(main.command_status.text) != "Attack command queued":
-		_fail("the in-front enemy unit's right-click did not dispatch the (\"unit\", 9002) target: %s (a building-routed dispatch is bridge-rejected by the box's parse-invalid id)" % str(main.command_status.text))
+	if str(main.command_status.text) != "Attack command queued" \
+			or main.get("last_dispatched_attack") != {"kind": "unit", "id": 9002}:
+		_fail("the in-front enemy unit's right-click did not dispatch exactly (\"unit\", 9002): status=%s dispatched=%s" % [str(main.command_status.text), str(main.get("last_dispatched_attack"))])
 		for view in dispatch_views:
 			view.free()
 		return
@@ -4820,18 +4821,15 @@ func _run() -> void:
 			view.free()
 		return
 	# With the unit behind the opaque silhouette, the right-click must still
-	# dispatch an attack — now for the building the pick switched to. The
-	# metas flip the parse gate: the spent unit's id goes parse-invalid and
-	# the box's real id goes live, so only a ("building", 9101) dispatch
-	# queues.
+	# dispatch an attack — now for the building the pick switched to, and
+	# the dispatched tuple must read exactly ("building", 9101).
 	enemy_unit.global_position = attack_origin + attack_dir * 7.0 + attack_side * 0.1
-	enemy_unit.set_meta("unit_id", -9002)
-	enemy_block.set_meta("building_id", 9101)
 	await get_tree().process_frame
 	dispatch_revision = int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
-	if str(main.command_status.text) != "Attack command queued":
-		_fail("the right-click behind the enemy silhouette did not dispatch the (\"building\", 9101) target: %s (a unit-routed dispatch is bridge-rejected by the unit's parse-invalid id)" % str(main.command_status.text))
+	if str(main.command_status.text) != "Attack command queued" \
+			or main.get("last_dispatched_attack") != {"kind": "building", "id": 9101}:
+		_fail("the right-click behind the enemy silhouette did not dispatch exactly (\"building\", 9101): status=%s dispatched=%s" % [str(main.command_status.text), str(main.get("last_dispatched_attack"))])
 		for view in dispatch_views:
 			view.free()
 		return
@@ -4848,8 +4846,9 @@ func _run() -> void:
 	enemy_unit.visible = false
 	enemy_block.visible = false
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
-	if str(main.command_status.text) != "Move command queued":
-		_fail("a right-click over only fog-hidden enemies dispatched %s instead of falling through to Move" % str(main.command_status.text))
+	if str(main.command_status.text) != "Move command queued" \
+			or main.get("last_dispatched_attack") != {"kind": "building", "id": 9101}:
+		_fail("a right-click over only fog-hidden enemies dispatched %s (last dispatched attack: %s) instead of falling through to Move" % [str(main.command_status.text), str(main.get("last_dispatched_attack"))])
 		for view in dispatch_views:
 			view.free()
 		return
@@ -4868,14 +4867,15 @@ func _run() -> void:
 			view.free()
 		return
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
-	if str(main.command_status.text) != "Move command queued":
-		_fail("a right-click whose nearest candidate is friendly dispatched %s instead of falling through to Move" % str(main.command_status.text))
+	if str(main.command_status.text) != "Move command queued" \
+			or main.get("last_dispatched_attack") != {"kind": "building", "id": 9101}:
+		_fail("a right-click whose nearest candidate is friendly dispatched %s (last dispatched attack: %s) instead of falling through to Move" % [str(main.command_status.text), str(main.get("last_dispatched_attack"))])
 		for view in dispatch_views:
 			view.free()
 		return
 	for view in dispatch_views:
 		view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click dispatch_target=parse_gated" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click dispatch_target=tuple_readback" % max_visual_step)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
