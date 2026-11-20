@@ -935,13 +935,13 @@ func _has_visible_icon(root: Node, resource_path: String) -> bool:
 			return true
 	return false
 
-## Structure import check (HPA-291): the PackedScene must load and
-## instantiate a nonempty mesh, carry no gameplay nodes, sit inside the
-## normalized ±0.5 footprint with a grounded base, and resolve its diffuse
-## texture from the committed res://assets/structures/ PNG — the recipe
-## the catalogue-wide loop applies to every building kind. The GLB itself
-## must carry each image as exactly one source — a committed-texture uri,
-## never an embedded bufferView — or Godot's importer warns.
+## Structure import check (HPA-291, narrowed to the retained Wall/Gate
+## GLBs by HPA-697): the PackedScene must load and instantiate a nonempty
+## mesh, carry no gameplay nodes, sit inside the normalized ±0.5 footprint
+## with a grounded base, and resolve its diffuse texture from the committed
+## res://assets/structures/ PNG. The GLB itself must carry each image as
+## exactly one source — a committed-texture uri, never an embedded
+## bufferView — or Godot's importer warns.
 func _assert_structure_import(path: String) -> bool:
 	if not ResourceLoader.exists(path):
 		_fail("structure import is missing: %s" % path)
