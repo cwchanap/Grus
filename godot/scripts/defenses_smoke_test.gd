@@ -529,12 +529,45 @@ func _observe_turret(turret_id: int, crystals_before_wave: int) -> void:
 		_turret_crystal_kill_seen = true
 
 func _select_worker(worker: Node3D) -> bool:
-	await _mouse_click(_main.camera.unproject_position(worker.global_position), MOUSE_BUTTON_LEFT)
+	# HPA-697 depth-scoped picking: an overlapping completed wall can own the
+	# worker's own projection, so click the nearest eligible pixel inside the
+	# 20px radius with no opaque building hit in front of the body reference
+	# — the exact projection whenever it is unobstructed.
+	var click_point := _worker_pick_point(worker)
+	if click_point == Vector2.INF:
+		_fail("no unobstructed pixel exists inside Worker %d's pick radius" % int(worker.get_meta("unit_id", -1)))
+		return false
+	await _mouse_click(click_point, MOUSE_BUTTON_LEFT)
 	var worker_id := int(worker.get_meta("unit_id", -1))
 	if _main.selected_ids.size() != 1 or not _main.selected_ids.has(worker_id):
 		_fail("real controller input did not select only Worker %d: %s" % [worker_id, _main.selected_ids])
 		return false
 	return true
+
+func _worker_pick_point(worker: Node3D) -> Vector2:
+	var center: Vector2 = _main.camera.unproject_position(worker.global_position)
+	var viewport_size := get_viewport().get_visible_rect().size
+	var best := Vector2.INF
+	var best_distance := -1.0
+	for offset_y in range(-16, 17, 8):
+		for offset_x in range(-16, 17, 8):
+			var candidate := center + Vector2(float(offset_x), float(offset_y))
+			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate):
+				continue
+			if (_main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != worker:
+				continue
+			var hit: Dictionary = _main.call("_building_hit_at", candidate, 1)
+			var building_depth: float = hit.get("depth", INF)
+			var origin: Vector3 = _main.camera.project_ray_origin(candidate)
+			var direction: Vector3 = _main.camera.project_ray_normal(candidate)
+			var unit_depth: float = (worker.global_position + Vector3(0.0, 0.15, 0.0) - origin).dot(direction)
+			if building_depth < INF and building_depth < unit_depth:
+				continue
+			var distance := center.distance_to(candidate)
+			if best_distance < 0.0 or distance < best_distance:
+				best = candidate
+				best_distance = distance
+	return best
 
 func _arm_build(kind: String) -> bool:
 	var button_name := "GunTurretButton" if kind == "GunTurret" else "%sButton" % kind
