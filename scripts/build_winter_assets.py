@@ -303,6 +303,29 @@ def sbox(name, location, size, hex_color, rotation=0):
     return obj
 
 
+# Retained authoring helpers for future structure work (HPA-697 kept the
+# Wall/Gate blocks only); they have no callers in the current script.
+
+
+def srock(name, location, size, hex_color):
+    obj = rock(name, location, size, hex_color, STRUCT)
+    project_uv(obj)
+    return obj
+
+
+def stube(name, location, radius1, radius2, depth, hex_color,
+          vertices=12, rotation=(0, 0, 0)):
+    bpy.ops.mesh.primitive_cone_add(
+        vertices=vertices, radius1=radius1, radius2=radius2, depth=depth,
+        location=location, rotation=rotation)
+    obj = bpy.context.object
+    obj.name = name
+    obj.data.materials.append(STRUCT)
+    tint(obj, hex_color)
+    project_uv(obj)
+    return obj
+
+
 # Wall: a symmetric four-side barricade authored at its 1x1 cell — band and
 # rail reach every edge so straight runs read continuous in either axis,
 # and the corner blocks run into both bands before meeting a neighbor
