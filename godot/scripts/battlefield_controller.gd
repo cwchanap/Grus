@@ -41,8 +41,10 @@ const ZOOM_STEP := 6.0
 var selected_ids: Array[int] = []
 var selected_building_id := -1
 # The (kind, id) tuple the most recent direct attack handed to
-# GrusBridge.attack_units; smoke journeys read it back because sim receipts
-# cannot pin a Worker's attack target (NotCombatant precedes resolution).
+# GrusBridge.attack_units; written by _dispatch_attack from the arguments
+# it receives, so the smoke read-back observes the actual dispatch
+# boundary rather than the call site's locals. Sim receipts cannot pin a
+# Worker's attack target (NotCombatant precedes resolution).
 var last_dispatched_attack := {}
 var _control_groups: Dictionary = {}
 var _feedback_revision := -1
@@ -555,10 +557,7 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	if enemy != null and not selected_ids.is_empty():
 		var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
 		var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
-		# Recorded before the bridge call: the record is what the controller
-		# dispatched, including dispatches the bridge goes on to reject.
-		last_dispatched_attack = {"kind": target_kind, "id": target_id}
-		if GrusBridge.attack_units(PackedInt32Array(selected_ids), target_kind, target_id):
+		if _dispatch_attack(target_kind, target_id):
 			command_status.text = "Attack command queued"
 		else:
 			command_status.text = "Attack command rejected"
@@ -569,6 +568,13 @@ func _issue_context_command(screen_position: Vector2) -> void:
 			_issue_rally(target)
 			return
 	_issue_move(screen_position)
+
+## Spy seam for the direct-attack dispatch: records the (kind, id) it
+## receives, then forwards both unchanged to GrusBridge.attack_units, so
+## the last-dispatch record can never disagree with the actual invocation.
+func _dispatch_attack(kind: String, target_id: int) -> bool:
+	last_dispatched_attack = {"kind": kind, "id": target_id}
+	return GrusBridge.attack_units(PackedInt32Array(selected_ids), kind, target_id)
 
 ## The one modal-order dispatch table. Each branch reuses the existing bridge
 ## operation and never falls through to a generic contextual pick.
