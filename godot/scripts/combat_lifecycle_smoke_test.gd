@@ -577,7 +577,7 @@ func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
 	return true
 
 func _success_marker() -> String:
-	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true research_boundary=analyze_reject8_zero_crystal research_progress=20x_advancing restart_research=zero blip_cue=counted_throttled_cleared"
+	return "GRUS_COMBAT_LIFECYCLE_SMOKE_OK stage=restart-fresh fixture=4/1/18 warning=North live_aliens=true fog=hidden_then_revealed markers=visibility_gated controller_attack_move=accepted controller_visible_alien_right_click=accepted right_click_target=guard_event_readback crystal_reward=1 pause_frozen=true result=alien_defeat result_reject=session_locked restart_wave_reset=true research_boundary=analyze_reject8_zero_crystal research_progress=20x_advancing restart_research=zero blip_cue=counted_throttled_cleared"
 
 func _run() -> void:
 	var window := get_window()
@@ -846,6 +846,29 @@ func _run() -> void:
 			func(): return int(GrusBridge.command_feedback_revision()) > attack_revision \
 					and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
 			10.0, "simulation rejected the live-alien attack"):
+		return
+	# Target-identity read-back (HPA-697 fix round 2): the accepted
+	# right-click must strike the picked alien — a combat event must name one
+	# selected Guard as attacker and the winning view's real unit id as a
+	# "unit" target, proving the dispatched command's actual kind and id.
+	# Poll on process_frame, which fires before the controller's per-frame
+	# cosmetics drain inside _process: physics_frame resumes before the
+	# fixed ticks, so the previous frame's staged events would already be
+	# consumed by then. The Guard keeps firing until the kill, so one
+	# stolen cosmetic frame is harmless.
+	var strike_seen := false
+	for _frame in int(ceilf(15.0 * Engine.physics_ticks_per_second)):
+		for event in GrusBridge.drain_combat_events():
+			if int(event.get("attacker", -1)) in guard_ids \
+						and str(event.get("target_kind", "")) == "unit" \
+						and int(event.get("target_id", -1)) == target_id:
+				strike_seen = true
+				break
+		if strike_seen:
+			break
+		await get_tree().process_frame
+	if not strike_seen:
+		_fail("the accepted attack never struck the picked alien as a Guard-targeted unit %d" % target_id)
 		return
 	if not await _wait_until(
 			func(): return int(GrusBridge.economy_snapshot().get("crystals", -1)) > crystals_before,

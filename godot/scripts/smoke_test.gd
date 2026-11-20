@@ -4715,15 +4715,20 @@ func _run() -> void:
 			5.0, "the completed Gate stole the click from the Worker inside its corridor (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
 		return
 
-	# HPA-697 fix round 1: the enemy overlap rules must also hold through
-	# real right-clicks — the contextual router must dispatch the attack for
-	# the picked enemy, and hidden or team-filtered candidates must never
-	# become the dispatched target. The fixture is pre-wave (workers only),
-	# so the sim receipts below reject with NotCombatant: that rejection is
-	# the observable proof the dispatched command was an attack carrying the
-	# selected Worker — a router regression to Move would be accepted
-	# instead. The exact winning view stays pinned by the kept
-	# _assert_enemy_overlap_pick direct checks; real-enemy acceptance is the
+	# HPA-697 fix rounds 1–2: the enemy overlap rules must also hold through
+	# real right-clicks — the dispatched attack must carry the winning view's
+	# target kind and id, and hidden or team-filtered candidates must never
+	# become the dispatched target. The fixture is pre-wave (workers only):
+	# every dispatched attack receipts as the selected Worker's NotCombatant
+	# rejection and no sim surface can read a synthetic target id back, so
+	# the dispatched identity is observed at the bridge's own parse gate
+	# (parse_target_kind rejects ids <= 0). The LOSING view always carries a
+	# negative id, so a router that dispatches the wrong view is
+	# bridge-rejected ("Attack command rejected") while the correct route
+	# queues and reaches the sim. The in-front leg pins the unit target
+	# ("unit", 9002); once the unit slips behind the opaque silhouette the
+	# metas flip and the leg pins the building target ("building", 9101).
+	# Real-enemy kind+id read-back through a combat-capable selection is the
 	# combat lifecycle smoke's visible-alien right-click leg.
 	if (main.selected_ids as Array).is_empty() \
 			or int(main.selected_ids[0]) != int(gate_worker.get_meta("unit_id", -1)):
@@ -4765,7 +4770,9 @@ func _run() -> void:
 	dispatch_views.append(enemy_unit)
 	var enemy_block := Node3D.new()
 	enemy_block.set_meta("team_id", 2)
-	enemy_block.set_meta("building_id", 9101)
+	# Parse-invalid while the unit is the expected winner: a router that
+	# dispatches the box here is rejected at the bridge, never queued.
+	enemy_block.set_meta("building_id", -9101)
 	var block_model := Node3D.new()
 	block_model.name = "Model"
 	var block_mesh := MeshInstance3D.new()
@@ -4801,7 +4808,7 @@ func _run() -> void:
 	# where the verdict mirror may already have replaced it).
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
 	if str(main.command_status.text) != "Attack command queued":
-		_fail("the in-front enemy unit's right-click did not dispatch an attack: %s" % str(main.command_status.text))
+		_fail("the in-front enemy unit's right-click did not dispatch the (\"unit\", 9002) target: %s (a building-routed dispatch is bridge-rejected by the box's parse-invalid id)" % str(main.command_status.text))
 		for view in dispatch_views:
 			view.free()
 		return
@@ -4813,13 +4820,18 @@ func _run() -> void:
 			view.free()
 		return
 	# With the unit behind the opaque silhouette, the right-click must still
-	# dispatch an attack — now for the building the pick switched to.
+	# dispatch an attack — now for the building the pick switched to. The
+	# metas flip the parse gate: the spent unit's id goes parse-invalid and
+	# the box's real id goes live, so only a ("building", 9101) dispatch
+	# queues.
 	enemy_unit.global_position = attack_origin + attack_dir * 7.0 + attack_side * 0.1
+	enemy_unit.set_meta("unit_id", -9002)
+	enemy_block.set_meta("building_id", 9101)
 	await get_tree().process_frame
 	dispatch_revision = int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
 	if str(main.command_status.text) != "Attack command queued":
-		_fail("the right-click behind the enemy silhouette did not dispatch an attack: %s" % str(main.command_status.text))
+		_fail("the right-click behind the enemy silhouette did not dispatch the (\"building\", 9101) target: %s (a unit-routed dispatch is bridge-rejected by the unit's parse-invalid id)" % str(main.command_status.text))
 		for view in dispatch_views:
 			view.free()
 		return
@@ -4864,6 +4876,6 @@ func _run() -> void:
 	for view in dispatch_views:
 		view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click" % max_visual_step)
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click dispatch_target=parse_gated" % max_visual_step)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
