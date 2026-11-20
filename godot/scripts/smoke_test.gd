@@ -1516,6 +1516,46 @@ func _hop_worker(unit: Node3D, target: Vector2, tolerance: float, why: String) -
 		return false
 	return true
 
+## Hop one worker through the real bridge move path to the first candidate
+## cell whose move the sim accepts, then wait for arrival, settle and Idle.
+## Used where the target ground's walkability is not knowable in advance, so
+## a rejected goal must try the next cell instead of failing the leg.
+func _hop_worker_to_first_cell(unit: Node3D, cells: Array[Vector2], tolerance: float, why: String) -> Vector2:
+	var unit_id := int(unit.get_meta("unit_id", -1))
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("could not accelerate the sim for the %s hop" % why)
+		return Vector2.INF
+	var chosen := Vector2.INF
+	for cell in cells:
+		var revision := int(GrusBridge.command_feedback_revision())
+		if not GrusBridge.move_units(PackedInt32Array([unit_id]), cell):
+			continue
+		for _frame in int(10.0 * Engine.physics_ticks_per_second):
+			if _accepted_since(revision):
+				chosen = cell
+				break
+			if int(GrusBridge.command_feedback_revision()) > revision:
+				break
+			await get_tree().physics_frame
+		if chosen != Vector2.INF:
+			break
+	if chosen == Vector2.INF:
+		_fail("%s move was never accepted for any candidate cell" % why)
+		return Vector2.INF
+	if not await _wait_until(func():
+			var view := _unit_view(unit_id)
+			return view != null \
+				and view.global_position.distance_to(Vector3(chosen.x, 0.0, chosen.y)) <= tolerance \
+				and _unit_idle(view),
+			30.0, "the %s worker never arrived near %s" % [why, chosen]):
+		return Vector2.INF
+	for _settle in 3:
+		await get_tree().process_frame
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not restore sim speed after the %s hop" % why)
+		return Vector2.INF
+	return chosen
+
 func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for row in [viewport_size.y - 30.0, viewport_size.y - 60.0, viewport_size.y * 0.5, 40.0]:
@@ -1589,7 +1629,13 @@ func _assert_enemy_overlap_pick(main: Node, camera: Camera3D) -> bool:
 	var model := Node3D.new()
 	model.name = "Model"
 	var mesh := MeshInstance3D.new()
-	mesh.mesh = BoxMesh.new()
+	var box := BoxMesh.new()
+	# Half-width 0.25 keeps the box an opaque hit for the in-front/behind
+	# cases while leaving lateral offsets inside the 20px center radius that
+	# miss the silhouette — the only geometry where a genuine fallback-only
+	# hit exists at this framing.
+	box.size = Vector3(0.5, 1.0, 0.5)
+	mesh.mesh = box
 	model.add_child(mesh)
 	building.add_child(model)
 	add_child(building)
@@ -1611,7 +1657,20 @@ func _assert_enemy_overlap_pick(main: Node, camera: Camera3D) -> bool:
 	# radius) never outranks an eligible unit either; park the spent unit
 	# beside the ray where its projection leaves the pick radius.
 	views[1].global_position = origin + direction * 7.0 + side * 5.0
-	building.global_position = origin + direction * 6.0 + side * 1.4
+	# The case only proves anything when the building is genuinely a
+	# fallback hit — center within the radius, no opaque silhouette hit,
+	# depth INF — so scan for a lateral offset that yields exactly that
+	# setup before asserting the unit wins.
+	var fallback_ready := false
+	for offset in [0.05, 0.1, 0.2, 0.28, 0.32]:
+		building.global_position = origin + direction * 6.0 + side * offset
+		var fallback_hit: Dictionary = main.call("_building_hit_at", point, 2)
+		if fallback_hit.get("view") == building and is_inf(float(fallback_hit.get("depth", INF))):
+			fallback_ready = true
+			break
+	if not fallback_ready:
+		_fail("no lateral offset yielded a genuine fallback-only enemy building hit (view with INF depth) for the picker probe")
+		ok = false
 	enemy = main.call("_nearest_enemy_view", point)
 	if enemy != views[0]:
 		_fail("enemy right-click pick let a fallback-only building steal the unit: view=%s" % str(enemy))
@@ -4145,6 +4204,77 @@ func _run() -> void:
 	if main.call("_building_at", empty_corner, 0) == rc_view:
 		_fail("empty ground in the Research Center's bounding box selected the Research Center")
 		return
+	# HPA-697 fix round 1: the transparent corner must also lose to an
+	# overlapping eligible unit through a real left-click. Assert the setup
+	# first — the corner yields no building hit at all (no opaque art, no
+	# 20px fallback) — then hop a worker under the projected bounds and
+	# require the click to select only that worker.
+	var corner_hit: Dictionary = main.call("_building_hit_at", empty_corner, 0)
+	if corner_hit.get("view") != null or not is_inf(float(corner_hit.get("depth", INF))):
+		_fail("the Research Center empty corner is not a transparent miss: hit=%s" % str(corner_hit))
+		return
+	var corner_workers: Array[Node3D] = []
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		var view := unit_node as Node3D
+		if view != null and int(view.get_meta("team_id", -1)) == 1:
+			corner_workers.append(view)
+	if corner_workers.is_empty():
+		_fail("no Team-1 worker remains for the transparent-corner click leg")
+		return
+	var corner_origin := camera.project_ray_origin(empty_corner)
+	var corner_dir := camera.project_ray_normal(empty_corner)
+	var corner_ground := corner_origin + corner_dir * (-corner_origin.y / corner_dir.y)
+	var corner_cells: Array[Vector2] = []
+	for offset in [Vector2.ZERO, Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1),
+			Vector2(2, 0), Vector2(-2, 0), Vector2(0, 2), Vector2(0, -2)]:
+		corner_cells.append(Vector2(floori(corner_ground.x) + 0.5, floori(corner_ground.z) + 0.5) + offset)
+	var corner_worker: Node3D = corner_workers[0]
+	if await _hop_worker_to_first_cell(corner_worker, corner_cells, 0.45, "transparent-corner") == Vector2.INF:
+		return
+	var corner_unit_screen := camera.unproject_position(corner_worker.global_position)
+	var corner_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var corner_click := Vector2.INF
+	for dy in range(-16, 17, 4):
+		for dx in range(-16, 17, 4):
+			var candidate := corner_unit_screen + Vector2(float(dx), float(dy))
+			if candidate.distance_to(corner_unit_screen) > main.CLICK_RADIUS - 2.0:
+				continue
+			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+					or corner_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)):
+				continue
+			var probe_hit: Dictionary = main.call("_building_hit_at", candidate, 0)
+			if probe_hit.get("view") != null or not is_inf(float(probe_hit.get("depth", INF))):
+				continue
+			if not rc_art_rect.has_point(candidate):
+				continue
+			if float(main.call("_model_ray_hit_depth", rc_model,
+					camera.project_ray_origin(candidate), camera.project_ray_normal(candidate))) >= 0.0:
+				continue
+			if (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != corner_worker:
+				continue
+			corner_click = candidate
+			break
+		if corner_click != Vector2.INF:
+			break
+	if corner_click == Vector2.INF:
+		_fail("no transparent in-bounds pixel overlaps the hopped worker for the transparent-corner click")
+		return
+	_mouse_click(corner_click, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return (main.selected_ids as Array).size() == 1 \
+				and int(main.selected_ids[0]) == int(corner_worker.get_meta("unit_id", -1)) \
+				and int(main.selected_building_id) == -1,
+			5.0, "the transparent corner click inside the Research Center's bounds did not select only the overlapping worker (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+	# Park the spent worker south of the footprint so the roof-pick scans
+	# below keep their unit-free pixels.
+	var rc_catalogue: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get("ResearchCenter", {})
+	var rc_half_depth := float(rc_catalogue.get("height", 0)) * 0.5
+	var park_cells: Array[Vector2] = []
+	for south in [2.0, 3.0, 4.0, 5.0]:
+		park_cells.append(Vector2(floori(rc_view.global_position.x) + 0.5, floori(rc_view.global_position.z + rc_half_depth + south) + 0.5))
+	if await _hop_worker_to_first_cell(corner_worker, park_cells, 0.9, "transparent-corner park") == Vector2.INF:
+		return
 	var rc_roof_point := _roof_pick_point(rc_view, camera, viewport_size, main)
 	if rc_roof_point == Vector2.INF:
 		_fail("Research Center painted silhouette exposes no opaque art pixel beyond the old center radius")
@@ -4388,6 +4518,39 @@ func _run() -> void:
 	if (main.call("_building_at", fallback_screen + fallback_side, 0) as Node3D) == unready_view:
 		_fail("the unstyled view was picked beyond its center-radius fallback")
 		return
+	# HPA-697 fix round 1: the fallback must be proven as such — the view is
+	# returned with INF depth, never an opaque hit — and a real left-click
+	# with an eligible unit on the same pixel must select only that unit.
+	var fallback_setup: Dictionary = main.call("_building_hit_at", fallback_screen, 0)
+	if fallback_setup.get("view") != unready_view or not is_inf(float(fallback_setup.get("depth", INF))):
+		_fail("the unstyled-view probe point is not a genuine fallback hit (view with INF depth): hit=%s" % str(fallback_setup))
+		return
+	var fallback_workers: Array[Node3D] = []
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		var view := unit_node as Node3D
+		if view != null and int(view.get_meta("team_id", -1)) == 1:
+			fallback_workers.append(view)
+	if fallback_workers.is_empty():
+		_fail("no Team-1 worker remains for the fallback-vs-unit click leg")
+		return
+	var fallback_cells: Array[Vector2] = []
+	for offset in [Vector2.ZERO, Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1),
+			Vector2(2, 0), Vector2(-2, 0), Vector2(0, 2), Vector2(0, -2)]:
+		fallback_cells.append(Vector2(floori(fallback_ground.x) + 0.5, floori(fallback_ground.z) + 0.5) + offset)
+	var fallback_worker: Node3D = fallback_workers[0]
+	if await _hop_worker_to_first_cell(fallback_worker, fallback_cells, 0.45, "fallback-vs-unit") == Vector2.INF:
+		return
+	var fallback_unit_screen := camera.unproject_position(fallback_worker.global_position)
+	if fallback_unit_screen.distance_to(fallback_screen) > main.CLICK_RADIUS - 2.0:
+		_fail("the hopped fallback worker's projection left the fallback pixel (%.1fpx)" % fallback_unit_screen.distance_to(fallback_screen))
+		return
+	_mouse_click(fallback_screen, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return (main.selected_ids as Array).size() == 1 \
+				and int(main.selected_ids[0]) == int(fallback_worker.get_meta("unit_id", -1)) \
+				and int(main.selected_building_id) == -1,
+			5.0, "the 20px fallback building stole the left-click from the overlapping unit (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
 	unready_view.free()
 
 	# HPA-697 Step 2 unit/building overlap legs through real input. The
@@ -4528,6 +4691,23 @@ func _run() -> void:
 		return
 	for _settle in 3:
 		await get_tree().process_frame
+	# The +0.15 body anchor is what keeps a crossing Worker selectable: at
+	# this framing the retained Gate GLB yields a real plinth hit just
+	# behind the anchor, so pin the exact comparison — a loosened anchor or
+	# a flipped rule would hand the click to the Gate and fail both this
+	# check and the real selection below.
+	var anchor_screen: Vector2 = camera.unproject_position(gate_worker.global_position)
+	var anchor_hit: Dictionary = main.call("_building_hit_at", anchor_screen, 1)
+	var anchor_origin: Vector3 = camera.project_ray_origin(anchor_screen)
+	var anchor_dir: Vector3 = camera.project_ray_normal(anchor_screen)
+	var anchor_unit_depth: float = (gate_worker.global_position + Vector3(0.0, 0.15, 0.0) - anchor_origin).dot(anchor_dir)
+	var anchor_building_depth: float = float(anchor_hit.get("depth", INF))
+	if anchor_hit.get("view") != gate_view or anchor_building_depth >= INF:
+		_fail("the corridor click no longer yields a real Gate plinth hit for the +0.15 anchor check (view=%s depth=%s)" % [str(anchor_hit.get("view")), str(anchor_building_depth)])
+		return
+	if anchor_building_depth <= anchor_unit_depth:
+		_fail("the Gate plinth hit is no longer strictly behind the Worker's +0.15 body anchor (plinth=%.3f anchor=%.3f)" % [anchor_building_depth, anchor_unit_depth])
+		return
 	_mouse_click(camera.unproject_position(gate_worker.global_position), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(gate_worker.get_meta("unit_id", -1)) in main.selected_ids \
@@ -4535,6 +4715,155 @@ func _run() -> void:
 			5.0, "the completed Gate stole the click from the Worker inside its corridor (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
 		return
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped" % max_visual_step)
+	# HPA-697 fix round 1: the enemy overlap rules must also hold through
+	# real right-clicks — the contextual router must dispatch the attack for
+	# the picked enemy, and hidden or team-filtered candidates must never
+	# become the dispatched target. The fixture is pre-wave (workers only),
+	# so the sim receipts below reject with NotCombatant: that rejection is
+	# the observable proof the dispatched command was an attack carrying the
+	# selected Worker — a router regression to Move would be accepted
+	# instead. The exact winning view stays pinned by the kept
+	# _assert_enemy_overlap_pick direct checks; real-enemy acceptance is the
+	# combat lifecycle smoke's visible-alien right-click leg.
+	if (main.selected_ids as Array).is_empty() \
+			or int(main.selected_ids[0]) != int(gate_worker.get_meta("unit_id", -1)):
+		_fail("the right-click dispatch leg expected the corridor click's Worker selection: %s" % str(main.selected_ids))
+		return
+	if str(main.get("_armed_order")) != "" or str(main.get("_placement_kind")) != "":
+		_fail("the right-click dispatch leg expects no armed order or pending placement: armed=%s placement=%s" % [str(main.get("_armed_order")), str(main.get("_placement_kind"))])
+		return
+	var attack_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var attack_point := Vector2.INF
+	for row in [viewport_size.y - 30.0, viewport_size.y - 60.0, viewport_size.y * 0.5, 40.0]:
+		for column in range(20, int(viewport_size.x) - 20, 40):
+			var candidate := Vector2(float(column), row)
+			if attack_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)):
+				continue
+			if (main.call("_building_at", candidate, 0) as Node3D) != null:
+				continue
+			if (main.call("_nearest_view", "unit_views", candidate, 0) as Node3D) != null:
+				continue
+			if int(main.call("_gatherable_resource_id", candidate)) > 0:
+				continue
+			attack_point = candidate
+			break
+		if attack_point != Vector2.INF:
+			break
+	if attack_point == Vector2.INF:
+		_fail("no open pixel exists for the real-input right-click overlap legs")
+		return
+	var attack_origin := camera.project_ray_origin(attack_point)
+	var attack_dir := camera.project_ray_normal(attack_point)
+	var attack_side := (camera.global_transform.basis.x).normalized()
+	var dispatch_views: Array[Node3D] = []
+	var enemy_unit := Node3D.new()
+	enemy_unit.set_meta("team_id", 2)
+	enemy_unit.set_meta("unit_id", 9002)
+	add_child(enemy_unit)
+	enemy_unit.global_position = attack_origin + attack_dir * 4.5 + attack_side * 0.1
+	enemy_unit.add_to_group("unit_views")
+	dispatch_views.append(enemy_unit)
+	var enemy_block := Node3D.new()
+	enemy_block.set_meta("team_id", 2)
+	enemy_block.set_meta("building_id", 9101)
+	var block_model := Node3D.new()
+	block_model.name = "Model"
+	var block_mesh := MeshInstance3D.new()
+	var block_box := BoxMesh.new()
+	block_box.size = Vector3(0.5, 1.0, 0.5)
+	block_mesh.mesh = block_box
+	block_model.add_child(block_mesh)
+	enemy_block.add_child(block_model)
+	add_child(enemy_block)
+	enemy_block.global_position = attack_origin + attack_dir * 6.0
+	enemy_block.add_to_group("building_views")
+	dispatch_views.append(enemy_block)
+	# The overlap precondition through the real picker: the in-front unit is
+	# the nearest team-filtered candidate and the box behind it is a genuine
+	# opaque silhouette hit at the same pixel.
+	if (main.call("_nearest_view", "unit_views", attack_point, 2) as Node3D) != enemy_unit:
+		_fail("the synthetic enemy unit is not the nearest team-filtered candidate for the right-click leg")
+		for view in dispatch_views:
+			view.free()
+		return
+	var block_setup: Dictionary = main.call("_building_hit_at", attack_point, 2)
+	if block_setup.get("view") != enemy_block or is_inf(float(block_setup.get("depth", INF))):
+		_fail("the synthetic enemy box is not an opaque silhouette hit behind the unit: hit=%s" % str(block_setup))
+		for view in dispatch_views:
+			view.free()
+		return
+	# Real right-click where the enemy unit overlaps the opaque building in
+	# front of it: the attack must dispatch (and reach the sim, receipting
+	# as the Worker's NotCombatant rejection).
+	var dispatch_revision := int(GrusBridge.command_feedback_revision())
+	# push_input's synchronous dispatch keeps the immediate command_status
+	# read exact (the buffered parse_input_event path only lands next frame,
+	# where the verdict mirror may already have replaced it).
+	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
+	if str(main.command_status.text) != "Attack command queued":
+		_fail("the in-front enemy unit's right-click did not dispatch an attack: %s" % str(main.command_status.text))
+		for view in dispatch_views:
+			view.free()
+		return
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > dispatch_revision \
+				and str(GrusBridge.command_feedback()).contains("NotCombatant"),
+			10.0, "the dispatched attack never reached the sim as the Worker's NotCombatant rejection: %s" % str(GrusBridge.command_feedback())):
+		for view in dispatch_views:
+			view.free()
+		return
+	# With the unit behind the opaque silhouette, the right-click must still
+	# dispatch an attack — now for the building the pick switched to.
+	enemy_unit.global_position = attack_origin + attack_dir * 7.0 + attack_side * 0.1
+	await get_tree().process_frame
+	dispatch_revision = int(GrusBridge.command_feedback_revision())
+	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
+	if str(main.command_status.text) != "Attack command queued":
+		_fail("the right-click behind the enemy silhouette did not dispatch an attack: %s" % str(main.command_status.text))
+		for view in dispatch_views:
+			view.free()
+		return
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > dispatch_revision \
+				and str(GrusBridge.command_feedback()).contains("NotCombatant"),
+			10.0, "the silhouette-switched attack never reached the sim as the Worker's NotCombatant rejection: %s" % str(GrusBridge.command_feedback())):
+		for view in dispatch_views:
+			view.free()
+		return
+	# Hidden enemy candidates: with both enemy views fog-hidden, the same
+	# right-click must fall through to Move — a hidden enemy may never
+	# become the dispatched attack target.
+	enemy_unit.visible = false
+	enemy_block.visible = false
+	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
+	if str(main.command_status.text) != "Move command queued":
+		_fail("a right-click over only fog-hidden enemies dispatched %s instead of falling through to Move" % str(main.command_status.text))
+		for view in dispatch_views:
+			view.free()
+		return
+	# Team-filtered candidates: a friendly unit nearest the same pixel must
+	# never become the dispatched attack target either.
+	var friendly_unit := Node3D.new()
+	friendly_unit.set_meta("team_id", 1)
+	friendly_unit.set_meta("unit_id", 9099)
+	add_child(friendly_unit)
+	friendly_unit.global_position = attack_origin + attack_dir * 4.0 + attack_side * 0.05
+	friendly_unit.add_to_group("unit_views")
+	dispatch_views.append(friendly_unit)
+	if (main.call("_nearest_view", "unit_views", attack_point, 0) as Node3D) != friendly_unit:
+		_fail("the synthetic friendly unit is not the nearest candidate for the team-filter leg")
+		for view in dispatch_views:
+			view.free()
+		return
+	SmokeHelpers.push_mouse_click(get_tree(), attack_point, MOUSE_BUTTON_RIGHT)
+	if str(main.command_status.text) != "Move command queued":
+		_fail("a right-click whose nearest candidate is friendly dispatched %s instead of falling through to Move" % str(main.command_status.text))
+		for view in dispatch_views:
+			view.free()
+		return
+	for view in dispatch_views:
+		view.free()
+
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click" % max_visual_step)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
