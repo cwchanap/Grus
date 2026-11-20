@@ -447,7 +447,10 @@ func _pan_camera(relative: Vector2) -> void:
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
 	var nearest := _nearest_view("unit_views", screen_position, 1)
-	if nearest != null:
+	var building_hit := _building_hit_at(screen_position, 1)
+	var ray_origin := camera.project_ray_origin(screen_position)
+	var ray_direction := camera.project_ray_normal(screen_position)
+	if nearest != null and not _building_beats_unit(building_hit, nearest, ray_origin, ray_direction):
 		if not additive:
 			selected_ids.clear()
 		selected_building_id = -1
@@ -456,7 +459,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			selected_ids.append(id)
 		_apply_selection()
 		return
-	var building := _building_at(screen_position, 1)
+	var building: Node3D = building_hit.get("view") as Node3D
 	if building != null:
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
@@ -659,15 +662,33 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 			nearest_distance = distance
 	return nearest
 
-## Compare the nearest eligible unit with the silhouette-picked building.
+## Compare the nearest eligible unit with the silhouette-picked building:
+## an overlapping unit loses only to a real opaque building hit in front of
+## its body reference; fallback-only building hits never outrank the unit.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 	var unit := _nearest_view("unit_views", screen_position, 2)
-	var building := _building_at(screen_position, 2)
+	var building_hit := _building_hit_at(screen_position, 2)
 	if unit == null:
-		return building
-	if building == null:
+		return building_hit.get("view") as Node3D
+	if building_hit.get("view") == null:
 		return unit
-	return unit if _view_distance(unit, screen_position) <= _view_distance(building, screen_position) else building
+	var ray_origin := camera.project_ray_origin(screen_position)
+	var ray_direction := camera.project_ray_normal(screen_position)
+	if _building_beats_unit(building_hit, unit, ray_origin, ray_direction):
+		return building_hit.get("view") as Node3D
+	return unit
+
+## A building only steals an overlapping unit's pick on a real opaque
+## silhouette hit strictly in front of the unit's small ground-level body
+## reference (+0.15 y): a finished Gate's shallow plinth must not take a
+## Worker's click, and a tall unit behind a painted roof must not steal the
+## roof click. A fallback-only hit (depth INF) never outranks the unit.
+func _building_beats_unit(building_hit: Dictionary, unit: Node3D, ray_origin: Vector3, ray_direction: Vector3) -> bool:
+	var building_depth: float = building_hit.get("depth", INF)
+	if building_depth >= INF:
+		return false
+	var unit_depth := (unit.global_position + Vector3(0.0, 0.15, 0.0) - ray_origin).dot(ray_direction)
+	return building_depth < unit_depth
 
 func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 	return camera.unproject_position(view.global_position).distance_to(screen_position)
@@ -677,8 +698,10 @@ func _view_distance(view: Node3D, screen_position: Vector2) -> float:
 ## depth sorting along the camera ray so foreground geometry wins over background
 ## structures. The center-radius floor stays as the fallback when no silhouette
 ## is hit (e.g. for small buildings at wide zoom or unstyled views). Hidden
-## (fogged) views are never picked.
-func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
+## (fogged) views are never picked. Returns {view, depth}; depth is INF for a
+## 20px fallback-only hit so unit overlap comparisons can never let a
+## fallback outrank an eligible unit.
+func _building_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
 	var nearest_hit_view: Node3D = null
@@ -707,7 +730,12 @@ func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 		if depth >= 0.0 and depth < nearest_hit_depth:
 			nearest_hit_view = view
 			nearest_hit_depth = depth
-	return nearest_hit_view if nearest_hit_view != null else fallback
+	if nearest_hit_view != null:
+		return {"view": nearest_hit_view, "depth": nearest_hit_depth}
+	return {"view": fallback, "depth": INF}
+
+func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
+	return _building_hit_at(screen_position, team_filter).get("view") as Node3D
 
 func _model_ray_hit_depth(model: Node3D, ray_origin: Vector3, ray_dir: Vector3) -> float:
 	var min_depth := INF

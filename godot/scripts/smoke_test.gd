@@ -1434,6 +1434,88 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 				best_margin = margin
 	return best
 
+## HPA-697 Step 2 overlap pick points: scan the painted view's opaque art
+## pixels for one whose camera ray relates to `unit`'s +0.15 y body reference
+## exactly as `want_unit_first` demands (front: the unit beats the opaque
+## building hit; behind: the hit beats the unit). The point keeps `unit` as
+## its only eligible picker and this view as the resolved building; the
+## eligible pixel closest to the unit's projection wins so a small view
+## settle can never push the click outside the 20px pick radius.
+func _overlap_pick_point(view: Node3D, unit: Node3D, want_unit_first: bool, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
+	var model := view.get_node_or_null("Model") as Node3D
+	if model == null:
+		return Vector2.INF
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if sprites.is_empty():
+		return Vector2.INF
+	var sprite := sprites[0] as SpriteBase3D
+	var view_script: Script = view.get_script()
+	var mask: BitMap = view_script.alpha_mask(sprite.texture)
+	if mask == null:
+		return Vector2.INF
+	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var unit_screen := camera.unproject_position(unit.global_position)
+	var mask_size := mask.get_size()
+	var best := Vector2.INF
+	var best_distance := -1.0
+	for row in range(0, int(mask_size.y), 8):
+		for col in range(0, int(mask_size.x), 8):
+			if not mask.get_bitv(Vector2i(col, row)):
+				continue
+			var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, Vector2(col, row))
+			var candidate := camera.unproject_position(world)
+			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+					or hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)):
+				continue
+			if (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != unit:
+				continue
+			if (main.call("_building_at", candidate, 1) as Node3D) != view:
+				continue
+			var origin := camera.project_ray_origin(candidate)
+			var direction := camera.project_ray_normal(candidate)
+			var building_depth: float = main.call("_model_ray_hit_depth", model, origin, direction)
+			if building_depth < 0.0:
+				continue
+			var unit_depth: float = (unit.global_position + Vector3(0.0, 0.15, 0.0) - origin).dot(direction)
+			if want_unit_first and unit_depth >= building_depth:
+				continue
+			if not want_unit_first and building_depth >= unit_depth:
+				continue
+			var unit_distance := unit_screen.distance_to(candidate)
+			if best_distance < 0.0 or unit_distance < best_distance:
+				best = candidate
+				best_distance = unit_distance
+	return best
+
+## Hop one worker to a cell-centred spot through the real bridge move path,
+## waiting for sim acceptance, the arrival radius and a settled Idle task.
+func _hop_worker(unit: Node3D, target: Vector2, tolerance: float, why: String) -> bool:
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("could not accelerate the sim for the %s hop" % why)
+		return false
+	var revision := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(PackedInt32Array([int(unit.get_meta("unit_id", -1))]), target):
+		_fail("%s move was not queued" % why)
+		return false
+	if not await _wait_until(_accepted_since.bind(revision), 10.0, "%s move was not accepted by the sim" % why):
+		return false
+	var unit_id := int(unit.get_meta("unit_id", -1))
+	if not await _wait_until(func():
+			var view := _unit_view(unit_id)
+			return view != null \
+				and view.global_position.distance_to(Vector3(target.x, 0.0, target.y)) <= tolerance \
+				and _unit_idle(view),
+			30.0, "the %s worker never arrived near %s" % [why, target]):
+		return false
+	# Let the hand-rolled per-tick view sync catch up with the settled sim
+	# position before any screen-space scan or click derives from the view.
+	for _settle in 3:
+		await get_tree().process_frame
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not restore sim speed after the %s hop" % why)
+		return false
+	return true
+
 func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
 	for row in [viewport_size.y - 30.0, viewport_size.y - 60.0, viewport_size.y * 0.5, 40.0]:
@@ -1477,6 +1559,67 @@ func _assert_overlapping_building_pick(main: Node, camera: Camera3D, viewport_si
 		_fail("overlapping building silhouettes did not pick the foreground model")
 	return ok
 
+## HPA-697 Step 2: the right-click enemy path must obey the same depth rule
+## as selection — an overlapping enemy unit loses only to a real opaque
+## building hit in front of its body reference, a fallback-only enemy
+## building never outranks the unit, and friendly or fog-hidden views never
+## win the pick. Synthetic views keep this probe deterministic; live alien
+## journeys stay in the wave/combat smokes.
+func _assert_enemy_overlap_pick(main: Node, camera: Camera3D) -> bool:
+	var point := get_viewport().get_visible_rect().size * 0.5
+	var origin := camera.project_ray_origin(point)
+	var direction := camera.project_ray_normal(point)
+	var side := (camera.global_transform.basis.x).normalized()
+	var views: Array[Node3D] = []
+	# Enemy units straddle the box silhouette's ~5.5 depth with distinct
+	# projected offsets; the friendly and hidden units sit tighter to the
+	# click so a broken filter would win.
+	for placement in [[9002, 2, 7.0, 0.2], [9003, 2, 4.5, 0.1], [9004, 1, 3.9, 0.05], [9005, 2, 4.0, 0.05]]:
+		var unit := Node3D.new()
+		unit.set_meta("team_id", placement[1])
+		unit.set_meta("unit_id", placement[0])
+		add_child(unit)
+		unit.global_position = origin + direction * float(placement[2]) + side * float(placement[3])
+		unit.add_to_group("unit_views")
+		views.append(unit)
+	views[3].visible = false
+	var building := Node3D.new()
+	building.set_meta("team_id", 2)
+	building.set_meta("building_id", 9101)
+	var model := Node3D.new()
+	model.name = "Model"
+	var mesh := MeshInstance3D.new()
+	mesh.mesh = BoxMesh.new()
+	model.add_child(mesh)
+	building.add_child(model)
+	add_child(building)
+	building.global_position = origin + direction * 6.0
+	building.add_to_group("building_views")
+	views.append(building)
+
+	var enemy: Node3D = main.call("_nearest_enemy_view", point)
+	var ok := enemy == views[1]
+	if not ok:
+		_fail("enemy right-click pick ignored the in-front enemy unit: view=%s" % str(enemy))
+	# With that unit behind the opaque silhouette, the building wins.
+	views[1].global_position = origin + direction * 7.0 + side * 0.1
+	enemy = main.call("_nearest_enemy_view", point)
+	if enemy != building:
+		_fail("enemy right-click pick let a unit behind the opaque silhouette steal the roof: view=%s" % str(enemy))
+		ok = false
+	# A fallback-only enemy building (off the silhouette, inside the center
+	# radius) never outranks an eligible unit either; park the spent unit
+	# beside the ray where its projection leaves the pick radius.
+	views[1].global_position = origin + direction * 7.0 + side * 5.0
+	building.global_position = origin + direction * 6.0 + side * 1.4
+	enemy = main.call("_nearest_enemy_view", point)
+	if enemy != views[0]:
+		_fail("enemy right-click pick let a fallback-only building steal the unit: view=%s" % str(enemy))
+		ok = false
+	for view in views:
+		view.free()
+	return ok
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -1501,6 +1644,8 @@ func _run() -> void:
 	if not _assert_empty_selection_hierarchy():
 		return
 	if not _assert_overlapping_building_pick(get_node("Main"), camera, viewport_size):
+		return
+	if not _assert_enemy_overlap_pick(get_node("Main"), camera):
 		return
 	var muzzle_probe := Node3D.new()
 	add_child(muzzle_probe)
@@ -4245,6 +4390,151 @@ func _run() -> void:
 		return
 	unready_view.free()
 
-	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius" % max_visual_step)
+	# HPA-697 Step 2 unit/building overlap legs through real input. The
+	# radius-steal park keeps every other worker clear, so each hop leaves
+	# exactly one eligible unit near the Research Center's scanned pixels.
+	var overlap_workers: Array[Node3D] = []
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		var view := unit_node as Node3D
+		if view != null and int(view.get_meta("team_id", -1)) == 1:
+			overlap_workers.append(view)
+	overlap_workers.sort_custom(func(a: Node3D, b: Node3D) -> bool:
+		return int(a.get_meta("unit_id", -1)) < int(b.get_meta("unit_id", -1)))
+	if overlap_workers.size() < 3:
+		_fail("fewer than three Team-1 workers remain for the overlap legs")
+		return
+	var overlap_rc := steal_rc
+	var rc_center := overlap_rc.global_position
+	# Unit in front of the painted facade keeps the click: hop a worker just
+	# south of the footprint and click an opaque pixel deeper than its +0.15
+	# body reference.
+	var south_spot := Vector2(floori(rc_center.x) + 0.5, floori(rc_center.z + rc_footprint_depth * 0.5 + 1.0) + 0.5)
+	if not await _hop_worker(overlap_workers[0], south_spot, 1.6, "overlap-front"):
+		return
+	var front_point := _overlap_pick_point(overlap_rc, overlap_workers[0], true, camera, viewport_size, main)
+	if front_point == Vector2.INF:
+		_fail("no opaque Research Center pixel sits deeper than the south worker's body reference")
+		return
+	if (main.call("_nearest_view", "unit_views", front_point, 1) as Node3D) != overlap_workers[0]:
+		_fail("the front worker left the scanned overlap pick point before the click")
+		return
+	_mouse_click(front_point, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(overlap_workers[0].get_meta("unit_id", -1)) in main.selected_ids \
+				and int(main.selected_building_id) == -1,
+			5.0, "the Research Center facade stole the click from the worker in front of it (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+	# Far unit behind the opaque roof loses: hop a second worker just north
+	# of the footprint and click an opaque pixel strictly in front of that
+	# body reference — the silhouette must win the click.
+	var north_spot := Vector2(floori(rc_center.x) + 0.5, floori(rc_center.z - rc_footprint_depth * 0.5 - 1.0) + 0.5)
+	if not await _hop_worker(overlap_workers[1], north_spot, 1.6, "overlap-behind"):
+		return
+	var behind_point := _overlap_pick_point(overlap_rc, overlap_workers[1], false, camera, viewport_size, main)
+	if behind_point == Vector2.INF:
+		_fail("no opaque Research Center pixel sits in front of the north worker's body reference")
+		return
+	if (main.call("_nearest_view", "unit_views", behind_point, 1) as Node3D) != overlap_workers[1]:
+		_fail("the behind worker left the scanned overlap pick point before the click")
+		return
+	_mouse_click(behind_point, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == int(overlap_rc.get_meta("building_id", -1)) \
+				and (main.selected_ids as Array).is_empty(),
+			5.0, "the unit behind the opaque roof stole the facade click (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+	# A completed Gate's shallow plinth must not take a Worker's click: place
+	# a real Gate through the bridge, march a worker into its corridor cell
+	# and click the worker's own projection.
+	var gate_anchor := Vector2i(-1, -1)
+	var gate_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	for dy in range(2, 9):
+		for dx in range(-6, 7):
+			var candidate := Vector2i(floori(rc_center.x) + dx, floori(rc_center.z + rc_footprint_depth * 0.5) + dy)
+			var near_unit := false
+			for unit_node in get_tree().get_nodes_in_group("unit_views"):
+				var unit_view := unit_node as Node3D
+				if unit_view != null and Vector2(unit_view.global_position.x, unit_view.global_position.z) \
+						.distance_to(Vector2(float(candidate.x) + 0.5, float(candidate.y) + 0.5)) < 1.5:
+					near_unit = true
+					break
+			if near_unit:
+				continue
+			var preview: Dictionary = GrusBridge.placement_preview(1, "Gate", candidate.x, candidate.y)
+			if not bool(preview.get("valid", false)):
+				continue
+			var cell_screen := camera.unproject_position(Vector3(float(candidate.x) + 0.5, 0.0, float(candidate.y) + 0.5))
+			if not Rect2(Vector2.ZERO, viewport_size).has_point(cell_screen) \
+					or gate_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(cell_screen)):
+				continue
+			gate_anchor = candidate
+			break
+		if gate_anchor.x >= 0:
+			break
+	if gate_anchor.x < 0:
+		_fail("no valid on-screen Gate anchor south of the Research Center for the corridor click")
+		return
+	if not GrusBridge.place_building(1, "Gate", gate_anchor.x, gate_anchor.y):
+		_fail("the corridor-click Gate placement was not queued")
+		return
+	var gate_box := [null]
+	if not await _wait_until(func():
+			for node in get_tree().get_nodes_in_group("building_views"):
+				var view := node as Node3D
+				if str(view.get_meta("building_kind", "")) != "Gate":
+					continue
+				gate_box[0] = view
+				return true
+			return false,
+			10.0, "the placed Gate never produced a building view"):
+		return
+	var gate_view := gate_box[0] as Node3D
+	var gate_id := int(gate_view.get_meta("building_id", -1))
+	if not await _wait_until(func():
+			return bool(GrusBridge.building_snapshot(gate_id).get("complete", false)) \
+				and SmokeHelpers.building_model_error(gate_view, "Gate", true).is_empty(),
+			30.0, "the corridor-click Gate never completed with its styled model"):
+		return
+	var gate_worker := overlap_workers[2]
+	# A Gate cell rejects move goals (the sim only clears it as a waypoint),
+	# so stage the worker south of the Gate, march it THROUGH the corridor
+	# and stop it inside — then click its own projection like a crossing
+	# Worker's click.
+	var gate_center := Vector2(gate_view.global_position.x, gate_view.global_position.z)
+	var stage_cell := Vector2(float(gate_anchor.x) + 0.5, float(gate_anchor.y) + 2.5)
+	if not await _hop_worker(gate_worker, stage_cell, 1.0, "gate-stage"):
+		return
+	var corridor_revision := int(GrusBridge.command_feedback_revision())
+	if not GrusBridge.move_units(PackedInt32Array([int(gate_worker.get_meta("unit_id", -1))]), Vector2(float(gate_anchor.x) + 0.5, float(gate_anchor.y) - 0.5)):
+		_fail("the gate crossing move was not queued")
+		return
+	if not await _wait_until(_accepted_since.bind(corridor_revision), 10.0,
+			"the gate crossing move was not accepted by the sim"):
+		return
+	var gate_worker_id := int(gate_worker.get_meta("unit_id", -1))
+	if not await _wait_until(func():
+			var view := _unit_view(gate_worker_id)
+			return view != null and Vector2(view.global_position.x, view.global_position.z).distance_to(gate_center) <= 0.15,
+			10.0, "the crossing worker never entered the Gate corridor"):
+		return
+	if not GrusBridge.stop_units(PackedInt32Array([gate_worker_id])):
+		_fail("the corridor stop was not queued")
+		return
+	if not await _wait_until(func():
+			var view := _unit_view(gate_worker_id)
+			return view != null and _unit_idle(view) \
+				and Vector2(view.global_position.x, view.global_position.z).distance_to(gate_center) <= 0.45,
+			5.0, "the corridor worker never settled inside the Gate cell"):
+		return
+	for _settle in 3:
+		await get_tree().process_frame
+	_mouse_click(camera.unproject_position(gate_worker.global_position), MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(gate_worker.get_meta("unit_id", -1)) in main.selected_ids \
+				and int(main.selected_building_id) == -1,
+			5.0, "the completed Gate stole the click from the Worker inside its corridor (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+
+	print("GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_%.3f fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped" % max_visual_step)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
