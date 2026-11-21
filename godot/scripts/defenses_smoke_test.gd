@@ -25,7 +25,7 @@ func _run() -> void:
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
 
-	if not GrusBridge.set_sim_speed(_march_speed()):
+	if not GrusBridge.set_sim_speed(20.0):
 		_fail("could not accelerate the defense journey")
 		return
 	if not await _wait_until(_fixture_views_settled, 20.0,
@@ -147,7 +147,11 @@ func _run() -> void:
 	_defense_ids.append(gate_id)
 	for id in _building_ids_of_kind("Wall"):
 		_defense_ids.append(id)
-	if not await _wait_until(_all_defenses_complete, 40.0,
+	# One builder constructs every defense sequentially (5 s per wall, 8 s
+	# for the Gate, plus slot walks), so the completion budget is sized for
+	# the builder-paced tail after the last placement, not for a single
+	# building time — and it must stay inside the 300-s wave preparation.
+	if not await _wait_until(_all_defenses_complete, 220.0,
 			"the Worker did not finish the placed wall ring"):
 		return
 	var gate_view := _building_view(gate_id)
@@ -429,11 +433,19 @@ func _wait_for_gatherer_settled(worker: Node3D, source: Node3D, timeout_s: float
 		timeout_s, "independent Worker did not settle beside the visible Scrap source")
 
 func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, timeout_s: float) -> bool:
+	# The placement polls (request drain, census, view sync) must not burn
+	# march seconds: at 20x each awaited physics step advances ~1 sim-s under
+	# the windowed renderer, which is how 29 placements once consumed the
+	# whole 300-s wave preparation. Slow the whole armed-placement attempt to
+	# 1x; every buffered click inside already rides 1x on its own. The _fail
+	# paths quit the process, so only the success paths restore the march.
+	var march := _slow_for_input()
 	var builder_id := int(_main.call("_lowest_selected_worker_id"))
 	var deadline_msec := Time.get_ticks_msec() + int(timeout_s * 1000.0)
 	var last_preview: Dictionary = {}
 	while Time.get_ticks_msec() < deadline_msec:
 		if _building_ids_of_kind(kind).size() >= expected_count:
+			_restore_march(march)
 			return true
 		last_preview = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
 		if not bool(last_preview.get("valid", false)):
@@ -453,6 +465,7 @@ func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, tim
 				_fail("%s placement at %s never returned an authoritative result" % [kind, cell])
 				return false
 			if _building_ids_of_kind(kind).size() >= expected_count:
+				_restore_march(march)
 				return true
 			var feedback := str(_main.command_status.text)
 			if feedback == "Command accepted":
@@ -460,6 +473,7 @@ func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, tim
 						and _building_ids_of_kind(kind).size() < expected_count:
 					await get_tree().physics_frame
 				if _building_ids_of_kind(kind).size() >= expected_count:
+					_restore_march(march)
 					return true
 				var orphan_preview: Dictionary = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
 				_fail("simulation accepted %s placement at %s but its view never appeared (views=%s preview_now=%s feedback=%s)" % [
@@ -594,24 +608,19 @@ func _cell_screen(cell: Vector2i) -> Vector2:
 	return _main.camera.unproject_position(_cell_world(cell))
 
 func _click_cell(cell: Vector2i, button: int) -> void:
-	# Clicks ride the march speed switch: on a real renderer the whole
-	# journey marches at 1x, so the 30-click wall ring cannot burn the
-	# 300 simulated-second wave-preparation clock it is placed against.
+	# Each buffered click rides 1x so it costs ~0.2 sim-s instead of the ~4
+	# sim-s a 20x catch-up frame burns under the windowed renderer; the ring's
+	# placement reliability must not depend on click pacing.
 	var march := _slow_for_input()
 	await _mouse_click(_cell_screen(cell), button)
 	_restore_march(march)
 
-## The journeys are authored against the 300 simulated-second wave
-## preparation with every budget in simulated seconds; input and view-sync
-## waits burn match time at 20x under a real renderer (each awaited frame
-## ≈ 4 match-seconds under llvmpipe), so the windowed march rides 1x and
-## headless CI keeps the 20x march.
-func _march_speed() -> float:
-	return 1.0 if DisplayServer.get_name() != "headless" else 20.0
-
-## Buffered input awaits burn match time at the active march speed (each
-## awaited frame advances ~4 simulated seconds at 20x under the windowed
-## renderer); clicks and taps ride 1x and restore the caller's march.
+## The journey keeps the 20x march on every host because its construction is
+## wave-raced by design (one builder must finish the ring before the 300-s
+## preparation expires), so a slowed march could not fit the builder-paced
+## tail inside the wave clock the smoke asserts. Buffered inputs and the
+## armed-placement polls below ride 1x instead, which is what actually
+## burns match time per awaited frame.
 func _slow_for_input() -> float:
 	var march := Engine.time_scale
 	if not is_equal_approx(march, 1.0) and not GrusBridge.set_sim_speed(1.0):
