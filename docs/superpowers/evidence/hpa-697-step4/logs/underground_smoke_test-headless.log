@@ -2,4 +2,4 @@ Initialize godot-rust (API v4.5.stable.official, runtime v4.7.1.stable.official,
 Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
 
 [godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
-GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=730 gathered_coal=110 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=34.60 elapsed_ms=14429
+GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=750 gathered_coal=114 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=10.40 elapsed_ms=16000
