@@ -1,0 +1,5 @@
+Initialize godot-rust (API v4.5.stable.official, runtime v4.7.1.stable.official, safeguards strict)
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
+GRUS_WAVE_SMOKE_OK start_pause_clock_frozen=true warning_hud=true snapshot_anchor_pings=true fog_markers_gated=true role_probes=white_box journey=kill_crystal_defeat_restart

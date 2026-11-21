@@ -1,0 +1,9 @@
+Initialize godot-rust (API v4.5.stable.official, runtime v4.7.1.stable.official, safeguards strict)
+Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
+
+[godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
+GRUS_UNDERGROUND_SMOKE_OK gathered_scrap=730 gathered_coal=110 paid_scrap=1026 paid_coal=258 cold_rate=2.8750 heat_delta=15 margin_s=34.60 elapsed_ms=14428
+WARNING: 4 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 2 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
