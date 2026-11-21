@@ -1730,6 +1730,40 @@ func _assert_enemy_overlap_pick(main: Node, camera: Camera3D) -> bool:
 	if enemy != views[0]:
 		_fail("enemy right-click pick let a fallback-only building steal the unit: view=%s" % str(enemy))
 		ok = false
+	# A friendly roof hides an enemy body pixel exactly as it hides a friendly
+	# one. The mesh picker accepts body pixels beyond the 20 px feet radius,
+	# so the depth verdict must see opaque buildings of both teams even
+	# though only an enemy may become the attack target. The spent box
+	# becomes the friendly roof, with a mesh-only enemy behind it whose feet
+	# project outside the fallback radius.
+	building.set_meta("team_id", 1)
+	building.global_position = origin + direction * 6.0
+	var roof_enemy := Node3D.new()
+	roof_enemy.set_meta("team_id", 2)
+	roof_enemy.set_meta("unit_id", 9102)
+	var roof_model := Node3D.new()
+	roof_model.name = "Model"
+	var roof_mesh := MeshInstance3D.new()
+	var roof_box := BoxMesh.new()
+	roof_box.size = Vector3(5.0, 1.0, 5.0)
+	roof_mesh.mesh = roof_box
+	roof_model.add_child(roof_mesh)
+	roof_enemy.add_child(roof_model)
+	add_child(roof_enemy)
+	roof_enemy.global_position = origin + direction * 8.0 + side * 1.8
+	roof_enemy.add_to_group("unit_views")
+	views.append(roof_enemy)
+	if camera.unproject_position(roof_enemy.global_position).distance_to(point) <= 20.0:
+		_fail("the friendly-roof probe's enemy feet are inside the 20 px fallback radius")
+		ok = false
+	elif main.call("_unit_mesh_hit_at", point, 2).get("view") != roof_enemy:
+		_fail("the friendly-roof probe's enemy mesh does not cover the click point")
+		ok = false
+	else:
+		enemy = main.call("_nearest_enemy_view", point)
+		if enemy != null:
+			_fail("a friendly roof did not occlude the enemy body pixel behind it: view=%s" % str(enemy))
+			ok = false
 	for view in views:
 		view.free()
 	return ok
@@ -3098,6 +3132,8 @@ func _run() -> void:
 	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	var stop_target := Vector3(40.5, 0.0, 44.5)
+	var stop_cell := Vector2i(floori(stop_target.x), floori(stop_target.z))
+	var stop_worker_id := int(unit_two.get_meta("unit_id", -1))
 	_mouse_click(camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
 	var stop_start := unit_two.global_position
 	for _frame in range(8):
@@ -3112,6 +3148,19 @@ func _run() -> void:
 		_fail("the stop probe had no live march for S to interrupt (moved=%.2f left=%.2f)" % [
 			unit_two.global_position.distance_to(stop_start),
 			unit_two.global_position.distance_to(stop_target)])
+		return
+	# A reserved click cell gets a neighbouring destination slot, so reaching
+	# the assigned goal short of the clicked point would still read as a
+	# stop. The accepted goal must be the clicked cell, and idle (which
+	# excludes MoveOrder owners) must be false while that order is live.
+	var stop_task: Dictionary = GrusBridge.unit_task_snapshot(stop_worker_id)
+	if int(stop_task.get("move_goal_x", -1)) != stop_cell.x \
+			or int(stop_task.get("move_goal_y", -1)) != stop_cell.y:
+		_fail("the stop probe's accepted move goal is not the clicked cell: %s vs %s" % [
+			str(stop_task), str(stop_cell)])
+		return
+	if _unit_idle(unit_two):
+		_fail("the stop probe worker was idle before S — no live order to interrupt")
 		return
 	_key_tap(KEY_S)
 	for _frame in range(2):
@@ -3135,6 +3184,16 @@ func _run() -> void:
 		await get_tree().physics_frame
 	if unit_two.global_position.distance_to(stopped_position) > 0.05:
 		_fail("Stop input did not settle the active move order")
+		return
+	# Stop-specific acceptance: idle (which excludes MoveOrder owners) must be
+	# true and the goal gone once S lands. Arrival also clears both, but the
+	# pre-key goal pin plus the ≥0.4 shortfall below reject a worker that got
+	# there on its own.
+	if not _unit_idle(unit_two):
+		_fail("Stop left the worker busy — the move order survived S")
+		return
+	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
+		_fail("Stop left a move goal on the worker")
 		return
 	# Settled is not stopped: a worker that simply finished the march would
 	# pass the checks above on a dead key. The S-application window (key
