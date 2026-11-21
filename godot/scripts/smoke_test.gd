@@ -3998,6 +3998,12 @@ func _run() -> void:
 				and selection_panel.tooltip_text.contains("Heat:"),
 			5.0, "single Research Center selection does not render catalogue-backed HP/heat detail"):
 		return
+	# Opt-in real-render evidence: the selected painted Research Center with
+	# its HUD HP/heat detail over the recentred world art.
+	var selected_capture := await SmokeHelpers.capture_frame(get_tree(), "selected-building")
+	if not selected_capture.is_empty():
+		_fail(selected_capture)
+		return
 	# HPA-291 silhouette picking: a click inside the model's projected art
 	# rect — beyond the old 20 px center-radius — must select the same
 	# building. The point derives from the live view's active Model bounds
@@ -4587,6 +4593,13 @@ func _run() -> void:
 				and int(main.selected_building_id) == -1,
 			5.0, "the Research Center facade stole the click from the worker in front of it (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
 		return
+	# Opt-in real-render evidence: the selected worker stands in front of the
+	# painted facade it just out-competed for this click.
+	if SmokeHelpers.capture_enabled():
+		var overlap_front_capture := await SmokeHelpers.capture_frame(get_tree(), "overlap-front")
+		if not overlap_front_capture.is_empty():
+			_fail(overlap_front_capture)
+			return
 	# Far unit behind the opaque roof loses: hop a second worker just north
 	# of the footprint and click an opaque pixel strictly in front of that
 	# body reference — the silhouette must win the click.
@@ -4606,6 +4619,14 @@ func _run() -> void:
 				and (main.selected_ids as Array).is_empty(),
 			5.0, "the unit behind the opaque roof stole the facade click (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
 		return
+	# Opt-in real-render evidence: the opaque painted roof won this click over
+	# the worker standing behind it, so the frame shows the selected Research
+	# Center with the occluded worker hidden by the art.
+	if SmokeHelpers.capture_enabled():
+		var overlap_behind_capture := await SmokeHelpers.capture_frame(get_tree(), "overlap-behind")
+		if not overlap_behind_capture.is_empty():
+			_fail(overlap_behind_capture)
+			return
 	# A completed Gate's shallow plinth must not take a Worker's click: place
 	# a real Gate through the bridge, march a worker into its corridor cell
 	# and click the worker's own projection.
@@ -4668,6 +4689,14 @@ func _run() -> void:
 	if not await _hop_worker(gate_worker, stage_cell, 1.0, "gate-stage"):
 		return
 	var corridor_revision := int(GrusBridge.command_feedback_revision())
+	# The Worker moves 6 cells/s (0.3 per 20 Hz tick): at windowed
+	# software-render frame rates the synced view advances further than the
+	# 0.3-cell entry window between two rendered samples, so the mid-corridor
+	# transit is only catchable at a reduced sim rate. Headless sampling is
+	# unaffected either way; the march speed itself never changes.
+	if not GrusBridge.set_sim_speed(0.25):
+		_fail("could not slow the sim for the gate corridor crossing")
+		return
 	if not GrusBridge.move_units(PackedInt32Array([int(gate_worker.get_meta("unit_id", -1))]), Vector2(float(gate_anchor.x) + 0.5, float(gate_anchor.y) - 0.5)):
 		_fail("the gate crossing move was not queued")
 		return
@@ -4691,6 +4720,16 @@ func _run() -> void:
 		return
 	for _settle in 3:
 		await get_tree().process_frame
+	# Opt-in real-render evidence: a Worker stopped inside the finished Gate's
+	# corridor — the clickable crossing the depth contract protects.
+	if SmokeHelpers.capture_enabled():
+		var gate_crossing_capture := await SmokeHelpers.capture_frame(get_tree(), "gate-crossing")
+		if not gate_crossing_capture.is_empty():
+			_fail(gate_crossing_capture)
+			return
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not restore sim speed after the gate corridor crossing")
+		return
 	# The +0.15 body anchor is what keeps a crossing Worker selectable: at
 	# this framing the retained Gate GLB yields a real plinth hit just
 	# behind the anchor, so pin the exact comparison — a loosened anchor or
