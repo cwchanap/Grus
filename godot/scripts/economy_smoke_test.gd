@@ -534,6 +534,59 @@ func _all_overlaid(views: Array, cold: bool) -> bool:
 ## can be freed between frames (the same stale-capture class that already
 ## aborted this wait), and a freed bound Node raises instead of failing the
 ## predicate.
+## Selects a possibly-marching gatherer through the real picker. Polls at the
+## caller's sim speed and only fires when the task snapshot reports a
+## stationary phase — Gathering (standing at its source) or Idle (sources
+## deplete exactly when the parks run, so the common park subject idles at
+## the exhausted source) — with an unoccluded projection sample (the
+## depth-scoped rule would otherwise hand the click to in-front painted
+## art) — then the click is sent at 1x so the buffered event cannot outpace
+## its own target, and the 20x march resumes. At 20x every polled physics
+## frame is one full sim-second, so a gate that never matches burns its
+## whole timeout as simulated world time; matching stationary states keeps
+## the burn to a few seconds. The poll itself never awaits a rendered
+## frame, which would burn ~4 sim-seconds per iteration at 20x. Caller
+## must be at 20x.
+func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
+	var frame_budget := int(ceilf(timeout_s * Engine.physics_ticks_per_second))
+	for _frame in frame_budget:
+		var unit := _unit_view(unit_id)
+		if unit == null:
+			_fail("unoccluded selection target %d vanished: %s" % [unit_id, _staging_details(unit_id)])
+			return false
+		var task := str(GrusBridge.unit_task_snapshot(unit_id).get("task", ""))
+		if task == "Gathering" or task == "Idle":
+			var position := unit.global_position
+			var screen := _camera.unproject_position(position)
+			var unit_depth: float = (position + Vector3(0.0, 0.15, 0.0) \
+					- _camera.project_ray_origin(screen)).dot(_camera.project_ray_normal(screen))
+			var hit: Dictionary = get_node("Main").call("_building_hit_at", screen, 1)
+			if float(hit.get("depth", INF)) >= unit_depth:
+				if not GrusBridge.set_sim_speed(1.0):
+					_fail("could not slow the sim for the clear-sample click")
+					return false
+				_mouse_click(screen, MOUSE_BUTTON_LEFT)
+				# Confirm across rendered frames: at the windowed renderer's
+				# frame pacing the click's selection result syncs a rendered
+				# frame or two after the input flush, so one immediate read
+				# would misjudge the attempt and burn another gather cycle
+				# waiting for the next stationary window. At 1x these confirm
+				# frames cost ~0.2 sim-s each; the 20x march resumes as soon
+				# as the id resolves either way.
+				var confirmed := false
+				for _confirm in 8:
+					await get_tree().process_frame
+					var selected := _selected_ids()
+					if selected.size() == 1 and int(selected[0]) == unit_id:
+						confirmed = true
+						break
+				GrusBridge.set_sim_speed(20.0)
+				if confirmed:
+					return true
+		await get_tree().physics_frame
+	_fail("unit %d never presented a stationary unoccluded pick" % unit_id)
+	return false
+
 func _scrap_deposited_at_depot(worker_id: int, depot: Vector3, box: Dictionary) -> bool:
 	var scrap := int(GrusBridge.economy_snapshot().get("scrap", -1))
 	var increased := scrap > int(box.get("scrap", scrap))
@@ -631,7 +684,13 @@ func _clear_selection_for_miss_probe(unit_id: int) -> bool:
 ## projected before a 20x frame can land behind a moving worker, so each
 ## bounded attempt re-resolves the live view and re-projects immediately
 ## before sending; no stale coordinate is retried.
-func _select_unit(unit_id: int) -> bool:
+func _select_unit(unit_id: int, gated := false) -> bool:
+	if gated:
+		# Moving gatherers at 20x outpace fresh-coordinate sampling entirely
+		# (the synced view can lag the marched sim by whole cells between
+		# rendered frames), so the caller has slowed the sim and this selects
+		# through the clear-sample gate instead of blind attempts.
+		return await _select_unoccluded_unit(unit_id, 16.0)
 	var attempts := PackedStringArray()
 	var injected_misses := 0
 	for attempt in STAGING_SELECT_ATTEMPTS:
@@ -686,8 +745,8 @@ func _select_unit(unit_id: int) -> bool:
 ## click zone — so the scenario stops its gatherers once the banked
 ## thresholds are met. Selection must resolve to exactly this id before S;
 ## otherwise a missed click would Stop whatever was selected instead.
-func _stop_unit(unit_id: int) -> bool:
-	if not await _select_unit(unit_id):
+func _stop_unit(unit_id: int, gated := false) -> bool:
+	if not await _select_unit(unit_id, gated):
 		return false
 	var selected := _selected_ids()
 	if selected.size() != 1 or int(selected[0]) != unit_id:
@@ -742,7 +801,7 @@ func _staging_target_error(unit_id: int) -> String:
 ## building-origin click. Takes the stable id and re-resolves the view after
 ## every await; returns false with the diagnosis already logged so callers
 ## stop immediately instead of driving a freed or absent worker further.
-func _park_at_staging(unit_id: int) -> bool:
+func _park_at_staging(unit_id: int, gated := false) -> bool:
 	var target_error := _staging_target_error(unit_id)
 	if not target_error.is_empty():
 		_fail(target_error)
@@ -751,13 +810,13 @@ func _park_at_staging(unit_id: int) -> bool:
 	if view == null:
 		_fail("staging target %d was freed before Stop: %s" % [unit_id, _staging_details(unit_id)])
 		return false
-	if not await _stop_unit(unit_id):
+	if not await _stop_unit(unit_id, gated):
 		return false
 	view = _unit_view(unit_id)
 	if view == null:
 		_fail("staging target %d was freed after Stop: %s" % [unit_id, _staging_details(unit_id)])
 		return false
-	if not await _select_unit(unit_id):
+	if not await _select_unit(unit_id, gated):
 		return false
 	view = _unit_view(unit_id)
 	if view == null:
@@ -815,17 +874,60 @@ func _staging_arrival_details(unit_id: int, start: Vector3) -> String:
 
 ## Full UI placement: select builder, press the build button, sweep the
 ## placement preview over the anchor, assert it rendered, then place.
+## The authoritative placement can reject Unreachable when the marching
+## builder is momentarily unroutable at 20x windowed pacing, so the armed
+## click is retried until the kind's new building view spawns. A builder
+## already selected exactly (e.g. still carrying its scout order) is not
+## re-clicked: a buffered projection click on a 20x marcher lands where the
+## synced view was, not where the worker is.
 func _place_building(builder: Node3D, button: Button, anchor: Vector2i) -> void:
-	await _click_view(builder, MOUSE_BUTTON_LEFT)
-	await _click_button(button)
-	var screen_point := _camera.unproject_position(Vector3(anchor.x + 0.25, 0.0, anchor.y + 0.25))
-	_mouse_motion(screen_point)
-	await get_tree().process_frame
-	var preview := get_node("Main/PlacementPreview") as MeshInstance3D
-	if preview == null or not preview.visible:
-		_fail("placement preview did not render for anchor %s" % anchor)
-		return
-	await _click_world(Vector2(anchor.x, anchor.y), MOUSE_BUTTON_LEFT)
+	var kind := str(button.get_meta("kind", ""))
+	var builder_id := int(builder.get_meta("unit_id", -1))
+	for attempt in 4:
+		var selected := _selected_ids()
+		if selected.size() != 1 or int(selected[0]) != builder_id:
+			await _click_view(builder, MOUSE_BUTTON_LEFT)
+		await _click_button(button)
+		var screen_point := _camera.unproject_position(Vector3(anchor.x + 0.25, 0.0, anchor.y + 0.25))
+		_mouse_motion(screen_point)
+		await get_tree().process_frame
+		var preview := get_node("Main/PlacementPreview") as MeshInstance3D
+		if preview == null or not preview.visible:
+			if attempt == 3:
+				_fail("placement preview did not render for anchor %s" % anchor)
+				return
+			continue
+		await _click_world(Vector2(anchor.x, anchor.y), MOUSE_BUTTON_LEFT)
+		# The acceptance proof is the kind's NEW building view, not the request:
+		# a placement request is a one-tick transient the fixed step resolves,
+		# so a slow windowed renderer routinely drains it before this watch
+		# reads it again. The view sync cannot be outpaced by the re-arm click,
+		# so a seen view is decisive and a double placement is unreachable; a
+		# resolve-without-view is an authoritative reject (e.g. Unreachable
+		# while a marcher is unroutable) — re-arm and retry. Non-wall kinds
+		# must also be back to the disarmed state before returning: the
+		# acceptance that spawned the view cancels the armed placement a
+		# rendered frame later, and no later real click of the journey may
+		# land while a placement is still armed (Wall/Gate stay armed for
+		# repeat placement by design; their callers cancel explicitly).
+		var known_ids := PackedInt32Array()
+		for node in get_tree().get_nodes_in_group("building_views"):
+			if str(node.get_meta("building_kind", "")) == kind:
+				known_ids.append(int(node.get_meta("building_id", -1)))
+		var stay_armed := kind == "Wall" or kind == "Gate"
+		for _watch in 12:
+			var spawned := false
+			for node in get_tree().get_nodes_in_group("building_views"):
+				if str(node.get_meta("building_kind", "")) == kind \
+						and not known_ids.has(int(node.get_meta("building_id", -1))):
+					spawned = true
+					break
+			if spawned and (stay_armed \
+					or str(get_node("Main").get("_placement_kind")) == ""):
+				return
+			await get_tree().physics_frame
+		# Resolved without a view (rejected): re-arm and retry.
+	_fail("placement at %s never produced a %s view" % [anchor, kind])
 
 func _rally_stored(building_id: int) -> bool:
 	var snap: Dictionary = GrusBridge.building_snapshot(building_id)
@@ -1136,6 +1238,14 @@ func _run() -> void:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("start_match did not reach Playing")
 		return
+	# The premise legs below sample two physics frames apart: at 20x a slow
+	# windowed renderer stretches that into several simulated seconds, wide
+	# enough for a full gather-and-deposit cycle to slip between the
+	# snapshots. 1x keeps the same commands and assertions on every host;
+	# the 20x economy march resumes after the carry detail.
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not slow the sim for the gather premise legs")
+		return
 
 	# Step 1: workers onto salvage/rations/coal via right-click; stockpiles
 	# move only after a deposit, never on the command itself.
@@ -1174,7 +1284,12 @@ func _run() -> void:
 	# HPA-698 carry detail: the selected worker's HUD bar and label mirror the
 	# same live carry amount and the Rust CARRY_LIMIT, with the resource icon
 	# only while a kind is held.
-	await _click_view(_unit_view(1), MOUSE_BUTTON_LEFT)
+	# The retrying staging selector, not a single projection click: worker 1
+	# is marching with its gather order, and a slow windowed renderer can
+	# move the synced view past the pick radius before the buffered click
+	# lands.
+	if not await _select_unit(1):
+		return
 	var carry_bar := get_node_or_null("Main/HUD/SelectionPanel/CarryBar") as ProgressBar
 	var carry_label := get_node_or_null("Main/HUD/SelectionPanel/CarryLabel") as RichTextLabel
 	if carry_bar == null or carry_label == null:
@@ -1196,12 +1311,33 @@ func _run() -> void:
 				and absf(carry_bar.value - float(task.get("carry_amount", -1))) <= 3.0 \
 				and carry_label.text.contains("alt=\"%s\"" % str(task.get("carry_kind", ""))) \
 				and carry_label.text.contains("resources/%s.png" % str(task.get("carry_kind", "")).to_snake_case()),
-			10.0, "selected worker carry detail does not mirror the live Carry snapshot"):
+			10.0, "selected worker carry detail does not mirror the live Carry snapshot",
+			func():
+				var t: Dictionary = GrusBridge.unit_task_snapshot(1)
+				var p := carry_label.get_parsed_text()
+				return "bar_visible=%s label_visible=%s bar=%.1f task_amount=%s task_kind=%s parsed=\"%s\" text_alt=%s" % [
+					str(carry_bar.visible), str(carry_label.visible), carry_bar.value,
+					str(t.get("carry_amount", -1)), str(t.get("carry_kind", "")), p,
+					str(carry_label.text.contains("alt=\"%s\"" % str(t.get("carry_kind", ""))))]):
+		return
+	if not GrusBridge.set_sim_speed(20.0):
+		_fail("could not resume the 20x economy march after the carry detail")
 		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
 	if not await _wait_until(_stockpiles_at_least.bind(TARGET_SCRAP, TARGET_FOOD, TARGET_COAL), 150.0,
 			"gatherers never stockpiled %d scrap / %d food / %d coal" % [TARGET_SCRAP, TARGET_FOOD, TARGET_COAL]):
+		return
+
+	# Retire the food and coal gatherers the moment the thresholds are banked
+	# (the scenario's designed stop). Parking immediately also clears both out
+	# of the southeast source ring before wave 1 launches at the 300 s
+	# preparation boundary: an unparked gatherer still cycling the ring dies
+	# to the first swarmers. Park on the staging ground southwest of the city;
+	# stable ids only — a view can be freed while another staging wait is in
+	# flight. Both still march their gather loops, so the parks select through
+	# the gated stationary click.
+	if not await _park_at_staging(2, true) or not await _park_at_staging(3, true):
 		return
 
 	# Step 4: Bunkhouse raises the population cap 10 -> 20; its construction
@@ -1216,7 +1352,14 @@ func _run() -> void:
 	if not await _wait_until(func():
 			return not _building_complete_at(bunkhouse_id) \
 				and SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", false).is_empty(),
-			20.0, "incomplete Bunkhouse never showed the construction site"):
+			20.0, "incomplete Bunkhouse never showed the construction site",
+			func():
+				var snap: Dictionary = GrusBridge.building_snapshot(bunkhouse_id)
+				return "complete=%s prog=%s model_err=\"%s\" in_group=%s ids=%s" % [
+					str(snap.get("complete")), str(snap.get("construction_progress")),
+					SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", false),
+					str(is_instance_valid(bunkhouse) and bunkhouse.is_in_group("building_views")),
+					str(_building_ids.keys())]):
 		return
 	if not await _wait_until(func(): return _construction_progress(bunkhouse_id) > 0.0, 20.0,
 			"Bunkhouse construction progress never started"):
@@ -1296,7 +1439,9 @@ func _run() -> void:
 	if scrap_worker == null or far_salvage == null:
 		_fail("scrap worker or expansion salvage view is missing")
 		return
-	await _click_view(scrap_worker, MOUSE_BUTTON_LEFT)
+	# Retask selection on the still-marching gatherer: gated stationary click.
+	if not await _select_unoccluded_unit(1, 30.0):
+		return
 	# The far salvage's view is fog-revealed: it pays the fog settle.
 	await _click_view_visible(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
@@ -1304,8 +1449,16 @@ func _run() -> void:
 			"no scrap delivery ever reached the Depot"):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
-	# later click target, so parking in place is safe. Stable id only.
-	if not await _stop_unit(1):
+	# later click target, so parking in place is safe. Stable id only. Same
+	# gated stationary click as the retask: the marcher loops behind the
+	# Depot art between deposits.
+	if not await _select_unoccluded_unit(1, 30.0):
+		return
+	_key_tap(KEY_S)
+	await get_tree().process_frame
+	if not await _wait_until(
+			func(): return str(GrusBridge.unit_task_snapshot(1).get("task", "")) == "Idle",
+			2.0, "Stop did not cancel the scrap gatherer's worker task"):
 		return
 
 	# Reject-code pin: the read-only placement preview reports the numeric
@@ -1318,14 +1471,15 @@ func _run() -> void:
 		_fail("placement preview inside the Research Center did not report Occupied (%d): %s" % [REJECT_OCCUPIED, occupied_preview])
 		return
 
-	# Retire the food and coal gatherers: the finite sources deplete at 20x
-	# virtual time and would otherwise idle a worker inside the Research Center
-	# click zone. Park both on the staging ground. Stable ids only — a view can
-	# be freed while another staging wait is in flight.
-	if not await _park_at_staging(2) or not await _park_at_staging(3):
-		return
-
 	# Step 6: a Research Center rally point; the next trained unit walks to it.
+	# The builder parks first: it may still be walking off its last
+	# construction site through the Research Center's click zone, and a
+	# buffered projection click there selects the builder instead of the
+	# building — the parked builder also keeps every later building-origin
+	# click unambiguous. It still marches, so the park selects through the
+	# gated stationary click.
+	if not await _park_at_staging(4, true):
+		return
 	await _select_building(research_center)
 	# HPA-698 contextual train filtering: the Research Center is the Worker
 	# producer, so only its catalogue-matching tile is visible.
@@ -1336,7 +1490,17 @@ func _run() -> void:
 	if not await _wait_until(func():
 			return train_grid.visible and worker_button.visible \
 				and not filter_guard_button.visible and not filter_rifleman_button.visible,
-			5.0, "Research Center selection did not filter train tiles to Worker"):
+			5.0, "Research Center selection did not filter train tiles to Worker",
+			func():
+				var main := get_node("Main")
+				var rc_screen := _camera.unproject_position(research_center.global_position)
+				var hit: Dictionary = main.call("_building_hit_at", rc_screen, 1)
+				var status := main.get_node_or_null("HUD/CommandStatus") as Label
+				return "selected=%s building_id=%s placement=%s armed=%s camera=%.1f rc_screen=%s hit=%s status=%s" % [
+					str(_selected_ids()), str(main.get("selected_building_id")),
+					str(main.get("_placement_kind")), str(main.get("_armed_order")),
+					_camera.size, str(rc_screen), str(hit),
+					status.text if status != null else "?"]):
 		return
 	await _click_world(Vector2(RALLY_CELL), MOUSE_BUTTON_RIGHT)
 	if not await _wait_until(_rally_stored.bind(research_center_id), 10.0,
@@ -1466,7 +1630,7 @@ func _run() -> void:
 		_fail("failed to resume accelerated Bevy virtual time")
 		return
 	var rally_worker_box := {}
-	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 30.0,
+	if not await _wait_until(_unit_of_kind_present.bind("Worker", 5, rally_worker_box), 60.0,
 			"rallied Worker view never appeared"):
 		return
 	if int(GrusBridge.economy_snapshot().get("population_used", -1)) != 5 \
@@ -1595,9 +1759,10 @@ func _run() -> void:
 	# first leg: finite
 	# sources idle workers at drop-off slots at 20x, and the later
 	# stockpile-unchanged assertions (queue charge, enqueue rejects) need a
-	# quiet Scrap flow to stay exact.
+	# quiet Scrap flow to stay exact. They still march, so gate the parks
+	# like the first leg's.
 	for worker_id in [1, 2, 3]:
-		if not await _park_at_staging(worker_id):
+		if not await _park_at_staging(worker_id, true):
 			return
 
 	# Cold demand: Depot (+1) and Gun Turret (+2) push demand past supply —
@@ -1722,8 +1887,6 @@ func _run() -> void:
 			_fail("completed %s fails the catalogue geometry contract: %s" % [kind, art_error])
 			return
 
-	if not await _park_at_staging(4):
-		return
 	await _select_building(barracks)
 	if not await _wait_until(func(): return filter_guard_button.visible and filter_rifleman_button.visible,
 			5.0, "Barracks selection did not show its Guard/Rifleman production row"):

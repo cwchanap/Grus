@@ -735,7 +735,7 @@ func _run() -> void:
 		_fail("failed to set a readable speed for the warning/combat window")
 		return
 	var scout := _find_view("unit_views", "unit_id", 4)
-	var scout_target := Vector2(anchor.x, anchor.y + 14.0)
+	var scout_target := Vector2(anchor.x, anchor.y + 22.0)
 	var scout_revision := int(GrusBridge.command_feedback_revision())
 	if not GrusBridge.move_units(PackedInt32Array([4]), scout_target):
 		_fail("scout move toward the announced entry was not queued")
@@ -787,8 +787,19 @@ func _run() -> void:
 	if not await _wait_until(func():
 			var snapshot: Dictionary = GrusBridge.wave_snapshot()
 			return int(snapshot.get("wave", 0)) >= 1 and int(snapshot.get("live_aliens", 0)) >= 10,
-			15.0, "first wave did not launch ten live aliens"):
+			45.0, "first wave did not launch ten live aliens"):
 		return
+	# The spawn-visibility sample below must land while the entrants still sit
+	# in their fogged spawn cells. Two pacing facts stack against that at the
+	# windowed renderer's ~4.5 FPS: the metadata-stamp pass that first makes
+	# alien views countable can lag the spawn by ~2 wall-s, and at 5x (or even
+	# 1x) the swarm uses that window to march several cells toward the scout.
+	# The scout therefore waits beyond the whole slot spread (anchor+22 keeps
+	# every spawn slot >=2.5 cells outside its 10-cell vision), and 0.25x (the
+	# smoke_test gate-corridor precedent for render-paced sampling) pins the
+	# remaining drift under ~2 cells. The 5x combat march resumes right after
+	# the check.
+	GrusBridge.set_sim_speed(0.25)
 	if not await _wait_until(func(): return _alien_views().size() >= 10, 5.0,
 			"live wave aliens never reached the Godot view tree"):
 		return
@@ -798,6 +809,7 @@ func _run() -> void:
 	if _hidden_alien_count() == 0:
 		_fail("wave spawn exposed every live alien despite fog of war")
 		return
+	GrusBridge.set_sim_speed(5.0)
 	await get_tree().process_frame
 	if int(_minimap.enemy_marker_count) != _visible_alien_count():
 		_fail("minimap alien markers are not gated by the same live visibility: markers=%d visible=%d" % [int(_minimap.enemy_marker_count), _visible_alien_count()])
@@ -1024,6 +1036,18 @@ func _run() -> void:
 	if not ug_drawer.visible:
 		_fail("Paused inspection drawer did not survive Resume into Playing")
 		return
+	# Opt-in real-render evidence of the damaged painted Research Center under
+	# its real assault: the world health bar renders only below full health, so
+	# a capture run waits for actual damage instead of staging any state.
+	if SmokeHelpers.capture_enabled():
+		if not await _wait_until(
+				func(): return float(_building_view(1).call("health_ratio")) < 0.999,
+				45.0, "the final assault never damaged the Research Center for the damaged-building capture"):
+			return
+		var damaged_capture := await SmokeHelpers.capture_frame(get_tree(), "damaged-building")
+		if not damaged_capture.is_empty():
+			_fail(damaged_capture)
+			return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
 		return
