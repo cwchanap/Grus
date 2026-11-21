@@ -90,7 +90,7 @@ func _fail(message: String) -> void:
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(1)
 
-## The pre-wave journeys are authored against the 300 simulated-second
+## The pre-wave economy journey is authored against the 300 simulated-second
 ## wave preparation, and every wait budget is authored in simulated
 ## seconds. On a real renderer, buffered input and view-sync waits burn
 ## match time at 20x (each awaited frame ≈ 4 match-seconds under llvmpipe),
