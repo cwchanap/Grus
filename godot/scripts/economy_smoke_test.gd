@@ -595,9 +595,11 @@ func _all_overlaid(views: Array, cold: bool) -> bool:
 ## predicate.
 ## Selects a possibly-marching gatherer through the real picker. Polls at the
 ## caller's sim speed and only fires when the task snapshot reports a
-## stationary phase — Gathering (standing at its source) or Idle (sources
-## deplete exactly when the parks run, so the common park subject idles at
-## the exhausted source) — with an unoccluded projection sample (the
+## stationary phase — Gathering (standing at its source) or Idle **and** a
+## member of economy_snapshot's idle_worker_ids (a mover keeps
+## WorkerTask::Idle, so the bare task is not stationary truth; membership
+## excludes live MoveOrders, e.g. the common park subject idling at the
+## exhausted source) — with an unoccluded projection sample (the
 ## depth-scoped rule would otherwise hand the click to in-front painted
 ## art) — then the click is sent at 1x so the buffered event cannot outpace
 ## its own target, and the 20x march resumes. At 20x every polled physics
@@ -614,7 +616,9 @@ func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
 			_fail("unoccluded selection target %d vanished: %s" % [unit_id, _staging_details(unit_id)])
 			return false
 		var task := str(GrusBridge.unit_task_snapshot(unit_id).get("task", ""))
-		if task == "Gathering" or task == "Idle":
+		var idle_workers: PackedInt32Array = GrusBridge.economy_snapshot() \
+				.get("idle_worker_ids", PackedInt32Array())
+		if task == "Gathering" or (task == "Idle" and idle_workers.has(unit_id)):
 			var position := unit.global_position
 			var screen := _camera.unproject_position(position)
 			var unit_depth: float = (position + Vector3(0.0, 0.15, 0.0) \

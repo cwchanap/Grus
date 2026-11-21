@@ -2,4 +2,4 @@ Initialize godot-rust (API v4.5.stable.official, runtime v4.7.1.stable.official,
 Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
 
 [godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
-GRUS_DEFENSE_SMOKE_OK wall_ring=28 concurrent_gatherer=1 builder=4 gather_source=3 gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=representation_aware setup_s=20.7 post_wave_s=25.1
+GRUS_DEFENSE_SMOKE_OK wall_ring=28 concurrent_gatherer=1 builder=4 gather_source=3 gate_human_traversal=true alien_ring_breach=true post_breach_structure_damage=true turret_crystal_kill=true turret_tracer_origin=building_view fog=hidden_distant_fallback=true defense_models=representation_aware setup_s=20.6 post_wave_s=20.8
