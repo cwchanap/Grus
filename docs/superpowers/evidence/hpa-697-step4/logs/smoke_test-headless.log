@@ -5,5 +5,9 @@ Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
 SMOKE_OPENING_SAFE_SOURCES id=1 Food screen=(553.3333, 305.2593) clear=129.3 | id=2 Food screen=(700.0, 305.2593) clear=94.7 | id=3 Scrap screen=(526.6667, 413.1283) clear=96.9 | id=4 Scrap screen=(726.6667, 413.1283) clear=9.3 | id=5 Scrap screen=(633.3333, 445.489) clear=64.5 | id=6 Coal screen=(633.3333, 294.4724) clear=105.5
 SMOKE_STRUCTURE_AUDIT source_bytes=editor
 RENDERED_FOCUS_SKIP keyboard-focused Wall (headless viewport has no readable pixels)
-GRUS_CADENCE_MOTION frames=141 changes=135 mean_frame_s=0.0071 worst_excess=0.000
+GRUS_CADENCE_MOTION frames=142 changes=136 mean_frame_s=0.0071 worst_excess=0.000
 GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=max_step_0.000 fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click dispatch_target=tuple_readback
+WARNING: 4 ObjectDB instances were leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)
+ERROR: 2 resources still in use at exit (run with --verbose for details).
+   at: clear (core/io/resource.cpp:822)
