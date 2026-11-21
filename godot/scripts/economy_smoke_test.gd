@@ -950,15 +950,31 @@ func _staging_arrival_details(unit_id: int, start: Vector3) -> String:
 ## Full UI placement: select builder, press the build button, sweep the
 ## placement preview over the anchor, assert it rendered, then place.
 ## The authoritative placement can reject Unreachable when the marching
-## builder is momentarily unroutable at 20x windowed pacing, so the armed
-## click is retried until the placement resolves. A builder already
-## selected exactly (e.g. still carrying its scout order) is not re-clicked:
-## a buffered projection click on a 20x marcher lands where the synced view
-## was, not where the worker is.
+## builder is momentarily unroutable, so the armed click is retried — but
+## only after a demonstrated rejection/no-dispatch from this placement's
+## own request-correlated controller lifecycle: the controller's ticket
+## list (dispatch/resolution), its placement generation (acceptance
+## cancel) and its click-time "Placement blocked" status. The shared
+## feedback surface and the live preview's validity never decide a
+## verdict: an unrelated worker route rejection or a current-invalid
+## preview says nothing about whether this click dispatched. An attempt
+## still unresolved at the deadline fails the journey loudly instead of
+## re-arming onto the anchor. A builder already selected exactly (e.g.
+## still carrying its scout order) is not re-clicked: a buffered
+## projection click on a 20x marcher lands where the synced view was, not
+## where the worker is.
 func _place_building(builder: Node3D, button: Button, anchor: Vector2i) -> void:
 	var kind := str(button.get_meta("kind", ""))
 	var builder_id := int(builder.get_meta("unit_id", -1))
 	var stay_armed := kind == "Wall" or kind == "Gate"
+	# Identity baseline BEFORE the first armed click, retained across every
+	# retry: _click_world's settle frames already let an accepted view sync,
+	# so a baseline sampled after the click would file the new building
+	# under "known" and the watch could never recognize its own success.
+	# Retries re-arm only on a demonstrated rejection/no-dispatch — never
+	# while an attempt is unresolved — so a late acceptance can never hide
+	# inside a re-sampled baseline.
+	var baseline := _placement_view_ids(kind)
 	for attempt in 4:
 		var selected := _selected_ids()
 		if selected.size() != 1 or int(selected[0]) != builder_id:
@@ -975,63 +991,64 @@ func _place_building(builder: Node3D, button: Button, anchor: Vector2i) -> void:
 				_fail("placement preview did not render for anchor %s" % anchor)
 				return
 			continue
-		# Identity baseline BEFORE the armed click, retained across the whole
-		# watch and every retry: _click_world's settle frames already let an
-		# accepted view sync, so a baseline sampled after the click would file
-		# the new building under "known", the watch could never recognize its
-		# own success, and the re-arm would drive real clicks onto the now
-		# occupied anchor.
-		var baseline := _placement_view_ids(kind)
-		var verdict_before := int(GrusBridge.command_feedback_revision())
+		# Arming bumped the controller's placement generation; this click's
+		# request ticket carries exactly that generation, so the watch reads
+		# this attempt's dispatch alone.
+		var armed_generation := int(get_node("Main").get("_placement_generation"))
 		await _click_world(Vector2(anchor.x, anchor.y), MOUSE_BUTTON_LEFT)
 		# Watch at 1x: the verdict lands within a couple of sim ticks and the
 		# view sync/disarm ride rendered frames, so a fixed-frame watch must
 		# not burn march seconds (each 20x frame is ~4 match-seconds).
 		var watch_march := _slow_for_input()
 		var watch_deadline := Time.get_ticks_msec() + 8000
-		var last_watch := ""
-		var resolved_reject := false
+		var saw_request := false
+		var last_watch := "pending-verdict"
 		while Time.get_ticks_msec() < watch_deadline:
+			var pending_request := _placement_request_pending(armed_generation, kind)
+			saw_request = saw_request or pending_request
 			last_watch = _placement_watch_error(
-				baseline,
-				int(GrusBridge.command_feedback_revision()) > verdict_before,
-				int(GrusBridge.last_reject_code()),
-				_placement_view_ids(kind),
-				str(get_node("Main").get("_placement_kind")),
+				baseline, _placement_view_ids(kind),
+				pending_request, saw_request,
+				int(get_node("Main").get("_placement_generation")), armed_generation,
+				str(get_node("Main").get("_placement_kind")), _controller_status_text(),
 				not stay_armed)
-			if last_watch == "":
-				break
-			if last_watch.begins_with("rejected:"):
-				resolved_reject = true
-				break
-			if last_watch == "pending-verdict" and not bool(
-					GrusBridge.placement_preview(builder_id, kind, anchor.x, anchor.y).get("valid", true)):
-				# Still no verdict beside an invalid live preview: the armed
-				# click was consumed by the controller's blocked-placement
-				# guard, so nothing was dispatched and this attempt is
-				# authoritatively rejected by the same Rust validator the
-				# preview reads — re-arm and retry.
-				resolved_reject = true
+			if _placement_watch_action(last_watch) != "keep-waiting":
 				break
 			await get_tree().process_frame
 		_restore_march(watch_march)
-		if last_watch == "":
-			return
-		if resolved_reject:
-			continue
-		if last_watch == "pending-verdict":
-			# A silent armed click dispatched nothing and rejected nothing;
-			# re-arm rather than clicking blindly on stale screen state.
-			continue
-		# An accepted placement whose view or disarm never synced is a
-		# presentation defect: failing loudly beats re-arming onto the anchor.
-		_fail("%s placement at %s never settled: watch=%s preview=%s feedback=%s reject=%d ids=%s" % [
-			kind, anchor, last_watch,
+		match _placement_watch_action(last_watch):
+			"settle":
+				return
+			"retry":
+				continue
+		# Deadline with a pending class: this attempt is unresolved — no
+		# demonstrated rejection, no demonstrated no-dispatch — so it fails
+		# loudly here instead of ever re-arming onto the anchor.
+		_fail("%s placement at %s unresolved on attempt %d: watch=%s status=%s preview=%s ids=%s" % [
+			kind, anchor, attempt + 1, last_watch, _controller_status_text(),
 			GrusBridge.placement_preview(builder_id, kind, anchor.x, anchor.y),
-			GrusBridge.command_feedback(),
-			int(GrusBridge.last_reject_code()), _placement_view_ids(kind)])
+			_placement_view_ids(kind)])
 		return
 	_fail("placement at %s never produced a %s view" % [anchor, kind])
+
+## This attempt's dispatch evidence: the controller lists the request-scoped
+## ticket {id, generation, kind} minted by the armed click until the fixed
+## step resolves it — correlated to exactly this placement, which the
+## shared latest-command feedback can never be.
+func _placement_request_pending(generation: int, kind: String) -> bool:
+	for request in get_node("Main").get("_pending_placement_requests"):
+		if int(request.get("generation", -1)) == generation \
+				and str(request.get("kind", "")) == kind:
+			return true
+	return false
+
+## The controller's correlated status label: "Placement blocked (code N)"
+## is written only by the armed click's pre-dispatch refusal, and at
+## request resolution it carries this placement's own ticket verdict
+## before any later shared feedback could mask it.
+func _controller_status_text() -> String:
+	var label := get_node("Main").get("command_status") as Label
+	return "" if label == null else label.text
 
 ## Live ids of every building view of one kind — the watch's per-sample scan.
 func _placement_view_ids(kind: String) -> PackedInt32Array:
@@ -1042,31 +1059,67 @@ func _placement_view_ids(kind: String) -> PackedInt32Array:
 	return ids
 
 ## One armed-placement watch sample, classified synchronously from
-## caller-scanned state — no frames, no gameplay writes — so the journey
-## watch above and the focused regression in _run judge the identical
-## predicate:
-##   ""                accepted and settled (new view + armed state final)
-##   "rejected:<code>" the sim resolved the command as a typed reject
-##   "pending-verdict" no sim verdict yet; the armed click may still resolve
-##   "pending-view"    accepted; the kind's new building view has not synced
-##   "pending-disarm"  accepted + view; the armed tool has not cleared yet
-## A view outside the pre-click baseline is decisive acceptance evidence
-## even if a later verdict overwrote the shared feedback, and a rejection is
-## never inferred from silence: a pending verdict or a late synced view must
-## keep waiting instead of re-arming onto the anchor.
-func _placement_watch_error(baseline: PackedInt32Array, verdict_resolved: bool,
-		reject_code: int, view_ids: PackedInt32Array, placement_armed: String,
+## caller-scanned controller/snapshot state — no frames, no gameplay
+## writes — so the journey watch above and the focused regression in _run
+## judge the identical decision:
+##   ""                     accepted and settled (new view + armed state final)
+##   "rejected:no-dispatch" the controller refused this armed click before
+##                          dispatching it ("Placement blocked …")
+##   "rejected:<status>"    this placement's correlated typed rejection —
+##                          its own ticket result, or the same verdict
+##                          already consumed before the first poll caught
+##                          the pending ticket
+##   "pending-verdict"      dispatched or unresolved; may still resolve
+##   "pending-view"         accepted/resolved; the kind's new view has not
+##                          synced, or the resolution is ambiguous
+##   "pending-disarm"       accepted + view; the armed tool has not cleared
+## Every verdict comes from this placement's own lifecycle — its request
+## ticket, the placement-generation cancel, or the click-time refusal —
+## never from the shared feedback surface, which an unrelated worker route
+## rejection can overwrite at any tick, and never from the live preview's
+## validity, which says nothing about whether the click dispatched. The
+## "Command rejected" prefix alone is safe to honor per-attempt: arming
+## rewrites the status before every attempt, so during a watch only this
+## placement's verdict (an unrelated route failure reads "Destination
+## unreachable for N unit(s)") can produce it. Silence keeps waiting: an
+## unresolved sample must never become a rejection.
+func _placement_watch_error(baseline: PackedInt32Array, view_ids: PackedInt32Array,
+		request_pending: bool, request_resolved: bool, generation_now: int,
+		armed_generation: int, armed_kind_now: String, status_text: String,
 		require_disarm: bool) -> String:
 	for id in view_ids:
 		if not baseline.has(id):
-			if require_disarm and placement_armed != "":
+			if require_disarm and armed_kind_now != "":
 				return "pending-disarm"
 			return ""
-	if not verdict_resolved:
+	if request_pending:
 		return "pending-verdict"
-	if reject_code != -1:
-		return "rejected:%d" % reject_code
-	return "pending-view"
+	if request_resolved and generation_now != armed_generation:
+		# The controller consumed this ticket's completed result and
+		# cancelled the tool: accepted; the view may still be syncing.
+		return "pending-view"
+	if status_text.begins_with("Command rejected"):
+		return "rejected:%s" % status_text
+	if request_resolved:
+		# Resolved while still armed and unchanged: a Wall/Gate acceptance
+		# with a delayed view, or a verdict masked by an unrelated command —
+		# ambiguous, so keep waiting; the deadline fails loudly instead of
+		# ever re-arming blind.
+		return "pending-view"
+	if status_text.begins_with("Placement blocked"):
+		return "rejected:no-dispatch"
+	return "pending-verdict"
+
+## The retry decision over one classified sample: settle returns to the
+## caller, retry re-arms only on a demonstrated rejection/no-dispatch, and
+## every pending class keeps waiting until the deadline fails the attempt —
+## an unresolved placement is never re-armed onto its anchor.
+func _placement_watch_action(watch: String) -> String:
+	if watch == "":
+		return "settle"
+	if watch.begins_with("rejected:"):
+		return "retry"
+	return "keep-waiting"
 
 func _rally_stored(building_id: int) -> bool:
 	var snap: Dictionary = GrusBridge.building_snapshot(building_id)
@@ -1157,40 +1210,90 @@ func _run() -> void:
 		return
 
 	# Focused armed-placement watch regression — synchronous and
-	# presentation-only (the classifier takes scanned state, so nothing on
-	# screen or in gameplay is touched): silence must stay pending instead
-	# of becoming a rejection, a typed reject must resolve for the retry, a
-	# late synced view must read as acceptance rather than rejection, a
-	# pre-existing/baseline view must never serve as the acceptance proof,
-	# non-Wall kinds must wait for the armed tool to clear, and Wall/Gate
-	# stay armed on success by design.
-	if _placement_watch_error(PackedInt32Array([4242]), false, -1,
-			PackedInt32Array(), "", true) != "pending-verdict":
-		_fail("placement watch treated a missing sim verdict as resolved")
+	# presentation-only (the decision reads scanned state, so nothing on
+	# screen or in gameplay is touched). It pins the watch/retry decision,
+	# not just string classes: an unrelated rejection must never decide a
+	# pending placement, a demonstrated rejection/no-dispatch is the only
+	# retry, silence keeps waiting, a late synced view reads as acceptance,
+	# a baseline view never serves as acceptance proof, non-Wall kinds wait
+	# for the armed tool to clear, and Wall/Gate stay armed by design.
+	var watch_baseline := PackedInt32Array([4242])
+	# Unrelated rejection while the placement view is delayed: the shared
+	# status was overwritten by a route failure, but this attempt's request
+	# ticket is still pending — the verdict stays pending, never retried.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			true, false, 7, 7, "Bunkhouse",
+			"Destination unreachable for 1 unit(s)", true) != "pending-verdict":
+		_fail("placement watch let an unrelated rejection decide a pending placement")
 		return
-	if _placement_watch_error(PackedInt32Array([4242]), true, 10,
-			PackedInt32Array([4242]), "Bunkhouse", true) != "rejected:10":
-		_fail("placement watch did not resolve a typed reject for the retry")
+	# Demonstrated no-dispatch: "Placement blocked" is written only by the
+	# armed click's pre-dispatch refusal in the controller.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, false, 7, 7, "Bunkhouse", "Placement blocked (code 3)", true) != "rejected:no-dispatch":
+		_fail("placement watch missed the controller's pre-dispatch refusal")
 		return
-	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
-			PackedInt32Array([4242]), "Bunkhouse", true) != "pending-view":
+	# Silence beside the arming status (click possibly lost) stays pending.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, false, 7, 7, "Bunkhouse",
+			"Placing Bunkhouse — left-click to place, right-click or Esc to cancel", true) != "pending-verdict":
+		_fail("placement watch retried an unresolved attempt without a demonstrated rejection")
+		return
+	# This placement's own ticket resolved with a typed rejection: retry.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, true, 7, 7, "Bunkhouse", "Command rejected (Unreachable)", true) != "rejected:Command rejected (Unreachable)":
+		_fail("placement watch missed a demonstrated correlated rejection")
+		return
+	# The ticket resolved before the first poll caught it pending (fast
+	# fixed-step drain): the correlated reject status still retries.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, false, 7, 7, "Bunkhouse", "Command rejected (OutOfBounds)", true) != "rejected:Command rejected (OutOfBounds)":
+		_fail("placement watch missed a rejection resolved before the first poll")
+		return
+	# The same fast drain of an UNRELATED per-unit route failure must not
+	# read as this placement's verdict: pending, never retried.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, false, 7, 7, "Bunkhouse", "Destination unreachable for 1 unit(s)", true) != "pending-verdict":
+		_fail("placement watch treated an unrelated route failure as the placement verdict")
+		return
+	# Resolved beside a masked status: ambiguous — pending, never retried.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, true, 7, 7, "Bunkhouse", "Destination unreachable for 1 unit(s)", true) != "pending-view":
+		_fail("placement watch retried on an ambiguous masked verdict")
+		return
+	# Accepted: the controller cancelled the tool before the view synced.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, true, 8, 7, "", "Command accepted", true) != "pending-view":
 		_fail("placement watch judged an accepted placement before its view synced")
 		return
-	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
-			PackedInt32Array([4242, 777]), "Bunkhouse", true) != "pending-disarm":
-		_fail("placement watch missed a newly synced view or the armed tool")
-		return
-	if _placement_watch_error(PackedInt32Array([4242, 777]), true, -1,
-			PackedInt32Array([4242, 777]), "Bunkhouse", true) != "pending-view":
-		_fail("placement watch spent a baseline view as the acceptance proof")
-		return
-	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
-			PackedInt32Array([4242, 777]), "", true) != "":
+	# Accepted and settled: new view outside the baseline + tool cleared.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
+			false, true, 8, 7, "", "Command accepted", true) != "":
 		_fail("placement watch did not settle an accepted, disarmed placement")
 		return
-	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
-			PackedInt32Array([4242, 777]), "Wall", false) != "":
+	# New view but tool still armed: wait for the disarm.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
+			false, true, 8, 7, "Bunkhouse", "Command accepted", true) != "pending-disarm":
+		_fail("placement watch missed the armed tool after acceptance")
+		return
+	# A pre-existing/baseline view never serves as the acceptance proof.
+	if _placement_watch_error(watch_baseline, watch_baseline,
+			true, false, 7, 7, "Bunkhouse", "Placement queued", true) != "pending-verdict":
+		_fail("placement watch spent a baseline view as the acceptance proof")
+		return
+	# Wall/Gate stay armed on success by design (no disarm required).
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
+			false, true, 7, 7, "Wall", "Command accepted", false) != "":
 		_fail("placement watch did not keep a Wall/Gate placement armed on success")
+		return
+	# The retry mapping itself: only a demonstrated rejection/no-dispatch
+	# retries; every pending class keeps waiting; settle returns.
+	if _placement_watch_action("") != "settle" \
+			or _placement_watch_action("rejected:no-dispatch") != "retry" \
+			or _placement_watch_action("rejected:Command rejected (Unreachable)") != "retry" \
+			or _placement_watch_action("pending-verdict") != "keep-waiting" \
+			or _placement_watch_action("pending-view") != "keep-waiting" \
+			or _placement_watch_action("pending-disarm") != "keep-waiting":
+		_fail("placement watch retry mapping broke its demonstrated-evidence contract")
 		return
 	print("GRUS_ECONOMY_PLACEMENT_WATCH_PROBE_OK")
 
