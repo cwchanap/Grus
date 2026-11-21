@@ -53,6 +53,12 @@ var _left_pressed := false
 var _placement_kind := ""
 var _placement_generation := 0
 var _pending_placement_requests: Array[Dictionary] = []
+## This generation's click-time refusal, kept beside the shared status
+## label: the feedback mirror can overwrite `command_status` with an
+## unrelated route failure on any later tick, but an armed click's
+## pre-dispatch refusal is this placement's own verdict and must survive
+## that mirror until the next arm.
+var _last_placement_refusal := {}
 var _idle_cursor := 0
 var _session_phase := ""
 var _session_winner := -2
@@ -452,7 +458,7 @@ func _pan_camera(relative: Vector2) -> void:
 	camera.position.z -= relative.y * world_per_pixel
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
-	var nearest := _nearest_view("unit_views", screen_position, 1)
+	var nearest := _unit_pick_at(screen_position, 1)
 	var building_hit := _building_hit_at(screen_position, 1)
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
@@ -656,6 +662,40 @@ func _ground_target(screen_position: Vector2):
 	var hit := origin + direction * distance
 	return Vector2(hit.x, hit.z)
 
+## Unit pick eligibility is the unit's own silhouette first: a click on the
+## visible body (torso, head) selects the unit even beyond the feet-projection
+## radius, which stays only as the affordance for near-miss clicks on empty
+## ground. Depth arbitration with buildings then reuses the same mesh hit
+## through _building_beats_unit.
+func _unit_pick_at(screen_position: Vector2, team_filter: int) -> Node3D:
+	var mesh_view := _unit_mesh_hit_at(screen_position, team_filter).get("view") as Node3D
+	if mesh_view != null:
+		return mesh_view
+	return _nearest_view("unit_views", screen_position, team_filter)
+
+func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
+	var ray_origin := camera.project_ray_origin(screen_position)
+	var ray_direction := camera.project_ray_normal(screen_position)
+	var nearest_hit_view: Node3D = null
+	var nearest_hit_depth := INF
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		var view := node as Node3D
+		if view == null or not view.is_visible_in_tree() \
+				or camera.is_position_behind(view.global_position):
+			continue
+		if team_filter != 0 and int(view.get_meta("team_id", -1)) != team_filter:
+			continue
+		var model := view.get_node_or_null("Model") as Node3D
+		if model == null:
+			continue
+		if not _projected_art_rect(view, model).has_point(screen_position):
+			continue
+		var depth := _model_ray_hit_depth(model, ray_origin, ray_direction)
+		if depth >= 0.0 and depth < nearest_hit_depth:
+			nearest_hit_view = view
+			nearest_hit_depth = depth
+	return {"view": nearest_hit_view, "depth": nearest_hit_depth}
+
 func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, radius := CLICK_RADIUS) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_distance := radius
@@ -679,7 +719,7 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 ## an overlapping unit loses only to a real opaque building hit in front of
 ## its body reference; fallback-only building hits never outrank the unit.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
-	var unit := _nearest_view("unit_views", screen_position, 2)
+	var unit := _unit_pick_at(screen_position, 2)
 	var building_hit := _building_hit_at(screen_position, 2)
 	if unit == null:
 		return building_hit.get("view") as Node3D
@@ -692,14 +732,22 @@ func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 	return unit
 
 ## A building only steals an overlapping unit's pick on a real opaque
-## silhouette hit strictly in front of the unit's small ground-level body
-## reference (+0.15 y): a finished Gate's shallow plinth must not take a
-## Worker's click, and a tall unit behind a painted roof must not steal the
-## roof click. A fallback-only hit (depth INF) never outranks the unit.
+## silhouette hit strictly in front of the unit's visible geometry: when the
+## pick ray meets the unit's own Model (head, torso) that mesh depth decides,
+## so a finished Gate's overhead beam cannot take a click the Worker's body
+## occludes; a ray that misses the unit's mesh falls back to the small
+## ground-level body reference (+0.15 y), so the shallow plinth still never
+## takes a Worker's click and a tall unit behind a painted roof never steals
+## the roof click. A fallback-only hit (depth INF) never outranks the unit.
 func _building_beats_unit(building_hit: Dictionary, unit: Node3D, ray_origin: Vector3, ray_direction: Vector3) -> bool:
 	var building_depth: float = building_hit.get("depth", INF)
 	if building_depth >= INF:
 		return false
+	var unit_model := unit.get_node_or_null("Model") as Node3D
+	if unit_model != null:
+		var unit_hit := _model_ray_hit_depth(unit_model, ray_origin, ray_direction)
+		if unit_hit >= 0.0:
+			return building_depth < unit_hit
 	var unit_depth := (unit.global_position + Vector3(0.0, 0.15, 0.0) - ray_origin).dot(ray_direction)
 	return building_depth < unit_depth
 
@@ -1116,7 +1164,9 @@ func _try_placement(screen_position: Vector2) -> void:
 	var anchor_y := floori(target.y)
 	var preview: Dictionary = GrusBridge.placement_preview(builder, _placement_kind, anchor_x, anchor_y)
 	if not bool(preview.get("valid", false)):
-		command_status.text = "Placement blocked (code %d)" % int(preview.get("reject_code", -1))
+		var refusal := "Placement blocked (code %d)" % int(preview.get("reject_code", -1))
+		_last_placement_refusal = {"generation": _placement_generation, "text": refusal}
+		command_status.text = refusal
 		return
 	var request_id := int(GrusBridge.next_placement_request_id())
 	var kind := _placement_kind

@@ -397,7 +397,17 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 		expected = "painted/%s.png" % kind.to_snake_case()
 	var sprites := model.find_children("*", "SpriteBase3D", true, false)
 	if not sprites.is_empty():
-		var texture: Texture2D = (sprites[0] as SpriteBase3D).texture
+		var sprite := sprites[0] as SpriteBase3D
+		# A matching texture under a hidden node is not rendered art: every
+		# ancestor through Model must be visible. The building root's own
+		# visibility stays the caller's call — the fog pass owns it, and
+		# standalone probes inspect views whose root was never shown.
+		var ancestor: Node = sprite
+		while ancestor != null and ancestor != view:
+			if ancestor is Node3D and not (ancestor as Node3D).visible:
+				return "%s sprite art hidden at %s" % [kind, ancestor.name]
+			ancestor = ancestor.get_parent()
+		var texture: Texture2D = sprite.texture
 		var path: String = texture.resource_path if texture != null else ""
 		if not path.ends_with(expected):
 			return "%s sprite texture %s does not end with %s" % [kind, path, expected]
