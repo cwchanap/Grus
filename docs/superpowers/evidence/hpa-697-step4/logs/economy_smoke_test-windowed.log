@@ -20,9 +20,9 @@ WARNING: Image format ETC2_RGB8 not supported by hardware, converting to RGBA8.
 [godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
 GRUS_ECONOMY_PLACEMENT_WATCH_PROBE_OK
 GRUS_ECONOMY_OPENING_CLEARANCE northwest_scout=15.33 Depot_placement=9.25
-GRUS_CAPTURE /tmp/grus-capture-econ/economy-queue-overflow.png 1280x720
-GRUS_CAPTURE /tmp/grus-capture-econ/economy-cold.png 1280x720
-GRUS_CAPTURE /tmp/grus-capture-econ/economy-warm.png 1280x720
-GRUS_CAPTURE /tmp/grus-capture-econ/economy-queue-barracks.png 1280x720
-GRUS_CAPTURE /tmp/grus-capture-econ/command-tiles-unaffordable.png 1280x720
-GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=40 scrap=35 coal=91 cap=20 units=7 buildings=8 unaffordable_reject=8 elapsed_ms=480676
+GRUS_CAPTURE /tmp/grus-hpa697-r2.K62P/economy-queue-overflow.png 1280x720
+GRUS_CAPTURE /tmp/grus-hpa697-r2.K62P/economy-cold.png 1280x720
+GRUS_CAPTURE /tmp/grus-hpa697-r2.K62P/economy-warm.png 1280x720
+GRUS_CAPTURE /tmp/grus-hpa697-r2.K62P/economy-queue-barracks.png 1280x720
+GRUS_CAPTURE /tmp/grus-hpa697-r2.K62P/command-tiles-unaffordable.png 1280x720
+GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=40 scrap=35 coal=91 cap=20 units=7 buildings=8 unaffordable_reject=8 elapsed_ms=476577
