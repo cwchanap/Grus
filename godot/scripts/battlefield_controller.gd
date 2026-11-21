@@ -715,20 +715,20 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 			nearest_distance = distance
 	return nearest
 
-## Compare the nearest eligible unit with the silhouette-picked building:
-## an overlapping unit loses only to a real opaque building hit in front of
-## its body reference; fallback-only building hits never outrank the unit.
+## Compare the nearest eligible enemy with the silhouette-picked building:
+## an overlapping enemy loses to a real opaque building hit in front of its
+## body reference — of either team, because a friendly roof hides the body
+## pixels the mesh picker accepts — while only an enemy building can be the
+## returned attack target. Fallback-only building hits never outrank a unit.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 	var unit := _unit_pick_at(screen_position, 2)
-	var building_hit := _building_hit_at(screen_position, 2)
+	var enemy_building := _building_hit_at(screen_position, 2).get("view") as Node3D
 	if unit == null:
-		return building_hit.get("view") as Node3D
-	if building_hit.get("view") == null:
-		return unit
+		return enemy_building
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
-	if _building_beats_unit(building_hit, unit, ray_origin, ray_direction):
-		return building_hit.get("view") as Node3D
+	if _building_beats_unit(_building_hit_at(screen_position, 0), unit, ray_origin, ray_direction):
+		return enemy_building
 	return unit
 
 ## A building only steals an overlapping unit's pick on a real opaque

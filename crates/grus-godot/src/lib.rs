@@ -14,7 +14,7 @@ use grus_sim::{
     ANALYZE_COST, ANALYZE_RESEARCH_GAIN, BASE_GATHER_RATE, Building, BuildingId, BuildingIndex,
     BuildingKind, CARRY_LIMIT, Carry, CombatEvent, CombatEventTotal, CombatEvents, CombatTarget,
     CommandResult, EntryZone, Footprint, GridMap, GridPos, Health, HeatState, LastRouteReject,
-    MapFixture, MatchPhase, MatchSession, PlayerCommand, ProductionJob, ProductionKind,
+    MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind,
     ProductionQueue, RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_PERCENT,
     RUINS, RallyPoint, RejectReason, ResourceId, ResourceSource, SIM_STEP_SECONDS, SimPosition,
     TeamEconomy, TeamId, Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex,
@@ -889,10 +889,11 @@ impl GrusBridgeNode {
 
     /// One unit's `WorkerTask` for command round-trip assertions: the task
     /// variant name plus the resource/building ids it names (-1 when the
-    /// task names none), and its live `Carry` as `carry_amount` +
-    /// `carry_kind` (0 / "" when empty). Empty dict for a missing unit, a
-    /// unit with no worker task, or a fog-hidden enemy — task/carry data
-    /// must not leak through stale ids.
+    /// task names none), its live `Carry` as `carry_amount` +
+    /// `carry_kind` (0 / "" when empty), and its accepted `MoveOrder` goal
+    /// cell as `move_goal_x`/`move_goal_y` (-1 when it has no order). Empty
+    /// dict for a missing unit, a unit with no worker task, or a fog-hidden
+    /// enemy — task/carry data must not leak through stale ids.
     #[func]
     fn unit_task_snapshot(&self, unit_id: i32) -> VarDictionary {
         with_app(|app| {
@@ -936,6 +937,9 @@ impl GrusBridgeNode {
             };
             dict.set("carry_amount", i64::from(carry_amount));
             dict.set("carry_kind", &carry_kind);
+            let goal = world.get::<MoveOrder>(entity).map(|order| order.goal);
+            dict.set("move_goal_x", goal.map_or(-1, |cell| i64::from(cell.x)));
+            dict.set("move_goal_y", goal.map_or(-1, |cell| i64::from(cell.y)));
             dict
         })
         .unwrap_or_default()
