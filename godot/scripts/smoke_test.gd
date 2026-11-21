@@ -172,10 +172,16 @@ func _accepted_since(revision: int) -> bool:
 
 ## The view transform can lag a marching unit by several ticks under slow
 ## windowed rendering, so click-picking a mover is frame-rate sensitive;
-## wait for the sim task to settle instead.
+## wait for the sim task to settle instead. A mover keeps WorkerTask::Idle,
+## so the stationary truth is economy_snapshot's idle set (Worker + Idle +
+## no MoveOrder) — the task check alone would clear mid-march.
 func _unit_idle(unit: Node3D) -> bool:
 	var unit_id := int(unit.get_meta("unit_id", -1))
-	return str(GrusBridge.unit_task_snapshot(unit_id).get("task", "")) == "Idle"
+	if str(GrusBridge.unit_task_snapshot(unit_id).get("task", "")) != "Idle":
+		return false
+	var idle_workers: PackedInt32Array = GrusBridge.economy_snapshot() \
+			.get("idle_worker_ids", PackedInt32Array())
+	return idle_workers.has(unit_id)
 
 ## A clickable world probe site: the candidate must be a valid placement
 ## preview, clear of reserved footprints, AND its real click point must not
@@ -1623,6 +1629,21 @@ func _assert_enemy_overlap_pick(main: Node, camera: Camera3D) -> bool:
 		unit.add_to_group("unit_views")
 		views.append(unit)
 	views[3].visible = false
+	# The spec's named overlap case is a TALL unit behind a painted building:
+	# the depth verdict must come from the ground-level body reference
+	# (global +0.15 y), never the unit's visible height. The occluded enemy
+	# therefore carries a 3-world-unit sprite — a comparison anchored to the
+	# sprite top would project ~2.4 world units in front of the box and flip
+	# the behind case below. No journey reaches a real Behemoth (wave 10+;
+	# spawning one would be a sim poke), so the height property is what this
+	# synthetic probe pins.
+	var tall_probe := Image.create(16, 96, false, Image.FORMAT_RGBA8)
+	tall_probe.fill(Color(0.85, 0.2, 0.2, 1.0))
+	var tall_sprite := Sprite3D.new()
+	tall_sprite.texture = ImageTexture.create_from_image(tall_probe)
+	tall_sprite.pixel_size = 3.0 / 96.0
+	tall_sprite.position.y = 1.5
+	views[1].add_child(tall_sprite)
 	var building := Node3D.new()
 	building.set_meta("team_id", 2)
 	building.set_meta("building_id", 9101)
@@ -2549,6 +2570,130 @@ func _run() -> void:
 			hookup_view.free()
 			return
 		hookup_view.free()
+	# HPA-697 review fix: an opt-in, staged in-world render PROBE of the
+	# approved Crystal Lance art on a real 2x2 catalogue transform. No
+	# journey can research-unlock the lance, so this is presentation-only
+	# staging through the same hookup contract as the loop above, driven
+	# only by the view's public set_state/set_health_ratio API — the frame
+	# documents the shipped PNG's in-world silhouette, alpha edges, depth
+	# ordering and health-bar seat; it is not gameplay evidence of a
+	# purchased lance. The staged legs also assert the world bar seats on
+	# each stage's real art top (site and finished) on this multicell
+	# footprint, in BuildingView-local space — never the transparent quad
+	# top, never a world-space write.
+	var lance_spec: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get("CrystalLance", {})
+	var lance_width := float(lance_spec.get("width", 0))
+	var lance_depth := float(lance_spec.get("height", 0))
+	if lance_width != 2.0 or lance_depth != 2.0:
+		_fail("catalogue exposes no 2x2 CrystalLance footprint for the in-world probe")
+		return
+	var probe_screen := viewport_size * Vector2(0.5, 0.3)
+	var probe_origin := camera.project_ray_origin(probe_screen)
+	var probe_direction := camera.project_ray_normal(probe_screen)
+	if probe_direction.y >= -0.0001:
+		_fail("the lance-probe camera ray never reaches the ground")
+		return
+	var probe_ground := probe_origin + probe_direction * (-probe_origin.y / probe_direction.y)
+	var lance_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var lance_anchor := Vector2i(-1, -1)
+	for radius in range(0, 10):
+		for y in range(-radius, radius + 1):
+			for x in range(-radius, radius + 1):
+				if maxi(absi(x), absi(y)) != radius:
+					continue
+				var candidate := Vector2i(floori(probe_ground.x) + x, floori(probe_ground.z) + y)
+				# A valid 2x2 Bunkhouse preview proves the pair is free,
+				# buildable ground; the probe view is presentation-only.
+				var probe_preview: Dictionary = GrusBridge.placement_preview(1, "Bunkhouse", candidate.x, candidate.y)
+				if not bool(probe_preview.get("valid", false)):
+					continue
+				var probe_center_screen := camera.unproject_position(Vector3(float(candidate.x) + lance_width * 0.5, 0.0, float(candidate.y) + lance_depth * 0.5))
+				if not Rect2(Vector2.ZERO, viewport_size).has_point(probe_center_screen) \
+						or lance_hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(probe_center_screen)):
+					continue
+				lance_anchor = candidate
+				break
+			if lance_anchor.x >= 0:
+				break
+		if lance_anchor.x >= 0:
+			break
+	if lance_anchor.x < 0:
+		_fail("no on-screen 2x2 ground pair exists for the CrystalLance in-world probe")
+		return
+	var lance_probe := building_view_scene.instantiate() as Node3D
+	lance_probe.set_meta("building_kind", "CrystalLance")
+	lance_probe.scale = Vector3(lance_width, 1.0, lance_depth)
+	lance_probe.position = Vector3(float(lance_anchor.x) + lance_width * 0.5, 0.0, float(lance_anchor.y) + lance_depth * 0.5)
+	add_child(lance_probe)
+	# Real views get Node3D.visible from the bridge's fog-driven visibility
+	# pass; a standalone probe never does, so mirror the explored case here
+	# (the anchor scan proved the cells are buildable ground beside the
+	# city, i.e. fog-explored).
+	lance_probe.visible = true
+	await get_tree().process_frame
+	var probe_view_script: Script = lance_probe.get_script()
+	for staged_complete in [false, true]:
+		if bool(staged_complete):
+			lance_probe.set_state(true, false)
+			await get_tree().process_frame
+		var stage_error := SmokeHelpers.building_model_error(lance_probe, "CrystalLance", bool(staged_complete))
+		if not stage_error.is_empty():
+			_fail("the lance probe view failed its %s stage: %s" % ["finished" if bool(staged_complete) else "site", stage_error])
+			lance_probe.free()
+			return
+		var stage_sprite: SpriteBase3D = (lance_probe.get_node("Model") as Node3D).find_children("*", "SpriteBase3D", true, false)[0]
+		var stage_top: Vector2 = probe_view_script.opaque_top_pixels(stage_sprite.texture)
+		if stage_top == Vector2.INF:
+			_fail("the lance probe %s texture exposes no opaque pixel for the bar seat" % ["finished" if bool(staged_complete) else "site"])
+			lance_probe.free()
+			return
+		var stage_seat: Vector3 = lance_probe.global_transform.affine_inverse() \
+				* (stage_sprite.global_transform * probe_view_script.sprite_local_from_pixel(stage_sprite, stage_top))
+		if not (lance_probe.get_node("HealthBar") as MeshInstance3D).position.is_equal_approx(Vector3(stage_seat.x, stage_seat.y + 0.15, stage_seat.z)) \
+				or (bool(staged_complete) and stage_top.y <= 0.0):
+			_fail("the lance probe %s health bar did not seat above the art's top opaque pixel (top row %s)" % ["finished" if bool(staged_complete) else "site", stage_top])
+			lance_probe.free()
+			return
+	lance_probe.set_health_ratio(0.45)
+	if not (lance_probe.get_node("HealthBar") as MeshInstance3D).visible:
+		_fail("the damaged lance probe did not show its world health bar")
+		lance_probe.free()
+		return
+	# Depth context: park one worker just behind the sprite (the probe cells
+	# are free ground — the view is not a real building) so the frame reads
+	# the worker through the lattice art, then restore its prior spot.
+	var probe_worker: Node3D = null
+	var probe_worker_home := Vector3.INF
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		var candidate_worker := unit_node as Node3D
+		if candidate_worker != null and int(candidate_worker.get_meta("team_id", -1)) == 1:
+			probe_worker = candidate_worker
+			probe_worker_home = candidate_worker.global_position
+			break
+	if probe_worker == null:
+		_fail("no Team-1 worker remains for the lance probe overlap frame")
+		lance_probe.free()
+		return
+	var behind_cells: Array[Vector2] = [
+		Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) + 0.6),
+		Vector2(float(lance_anchor.x) + 1.4, float(lance_anchor.y) + 1.0),
+		Vector2(float(lance_anchor.x) + 0.6, float(lance_anchor.y) + 1.2),
+		Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) - 0.5),
+	]
+	if await _hop_worker_to_first_cell(probe_worker, behind_cells, 0.55, "lance-probe-overlap") == Vector2.INF:
+		lance_probe.free()
+		return
+	if SmokeHelpers.capture_enabled():
+		var lance_capture := await SmokeHelpers.capture_frame(get_tree(), "lance-in-world-probe")
+		if not lance_capture.is_empty():
+			_fail(lance_capture)
+			lance_probe.free()
+			return
+	if not await _hop_worker(probe_worker,
+			Vector2(probe_worker_home.x, probe_worker_home.z), 1.0, "lance-probe-restore"):
+		lance_probe.free()
+		return
+	lance_probe.free()
 	if not _assert_structure_import("res://assets/structures/wall.glb") \
 			or not _assert_structure_import("res://assets/structures/gate.glb"):
 		return
@@ -3088,15 +3233,24 @@ func _run() -> void:
 			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("Esc did not clear the armed order before pausing")
 		return
-	# Stop tile executes immediately through the existing stop path.
+	# Stop tile executes immediately through the existing stop path. The
+	# verdict is pinned to the stop dispatch itself: the settled feedback
+	# must be an acceptance (not just any later revision bump) and unit two
+	# must converge to the stationary gate — ordinary arrival at an old
+	# goal must never read as this probe's pass.
 	var stop_revision := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if str(command_status.text) != "Stop command queued" \
 			or str(get_node("Main").get("_armed_order")) != "":
 		_fail("Stop tile did not execute immediately: %s" % command_status.text)
 		return
-	if not await _wait_until(func(): return int(GrusBridge.command_feedback_revision()) > stop_revision,
-			5.0, "Stop command never settled its authoritative feedback"):
+	if not await _wait_until(func():
+			return int(GrusBridge.command_feedback_revision()) > stop_revision \
+				and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
+			5.0, "Stop command never settled an accepted authoritative verdict"):
+		return
+	if not await _wait_until(_unit_idle.bind(unit_two), 5.0,
+			"unit 2 never settled after the Stop dispatch"):
 		return
 	# Losing the selection clears a modal order instead of leaving it armed.
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
@@ -4443,6 +4597,20 @@ func _run() -> void:
 	if not GrusBridge.move_units(park_ids, park_target):
 		_fail("radius-steal worker park move was not queued")
 		return
+	if not await _wait_until(_accepted_since.bind(park_revision), 10.0,
+			"the radius-steal park move was not accepted by the sim"):
+		return
+	# Stationary-gate regression probe: the 27-cell park march keeps every
+	# worker under a live MoveOrder across several 20 Hz ticks even at 20x,
+	# and a marching worker keeps WorkerTask::Idle — so an Idle gate that
+	# reads the task snapshot alone reports a mover "idle". The gate must
+	# consult economy_snapshot's idle set (Worker + Idle + no MoveOrder).
+	for unit_node in get_tree().get_nodes_in_group("unit_views"):
+		var marching := unit_node as Node3D
+		if marching != null and int(marching.get_meta("team_id", -1)) == 1 \
+				and _unit_idle(marching):
+			_fail("the stationary gate reported worker %d idle mid-march on the radius-steal park" % int(marching.get_meta("unit_id", -1)))
+			return
 	if not await _wait_until(func():
 			for unit_node in get_tree().get_nodes_in_group("unit_views"):
 				var unit := unit_node as Node3D
@@ -4627,6 +4795,53 @@ func _run() -> void:
 		if not overlap_behind_capture.is_empty():
 			_fail(overlap_behind_capture)
 			return
+	# The depth contract holds at both authored framings (spec): repeat the
+	# behind-roof click at the wheel-zoomed-out view through real input,
+	# then restore the default size for the later legs.
+	var overlap_default_size := camera.size
+	for _step in 3:
+		_mouse_click(viewport_size * 0.5, MOUSE_BUTTON_WHEEL_DOWN)
+		await get_tree().process_frame
+	if camera.size < PRIOR_CAMERA_SIZE:
+		_fail("three wheel-out steps reached only %.1f, short of the %.1f zoom-out overlap framing" % [camera.size, PRIOR_CAMERA_SIZE])
+		return
+	var zoomout_clear := _clear_click_point(viewport_size, main)
+	if zoomout_clear == Vector2.INF:
+		_fail("no empty pixel exists to deselect before the zoom-out overlap click")
+		return
+	_mouse_click(zoomout_clear, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == -1 and (main.selected_ids as Array).is_empty(),
+			5.0, "the pre-zoom-out deselection click did not clear the selection"):
+		return
+	var behind_point_zoomout := _overlap_pick_point(overlap_rc, overlap_workers[1], false, camera, viewport_size, main)
+	if behind_point_zoomout == Vector2.INF:
+		_fail("no opaque Research Center pixel sits in front of the north worker at the zoom-out framing")
+		return
+	if (main.call("_nearest_view", "unit_views", behind_point_zoomout, 1) as Node3D) != overlap_workers[1]:
+		_fail("the behind worker left the zoom-out overlap pick point before the click")
+		return
+	_mouse_click(behind_point_zoomout, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == int(overlap_rc.get_meta("building_id", -1)) \
+				and (main.selected_ids as Array).is_empty(),
+			5.0, "the zoom-out behind-roof click did not select the Research Center (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+	# Opt-in real-render evidence: the same opaque-roof-wins verdict at the
+	# zoomed-out framing.
+	if SmokeHelpers.capture_enabled():
+		var overlap_zoomout_capture := await SmokeHelpers.capture_frame(get_tree(), "overlap-behind-zoomout")
+		if not overlap_zoomout_capture.is_empty():
+			_fail(overlap_zoomout_capture)
+			return
+	for _step in range(16):
+		if is_equal_approx(camera.size, overlap_default_size):
+			break
+		_mouse_click(viewport_size * 0.5, MOUSE_BUTTON_WHEEL_UP)
+		await get_tree().process_frame
+	if not is_equal_approx(camera.size, overlap_default_size):
+		_fail("wheel zoom never restored the default camera size after the zoom-out overlap leg: %s" % camera.size)
+		return
 	# A completed Gate's shallow plinth must not take a Worker's click: place
 	# a real Gate through the bridge, march a worker into its corridor cell
 	# and click the worker's own projection.
