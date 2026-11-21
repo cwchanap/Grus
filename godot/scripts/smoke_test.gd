@@ -1576,6 +1576,40 @@ func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 			return point
 	return Vector2.INF
 
+## Scan the screen column above a transit worker's ground projection for a
+## Gate-beam pixel in the bug regime: a real art hit whose depth sits
+## strictly between the worker's own mesh hit and its +0.15 feet anchor —
+## beam nearer than the feet rule's reference but behind the visible body.
+## The qualifying band is only a few pixels tall, so the caller re-derives
+## the pick right before the verdict click and takes the run's middle row —
+## the freshest sample the frame allows, not an interior-margin guess.
+## Returns [screen_point, gate_depth, unit_depth] or [] when no such pixel
+## exists at this position.
+func _beam_overlap_pick(transit_view: Node3D, transit_model: Node3D,
+		camera: Camera3D, main: Node, gate_view: Node3D) -> Array:
+	var feet_screen: Vector2 = camera.unproject_position(transit_view.global_position)
+	var run: Array = []
+	for dy in range(4, 40, 3):
+		var candidate := feet_screen + Vector2(0.0, -float(dy))
+		var ray_o := camera.project_ray_origin(candidate)
+		var ray_d := camera.project_ray_normal(candidate)
+		var hit: Dictionary = main.call("_building_hit_at", candidate, 1)
+		if hit.get("view") != gate_view:
+			continue
+		var gate_depth := float(hit.get("depth", INF))
+		var unit_depth := float(main.call("_model_ray_hit_depth",
+				transit_model, ray_o, ray_d))
+		if gate_depth >= INF or unit_depth < 0.0 \
+				or gate_depth - unit_depth < 0.15:
+			continue
+		var anchor := (transit_view.global_position \
+				+ Vector3(0.0, 0.15, 0.0) - ray_o).dot(ray_d)
+		if gate_depth < anchor:
+			run.append([candidate, gate_depth, unit_depth])
+	if run.is_empty():
+		return []
+	return run[int(run.size() / 2)]
+
 func _assert_overlapping_building_pick(main: Node, camera: Camera3D, viewport_size: Vector2) -> bool:
 	var point := viewport_size * 0.5
 	var origin := camera.project_ray_origin(point)
@@ -2537,7 +2571,6 @@ func _run() -> void:
 		_fail("a successful completion push did not finish the pending initial attachment")
 		return
 	pending_view.free()
-	print("SMOKE_STRUCTURE_AUDIT source_bytes=%s" % ("editor" if OS.has_feature("editor") else "skipped_packaged"))
 	# HPA-697 painted-texture imports: every non-Wall/Gate catalogue kind's
 	# PNG sits at the same to_snake_case-derived path building_view.gd
 	# resolves, audited for mipmaps, alpha, lossless CPU-readable pixels and
@@ -2659,40 +2692,43 @@ func _run() -> void:
 		_fail("the damaged lance probe did not show its world health bar")
 		lance_probe.free()
 		return
-	# Depth context: park one worker just behind the sprite (the probe cells
-	# are free ground — the view is not a real building) so the frame reads
-	# the worker through the lattice art, then restore its prior spot.
-	var probe_worker: Node3D = null
-	var probe_worker_home := Vector3.INF
-	for unit_node in get_tree().get_nodes_in_group("unit_views"):
-		var candidate_worker := unit_node as Node3D
-		if candidate_worker != null and int(candidate_worker.get_meta("team_id", -1)) == 1:
-			probe_worker = candidate_worker
-			probe_worker_home = candidate_worker.global_position
-			break
-	if probe_worker == null:
-		_fail("no Team-1 worker remains for the lance probe overlap frame")
-		lance_probe.free()
-		return
-	var behind_cells: Array[Vector2] = [
-		Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) + 0.6),
-		Vector2(float(lance_anchor.x) + 1.4, float(lance_anchor.y) + 1.0),
-		Vector2(float(lance_anchor.x) + 0.6, float(lance_anchor.y) + 1.2),
-		Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) - 0.5),
-	]
-	if await _hop_worker_to_first_cell(probe_worker, behind_cells, 0.55, "lance-probe-overlap") == Vector2.INF:
-		lance_probe.free()
-		return
+	# Depth context for the opt-in frame only: park one worker just behind
+	# the sprite (the probe cells are free ground — the view is not a real
+	# building) so the still reads the worker through the lattice art, then
+	# restore its prior spot. The whole maneuver is capture-scoped — in a
+	# headless or uncaptured run the two hops would burn march seconds for a
+	# frame nothing records, and the restore cannot unburn them.
 	if SmokeHelpers.capture_enabled():
+		var probe_worker: Node3D = null
+		var probe_worker_home := Vector3.INF
+		for unit_node in get_tree().get_nodes_in_group("unit_views"):
+			var candidate_worker := unit_node as Node3D
+			if candidate_worker != null and int(candidate_worker.get_meta("team_id", -1)) == 1:
+				probe_worker = candidate_worker
+				probe_worker_home = candidate_worker.global_position
+				break
+		if probe_worker == null:
+			_fail("no Team-1 worker remains for the lance probe overlap frame")
+			lance_probe.free()
+			return
+		var behind_cells: Array[Vector2] = [
+			Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) + 0.6),
+			Vector2(float(lance_anchor.x) + 1.4, float(lance_anchor.y) + 1.0),
+			Vector2(float(lance_anchor.x) + 0.6, float(lance_anchor.y) + 1.2),
+			Vector2(float(lance_anchor.x) + 1.0, float(lance_anchor.y) - 0.5),
+		]
+		if await _hop_worker_to_first_cell(probe_worker, behind_cells, 0.55, "lance-probe-overlap") == Vector2.INF:
+			lance_probe.free()
+			return
 		var lance_capture := await SmokeHelpers.capture_frame(get_tree(), "lance-in-world-probe")
 		if not lance_capture.is_empty():
 			_fail(lance_capture)
 			lance_probe.free()
 			return
-	if not await _hop_worker(probe_worker,
-			Vector2(probe_worker_home.x, probe_worker_home.z), 1.0, "lance-probe-restore"):
-		lance_probe.free()
-		return
+		if not await _hop_worker(probe_worker,
+				Vector2(probe_worker_home.x, probe_worker_home.z), 1.0, "lance-probe-restore"):
+			lance_probe.free()
+			return
 	lance_probe.free()
 	if not _assert_structure_import("res://assets/structures/wall.glb") \
 			or not _assert_structure_import("res://assets/structures/gate.glb"):
@@ -2703,6 +2739,9 @@ func _run() -> void:
 		return
 	if not await _assert_wall_gate_run(building_view_scene):
 		return
+	# The audit marker only means the checks passed, so it prints after the
+	# last one — a bad PNG or GLB must never produce it before the fail.
+	print("SMOKE_STRUCTURE_AUDIT source_bytes=%s" % ("editor" if OS.has_feature("editor") else "skipped_packaged"))
 
 	# The view contract behind the live journeys: a state pushed before the
 	# kind metadata caches and drives the first attach; identical pushes and
@@ -3060,8 +3099,20 @@ func _run() -> void:
 	await get_tree().process_frame
 	var stop_target := Vector3(40.5, 0.0, 44.5)
 	_mouse_click(camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
+	var stop_start := unit_two.global_position
 	for _frame in range(8):
 		await get_tree().physics_frame
+	# S must interrupt a live march: a click that never issued the move
+	# leaves the worker parked and the settle check below passes on a no-op
+	# key, and a worker that already reached the target passes on a finished
+	# march — both read as a working stop. Require the order demonstrably in
+	# flight (moved, still short of the goal) before the key goes down.
+	if unit_two.global_position.distance_to(stop_start) < 0.2 \
+			or unit_two.global_position.distance_to(stop_target) < 1.0:
+		_fail("the stop probe had no live march for S to interrupt (moved=%.2f left=%.2f)" % [
+			unit_two.global_position.distance_to(stop_start),
+			unit_two.global_position.distance_to(stop_target)])
+		return
 	_key_tap(KEY_S)
 	for _frame in range(2):
 		await get_tree().physics_frame
@@ -3084,6 +3135,14 @@ func _run() -> void:
 		await get_tree().physics_frame
 	if unit_two.global_position.distance_to(stopped_position) > 0.05:
 		_fail("Stop input did not settle the active move order")
+		return
+	# Settled is not stopped: a worker that simply finished the march would
+	# pass the checks above on a dead key. The S-application window (key
+	# dispatch plus at most a couple of 20 Hz sim ticks) can carry it at
+	# most ≈0.6 cells past the pre-check sample, so anything within 0.4 of
+	# the goal means the march completed — the key interrupted nothing.
+	if unit_two.global_position.distance_to(stop_target) < 0.4:
+		_fail("the stopped worker reached its target — S interrupted no live march")
 		return
 
 	# HPA-698 modal orders: one controller-owned _armed_order string, armed by
@@ -4834,6 +4893,38 @@ func _run() -> void:
 		if not overlap_zoomout_capture.is_empty():
 			_fail(overlap_zoomout_capture)
 			return
+	# The spec's overlap contract spans both directions at both framings, so
+	# the south worker's facade click must also win while still zoomed out:
+	# deselect, then click the same front-of-silhouette pixel class.
+	var zoomout_front_clear := _clear_click_point(viewport_size, main)
+	if zoomout_front_clear == Vector2.INF:
+		_fail("no empty pixel exists to deselect before the zoom-out front-worker click")
+		return
+	_mouse_click(zoomout_front_clear, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == -1 and (main.selected_ids as Array).is_empty(),
+			5.0, "the pre-zoom-out-front deselection click did not clear the selection"):
+		return
+	var front_point_zoomout := _overlap_pick_point(overlap_rc, overlap_workers[0], true, camera, viewport_size, main)
+	if front_point_zoomout == Vector2.INF:
+		_fail("no opaque Research Center pixel sits deeper than the south worker's body reference at the zoom-out framing")
+		return
+	if (main.call("_nearest_view", "unit_views", front_point_zoomout, 1) as Node3D) != overlap_workers[0]:
+		_fail("the front worker left the zoom-out overlap pick point before the click")
+		return
+	_mouse_click(front_point_zoomout, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(overlap_workers[0].get_meta("unit_id", -1)) in main.selected_ids \
+				and int(main.selected_building_id) == -1,
+			5.0, "the Research Center facade stole the zoom-out click from the worker in front of it (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+	# Opt-in real-render evidence: the front-worker-wins verdict at the
+	# zoomed-out framing.
+	if SmokeHelpers.capture_enabled():
+		var overlap_front_zoomout_capture := await SmokeHelpers.capture_frame(get_tree(), "overlap-front-zoomout")
+		if not overlap_front_zoomout_capture.is_empty():
+			_fail(overlap_front_zoomout_capture)
+			return
 	for _step in range(16):
 		if is_equal_approx(camera.size, overlap_default_size):
 			break
@@ -4967,6 +5058,109 @@ func _run() -> void:
 			return int(gate_worker.get_meta("unit_id", -1)) in main.selected_ids \
 				and int(main.selected_building_id) == -1,
 			5.0, "the completed Gate stole the click from the Worker inside its corridor (units=%s building=%s)" % [str(main.selected_ids), str(main.selected_building_id)]):
+		return
+
+	# The plinth click above covers only the shallow threshold: a completed
+	# Gate also spans an overhead beam ring across the corridor, and a
+	# Worker parked just inside its rear half projects its upper body over
+	# beam pixels the beam can be nearer than the feet anchor yet still sit
+	# behind — the one place the feet-reference rule could hand the click to
+	# the Gate although the Worker's mesh occludes the beam there. March the
+	# Worker through the corridor at 0.05x and, per physics frame inside
+	# that band, scan its screen column for a beam pixel its mesh covers —
+	# the verdict click fires only on a pick re-derived at the post-deselect
+	# position (the run's middle row), so march drift can never slide the
+	# ray off the mesh edge into the anchor rule it is meant to discriminate. The
+	# deselection click first empties the selection so the verdict can only
+	# ever come from the beam click itself, never a stale selection.
+	var beam_verdict := false
+	var beam_gate_depth := -1.0
+	var beam_unit_depth := -1.0
+	if not GrusBridge.set_sim_speed(0.05):
+		_fail("could not slow the sim for the beam-overlap transit")
+		return
+	for beam_goal in [Vector2(gate_center.x, gate_center.y - 2.0),
+			Vector2(gate_center.x, gate_center.y + 2.0)]:
+		if beam_verdict:
+			break
+		var beam_revision := int(GrusBridge.command_feedback_revision())
+		if not GrusBridge.move_units(PackedInt32Array([gate_worker_id]), beam_goal):
+			_fail("the beam-overlap transit move was not queued")
+			return
+		if not await _wait_until(_accepted_since.bind(beam_revision), 10.0,
+				"the beam-overlap transit move was not accepted by the sim"):
+			return
+		var transit_deadline := Time.get_ticks_msec() + 20000
+		while not beam_verdict and Time.get_ticks_msec() < transit_deadline:
+			var transit_view := _unit_view(gate_worker_id)
+			if transit_view == null:
+				break
+			var transit_z := transit_view.global_position.z
+			if transit_z > gate_center.y - 0.55 and transit_z < gate_center.y + 0.1:
+				var transit_model := transit_view.get_node_or_null("Model") as Node3D
+				if transit_model != null:
+					var beam_pick := _beam_overlap_pick(transit_view, transit_model,
+							camera, main, gate_view)
+					if not beam_pick.is_empty():
+						var beam_clear := _clear_click_point(viewport_size, main)
+						if beam_clear == Vector2.INF:
+							_fail("no empty pixel exists to deselect before the beam-overlap click")
+							return
+						_mouse_click(beam_clear, MOUSE_BUTTON_LEFT)
+						# The deselection must land before the verdict click:
+						# the corridor click already selected this Worker, and
+						# a verdict poll that samples the stale selection
+						# would pass without the beam click ever being read.
+						if not await _wait_until(func():
+								return int(main.selected_building_id) == -1 \
+									and (main.selected_ids as Array).is_empty(),
+								3.0, "the pre-beam deselection click did not clear the selection"):
+							return
+						# Re-verify at the post-deselect position: the march
+						# moved the view meanwhile, so the interior pixel is
+						# re-derived — never the stale first sample.
+						var verify_view := _unit_view(gate_worker_id)
+						if verify_view != null:
+							var verify_model := verify_view.get_node_or_null("Model") as Node3D
+							if verify_model != null:
+								beam_pick = _beam_overlap_pick(verify_view, verify_model,
+										camera, main, gate_view)
+						if not beam_pick.is_empty():
+							_mouse_click(beam_pick[0], MOUSE_BUTTON_LEFT)
+							beam_gate_depth = float(beam_pick[1])
+							beam_unit_depth = float(beam_pick[2])
+			await get_tree().physics_frame
+			if beam_gate_depth >= 0.0:
+				# Three verdicts: the Worker wins (fixed rule), the Gate's
+				# beam steals (the bug this leg exists to catch), or nothing
+				# resolves — the march carried the mesh off the sampled pixel
+				# before the click landed, a stale sample to retry, never a
+				# verdict.
+				var verdict_deadline := Time.get_ticks_msec() + 5000
+				while Time.get_ticks_msec() < verdict_deadline:
+					if gate_worker_id in (main.selected_ids as Array) \
+							or int(main.selected_building_id) != -1:
+						break
+					await get_tree().physics_frame
+				if gate_worker_id in (main.selected_ids as Array):
+					beam_verdict = true
+				elif int(main.selected_building_id) == gate_id:
+					_fail("the Gate's rear beam stole the upper-body click from the corridor Worker (beam=%.3f worker=%.3f units=%s building=%s)" % [
+						beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
+					return
+				else:
+					beam_gate_depth = -1.0
+	if not GrusBridge.stop_units(PackedInt32Array([gate_worker_id])):
+		_fail("the beam-overlap stop was not queued")
+		return
+	if not GrusBridge.set_sim_speed(1.0):
+		_fail("could not restore sim speed after the beam-overlap click")
+		return
+	if not beam_verdict:
+		_fail("the corridor transits never produced a Worker-in-front-of-beam overlap pixel")
+		return
+	if not await _wait_until(_unit_idle.bind(gate_worker), 10.0,
+			"the corridor worker never idled after the beam-overlap stop"):
 		return
 
 	# HPA-697 fix rounds 1–3: the enemy overlap rules must also hold through
