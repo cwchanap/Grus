@@ -25,7 +25,7 @@ func _run() -> void:
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
 
-	if not GrusBridge.set_sim_speed(20.0):
+	if not GrusBridge.set_sim_speed(_march_speed()):
 		_fail("could not accelerate the defense journey")
 		return
 	if not await _wait_until(_fixture_views_settled, 20.0,
@@ -135,7 +135,9 @@ func _run() -> void:
 		return
 
 	# Esc must cancel the armed Wall tool before the normal pause action.
+	var esc_march := _slow_for_input()
 	await _key_tap(KEY_ESCAPE)
+	_restore_march(esc_march)
 	if str(_main._placement_kind) != "" \
 			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("Esc did not cancel Wall placement while keeping the match Playing")
@@ -163,7 +165,7 @@ func _run() -> void:
 			_fail("completed defense %d lost its view" % id)
 			return
 		var defense_kind := str(defense_view.get_meta("building_kind", ""))
-		if not await _wait_until(func():
+		if not await _wait_until_at_1x(func():
 				var model := defense_view.get_node_or_null("Model") as Node3D
 				return model != null and model.is_visible_in_tree() \
 						and SmokeHelpers.building_model_error(defense_view, defense_kind, true).is_empty(),
@@ -228,7 +230,7 @@ func _run() -> void:
 	if done_turret_view == null:
 		_fail("completed Gun Turret view is missing")
 		return
-	if not await _wait_until(func():
+	if not await _wait_until_at_1x(func():
 			var model := done_turret_view.get_node_or_null("Model") as Node3D
 			return model != null and model.is_visible_in_tree() \
 					and SmokeHelpers.building_model_error(done_turret_view, "GunTurret", true).is_empty(),
@@ -459,7 +461,10 @@ func _place_armed_defense(kind: String, cell: Vector2i, expected_count: int, tim
 					await get_tree().physics_frame
 				if _building_ids_of_kind(kind).size() >= expected_count:
 					return true
-				_fail("simulation accepted %s placement at %s but its view never appeared" % [kind, cell])
+				var orphan_preview: Dictionary = GrusBridge.placement_preview(builder_id, kind, cell.x, cell.y)
+				_fail("simulation accepted %s placement at %s but its view never appeared (views=%s preview_now=%s feedback=%s)" % [
+					kind, cell, _building_ids_of_kind(kind), orphan_preview,
+					GrusBridge.command_feedback()])
 				return false
 			if feedback != "Command rejected (Occupied)":
 				_fail("%s placement at %s was rejected: %s" % [kind, cell, feedback])
@@ -537,7 +542,9 @@ func _select_worker(worker: Node3D) -> bool:
 	if click_point == Vector2.INF:
 		_fail("no unobstructed pixel exists inside Worker %d's pick radius" % int(worker.get_meta("unit_id", -1)))
 		return false
+	var march := _slow_for_input()
 	await _mouse_click(click_point, MOUSE_BUTTON_LEFT)
+	_restore_march(march)
 	var worker_id := int(worker.get_meta("unit_id", -1))
 	if _main.selected_ids.size() != 1 or not _main.selected_ids.has(worker_id):
 		_fail("real controller input did not select only Worker %d: %s" % [worker_id, _main.selected_ids])
@@ -572,7 +579,9 @@ func _worker_pick_point(worker: Node3D) -> Vector2:
 func _arm_build(kind: String) -> bool:
 	var button_name := "GunTurretButton" if kind == "GunTurret" else "%sButton" % kind
 	var button := _main.get_node("HUD/CommandPanel/BuildGrid/%s" % button_name) as Button
+	var march := _slow_for_input()
 	await _mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	_restore_march(march)
 	if str(_main._placement_kind) != kind:
 		_fail("real build-button input did not arm %s placement" % kind)
 		return false
@@ -585,7 +594,43 @@ func _cell_screen(cell: Vector2i) -> Vector2:
 	return _main.camera.unproject_position(_cell_world(cell))
 
 func _click_cell(cell: Vector2i, button: int) -> void:
+	# Clicks ride the march speed switch: on a real renderer the whole
+	# journey marches at 1x, so the 30-click wall ring cannot burn the
+	# 300 simulated-second wave-preparation clock it is placed against.
+	var march := _slow_for_input()
 	await _mouse_click(_cell_screen(cell), button)
+	_restore_march(march)
+
+## The journeys are authored against the 300 simulated-second wave
+## preparation with every budget in simulated seconds; input and view-sync
+## waits burn match time at 20x under a real renderer (each awaited frame
+## ≈ 4 match-seconds under llvmpipe), so the windowed march rides 1x and
+## headless CI keeps the 20x march.
+func _march_speed() -> float:
+	return 1.0 if DisplayServer.get_name() != "headless" else 20.0
+
+## Buffered input awaits burn match time at the active march speed (each
+## awaited frame advances ~4 simulated seconds at 20x under the windowed
+## renderer); clicks and taps ride 1x and restore the caller's march.
+func _slow_for_input() -> float:
+	var march := Engine.time_scale
+	if not is_equal_approx(march, 1.0) and not GrusBridge.set_sim_speed(1.0):
+		_fail("could not slow the sim for a buffered input await")
+	return march
+
+func _restore_march(march: float) -> void:
+	if not is_equal_approx(Engine.time_scale, march) \
+			and not GrusBridge.set_sim_speed(march):
+		_fail("could not restore the march speed after a buffered input await")
+
+## Render-paced waits (model swaps pushed per rendered frame) ride 1x: at
+## 20x under the windowed renderer each awaited frame burns ~4 match-seconds
+## of the wave-preparation budget. The condition is unchanged.
+func _wait_until_at_1x(condition: Callable, timeout_s: float, message: String) -> bool:
+	var march := _slow_for_input()
+	var ok := await _wait_until(condition, timeout_s, message)
+	_restore_march(march)
+	return ok
 
 func _inside_ring(position: Vector3) -> bool:
 	return position.x >= _ring_min.x + 1 and position.x < _ring_max.x \

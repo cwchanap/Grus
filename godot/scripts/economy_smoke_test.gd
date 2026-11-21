@@ -90,6 +90,17 @@ func _fail(message: String) -> void:
 	GrusBridge.set_sim_speed(1.0)
 	get_tree().quit(1)
 
+## The pre-wave journeys are authored against the 300 simulated-second
+## wave preparation, and every wait budget is authored in simulated
+## seconds. On a real renderer, buffered input and view-sync waits burn
+## match time at 20x (each awaited frame ≈ 4 match-seconds under llvmpipe),
+## which is how the click-heavy legs overran the preparation boundary while
+## every assertion stayed green headless — so the windowed march rides 1x
+## and keeps every budget exact (the premise legs already do this on every
+## host). Headless CI keeps the 20x march.
+func _march_speed() -> float:
+	return 1.0 if DisplayServer.get_name() != "headless" else 20.0
+
 func _gather_wait_details(elapsed_seconds: float) -> String:
 	var economy: Dictionary = GrusBridge.economy_snapshot()
 	var session: Dictionary = GrusBridge.session_snapshot()
@@ -141,7 +152,45 @@ func _key_tap(keycode: int) -> void:
 	release.pressed = false
 	Input.parse_input_event(release)
 
+## Buffered input awaits burn match time at the active march speed: under
+## the windowed renderer every awaited frame advances ~4 simulated seconds
+## at 20x, which is how the click-heavy legs overran the 300 s wave
+## preparation while every scripted wait stayed green. Real clicks, taps
+## and tile presses therefore ride 1x (each awaited frame then advances
+## ~0.2 s) and restore the caller's march speed; long waits keep the march
+## unchanged. Returns the march speed the caller must hand back.
+func _slow_for_input() -> float:
+	var march := Engine.time_scale
+	if not is_equal_approx(march, 1.0) and not GrusBridge.set_sim_speed(1.0):
+		_fail("could not slow the sim for a buffered input await")
+	return march
+
+func _restore_march(march: float) -> void:
+	if not is_equal_approx(Engine.time_scale, march) \
+			and not GrusBridge.set_sim_speed(march):
+		_fail("could not restore the march speed after a buffered input await")
+
+## Waits whose condition is pushed by a rendered frame (view-state/model
+## swaps, capture frames) must not poll at 20x under the windowed renderer:
+## each awaited frame burns ~4 match-seconds there. The condition itself is
+## unchanged; only the march speed during the wait drops to 1x.
+func _wait_until_at_1x(condition: Callable, timeout_s: float, message: String,
+		details := Callable()) -> bool:
+	var march := _slow_for_input()
+	var ok := await _wait_until(condition, timeout_s, message, details)
+	_restore_march(march)
+	return ok
+
+## A capture frame awaits one rendered frame; at 20x under the windowed
+## renderer that is ~4 match-seconds of the wave-preparation budget.
+func _capture_at_1x(file_name: String) -> String:
+	var march := _slow_for_input()
+	var error := await SmokeHelpers.capture_frame(get_tree(), file_name)
+	_restore_march(march)
+	return error
+
 func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
+	var march := _slow_for_input()
 	_mouse_click(_camera.unproject_position(view.global_position), button)
 	await get_tree().process_frame
 	await get_tree().process_frame
@@ -149,11 +198,14 @@ func _click_view(view: Node3D, button: int, fog_settle := false) -> void:
 	# revealed; plain clicks keep the original single-frame settle.
 	if fog_settle:
 		await get_tree().process_frame
+	_restore_march(march)
 
 func _click_world(point: Vector2, button: int) -> void:
+	var march := _slow_for_input()
 	_mouse_click(_camera.unproject_position(Vector3(point.x + 0.25, 0.0, point.y + 0.25)), button)
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_restore_march(march)
 
 ## The far northwest expansion salvage boots behind the top bar at the
 ## authored framing. This real wheel zoom-out restores the former coverage
@@ -162,15 +214,20 @@ func _click_world(point: Vector2, button: int) -> void:
 ## at least 8 px on the default view; the target, click and command path are
 ## unchanged — no camera pan, no direct gameplay write.
 func _click_visible(world_point: Vector3, button: int) -> void:
+	# The wheel zoom itself is a click-heavy leg: each wheel step awaits
+	# frames, so it rides 1x with the click it enables.
+	var march := _slow_for_input()
 	var authored_size: float = await SmokeHelpers.zoom_until_visible(
 		get_tree(), _camera, get_node("Main/HUD"), [world_point])
 	if authored_size < 0.0:
+		_restore_march(march)
 		_fail("could not wheel-zoom %s clear of the HUD" % world_point)
 		return
 	_mouse_click(_camera.unproject_position(world_point), button)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var restored := await SmokeHelpers.restore_camera_size(get_tree(), _camera, authored_size)
+	_restore_march(march)
 	if not restored:
 		_fail("real wheel zoom never restored the authored camera framing: %s" % _camera.size)
 
@@ -180,9 +237,11 @@ func _click_view_visible(view: Node3D, button: int, fog_settle := false) -> void
 		await get_tree().process_frame
 
 func _click_button(button: Button) -> void:
+	var march := _slow_for_input()
 	_mouse_click(button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	await get_tree().process_frame
+	_restore_march(march)
 
 ## Polls a condition every physics frame until it holds or the frame budget
 ## (timeout_s of physics ticks) is exhausted; fails the smoke on timeout.
@@ -562,6 +621,7 @@ func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
 					- _camera.project_ray_origin(screen)).dot(_camera.project_ray_normal(screen))
 			var hit: Dictionary = get_node("Main").call("_building_hit_at", screen, 1)
 			if float(hit.get("depth", INF)) >= unit_depth:
+				var march := Engine.time_scale
 				if not GrusBridge.set_sim_speed(1.0):
 					_fail("could not slow the sim for the clear-sample click")
 					return false
@@ -571,7 +631,7 @@ func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
 				# frame or two after the input flush, so one immediate read
 				# would misjudge the attempt and burn another gather cycle
 				# waiting for the next stationary window. At 1x these confirm
-				# frames cost ~0.2 sim-s each; the 20x march resumes as soon
+				# frames cost ~0.2 sim-s each; the march speed resumes as soon
 				# as the id resolves either way.
 				var confirmed := false
 				for _confirm in 8:
@@ -580,7 +640,8 @@ func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
 					if selected.size() == 1 and int(selected[0]) == unit_id:
 						confirmed = true
 						break
-				GrusBridge.set_sim_speed(20.0)
+				if not is_equal_approx(Engine.time_scale, march):
+					GrusBridge.set_sim_speed(march)
 				if confirmed:
 					return true
 		await get_tree().physics_frame
@@ -633,7 +694,19 @@ func _wait_units_clear(point: Vector3, timeout_s: float) -> bool:
 	return false
 
 func _select_building(view: Node3D) -> void:
-	if not await _wait_units_clear(view.global_position, 15.0):
+	# A freed view means the building was destroyed mid-journey (e.g. a wave
+	# the leg overran): fail with the live state instead of crashing the
+	# coroutine into a silent hang.
+	if not is_instance_valid(view):
+		_fail("selected building view was freed before its selection click: %s" % [
+			_gather_wait_details(-1.0)])
+		return
+	# `_wait_units_clear` polls the controller's per-rendered-frame screen
+	# index, so like the other render-paced waits it rides 1x.
+	var clear_march := _slow_for_input()
+	var cleared := await _wait_units_clear(view.global_position, 15.0)
+	_restore_march(clear_march)
+	if not cleared:
 		return
 	await _click_view(view, MOUSE_BUTTON_LEFT)
 
@@ -753,8 +826,10 @@ func _stop_unit(unit_id: int, gated := false) -> bool:
 		_fail("Stop would target %s instead of unit %d: %s" % [
 			selected, unit_id, _staging_details(unit_id)])
 		return false
+	var stop_march := _slow_for_input()
 	_key_tap(KEY_S)
 	await get_tree().process_frame
+	_restore_march(stop_march)
 	# Correlated Stop result: a worker (non-empty task snapshot) must be Idle,
 	# proving the accepted Stop cancelled this id's gather/route rather than a
 	# different selection. Combatants carry no WorkerTask; their later Move
@@ -876,58 +951,122 @@ func _staging_arrival_details(unit_id: int, start: Vector3) -> String:
 ## placement preview over the anchor, assert it rendered, then place.
 ## The authoritative placement can reject Unreachable when the marching
 ## builder is momentarily unroutable at 20x windowed pacing, so the armed
-## click is retried until the kind's new building view spawns. A builder
-## already selected exactly (e.g. still carrying its scout order) is not
-## re-clicked: a buffered projection click on a 20x marcher lands where the
-## synced view was, not where the worker is.
+## click is retried until the placement resolves. A builder already
+## selected exactly (e.g. still carrying its scout order) is not re-clicked:
+## a buffered projection click on a 20x marcher lands where the synced view
+## was, not where the worker is.
 func _place_building(builder: Node3D, button: Button, anchor: Vector2i) -> void:
 	var kind := str(button.get_meta("kind", ""))
 	var builder_id := int(builder.get_meta("unit_id", -1))
+	var stay_armed := kind == "Wall" or kind == "Gate"
 	for attempt in 4:
 		var selected := _selected_ids()
 		if selected.size() != 1 or int(selected[0]) != builder_id:
 			await _click_view(builder, MOUSE_BUTTON_LEFT)
 		await _click_button(button)
 		var screen_point := _camera.unproject_position(Vector3(anchor.x + 0.25, 0.0, anchor.y + 0.25))
+		var motion_march := _slow_for_input()
 		_mouse_motion(screen_point)
 		await get_tree().process_frame
+		_restore_march(motion_march)
 		var preview := get_node("Main/PlacementPreview") as MeshInstance3D
 		if preview == null or not preview.visible:
 			if attempt == 3:
 				_fail("placement preview did not render for anchor %s" % anchor)
 				return
 			continue
+		# Identity baseline BEFORE the armed click, retained across the whole
+		# watch and every retry: _click_world's settle frames already let an
+		# accepted view sync, so a baseline sampled after the click would file
+		# the new building under "known", the watch could never recognize its
+		# own success, and the re-arm would drive real clicks onto the now
+		# occupied anchor.
+		var baseline := _placement_view_ids(kind)
+		var verdict_before := int(GrusBridge.command_feedback_revision())
 		await _click_world(Vector2(anchor.x, anchor.y), MOUSE_BUTTON_LEFT)
-		# The acceptance proof is the kind's NEW building view, not the request:
-		# a placement request is a one-tick transient the fixed step resolves,
-		# so a slow windowed renderer routinely drains it before this watch
-		# reads it again. The view sync cannot be outpaced by the re-arm click,
-		# so a seen view is decisive and a double placement is unreachable; a
-		# resolve-without-view is an authoritative reject (e.g. Unreachable
-		# while a marcher is unroutable) — re-arm and retry. Non-wall kinds
-		# must also be back to the disarmed state before returning: the
-		# acceptance that spawned the view cancels the armed placement a
-		# rendered frame later, and no later real click of the journey may
-		# land while a placement is still armed (Wall/Gate stay armed for
-		# repeat placement by design; their callers cancel explicitly).
-		var known_ids := PackedInt32Array()
-		for node in get_tree().get_nodes_in_group("building_views"):
-			if str(node.get_meta("building_kind", "")) == kind:
-				known_ids.append(int(node.get_meta("building_id", -1)))
-		var stay_armed := kind == "Wall" or kind == "Gate"
-		for _watch in 12:
-			var spawned := false
-			for node in get_tree().get_nodes_in_group("building_views"):
-				if str(node.get_meta("building_kind", "")) == kind \
-						and not known_ids.has(int(node.get_meta("building_id", -1))):
-					spawned = true
-					break
-			if spawned and (stay_armed \
-					or str(get_node("Main").get("_placement_kind")) == ""):
-				return
-			await get_tree().physics_frame
-		# Resolved without a view (rejected): re-arm and retry.
+		# Watch at 1x: the verdict lands within a couple of sim ticks and the
+		# view sync/disarm ride rendered frames, so a fixed-frame watch must
+		# not burn march seconds (each 20x frame is ~4 match-seconds).
+		var watch_march := _slow_for_input()
+		var watch_deadline := Time.get_ticks_msec() + 8000
+		var last_watch := ""
+		var resolved_reject := false
+		while Time.get_ticks_msec() < watch_deadline:
+			last_watch = _placement_watch_error(
+				baseline,
+				int(GrusBridge.command_feedback_revision()) > verdict_before,
+				int(GrusBridge.last_reject_code()),
+				_placement_view_ids(kind),
+				str(get_node("Main").get("_placement_kind")),
+				not stay_armed)
+			if last_watch == "":
+				break
+			if last_watch.begins_with("rejected:"):
+				resolved_reject = true
+				break
+			if last_watch == "pending-verdict" and not bool(
+					GrusBridge.placement_preview(builder_id, kind, anchor.x, anchor.y).get("valid", true)):
+				# Still no verdict beside an invalid live preview: the armed
+				# click was consumed by the controller's blocked-placement
+				# guard, so nothing was dispatched and this attempt is
+				# authoritatively rejected by the same Rust validator the
+				# preview reads — re-arm and retry.
+				resolved_reject = true
+				break
+			await get_tree().process_frame
+		_restore_march(watch_march)
+		if last_watch == "":
+			return
+		if resolved_reject:
+			continue
+		if last_watch == "pending-verdict":
+			# A silent armed click dispatched nothing and rejected nothing;
+			# re-arm rather than clicking blindly on stale screen state.
+			continue
+		# An accepted placement whose view or disarm never synced is a
+		# presentation defect: failing loudly beats re-arming onto the anchor.
+		_fail("%s placement at %s never settled: watch=%s preview=%s feedback=%s reject=%d ids=%s" % [
+			kind, anchor, last_watch,
+			GrusBridge.placement_preview(builder_id, kind, anchor.x, anchor.y),
+			GrusBridge.command_feedback(),
+			int(GrusBridge.last_reject_code()), _placement_view_ids(kind)])
+		return
 	_fail("placement at %s never produced a %s view" % [anchor, kind])
+
+## Live ids of every building view of one kind — the watch's per-sample scan.
+func _placement_view_ids(kind: String) -> PackedInt32Array:
+	var ids := PackedInt32Array()
+	for node in get_tree().get_nodes_in_group("building_views"):
+		if str(node.get_meta("building_kind", "")) == kind:
+			ids.append(int(node.get_meta("building_id", -1)))
+	return ids
+
+## One armed-placement watch sample, classified synchronously from
+## caller-scanned state — no frames, no gameplay writes — so the journey
+## watch above and the focused regression in _run judge the identical
+## predicate:
+##   ""                accepted and settled (new view + armed state final)
+##   "rejected:<code>" the sim resolved the command as a typed reject
+##   "pending-verdict" no sim verdict yet; the armed click may still resolve
+##   "pending-view"    accepted; the kind's new building view has not synced
+##   "pending-disarm"  accepted + view; the armed tool has not cleared yet
+## A view outside the pre-click baseline is decisive acceptance evidence
+## even if a later verdict overwrote the shared feedback, and a rejection is
+## never inferred from silence: a pending verdict or a late synced view must
+## keep waiting instead of re-arming onto the anchor.
+func _placement_watch_error(baseline: PackedInt32Array, verdict_resolved: bool,
+		reject_code: int, view_ids: PackedInt32Array, placement_armed: String,
+		require_disarm: bool) -> String:
+	for id in view_ids:
+		if not baseline.has(id):
+			if require_disarm and placement_armed != "":
+				return "pending-disarm"
+			return ""
+	if not verdict_resolved:
+		return "pending-verdict"
+	if reject_code != -1:
+		return "rejected:%d" % reject_code
+	return "pending-view"
 
 func _rally_stored(building_id: int) -> bool:
 	var snap: Dictionary = GrusBridge.building_snapshot(building_id)
@@ -970,11 +1109,11 @@ func _run() -> void:
 	_authored_camera_transform = _camera.global_transform
 	_authored_camera_size = _camera.size
 
-	if not GrusBridge.set_sim_speed(20.0):
+	if not GrusBridge.set_sim_speed(_march_speed()):
 		_fail("failed to accelerate Bevy virtual time")
 		return
 
-	if not await _wait_until(_fixture_views_settled, 20.0,
+	if not await _wait_until_at_1x(_fixture_views_settled, 20.0,
 			"skirmish startup never settled to 4 units / 1 building / 18 resources"):
 		return
 
@@ -1016,6 +1155,44 @@ func _run() -> void:
 		if not await _park_at_staging(2):
 			print("GRUS_ECONOMY_STAGING_MISSED_CLICK_PROPAGATED")
 		return
+
+	# Focused armed-placement watch regression — synchronous and
+	# presentation-only (the classifier takes scanned state, so nothing on
+	# screen or in gameplay is touched): silence must stay pending instead
+	# of becoming a rejection, a typed reject must resolve for the retry, a
+	# late synced view must read as acceptance rather than rejection, a
+	# pre-existing/baseline view must never serve as the acceptance proof,
+	# non-Wall kinds must wait for the armed tool to clear, and Wall/Gate
+	# stay armed on success by design.
+	if _placement_watch_error(PackedInt32Array([4242]), false, -1,
+			PackedInt32Array(), "", true) != "pending-verdict":
+		_fail("placement watch treated a missing sim verdict as resolved")
+		return
+	if _placement_watch_error(PackedInt32Array([4242]), true, 10,
+			PackedInt32Array([4242]), "Bunkhouse", true) != "rejected:10":
+		_fail("placement watch did not resolve a typed reject for the retry")
+		return
+	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
+			PackedInt32Array([4242]), "Bunkhouse", true) != "pending-view":
+		_fail("placement watch judged an accepted placement before its view synced")
+		return
+	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
+			PackedInt32Array([4242, 777]), "Bunkhouse", true) != "pending-disarm":
+		_fail("placement watch missed a newly synced view or the armed tool")
+		return
+	if _placement_watch_error(PackedInt32Array([4242, 777]), true, -1,
+			PackedInt32Array([4242, 777]), "Bunkhouse", true) != "pending-view":
+		_fail("placement watch spent a baseline view as the acceptance proof")
+		return
+	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
+			PackedInt32Array([4242, 777]), "", true) != "":
+		_fail("placement watch did not settle an accepted, disarmed placement")
+		return
+	if _placement_watch_error(PackedInt32Array([4242]), true, -1,
+			PackedInt32Array([4242, 777]), "Wall", false) != "":
+		_fail("placement watch did not keep a Wall/Gate placement armed on success")
+		return
+	print("GRUS_ECONOMY_PLACEMENT_WATCH_PROBE_OK")
 
 	var boot: Dictionary = GrusBridge.economy_snapshot()
 	if int(boot.get("food", -1)) != 200 or int(boot.get("scrap", -1)) != 300 or int(boot.get("coal", -1)) != 150:
@@ -1320,8 +1497,8 @@ func _run() -> void:
 					str(t.get("carry_amount", -1)), str(t.get("carry_kind", "")), p,
 					str(carry_label.text.contains("alt=\"%s\"" % str(t.get("carry_kind", ""))))]):
 		return
-	if not GrusBridge.set_sim_speed(20.0):
-		_fail("could not resume the 20x economy march after the carry detail")
+	if not GrusBridge.set_sim_speed(_march_speed()):
+		_fail("could not resume the economy march after the carry detail")
 		return
 
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
@@ -1349,7 +1526,7 @@ func _run() -> void:
 	var bunkhouse_id := int(bunkhouse.get_meta("building_id"))
 	# HPA-291/HPA-697: the unfinished Bunkhouse renders the shared painted
 	# construction-site sprite until the bridge's pushed state says complete.
-	if not await _wait_until(func():
+	if not await _wait_until_at_1x(func():
 			return not _building_complete_at(bunkhouse_id) \
 				and SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", false).is_empty(),
 			20.0, "incomplete Bunkhouse never showed the construction site",
@@ -1381,7 +1558,7 @@ func _run() -> void:
 	# The completion push swaps the construction-site sprite for the kind's
 	# painted sprite exactly once; the geometry must still sit inside the
 	# normalized ±0.5 footprint the 2x2 root scale blows up to world size.
-	if not await _wait_until(func():
+	if not await _wait_until_at_1x(func():
 			return SmokeHelpers.building_model_error(bunkhouse, "Bunkhouse", true).is_empty(),
 			10.0, "completed Bunkhouse never swapped to its painted sprite"):
 		return
@@ -1446,7 +1623,15 @@ func _run() -> void:
 	await _click_view_visible(far_salvage, MOUSE_BUTTON_RIGHT, true)
 	var delivery_box := {"scrap": int(GrusBridge.economy_snapshot().get("scrap", -1))}
 	if not await _wait_until(_scrap_deposited_at_depot.bind(1, depot.global_position, delivery_box), 45.0,
-			"no scrap delivery ever reached the Depot"):
+			"no scrap delivery ever reached the Depot",
+			func():
+				var task: Dictionary = GrusBridge.unit_task_snapshot(1)
+				var worker := _unit_view(1)
+				return "worker=%s task=%s carry=%s/%s box_scrap=%s depot=%s" % [
+					"missing" if worker == null else str(worker.global_position),
+					str(task.get("task", "?")), str(task.get("carry_amount", "?")),
+					str(task.get("carry_kind", "?")), str(delivery_box.get("scrap", -1)),
+					str(depot.global_position)]):
 		return
 	# Retire the scrap gatherer: its northwest corridor stays clear of every
 	# later click target, so parking in place is safe. Stable id only. Same
@@ -1626,7 +1811,7 @@ func _run() -> void:
 				and absf(head_progress.value - _queue_progress(research_center_id) * 100.0) <= 12.0,
 			5.0, "head socket progress does not track the live queue_progress"):
 		return
-	if not GrusBridge.set_sim_speed(20.0):
+	if not GrusBridge.set_sim_speed(_march_speed()):
 		_fail("failed to resume accelerated Bevy virtual time")
 		return
 	var rally_worker_box := {}
@@ -1654,7 +1839,7 @@ func _run() -> void:
 	if not GrusBridge.reset_fixture():
 		_fail("fixture reset between economy smoke legs was rejected")
 		return
-	if not await _wait_until(_fixture_views_settled, 20.0,
+	if not await _wait_until_at_1x(_fixture_views_settled, 20.0,
 			"economy fixture did not settle after its guarded reset"):
 		return
 	_building_ids = {1: true}
@@ -1714,8 +1899,10 @@ func _run() -> void:
 	if heat_wall == null:
 		return
 	var heat_wall_id := int(heat_wall.get_meta("building_id"))
+	var wall_esc_march := _slow_for_input()
 	_key_tap(KEY_ESCAPE)
 	await get_tree().process_frame
+	_restore_march(wall_esc_march)
 	if not await _wait_until(_building_complete_at.bind(heat_wall_id), 15.0, "heat-leg Wall never completed"):
 		return
 
@@ -1728,8 +1915,10 @@ func _run() -> void:
 	if heat_gate == null:
 		return
 	var heat_gate_id := int(heat_gate.get_meta("building_id"))
+	var gate_esc_march := _slow_for_input()
 	_key_tap(KEY_ESCAPE)
 	await get_tree().process_frame
+	_restore_march(gate_esc_march)
 	if not await _wait_until(_building_complete_at.bind(heat_gate_id), 15.0, "heat-leg Gate never completed"):
 		return
 
@@ -1797,11 +1986,11 @@ func _run() -> void:
 			10.0, "cold stage after Depot+Turret never read 15/16 at 94%"):
 		return
 	var heat_views: Array[Node3D] = [research_center, barracks, heat_depot, heat_turret]
-	if not await _wait_until(_all_overlaid.bind(heat_views, true), 10.0,
+	if not await _wait_until_at_1x(_all_overlaid.bind(heat_views, true), 10.0,
 			"cold overlay never reached the completed demand-bearing views"):
 		return
 	# Opt-in real-render evidence of the icy tint on cold painted sprites.
-	var cold_capture := await SmokeHelpers.capture_frame(get_tree(), "economy-cold")
+	var cold_capture := await _capture_at_1x("economy-cold")
 	if not cold_capture.is_empty():
 		_fail(cold_capture)
 		return
@@ -1821,7 +2010,7 @@ func _run() -> void:
 			10.0, "cold stage after the Bunkhouse completion never read 15/17 at 88%"):
 		return
 	heat_views.append(heat_bunkhouse)
-	if not await _wait_until(_all_overlaid.bind(heat_views, true), 10.0,
+	if not await _wait_until_at_1x(_all_overlaid.bind(heat_views, true), 10.0,
 			"cold overlay never reached the completed Bunkhouse"):
 		return
 	# The zero-demand defenses standing through this deficit never take the
@@ -1854,11 +2043,11 @@ func _run() -> void:
 			_heat_stage_ok.bind(27, 17, 1.0, "27 / 17 · surface 100%"),
 			10.0, "warm stage after the Coal Furnace never read 27/17 at 100%"):
 		return
-	if not await _wait_until(_all_overlaid.bind(heat_views, false), 10.0,
+	if not await _wait_until_at_1x(_all_overlaid.bind(heat_views, false), 10.0,
 			"cold overlay never cleared after the Coal Furnace completed"):
 		return
 	# Opt-in real-render evidence of the restored warm WHITE modulate.
-	var warm_capture := await SmokeHelpers.capture_frame(get_tree(), "economy-warm")
+	var warm_capture := await _capture_at_1x("economy-warm")
 	if not warm_capture.is_empty():
 		_fail(warm_capture)
 		return
@@ -1981,7 +2170,7 @@ func _run() -> void:
 				_training_queue(barracks_id),
 				_queue_accessibility_error(sockets, _training_queue(barracks_id), "Barracks FIFO")]):
 		return
-	capture_error = await SmokeHelpers.capture_frame(get_tree(), "economy-queue-barracks")
+	capture_error = await _capture_at_1x("economy-queue-barracks")
 	if not capture_error.is_empty():
 		_fail(capture_error)
 		return
@@ -2016,8 +2205,8 @@ func _run() -> void:
 						sockets, _training_queue(barracks_id), "reselected Barracks").is_empty(),
 			5.0, "reselected Barracks did not restore its live queue row"):
 		return
-	if not GrusBridge.set_sim_speed(20.0):
-		_fail("failed to restore the 20x clock after the populated selection-loss probe")
+	if not GrusBridge.set_sim_speed(_march_speed()):
+		_fail("failed to restore the march clock after the populated selection-loss probe")
 		return
 	var guard_seconds := float(catalogue_units.get("Guard", {}).get("seconds", 0))
 	var head_time_text := (sockets.get_child(0).get_node("Time") as Label).text
@@ -2251,8 +2440,8 @@ func _run() -> void:
 		return
 	# The refused click leaves the Guard tile focused, still enabled and still
 	# on its unaffordable plate: the real frame proves the clickable state.
-	var unaffordable_capture := await SmokeHelpers.capture_frame(
-		get_tree(), "command-tiles-unaffordable")
+	var unaffordable_capture := await _capture_at_1x(
+		"command-tiles-unaffordable")
 	if not unaffordable_capture.is_empty():
 		_fail(unaffordable_capture)
 		return
