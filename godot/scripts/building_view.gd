@@ -56,15 +56,32 @@ func _ready() -> void:
 	set_notify_transform(true)
 
 ## The valid art geometry under a model for bounds/picking scanners: a
-## mesh with geometry or a textured SpriteBase3D — both expose get_aabb().
+## mesh with geometry or a textured Sprite3D — both expose get_aabb().
+## Sprite3D specifically, never the wider SpriteBase3D: AnimatedSprite3D
+## carries sprite_frames, not texture, so a base-class read script-errors
+## instead of filtering the node out.
 static func art_geometry(node: Node) -> GeometryInstance3D:
 	if node is MeshInstance3D:
 		var mesh_instance := node as MeshInstance3D
 		return null if mesh_instance.mesh == null else mesh_instance
-	if node is SpriteBase3D:
-		var sprite := node as SpriteBase3D
+	if node is Sprite3D:
+		var sprite := node as Sprite3D
 		return null if sprite.texture == null else sprite
 	return null
+
+## Whether geometry under `model` is actually rendered: the geometry node
+## and every ancestor through `model` itself must be visible — a hidden
+## mesh still carries triangles and bounds but supplies no pixels. The view
+## root's own visibility stays the caller's call: fog hides live views and
+## standalone probes inspect views whose root was never shown.
+static func art_rendered(art: GeometryInstance3D, model: Node) -> bool:
+	var ancestor: Node = art
+	var stop := model.get_parent()
+	while ancestor != null and ancestor != stop:
+		if ancestor is Node3D and not (ancestor as Node3D).visible:
+			return false
+		ancestor = ancestor.get_parent()
+	return true
 
 ## Thresholded opaque mask for a texture, cached per texture resource.
 static func alpha_mask(texture: Texture2D) -> BitMap:

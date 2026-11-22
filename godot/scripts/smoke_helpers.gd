@@ -452,13 +452,17 @@ static func view_art_error(view: Node3D) -> String:
 	var first := true
 	for node in model.find_children("*", "GeometryInstance3D", true, false):
 		var art: GeometryInstance3D = BuildingView.art_geometry(node)
-		if art == null:
+		# Hidden art cannot be the rendered building — a hidden mesh under
+		# Model must not supply the ground plane for a floating sprite. The
+		# view root's own visibility stays the caller's call: fog and
+		# standalone probes inspect views whose root was never shown.
+		if art == null or not BuildingView.art_rendered(art, model):
 			continue
 		var world_bounds: AABB = art.global_transform * art.get_aabb()
 		bounds = world_bounds if first else bounds.merge(world_bounds)
 		first = false
 	if first:
-		return "%s Model carries no meshes" % kind
+		return "%s Model carries no supported art" % kind
 	var origin := view.global_position
 	if bounds.position.y < origin.y - 0.02:
 		return "%s art sinks below ground: %s" % [kind, bounds]
