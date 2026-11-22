@@ -9,6 +9,16 @@ test_output/
 dist/
 build/
 
+# Supplemental HPA-291 capture exports, not project art.
+/docs/hpa-291-city-cold-deficit-detail.png
+/docs/hpa-291-city-warm-recovery-detail.png
+/docs/hpa-291-city-wide-context.png
+/docs/hpa-291-construction-in-progress-detail.png
+/docs/hpa-291-wall-gate-wall-horizontal-detail.png
+/docs/hpa-291-wall-gate-wall-horizontal.png
+/docs/hpa-291-wall-gate-wall-vertical-detail.png
+/docs/hpa-291-wall-gate-wall-vertical.png
+
 # Disposable verification output. Put new local runs under verification-output/
 # or an evidence folder's generated/ directory; keep curated evidence outside it.
 /verification-output/
