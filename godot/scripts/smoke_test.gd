@@ -1877,9 +1877,14 @@ func _cover_probe_unit(unit_id: int, team: int, kind: String) -> Node3D:
 ## verdicts run white-box and through real pushed input — a left-click must
 ## never select the covered friendly, and a combat-unit right-click on the
 ## covered alien must fall through to a ground move ("Move command queued"),
-## never "Attack command queued". Runs during Playing so the right-click
-## reaches `_issue_context_command`; the fake Guard id is rejected by the
-## sim a tick later, which is why the verdict is the label, not feedback.
+## never "Attack command queued". The same cover rule reaches buildings: a
+## synthetic building sits behind each unit in turn, so `_enemy_pick_at`
+## must not return the covered enemy building and `_select_at` must not
+## select the covered friendly one — removing the `covered` suppression on
+## either path is the regression this leg pins. Runs during Playing so the
+## right-click reaches `_issue_context_command`; the fake Guard id is
+## rejected by the sim a tick later, which is why the verdict is the label,
+## not feedback.
 func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: Vector2) -> bool:
 	if str(main.get("_armed_order")) != "" or str(main.get("_placement_kind")) != "":
 		_fail("the cross-team cover probe needs no armed order or placement: order=%s placement=%s" % [
@@ -1941,6 +1946,85 @@ func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: 
 	if str(status.text) != "Move command queued":
 		_fail("cross-team cover: a combat-unit right-click on the occluded alien did not fall through to a move: %s" % status.text)
 		ok = false
+	# Building cover, both click paths: a building behind the covering unit
+	# is covered ground too — `_enemy_pick_at` must suppress the covered
+	# enemy building and `_select_at` the covered friendly one.
+	var building := Node3D.new()
+	building.set_meta("building_id", 9104)
+	var building_model := Node3D.new()
+	building_model.name = "Model"
+	var building_mesh := MeshInstance3D.new()
+	var building_box := BoxMesh.new()
+	building_box.size = Vector3(0.5, 1.0, 0.5)
+	building_mesh.mesh = building_box
+	building_model.add_child(building_mesh)
+	building.add_child(building_model)
+	add_child(building)
+	building.global_position = origin + direction * 7.0
+	building.add_to_group("building_views")
+	# Friendly body in front of an enemy building: the pick sees covered
+	# ground and suppresses the building; uncovered, that same building is
+	# a direct silhouette hit — the controls pin both directions.
+	building.set_meta("team_id", 2)
+	friendly.global_position = origin + direction * 4.5
+	enemy.visible = false
+	main.call("_index_views")
+	if (main.call("_building_hit_at", point, 0).get("view") as Node3D) != building \
+			or (main.call("_unit_mesh_hit_at", point).get("view") as Node3D) != friendly:
+		_fail("cross-team building cover: the staged enemy building / friendly body geometry does not cover the click")
+		ok = false
+	else:
+		if (main.call("_enemy_pick_at", point).get("view") as Node3D) != null:
+			_fail("cross-team building cover: the enemy pick reached a building through the foreground friendly body")
+			ok = false
+		friendly.visible = false
+		var uncovered_pick: Dictionary = main.call("_enemy_pick_at", point)
+		if (uncovered_pick.get("view") as Node3D) != building \
+				or not bool(uncovered_pick.get("direct", false)):
+			_fail("cross-team building cover: the uncovered enemy building lost its direct pick (view=%s direct=%s)" % [
+				str(uncovered_pick.get("view")), str(uncovered_pick.get("direct", false))])
+			ok = false
+		friendly.visible = true
+	# The covering friendly is itself a real left-click pick; with the Guard
+	# selected, a real right-click on the covered enemy building must fall
+	# through to a move, never "Attack command queued".
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_LEFT)
+	if (main.selected_ids as Array) != [9210]:
+		_fail("cross-team building cover: a real left-click did not select the covering friendly unit (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	status.text = "<no command issued>"
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_RIGHT)
+	if str(status.text) != "Move command queued":
+		_fail("cross-team building cover: a combat-unit right-click on the covered enemy building did not fall through to a move: %s" % status.text)
+		ok = false
+	# Enemy body in front of a friendly building: left-click sees covered
+	# ground and selects nothing; with the cover gone the same click
+	# selects the building.
+	building.set_meta("team_id", 1)
+	enemy.global_position = origin + direction * 4.5
+	enemy.visible = true
+	friendly.visible = false
+	main.call("_index_views")
+	if (main.call("_unit_pick_at", point, 1) as Node3D) != null:
+		_fail("cross-team building cover: the team-1 pick reached a building through the foreground enemy body")
+		ok = false
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_LEFT)
+	if not (main.selected_ids as Array).is_empty() or int(main.selected_building_id) != -1:
+		_fail("cross-team building cover: a real left-click selected a friendly building through the enemy body (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	enemy.visible = false
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_LEFT)
+	if int(main.selected_building_id) != 9104:
+		_fail("cross-team building cover: a real left-click did not select the uncovered friendly building (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	building.free()
 	enemy.free()
 	friendly.free()
 	main.selected_ids.clear()
