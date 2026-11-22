@@ -3827,6 +3827,28 @@ func _run() -> void:
 	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
 		_fail("the Stop tile left a move goal on the worker")
 		return
+	# The cell read below must not run on a stale view: _unit_idle settles on
+	# the authoritative snapshot while the hand-rolled view interpolation can
+	# lag the sim by several ticks under slow windowed rendering, so a worker
+	# that arrived on its own could still render outside the cell. Sample
+	# across process frames — each runs the Update transform sync — and fail
+	# rather than judge a view that never converged.
+	var tile_view_position := unit_two.global_position
+	var tile_view_stable := 0
+	var tile_view_converged := false
+	for _frame in range(60):
+		await get_tree().process_frame
+		if unit_two.global_position.distance_to(tile_view_position) < 0.001:
+			tile_view_stable += 1
+			if tile_view_stable >= 6:
+				tile_view_converged = true
+				break
+		else:
+			tile_view_stable = 0
+			tile_view_position = unit_two.global_position
+	if not tile_view_converged:
+		_fail("the Stop tile worker's view never converged after the sim settled")
+		return
 	if Vector2i(floori(unit_two.global_position.x), floori(unit_two.global_position.z)) == tile_move_cell:
 		_fail("the Stop tile worker entered its goal cell — the tile interrupted no live march")
 		return
