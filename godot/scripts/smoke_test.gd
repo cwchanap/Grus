@@ -3612,12 +3612,13 @@ func _run() -> void:
 		_fail("Stop left a move goal on the worker")
 		return
 	# Settled is not stopped: a worker that simply finished the march would
-	# pass the checks above on a dead key. The S-application window (key
-	# dispatch plus at most a couple of 20 Hz sim ticks) can carry it at
-	# most ≈0.6 cells past the pre-check sample, so anything within 0.4 of
-	# the goal means the march completed — the key interrupted nothing.
-	if unit_two.global_position.distance_to(stop_target) < 0.4:
-		_fail("the stopped worker reached its target — S interrupted no live march")
+	# pass the checks above on a dead key. Every arrival path ends inside
+	# the assigned goal cell — normal pathing consumes the cell-centre
+	# waypoint, and a map-revision replan drops a plain move order only
+	# when the unit already stands in that cell — so a worker still
+	# outside it could only have been halted by this Stop.
+	if Vector2i(floori(unit_two.global_position.x), floori(unit_two.global_position.z)) == stop_cell:
+		_fail("the stopped worker entered its goal cell — S interrupted no live march")
 		return
 
 	if not _assert_cross_team_unit_cover(controller, camera, viewport_size):
@@ -3789,9 +3790,14 @@ func _run() -> void:
 			"the Stop tile probe's setup move was never accepted by the sim"):
 		return
 	var tile_task: Dictionary = GrusBridge.unit_task_snapshot(stop_worker_id)
+	# Still ≥2.0 short of the goal pins the march mid-flight: the dispatch
+	# window below carries the worker well under a cell further, so a real
+	# interrupt cannot reach the assigned cell — any in-cell finish is an
+	# arrival, never this Stop.
 	if int(tile_task.get("move_goal_x", -1)) != tile_move_cell.x \
 			or int(tile_task.get("move_goal_y", -1)) != tile_move_cell.y \
-			or _unit_idle(unit_two):
+			or _unit_idle(unit_two) \
+			or unit_two.global_position.distance_to(tile_move_target) < 2.0:
 		_fail("the Stop tile probe has no live march to interrupt: %s" % str(tile_task))
 		return
 	# The verdict is pinned to the stop dispatch itself: the settled feedback
@@ -3812,14 +3818,17 @@ func _run() -> void:
 	if not await _wait_until(_unit_idle.bind(unit_two), 5.0,
 			"unit 2 never settled after the Stop dispatch"):
 		return
-	# Cleared means cleared: no leftover goal, and the worker ended short of
-	# it — an arrival would clear both too, but the pre-press live-march
-	# check plus the shortfall here reject a march the tile never stopped.
+	# Cleared means cleared: no leftover goal, and no arrival either. Every
+	# arrival path ends inside the assigned goal cell — normal pathing
+	# consumes the cell-centre waypoint, and a map-revision replan drops a
+	# plain move order only when the unit already stands in that cell — so
+	# the stopped worker must stand outside it or the verdict is a finished
+	# march the tile never interrupted.
 	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
 		_fail("the Stop tile left a move goal on the worker")
 		return
-	if unit_two.global_position.distance_to(tile_move_target) < 0.4:
-		_fail("the Stop tile worker reached its goal — the tile interrupted no live march")
+	if Vector2i(floori(unit_two.global_position.x), floori(unit_two.global_position.z)) == tile_move_cell:
+		_fail("the Stop tile worker entered its goal cell — the tile interrupted no live march")
 		return
 	# Losing the selection clears a modal order instead of leaving it armed.
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
