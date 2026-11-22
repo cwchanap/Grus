@@ -24,11 +24,12 @@ const MODELS := {
 	"Wall": preload("res://assets/structures/wall.glb"),
 	"Gate": preload("res://assets/structures/gate.glb"),
 }
-## Sprite presentation: the fixed orthographic camera pitches −54°, so the
-## quad tilts to face it and its bottom image edge sits on the camera-side
-## (+z) footprint edge a hair above the ground (the painted PNG already
-## carries its baked contact shadow, so the sun must not cast a second one).
-const SPRITE_PITCH_DEGREES := 54.0
+## Sprite presentation: the quad pitches to match the active Camera3D's view
+## tilt (default 54° when no camera is active) and its bottom image edge sits on
+## the camera-side (+z) footprint edge a hair above the ground (the painted PNG
+## already carries its baked contact shadow, so the sun must not cast a second
+## one).
+const DEFAULT_SPRITE_PITCH_DEGREES := 54.0
 const GROUND_LIFT := 0.01
 ## Shared alpha threshold for the opaque-pixel cache (health bar seat and
 ## silhouette picking read the same mask).
@@ -48,9 +49,11 @@ var _styled_kind := ""
 var _complete := false
 var _cold := false
 var _health_ratio := 1.0
+var _sprite_root_scale := Vector2.ZERO
 
 func _ready() -> void:
 	add_to_group("building_views")
+	set_notify_transform(true)
 
 ## The valid art geometry under a model for bounds/picking scanners: a
 ## mesh with geometry or a textured SpriteBase3D — both expose get_aabb().
@@ -171,8 +174,10 @@ func _attach_model() -> bool:
 	elif PAINTED.has(_styled_kind):
 		instance = _painted_sprite_node(PAINTED[_styled_kind])
 	elif MODELS.has(_styled_kind):
+		_sprite_root_scale = Vector2.ZERO
 		instance = (MODELS[_styled_kind] as PackedScene).instantiate()
 	else:
+		_sprite_root_scale = Vector2.ZERO
 		# A kind whose art has not landed yet must still render and be
 		# debuggable — an invisible building would silently stand.
 		push_warning("building_view: no model for building_kind '%s', using placeholder" % _styled_kind)
@@ -196,10 +201,51 @@ func _attach_model() -> bool:
 	_seat_health_bar()
 	return true
 
+func _sprite_pitch_degrees() -> float:
+	var viewport := get_viewport()
+	var cam := viewport.get_camera_3d() if viewport != null else null
+	if cam != null:
+		return clampf(rad_to_deg(atan2(cam.global_basis.z.y, cam.global_basis.z.z)), 0.0, 90.0)
+	return DEFAULT_SPRITE_PITCH_DEGREES
+
+func _apply_painted_sprite_layout(holder: Node3D, sprite: Sprite3D, width: float, depth: float, pitch_deg: float) -> void:
+	var pitch_rad := deg_to_rad(pitch_deg)
+	holder.scale = Vector3(1.0 / width, 1.0, 1.0 / depth)
+	sprite.pixel_size = width / float(sprite.texture.get_width())
+	sprite.rotation_degrees = Vector3(-pitch_deg, 0.0, 0.0)
+	sprite.position = Vector3(
+		0.0,
+		0.5 * width * cos(pitch_rad) + GROUND_LIFT,
+		0.5 * depth - 0.5 * width * sin(pitch_rad))
+
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_TRANSFORM_CHANGED or _sprite_root_scale == Vector2.ZERO:
+		return
+	var width := scale.x
+	var depth := scale.z
+	if width <= 0.001 or depth <= 0.001 or not is_finite(width) or not is_finite(depth):
+		return
+	if is_equal_approx(width, _sprite_root_scale.x) and is_equal_approx(depth, _sprite_root_scale.y):
+		return
+	var model := get_node_or_null("Model") as Node3D
+	if model == null:
+		return
+	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	if sprites.is_empty():
+		return
+	var sprite := sprites[0] as Sprite3D
+	if sprite == null or sprite.texture == null:
+		return
+	_apply_painted_sprite_layout(model, sprite, width, depth, _sprite_pitch_degrees())
+	_sprite_root_scale = Vector2(width, depth)
+	if model.has_meta("_cached_art_bounds"):
+		model.remove_meta("_cached_art_bounds")
+	_seat_health_bar()
+
 ## Build the painted-sprite presentation under a wrapper that cancels the
 ## Rust root's nonuniform X/Z footprint scale, so the sprite plane renders
 ## width world units wide (pixel_size = width / texture width) and stays
-## square. It pitches to face the fixed −54° camera with billboard off, and
+## square. It pitches to face the active camera with billboard off, and
 ## the wrapper-local center coordinates equal world-relative ones because
 ## the wrapper and root scales cancel exactly. Returns null while the root
 ## scale is not yet usable (the attach retries next _process).
@@ -209,20 +255,15 @@ func _painted_sprite_node(texture: Texture2D) -> Node3D:
 	if width <= 0.001 or depth <= 0.001 or not is_finite(width) or not is_finite(depth):
 		return null
 	var holder := Node3D.new()
-	holder.scale = Vector3(1.0 / width, 1.0, 1.0 / depth)
 	var sprite := Sprite3D.new()
 	sprite.texture = texture
-	sprite.pixel_size = width / float(texture.get_width())
-	sprite.rotation_degrees = Vector3(-SPRITE_PITCH_DEGREES, 0.0, 0.0)
 	sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	sprite.shaded = false
 	sprite.alpha_cut = SpriteBase3D.ALPHA_CUT_OPAQUE_PREPASS
 	sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	sprite.position = Vector3(
-		0.0,
-		0.5 * width * cos(deg_to_rad(SPRITE_PITCH_DEGREES)) + GROUND_LIFT,
-		0.5 * depth - 0.5 * width * sin(deg_to_rad(SPRITE_PITCH_DEGREES)))
 	sprite.modulate = COLD_TINT if _cold else Color.WHITE
+	_apply_painted_sprite_layout(holder, sprite, width, depth, _sprite_pitch_degrees())
+	_sprite_root_scale = Vector2(width, depth)
 	holder.add_child(sprite)
 	return holder
 

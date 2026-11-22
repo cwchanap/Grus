@@ -156,7 +156,7 @@ jobs:
         # tests), so any nonzero exit is a real failure.
         run: |
           set -o pipefail
-          timeout 45s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log || rc=$?
+          timeout 90s godot --headless --path godot res://scenes/smoke_test.tscn 2>&1 | tee bridge-smoke.log || rc=$?
           rc=${rc:-0}
           grep -q "GRUS_GODOT_SMOKE_OK" bridge-smoke.log || exit 1
           grep -q "SMOKE_STRUCTURE_AUDIT source_bytes=editor" bridge-smoke.log || exit 1

@@ -575,14 +575,12 @@ func _worker_pick_point(worker: Node3D) -> Vector2:
 			var candidate := center + Vector2(float(offset_x), float(offset_y))
 			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate):
 				continue
-			if (_main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != worker:
+			var hit: Dictionary = _main.call("_building_hit_at", candidate, 0)
+			if (_main.call("_unit_pick_at", candidate, 1, hit) as Node3D) != worker:
 				continue
-			var hit: Dictionary = _main.call("_building_hit_at", candidate, 1)
-			var building_depth: float = hit.get("depth", INF)
 			var origin: Vector3 = _main.camera.project_ray_origin(candidate)
 			var direction: Vector3 = _main.camera.project_ray_normal(candidate)
-			var unit_depth: float = (worker.global_position + Vector3(0.0, 0.15, 0.0) - origin).dot(direction)
-			if building_depth < INF and building_depth < unit_depth:
+			if bool(_main.call("_building_beats_unit", hit, worker, origin, direction)):
 				continue
 			var distance := center.distance_to(candidate)
 			if best_distance < 0.0 or distance < best_distance:
@@ -646,6 +644,7 @@ func _inside_ring(position: Vector3) -> bool:
 		and position.z >= _ring_min.y + 1 and position.z < _ring_max.y
 
 func _turret_tracer_from(turret: Node3D) -> bool:
+	var expected_muzzle: Vector3 = _main.call("_attacker_muzzle_position", turret, "building")
 	for child in _fx.get_children():
 		var view := child as MeshInstance3D
 		if view == null or not (view.mesh is BoxMesh):
@@ -654,6 +653,6 @@ func _turret_tracer_from(turret: Node3D) -> bool:
 		if not is_equal_approx(mesh.size.x, 0.08):
 			continue
 		var origin := view.global_position + view.global_basis.z * (mesh.size.z * 0.5)
-		if origin.distance_to(turret.global_position + Vector3(0.0, 0.62, 0.0)) < 0.05:
+		if origin.distance_to(expected_muzzle) < 0.05:
 			return true
 	return false
