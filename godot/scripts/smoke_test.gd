@@ -3579,36 +3579,15 @@ func _run() -> void:
 	if not await _wait_until(_accepted_since.bind(stop_feedback), 10.0,
 			"the stop probe's queued Stop was never accepted by the sim"):
 		return
-	for _frame in range(2):
-		await get_tree().physics_frame
-	# The hand-rolled view interpolation can lag the settled sim by several
-	# ticks when windowed rendering is slow; sample only after the view
-	# converges so the check below tests the stopped order, not the lag.
-	var settle_position := unit_two.global_position
-	var settled_samples := 0
-	for _frame in range(60):
-		await get_tree().process_frame
-		if unit_two.global_position.distance_to(settle_position) < 0.001:
-			settled_samples += 1
-			if settled_samples >= 6:
-				break
-		else:
-			settled_samples = 0
-			settle_position = unit_two.global_position
-	var stopped_position := unit_two.global_position
-	for _frame in range(15):
-		await get_tree().physics_frame
-	if unit_two.global_position.distance_to(stopped_position) > 0.05:
-		_fail("Stop input did not settle the active move order")
-		return
 	# Stop-specific acceptance: idle (which excludes MoveOrder owners) must be
 	# true and the goal gone once S lands. Arrival also clears both, but the
-	# pre-key goal pin plus the ≥0.4 shortfall below reject a worker that got
-	# there on its own.
-	if not _unit_idle(unit_two):
-		_fail("Stop left the worker busy — the move order survived S")
+	# pre-key goal pin plus the outside-cell verdict below reject a worker
+	# that got there on its own.
+	if not await _wait_until(_unit_idle.bind(unit_two), 5.0,
+			"Stop left the worker busy — the move order survived S"):
 		return
-	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
+	var stopped_snapshot: Dictionary = GrusBridge.unit_task_snapshot(stop_worker_id)
+	if int(stopped_snapshot.get("move_goal_x", -1)) != -1:
 		_fail("Stop left a move goal on the worker")
 		return
 	# Settled is not stopped: a worker that simply finished the march would
@@ -3616,8 +3595,12 @@ func _run() -> void:
 	# the assigned goal cell — normal pathing consumes the cell-centre
 	# waypoint, and a map-revision replan drops a plain move order only
 	# when the unit already stands in that cell — so a worker still
-	# outside it could only have been halted by this Stop.
-	if Vector2i(floori(unit_two.global_position.x), floori(unit_two.global_position.z)) == stop_cell:
+	# outside it could only have been halted by this Stop. The verdict reads
+	# the authoritative sim position, never the view: the hand-rolled
+	# interpolation can lag the sim, and a stationary render only proves the
+	# view stopped moving — not that the position it renders is current.
+	if Vector2i(floori(float(stopped_snapshot.get("pos_x", 0.0))),
+			floori(float(stopped_snapshot.get("pos_y", 0.0)))) == stop_cell:
 		_fail("the stopped worker entered its goal cell — S interrupted no live march")
 		return
 
@@ -3793,17 +3776,21 @@ func _run() -> void:
 	# Still ≥2.0 short of the goal pins the march mid-flight: the dispatch
 	# window below carries the worker well under a cell further, so a real
 	# interrupt cannot reach the assigned cell — any in-cell finish is an
-	# arrival, never this Stop.
+	# arrival, never this Stop. The distance is authoritative, not the view:
+	# a lagging render can overstate the march remaining and pass a worker
+	# already near arrival.
+	var tile_task_pos := Vector2(
+		float(tile_task.get("pos_x", 0.0)), float(tile_task.get("pos_y", 0.0)))
 	if int(tile_task.get("move_goal_x", -1)) != tile_move_cell.x \
 			or int(tile_task.get("move_goal_y", -1)) != tile_move_cell.y \
 			or _unit_idle(unit_two) \
-			or unit_two.global_position.distance_to(tile_move_target) < 2.0:
+			or tile_task_pos.distance_to(Vector2(tile_move_target.x, tile_move_target.z)) < 2.0:
 		_fail("the Stop tile probe has no live march to interrupt: %s" % str(tile_task))
 		return
 	# The verdict is pinned to the stop dispatch itself: the settled feedback
 	# must be an acceptance (not just any later revision bump) and unit two
-	# must converge to the stationary gate — ordinary arrival at an old
-	# goal must never read as this probe's pass.
+	# must settle idle — ordinary arrival at an old goal must never read as
+	# this probe's pass.
 	var stop_revision := int(GrusBridge.command_feedback_revision())
 	SmokeHelpers.push_mouse_click(get_tree(), order_buttons["StopButton"].get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	if str(command_status.text) != "Stop command queued" \
@@ -3823,33 +3810,16 @@ func _run() -> void:
 	# consumes the cell-centre waypoint, and a map-revision replan drops a
 	# plain move order only when the unit already stands in that cell — so
 	# the stopped worker must stand outside it or the verdict is a finished
-	# march the tile never interrupted.
-	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
+	# march the tile never interrupted. The cell read is authoritative, not
+	# the view: _unit_idle settles on the sim snapshot while the hand-rolled
+	# interpolation can lag it, and a stationary render only proves the view
+	# stopped moving — never that the position it renders is current.
+	var tile_stop_snapshot: Dictionary = GrusBridge.unit_task_snapshot(stop_worker_id)
+	if int(tile_stop_snapshot.get("move_goal_x", -1)) != -1:
 		_fail("the Stop tile left a move goal on the worker")
 		return
-	# The cell read below must not run on a stale view: _unit_idle settles on
-	# the authoritative snapshot while the hand-rolled view interpolation can
-	# lag the sim by several ticks under slow windowed rendering, so a worker
-	# that arrived on its own could still render outside the cell. Sample
-	# across process frames — each runs the Update transform sync — and fail
-	# rather than judge a view that never converged.
-	var tile_view_position := unit_two.global_position
-	var tile_view_stable := 0
-	var tile_view_converged := false
-	for _frame in range(60):
-		await get_tree().process_frame
-		if unit_two.global_position.distance_to(tile_view_position) < 0.001:
-			tile_view_stable += 1
-			if tile_view_stable >= 6:
-				tile_view_converged = true
-				break
-		else:
-			tile_view_stable = 0
-			tile_view_position = unit_two.global_position
-	if not tile_view_converged:
-		_fail("the Stop tile worker's view never converged after the sim settled")
-		return
-	if Vector2i(floori(unit_two.global_position.x), floori(unit_two.global_position.z)) == tile_move_cell:
+	if Vector2i(floori(float(tile_stop_snapshot.get("pos_x", 0.0))),
+			floori(float(tile_stop_snapshot.get("pos_y", 0.0)))) == tile_move_cell:
 		_fail("the Stop tile worker entered its goal cell — the tile interrupted no live march")
 		return
 	# Losing the selection clears a modal order instead of leaving it armed.

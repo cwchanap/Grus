@@ -890,8 +890,10 @@ impl GrusBridgeNode {
     /// One unit's `WorkerTask` for command round-trip assertions: the task
     /// variant name plus the resource/building ids it names (-1 when the
     /// task names none), its live `Carry` as `carry_amount` +
-    /// `carry_kind` (0 / "" when empty), and its accepted `MoveOrder` goal
-    /// cell as `move_goal_x`/`move_goal_y` (-1 when it has no order). Empty
+    /// `carry_kind` (0 / "" when empty), its accepted `MoveOrder` goal
+    /// cell as `move_goal_x`/`move_goal_y` (-1 when it has no order), and
+    /// its authoritative `SimPosition.current` as `pos_x`/`pos_y` — the sim
+    /// position, never the lagging interpolated view. Empty
     /// dict for a missing unit, a unit with no worker task, or a fog-hidden
     /// enemy — task/carry data must not leak through stale ids.
     #[func]
@@ -940,6 +942,15 @@ impl GrusBridgeNode {
             let goal = world.get::<MoveOrder>(entity).map(|order| order.goal);
             dict.set("move_goal_x", goal.map_or(-1, |cell| i64::from(cell.x)));
             dict.set("move_goal_y", goal.map_or(-1, |cell| i64::from(cell.y)));
+            let position = world.get::<SimPosition>(entity);
+            dict.set(
+                "pos_x",
+                position.map_or(0.0, |position| f64::from(position.current.x)),
+            );
+            dict.set(
+                "pos_y",
+                position.map_or(0.0, |position| f64::from(position.current.y)),
+            );
             dict
         })
         .unwrap_or_default()
