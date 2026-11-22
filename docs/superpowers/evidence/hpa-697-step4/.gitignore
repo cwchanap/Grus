@@ -1,0 +1,11 @@
+# Generated Step 4 outputs. Keep the curated rendered examples.
+/logs/
+/*.png
+!/construction-site.png
+!/damaged-building.png
+!/economy-cold.png
+!/economy-warm.png
+!/lance-in-world-probe.png
+!/overlap-behind-zoomout.png
+!/overlap-behind.png
+!/overlap-front.png
