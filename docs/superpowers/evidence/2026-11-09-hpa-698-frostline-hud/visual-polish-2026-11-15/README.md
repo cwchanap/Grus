@@ -1,5 +1,7 @@
 # Frostline HUD visual polish — rendered evidence
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/visual-polish-2026-11-15) is available at the pre-cleanup commit.
+
 Unretouched 1280 × 720 viewport PNGs from implementation head `da298ec` on `hpa-698-frostline-hud`. Captured 2026-11-15 with Godot 4.7.1, OpenGL 4.1 Metal compatibility renderer on Apple M1 Pro, using the existing opt-in smoke capture helper. Times are source-file modification times in UTC; images do not embed a commit identifier.
 
 | Frame | Provenance | UTC | SHA-256 |

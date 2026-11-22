@@ -1,5 +1,7 @@
 # Frostline readability follow-up
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/readability-2026-11-16) is available at the pre-cleanup commit.
+
 Unretouched 1280 × 720 viewport captures from Godot 4.7.1, OpenGL 4.1 Metal
 compatibility renderer on an Apple M1 Pro. Frames use
 `SmokeHelpers.capture_frame` and were copied without re-encoding. The initial

@@ -1,5 +1,7 @@
 # Command-hint contrast on the battlefield
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/command-status-2026-11-15) is available at the pre-cleanup commit.
+
 Fix evidence for the final whole-branch review's P2 finding 1: the shared
 `HUD/CommandStatus` label was 12 px light ink with no backing, and its armed
 Bunkhouse hint lost the end of "right-click or Esc to cancel" where the string
