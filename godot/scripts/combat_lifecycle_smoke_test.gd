@@ -143,18 +143,21 @@ func _key_tap(keycode: int) -> void:
 ## Drains matching Guard→target combat events on every process_frame —
 ## which fires before the controller's per-frame cosmetics drain inside
 ## _process — starting before the attack click and running through its
-## acceptance wait, so a same-tick kill cannot be consumed unseen. Runs on
+## acceptance wait, so a same-tick kill cannot be consumed unseen. The
+## drain is destructive, so every consumed event is forwarded to the
+## controller's cosmetics dispatch — the strikes still flash and trace in
+## a windowed run exactly as if _refresh_session had read them. Runs on
 ## a wall-clock deadline rather than a frame budget so slow renderers stay
 ## bounded at any fps: box["seen"] records the match, box["done"] the exit.
 func _observe_guard_strike(guard_ids: PackedInt32Array, target_id: int, box: Dictionary) -> void:
 	var deadline := Time.get_ticks_msec() + 15000
 	while Time.get_ticks_msec() < deadline and not bool(box["seen"]):
 		for event in GrusBridge.drain_combat_events():
+			_main.call("_dispatch_combat_event", event)
 			if int(event.get("attacker", -1)) in guard_ids \
 					and str(event.get("target_kind", "")) == "unit" \
 					and int(event.get("target_id", -1)) == target_id:
 				box["seen"] = true
-				break
 		await get_tree().process_frame
 	box["done"] = true
 
@@ -861,6 +864,14 @@ func _run() -> void:
 			MOUSE_BUTTON_LEFT)
 		await get_tree().process_frame
 		await get_tree().process_frame
+		if not is_instance_valid(target):
+			# The recentering click's frame wait is enough for the defense to
+			# kill the scouted alien — its view frees with the sim entity, so
+			# re-pick the revealed target rather than read a freed node.
+			if not _visible_alien(target_box):
+				_fail("the revealed alien died before the attack could be clicked")
+				return
+			target = target_box["view"]
 		target_screen = _main.camera.unproject_position(target.global_position)
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
