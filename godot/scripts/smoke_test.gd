@@ -1727,6 +1727,31 @@ func _assert_presentation_overlap_pick(main: Node, camera: Camera3D) -> bool:
 		_fail("presentation overlap: left-click gave hidden mesh-hit unit click to building instead of visible 20px unit (units=%s building=%s)" % [
 			str(main.selected_ids), str(main.selected_building_id)])
 		ok = false
+	# The occluded mesh hit belonging to the OTHER team must not block that
+	# same 20 px fallback: an alien hidden behind the friendly roof leaves
+	# the visible friendly selectable — its team rule only applies once the
+	# body is known uncovered by the foreground building.
+	views[1].set_meta("team_id", 2)
+	main.call("_index_views")
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	main.call("_select_at", point, false)
+	if (main.selected_ids as Array) != [9002] or int(main.selected_building_id) != -1:
+		_fail("presentation overlap: occluded alien mesh blocked the visible 20px friendly pick (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	# Mirrored for the enemy pick: a friendly body hidden behind an opaque
+	# enemy building must not block the visible enemy within 20 px.
+	views[0].set_meta("team_id", 2)
+	views[1].set_meta("team_id", 1)
+	building.set_meta("team_id", 2)
+	main.call("_index_views")
+	enemy = main.call("_nearest_enemy_view", point)
+	if enemy != views[0]:
+		_fail("presentation overlap: occluded friendly mesh blocked the visible 20px enemy pick: view=%s" % str(enemy))
+		ok = false
+	views[0].set_meta("team_id", 1)
+	building.set_meta("team_id", 1)
 	# Left-click `_select_at` with an opaque enemy building hiding a Team-1
 	# unit must select neither the hidden unit nor the enemy building.
 	views[0].global_position = origin + direction * 7.0 + side * 5.0

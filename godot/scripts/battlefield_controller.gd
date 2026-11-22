@@ -693,9 +693,11 @@ func _ground_target(screen_position: Vector2):
 ## ground. The silhouette search runs across teams before the caller's team
 ## rule — a visible body of the other team covers the click, so neither the
 ## occluded unit's mesh nor the 20 px fallback may pick through it. When a
-## foreground building occludes the mesh-hit unit, fall back to
-## `_nearest_view` so a visible unit within 20 px beside the building is
-## still considered before giving the click to the building.
+## foreground building occludes the mesh-hit unit the team rule is moot —
+## the body never covered the click — so the pick falls back to
+## `_nearest_view` in either team order and a visible unit within 20 px
+## beside the building is still considered before giving the click to the
+## building.
 func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Node3D:
 	return _unit_pick_view(screen_position, team_filter, building_hit).get("view") as Node3D
 
@@ -703,17 +705,20 @@ func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dic
 ## Model mesh hit that survived the foreground-building check, false for the
 ## 20 px feet-radius fallback — so a caller weighing the pick against an
 ## actionable worker order can tell a body click from a near miss. A click
-## covered by a foreground unit of another team yields neither.
+## covered by a foreground unit of another team yields neither, while a
+## building-hidden body of another team blocks neither — the occlusion
+## check runs before the team rule.
 func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Dictionary:
 	var mesh_view := _unit_mesh_hit_at(screen_position).get("view") as Node3D
 	if mesh_view != null:
-		if team_filter != 0 and int(mesh_view.get_meta("team_id", -1)) != team_filter:
-			return {"view": null, "direct": false}
-		if building_hit.is_empty():
-			return {"view": mesh_view, "direct": true}
-		var ray_origin := camera.project_ray_origin(screen_position)
-		var ray_direction := camera.project_ray_normal(screen_position)
-		if not _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction):
+		var occluded := false
+		if not building_hit.is_empty():
+			var ray_origin := camera.project_ray_origin(screen_position)
+			var ray_direction := camera.project_ray_normal(screen_position)
+			occluded = _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction)
+		if not occluded:
+			if team_filter != 0 and int(mesh_view.get_meta("team_id", -1)) != team_filter:
+				return {"view": null, "direct": false}
 			return {"view": mesh_view, "direct": true}
 	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false}
 
