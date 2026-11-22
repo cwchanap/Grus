@@ -3114,6 +3114,7 @@ func _run() -> void:
 	# their imported bounds differ, so a silhouette that picks nothing or
 	# the wrong neighbour can no longer pass on a stale status label.
 	var gathered := {}
+	var alien_gather_probe_done := false
 	# Click points must reach _unhandled_input: skip any spot a HUD Control
 	# would consume (top bar, minimap, panels, buttons).
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
@@ -3177,6 +3178,49 @@ func _run() -> void:
 					resource_id, worker_id, task])
 				return
 		gathered[str(resource.get_meta("resource_kind", "?"))] = resource_id
+		# A neighbouring enemy must not swallow a worker's gather click:
+		# park a synthetic team-2 unit ~12 px from this click — inside the
+		# 20 px fallback radius but carrying no Model the pick ray could
+		# hit — so only the radius fallback can ever nominate it. A
+		# regression that lets a fallback pick consume the click queues a
+		# rejected attack and reads "Attack command queued" here instead.
+		if not alien_gather_probe_done:
+			alien_gather_probe_done = true
+			var alien := Node3D.new()
+			alien.set_meta("team_id", 2)
+			alien.set_meta("unit_id", 9301)
+			alien.add_to_group("unit_views")
+			add_child(alien)
+			var alien_ground = controller.call("_ground_target", click_at + Vector2(12.0, 0.0))
+			if alien_ground == null:
+				alien.free()
+				_fail("the alien fallback probe found no ground point beside the resource click")
+				return
+			alien.global_position = Vector3(alien_ground.x, 0.0, alien_ground.y)
+			command_status.text = "<no command issued>"
+			var alien_feedback := int(GrusBridge.command_feedback_revision())
+			var alien_press := InputEventMouseButton.new()
+			alien_press.button_index = MOUSE_BUTTON_RIGHT
+			alien_press.position = click_at
+			alien_press.pressed = true
+			get_tree().root.push_input(alien_press)
+			var alien_release := InputEventMouseButton.new()
+			alien_release.button_index = MOUSE_BUTTON_RIGHT
+			alien_release.position = click_at
+			alien_release.pressed = false
+			get_tree().root.push_input(alien_release)
+			alien.free()
+			if command_status.text != "Gather command queued":
+				_fail("a fallback-only alien within 20 px swallowed a worker gather right-click: %s" % command_status.text)
+				return
+			if not await _wait_until(_accepted_since.bind(alien_feedback), 10.0,
+					"the alien-adjacent gather click was not accepted by the sim"):
+				return
+			for probe_worker_id in controller.selected_ids:
+				var probe_task: Dictionary = GrusBridge.unit_task_snapshot(probe_worker_id)
+				if int(probe_task.get("source", -1)) != resource_id:
+					_fail("the alien-adjacent gather click tasked worker %d with %s" % [probe_worker_id, probe_task])
+					return
 	for kind in resource_models:
 		if not gathered.has(kind):
 			_fail("no %s resource art accepted a targeted gather pick" % kind)
@@ -3281,7 +3325,23 @@ func _run() -> void:
 	if _unit_idle(unit_two):
 		_fail("the stop probe worker was idle before S — no live order to interrupt")
 		return
-	_key_tap(KEY_S)
+	# A live march only proves S had something to interrupt; the label
+	# verdict is the one signal a dead key cannot fake — a no-op press
+	# leaves the right-click's "Move command queued" standing, and neither
+	# arrival nor a mid-march replan ever writes "Stop command queued".
+	# push_input dispatches synchronously so the verdict is read before the
+	# sim's own accept overwrites the label through the feedback mirror.
+	var stop_press := InputEventKey.new()
+	stop_press.keycode = KEY_S
+	stop_press.pressed = true
+	get_tree().root.push_input(stop_press)
+	var stop_release := InputEventKey.new()
+	stop_release.keycode = KEY_S
+	stop_release.pressed = false
+	get_tree().root.push_input(stop_release)
+	if str(command_status.text) != "Stop command queued":
+		_fail("the stop probe's S press did not dispatch through _issue_stop: %s" % command_status.text)
+		return
 	for _frame in range(2):
 		await get_tree().physics_frame
 	# The hand-rolled view interpolation can lag the settled sim by several

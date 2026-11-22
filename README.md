@@ -197,7 +197,7 @@ The full reference:
 - Left click: select a friendly unit or building — a unit keeps the click unless a real opaque building silhouette in front of the unit's visible geometry wins it (the unit's mesh depth when the ray meets its body, otherwise its ground-level body reference); a fallback-only building hit never steals a unit
 - Shift + left click: add to selection
 - Left drag: box select
-- Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, attack an enemy unit/building with the selected combatants (an enemy body pixel behind an opaque building of either team is not targetable, so that click stays a move), set a rally point when a producer is selected, otherwise move
+- Right click: contextual — gather on a resource, resume construction on an incomplete friendly building, attack an enemy unit/building only while the selection holds a combatant (an enemy body pixel behind an opaque building of either team is not targetable, so that click stays a move; and when the click names a gather/resume target only a direct silhouette hit on the enemy preempts it — a 20 px fallback pick cannot), set a rally point when a producer is selected, otherwise move
 - `A`: arm attack-move; the next right-click moves to the ground point and engages enemies acquired on the way
 - `S`: stop selected units
 - `Tab`: toggle the underground panel (also when a panel button holds focus)

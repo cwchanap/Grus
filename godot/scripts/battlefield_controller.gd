@@ -558,14 +558,31 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		_dispatch_armed_order(armed, screen_position)
 		return
 	# A right-click on an enemy unit/building attacks it with the whole
-	# selection; the sim rejects noncombatants per unit. Run this before
-	# worker gather/resume picks so an alien standing in front of a friendly
-	# construction site is targeted rather than resuming the site behind it,
-	# while an enemy hidden behind the site's opaque sprite still falls
-	# through to resume/gather.
-	if not selected_ids.is_empty():
-		var enemy := _nearest_enemy_view(screen_position)
-		if enemy != null:
+	# selection; the sim rejects noncombatants per unit. The pick consumes
+	# the click only when the selection holds a combatant — any selected
+	# unit that is not a Worker, the kind split _selected_worker_ids already
+	# single-sources — and, when the click names an actionable worker
+	# target, only when the enemy pick is a direct silhouette hit: an alien
+	# in front of a site is still attacked over resuming it, but a 20 px
+	# fallback pick can no longer swallow a gather/resume click it merely
+	# neighbours. The fallback still fires when no worker target exists,
+	# and an enemy hidden behind the site's opaque sprite still falls
+	# through.
+	var workers := _selected_worker_ids()
+	var resource_id := -1
+	var resumable: Node3D = null
+	if not workers.is_empty():
+		resource_id = _gatherable_resource_id(screen_position)
+		if resource_id <= 0:
+			var site := _building_at(screen_position)
+			if site != null and int(site.get_meta("team_id", -1)) == 1 \
+					and not _building_complete(int(site.get_meta("building_id", -1))):
+				resumable = site
+	if workers.size() != selected_ids.size():
+		var enemy_pick := _enemy_pick_at(screen_position)
+		var enemy := enemy_pick.get("view") as Node3D
+		if enemy != null and (bool(enemy_pick.get("direct", false)) \
+				or (resource_id <= 0 and resumable == null)):
 			var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
 			var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
 			if GrusBridge.attack_units(PackedInt32Array(selected_ids), target_kind, target_id):
@@ -573,21 +590,16 @@ func _issue_context_command(screen_position: Vector2) -> void:
 			else:
 				command_status.text = "Attack command rejected"
 			return
-	var workers := _selected_worker_ids()
-	if not workers.is_empty():
-		var resource_id := _gatherable_resource_id(screen_position)
-		if resource_id > 0:
-			_issue_gather(workers, resource_id)
-			return
-		var building := _building_at(screen_position)
-		if building != null and int(building.get_meta("team_id", -1)) == 1:
-			var building_id := int(building.get_meta("building_id", -1))
-			if not _building_complete(building_id):
-				if GrusBridge.resume_construction(workers[0], building_id):
-					command_status.text = "Construction resume queued"
-				else:
-					command_status.text = "Construction resume rejected"
-				return
+	if resource_id > 0:
+		_issue_gather(workers, resource_id)
+		return
+	if resumable != null:
+		var resumable_id := int(resumable.get_meta("building_id", -1))
+		if GrusBridge.resume_construction(workers[0], resumable_id):
+			command_status.text = "Construction resume queued"
+		else:
+			command_status.text = "Construction resume rejected"
+		return
 	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)
 		if target != null:
@@ -682,15 +694,22 @@ func _ground_target(screen_position: Vector2):
 ## to `_nearest_view` so a visible unit within 20 px beside the building is
 ## still considered before giving the click to the building.
 func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Node3D:
+	return _unit_pick_view(screen_position, team_filter, building_hit).get("view") as Node3D
+
+## `_unit_pick_at` plus pick provenance: `direct` is true only for a real
+## Model mesh hit that survived the foreground-building check, false for the
+## 20 px feet-radius fallback — so a caller weighing the pick against an
+## actionable worker order can tell a body click from a near miss.
+func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Dictionary:
 	var mesh_view := _unit_mesh_hit_at(screen_position, team_filter).get("view") as Node3D
 	if mesh_view != null:
 		if building_hit.is_empty():
-			return mesh_view
+			return {"view": mesh_view, "direct": true}
 		var ray_origin := camera.project_ray_origin(screen_position)
 		var ray_direction := camera.project_ray_normal(screen_position)
 		if not _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction):
-			return mesh_view
-	return _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit)
+			return {"view": mesh_view, "direct": true}
+	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false}
 
 func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
 	var ray_origin := camera.project_ray_origin(screen_position)
@@ -758,16 +777,27 @@ func _select_building_from_hit(screen_position: Vector2, all_building_hit: Dicti
 ## can be the returned attack target. Fallback-only building hits never
 ## outrank a unit and never pierce an opaque foreground roof.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
+	return _enemy_pick_at(screen_position).get("view") as Node3D
+
+## `_nearest_enemy_view` plus pick provenance under the same arbitration
+## rules: `direct` is true only when the returned enemy carried a real
+## silhouette hit — an unoccluded unit mesh or a real enemy-building face —
+## while the 20 px fallback reports false so a gather/resume click can
+## refuse to yield to a near miss.
+func _enemy_pick_at(screen_position: Vector2) -> Dictionary:
 	var all_building_hit := _building_hit_at(screen_position, 0)
-	var unit := _unit_pick_at(screen_position, 2, all_building_hit)
+	var unit_pick := _unit_pick_view(screen_position, 2, all_building_hit)
+	var unit := unit_pick.get("view") as Node3D
 	var enemy_building := _select_building_from_hit(screen_position, all_building_hit, 2)
+	var building_direct := enemy_building != null \
+		and float(all_building_hit.get("depth", INF)) < INF
 	if unit == null:
-		return enemy_building
+		return {"view": enemy_building, "direct": building_direct}
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
 	if _building_beats_unit(all_building_hit, unit, ray_origin, ray_direction):
-		return enemy_building
-	return unit
+		return {"view": enemy_building, "direct": building_direct}
+	return {"view": unit, "direct": bool(unit_pick.get("direct", false))}
 
 ## A building only steals an overlapping unit's pick on a real opaque
 ## silhouette hit strictly in front of the unit's visible geometry: when the
