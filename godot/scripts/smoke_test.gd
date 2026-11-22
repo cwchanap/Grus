@@ -1532,7 +1532,12 @@ func _hop_worker_to_first_cell(unit: Node3D, cells: Array[Vector2], tolerance: f
 			continue
 		for _frame in int(10.0 * Engine.physics_ticks_per_second):
 			if _accepted_since(revision):
-				chosen = cell
+				# Acceptance alone does not name the destination: when the
+				# requested cell is already reserved the sim assigns a free
+				# neighbour instead — that arrival would never land inside
+				# tolerance, so commit only on the assigned route.
+				if _hop_assigned_to(unit_id, cell, tolerance):
+					chosen = cell
 				break
 			if int(GrusBridge.command_feedback_revision()) > revision:
 				break
@@ -1555,6 +1560,20 @@ func _hop_worker_to_first_cell(unit: Node3D, cells: Array[Vector2], tolerance: f
 		_fail("could not restore sim speed after the %s hop" % why)
 		return Vector2.INF
 	return chosen
+
+## Whether the accepted move actually routes the worker to the requested
+## cell: the live MoveOrder goal is authoritative, and when the order
+## already finished (a zero-waypoint accept at high sim speed drops the
+## goal immediately) the authoritative position answers instead. A goal
+## cell is compared against the sim's world_to_cell floor of the request.
+func _hop_assigned_to(unit_id: int, cell: Vector2, tolerance: float) -> bool:
+	var task: Dictionary = GrusBridge.unit_task_snapshot(unit_id)
+	var goal_x := int(task.get("move_goal_x", -1))
+	var goal_y := int(task.get("move_goal_y", -1))
+	if goal_x >= 0:
+		return goal_x == floori(cell.x) and goal_y == floori(cell.y)
+	return Vector2(float(task.get("pos_x", 0.0)), float(task.get("pos_y", 0.0))) \
+		.distance_to(cell) <= tolerance
 
 func _clear_click_point(viewport_size: Vector2, main: Node) -> Vector2:
 	var hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
@@ -3150,21 +3169,31 @@ func _run() -> void:
 		var screen := camera.unproject_position(world)
 		return float(swap_controller.call("_model_ray_hit_depth", sprite.get_parent(),
 				camera.project_ray_origin(screen), camera.project_ray_normal(screen)))
+	# Both stages must answer the camera ray BOTH ways: an opaque texel hits
+	# and an in-bounds transparent texel misses, each miss sampled from that
+	# stage's own texture — a finished sprite that turned its whole quad
+	# opaque would pass a hit-only check.
+	var sprite_pick_error := func(sprite: SpriteBase3D, stage: String) -> String:
+		var top: Vector2 = view_script.opaque_top_pixels(sprite.texture)
+		if top == Vector2.INF:
+			return "%s sprite has no opaque art top" % stage
+		var depth := float(ray_depth.call(sprite, top + Vector2(0.0, 0.5)))
+		if depth < 0.0:
+			return "camera-ray alpha picking missed the %s sprite's opaque art" % stage
+		var transparent := Vector2.INF
+		for pixel in [Vector2(0, 0), Vector2(511, 0), Vector2(0, 511), Vector2(511, 511), Vector2(255, 0)]:
+			if not view_script.pixel_opaque(sprite.texture, pixel):
+				transparent = pixel
+				break
+		if transparent == Vector2.INF:
+			return "%s sprite exposes no transparent texel for the alpha-miss probe" % stage
+		if float(ray_depth.call(sprite, transparent)) >= 0.0:
+			return "camera-ray picking counted a transparent %s-sprite pixel" % stage
+		return ""
 	var site_sprite: SpriteBase3D = site_model.find_children("*", "SpriteBase3D", true, false)[0]
-	var opaque_top: Vector2 = view_script.opaque_top_pixels(site_sprite.texture)
-	if opaque_top == Vector2.INF or float(ray_depth.call(site_sprite, opaque_top + Vector2(0.0, 0.5))) < 0.0:
-		_fail("camera-ray alpha picking missed the site sprite's opaque art")
-		return
-	var transparent_pixel := Vector2.INF
-	for pixel in [Vector2(0, 0), Vector2(511, 0), Vector2(0, 511), Vector2(511, 511), Vector2(255, 0)]:
-		if not view_script.pixel_opaque(site_sprite.texture, pixel):
-			transparent_pixel = pixel
-			break
-	if transparent_pixel == Vector2.INF:
-		_fail("site sprite exposes no transparent corner for the alpha-miss probe")
-		return
-	if float(ray_depth.call(site_sprite, transparent_pixel)) >= 0.0:
-		_fail("camera-ray picking counted a transparent site-sprite pixel")
+	var site_pick_error: String = sprite_pick_error.call(site_sprite, "site")
+	if not site_pick_error.is_empty():
+		_fail(site_pick_error)
 		return
 	site_view.set_state(true, false)
 	var finished_model := site_view.get_node_or_null("Model") as Node3D
@@ -3173,8 +3202,9 @@ func _run() -> void:
 		_fail("a post-styling set_state did not swap the site sprite for the Depot sprite: %s" % finished_error)
 		return
 	var finished_sprite: SpriteBase3D = finished_model.find_children("*", "SpriteBase3D", true, false)[0]
-	if float(ray_depth.call(finished_sprite, view_script.opaque_top_pixels(finished_sprite.texture) + Vector2(0.0, 0.5))) < 0.0:
-		_fail("building picking lost the Depot's opaque art after the swap")
+	var finished_pick_error: String = sprite_pick_error.call(finished_sprite, "finished Depot")
+	if not finished_pick_error.is_empty():
+		_fail(finished_pick_error)
 		return
 	site_view.set_state(true, false)
 	if site_view.get_node("Model") != finished_model:
@@ -3418,6 +3448,24 @@ func _run() -> void:
 				_fail("the alien fallback probe found no ground point beside the resource click")
 				return
 			alien.global_position = Vector3(alien_ground.x, 0.0, alien_ground.y)
+			# An all-Worker selection never consults the enemy pick:
+			# _issue_context_command skips _enemy_pick_at unless a combatant
+			# is also selected. A hidden staged Guard joins the selection so
+			# the fallback alien competes with the gather target on the real
+			# dispatch path — invisible, it can never join the pick itself.
+			var probe_guard := _cover_probe_unit(9212, 1, "Guard")
+			probe_guard.visible = false
+			controller.call("_index_views")
+			var workers_only: Array[int] = controller.selected_ids.duplicate()
+			controller.selected_ids.append(9212)
+			var staged_pick: Dictionary = controller.call("_enemy_pick_at", click_at)
+			if (staged_pick.get("view") as Node3D) != alien \
+					or bool(staged_pick.get("direct", true)):
+				alien.free()
+				probe_guard.free()
+				controller.selected_ids = workers_only
+				_fail("the staged alien did not read as a fallback-only enemy pick beside the resource click: %s" % staged_pick)
+				return
 			command_status.text = "<no command issued>"
 			var alien_feedback := int(GrusBridge.command_feedback_revision())
 			var alien_press := InputEventMouseButton.new()
@@ -3431,6 +3479,8 @@ func _run() -> void:
 			alien_release.pressed = false
 			get_tree().root.push_input(alien_release)
 			alien.free()
+			probe_guard.free()
+			controller.selected_ids = workers_only
 			if command_status.text != "Gather command queued":
 				_fail("a fallback-only alien within 20 px swallowed a worker gather right-click: %s" % command_status.text)
 				return
@@ -4128,15 +4178,18 @@ func _run() -> void:
 	while Time.get_ticks_msec() - cadence_started_ms < 1000:
 		await get_tree().process_frame
 		frames_observed += 1
+		# The timestamp belongs to this exact position sample: taking it at
+		# the read keeps each displacement paired with the interval that
+		# produced it instead of a shorter one measured after the fact.
 		var visual_position := unit_three.global_position
+		var visual_ms := Time.get_ticks_msec()
 		var visual_step := visual_position.distance_to(previous_visual)
 		if visual_step > 0.0001:
 			visual_changes += 1
-			var visual_ms := Time.get_ticks_msec()
 			step_deltas.append(visual_step)
 			step_elapsed_s.append(float(visual_ms - previous_visual_ms) / 1000.0)
 		previous_visual = visual_position
-		previous_visual_ms = Time.get_ticks_msec()
+		previous_visual_ms = visual_ms
 
 	var cadence_distance := unit_three.global_position.distance_to(cadence_start)
 	if cadence_distance < 4.0 or cadence_distance > 8.0:
@@ -5340,6 +5393,19 @@ func _run() -> void:
 	if (main.call("_unit_pick_at", front_point, 1, main.call("_building_hit_at", front_point, 0)) as Node3D) != overlap_workers[0]:
 		_fail("the front worker left the scanned overlap pick point before the click")
 		return
+	# The fallback leg can leave this same Worker selected — a verdict poll
+	# sampling that stale selection would pass without the front click ever
+	# being read. Deselect through real input first, as the beam and
+	# zoom-out legs already do.
+	var front_clear := _clear_click_point(viewport_size, main)
+	if front_clear == Vector2.INF:
+		_fail("no empty pixel exists to deselect before the front-overlap click")
+		return
+	_mouse_click(front_clear, MOUSE_BUTTON_LEFT)
+	if not await _wait_until(func():
+			return int(main.selected_building_id) == -1 and (main.selected_ids as Array).is_empty(),
+			5.0, "the pre-front-overlap deselection click did not clear the selection"):
+		return
 	_mouse_click(front_point, MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
 			return int(overlap_workers[0].get_meta("unit_id", -1)) in main.selected_ids \
@@ -5602,6 +5668,7 @@ func _run() -> void:
 	var beam_verdict := false
 	var beam_gate_depth := -1.0
 	var beam_unit_depth := -1.0
+	var beam_click := Vector2.INF
 	if not GrusBridge.set_sim_speed(0.05):
 		_fail("could not slow the sim for the beam-overlap transit")
 		return
@@ -5662,6 +5729,7 @@ func _run() -> void:
 										camera, main, gate_view)
 						if not beam_pick.is_empty():
 							_mouse_click(beam_pick[0], MOUSE_BUTTON_LEFT)
+							beam_click = beam_pick[0]
 							beam_gate_depth = float(beam_pick[1])
 							beam_unit_depth = float(beam_pick[2])
 			await get_tree().physics_frame
@@ -5680,9 +5748,18 @@ func _run() -> void:
 				if gate_worker_id in (main.selected_ids as Array):
 					beam_verdict = true
 				elif int(main.selected_building_id) == gate_id:
-					_fail("the Gate's rear beam stole the upper-body click from the corridor Worker (beam=%.3f worker=%.3f units=%s building=%s)" % [
-						beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
-					return
+					# A Gate selection is a rear-beam steal only while the
+					# Worker mesh still covers the sampled pixel: when the
+					# march carried it off before the buffered click landed,
+					# the beam's win is the stale-sample case above — retry,
+					# never a verdict.
+					var cover_view := _unit_view(gate_worker_id)
+					if cover_view != null \
+							and (main.call("_unit_mesh_hit_at", beam_click).get("view") as Node3D) == cover_view:
+						_fail("the Gate's rear beam stole the upper-body click from the corridor Worker (beam=%.3f worker=%.3f units=%s building=%s)" % [
+							beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
+						return
+					beam_gate_depth = -1.0
 				else:
 					beam_gate_depth = -1.0
 	if not GrusBridge.stop_units(PackedInt32Array([gate_worker_id])):

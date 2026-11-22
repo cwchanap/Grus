@@ -140,6 +140,24 @@ func _key_tap(keycode: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+## Drains matching Guard→target combat events on every process_frame —
+## which fires before the controller's per-frame cosmetics drain inside
+## _process — starting before the attack click and running through its
+## acceptance wait, so a same-tick kill cannot be consumed unseen. Runs on
+## a wall-clock deadline rather than a frame budget so slow renderers stay
+## bounded at any fps: box["seen"] records the match, box["done"] the exit.
+func _observe_guard_strike(guard_ids: PackedInt32Array, target_id: int, box: Dictionary) -> void:
+	var deadline := Time.get_ticks_msec() + 15000
+	while Time.get_ticks_msec() < deadline and not bool(box["seen"]):
+		for event in GrusBridge.drain_combat_events():
+			if int(event.get("attacker", -1)) in guard_ids \
+					and str(event.get("target_kind", "")) == "unit" \
+					and int(event.get("target_id", -1)) == target_id:
+				box["seen"] = true
+				break
+		await get_tree().process_frame
+	box["done"] = true
+
 func _select_guards(guards: Array[Node3D], guard_ids: PackedInt32Array) -> bool:
 	var top_left := Vector2(INF, INF)
 	var bottom_right := Vector2(-INF, -INF)
@@ -847,6 +865,17 @@ func _run() -> void:
 	var target_id := int(target.get_meta("unit_id", -1))
 	var crystals_before := int(GrusBridge.economy_snapshot().get("crystals", -1))
 	var attack_revision := int(GrusBridge.command_feedback_revision())
+	# Target-identity read-back (HPA-697 fix round 2): the accepted
+	# right-click must strike the picked alien — a combat event must name one
+	# selected Guard as attacker and the winning view's real unit id as a
+	# "unit" target, proving the dispatched command's actual kind and id.
+	# The observer starts BEFORE the click: if all three Guards strike in
+	# the tick that accepts the attack (3 × 15 damage exceeds the Swarmer's
+	# 40 health), those events would otherwise sit in the shared queue while
+	# the acceptance wait still polls, and the controller's per-frame
+	# cosmetics drain would consume them before this observer ever ran.
+	var strike := {"seen": false, "done": false}
+	_observe_guard_strike(guard_ids, target_id, strike)
 	# Same synchronous-transient read as the attack-move announcement above:
 	# the verdict mirror in _process may legitimately replace it before any
 	# awaited frame completes under throttled fps.
@@ -859,27 +888,10 @@ func _run() -> void:
 					and str(GrusBridge.command_feedback()).begins_with("Command accepted"),
 			10.0, "simulation rejected the live-alien attack"):
 		return
-	# Target-identity read-back (HPA-697 fix round 2): the accepted
-	# right-click must strike the picked alien — a combat event must name one
-	# selected Guard as attacker and the winning view's real unit id as a
-	# "unit" target, proving the dispatched command's actual kind and id.
-	# Poll on process_frame, which fires before the controller's per-frame
-	# cosmetics drain inside _process: physics_frame resumes before the
-	# fixed ticks, so the previous frame's staged events would already be
-	# consumed by then. The Guard keeps firing until the kill, so one
-	# stolen cosmetic frame is harmless.
-	var strike_seen := false
-	for _frame in int(ceilf(15.0 * Engine.physics_ticks_per_second)):
-		for event in GrusBridge.drain_combat_events():
-			if int(event.get("attacker", -1)) in guard_ids \
-						and str(event.get("target_kind", "")) == "unit" \
-						and int(event.get("target_id", -1)) == target_id:
-				strike_seen = true
-				break
-		if strike_seen:
-			break
-		await get_tree().process_frame
-	if not strike_seen:
+	if not await _wait_until(func(): return bool(strike["seen"]) or bool(strike["done"]),
+			20.0, "the strike observer never finished"):
+		return
+	if not bool(strike["seen"]):
 		_fail("the accepted attack never struck the picked alien as a Guard-targeted unit %d" % target_id)
 		return
 	if not await _wait_until(

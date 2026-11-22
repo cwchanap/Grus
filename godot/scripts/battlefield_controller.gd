@@ -893,7 +893,11 @@ func _model_ray_hit_depth(model: Node3D, ray_origin: Vector3, ray_dir: Vector3) 
 	var min_depth := INF
 	for node in model.find_children("*", "GeometryInstance3D", true, false):
 		var art: GeometryInstance3D = BuildingView.art_geometry(node)
-		if art == null:
+		# Silhouette picking tests rendered geometry only: a hidden mesh
+		# still carries triangles and must not select or cover a click. The
+		# view root's own visibility stays the caller's contract — every
+		# caller already checked it before scanning the model.
+		if art == null or not BuildingView.art_rendered(art, model):
 			continue
 		# Both paths yield a TriangleMesh with intersect_ray: painted sprites
 		# generate their quad directly, meshes go through Mesh.generate_triangle_mesh.
@@ -1116,7 +1120,7 @@ func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 	var first := true
 	for node in (art_root if art_root != null else view).find_children("*", "GeometryInstance3D", true, false):
 		var art: GeometryInstance3D = BuildingView.art_geometry(node)
-		if art == null:
+		if art == null or not BuildingView.art_rendered(art, art_root if art_root != null else view):
 			continue
 		var local: AABB = view.global_transform.affine_inverse() * art.global_transform * art.get_aabb()
 		bounds = local if first else bounds.merge(local)
