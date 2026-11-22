@@ -1086,6 +1086,10 @@ func _placement_view_ids(kind: String) -> PackedInt32Array:
 ##   "pending-view"         accepted/resolved; the kind's new view has not
 ##                          synced, or the resolution is ambiguous
 ##   "pending-disarm"       accepted + view; the armed tool has not cleared
+##   "pending-rearm"        Wall/Gate view synced but this attempt's armed
+##                          tool was lost — it must stay armed to the same
+##                          kind and generation, so a cleared tool is the
+##                          placement regression itself, never a settle
 ## Every verdict comes from this placement's own lifecycle — its request
 ## ticket, the placement-generation cancel, or the click-time refusal —
 ## never from the shared feedback surface, which an unrelated worker route
@@ -1105,8 +1109,17 @@ func _placement_watch_error(baseline: PackedInt32Array, view_ids: PackedInt32Arr
 		refusal_text: String, require_disarm: bool) -> String:
 	for id in view_ids:
 		if not baseline.has(id):
-			if require_disarm and armed_kind_now != "":
-				return "pending-disarm"
+			if require_disarm:
+				if armed_kind_now != "":
+					return "pending-disarm"
+				return ""
+			# Wall/Gate stay armed on success by design — armed with THIS
+			# attempt's tool: every arm/cancel bumps the generation, so an
+			# unchanged generation plus a non-empty kind is the same armed
+			# session. A cleared tool here is the regression itself — let the
+			# deadline name it instead of settling into a pausing Esc.
+			if armed_kind_now == "" or generation_now != armed_generation:
+				return "pending-rearm"
 			return ""
 	if request_pending:
 		return "pending-verdict"
@@ -1232,7 +1245,8 @@ func _run() -> void:
 	# pending placement, a demonstrated rejection/no-dispatch is the only
 	# retry, silence keeps waiting, a late synced view reads as acceptance,
 	# a baseline view never serves as acceptance proof, non-Wall kinds wait
-	# for the armed tool to clear, and Wall/Gate stay armed by design.
+	# for the armed tool to clear, and Wall/Gate stay armed by design —
+	# armed with this attempt's own kind and generation, or the watch holds.
 	var watch_baseline := PackedInt32Array([4242])
 	# Unrelated rejection while the placement view is delayed: the shared
 	# status was overwritten by a route failure, but this attempt's request
@@ -1308,6 +1322,17 @@ func _run() -> void:
 	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
 			false, true, 7, 7, "Wall", "Command accepted", "", false) != "":
 		_fail("placement watch did not keep a Wall/Gate placement armed on success")
+		return
+	# But armed means THIS attempt's tool: a new Gate view beside a cleared
+	# tool is the placement regression, never a settle the caller's Esc
+	# could turn into a pause.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
+			false, true, 7, 7, "", "Command accepted", "", false) != "pending-rearm":
+		_fail("placement watch settled a Gate whose armed tool was already cleared")
+		return
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
+			false, true, 8, 7, "Gate", "Command accepted", "", false) != "pending-rearm":
+		_fail("placement watch settled a Gate re-armed under a new generation")
 		return
 	# The retry mapping itself: only a demonstrated rejection/no-dispatch
 	# retries; every pending class keeps waiting; settle returns.

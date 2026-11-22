@@ -1986,7 +1986,13 @@ func _run() -> void:
 		add_child(painted_muzzle_view)
 		painted_muzzle_view.set_state(true, false)
 		await get_tree().process_frame
-		var muzzle_sprite: SpriteBase3D = (painted_muzzle_view.get_node("Model") as Node3D).find_children("*", "SpriteBase3D", true, false)[0]
+		var muzzle_model := painted_muzzle_view.get_node_or_null("Model") as Node3D
+		var muzzle_sprites := muzzle_model.find_children("*", "SpriteBase3D", true, false) if muzzle_model != null else []
+		if muzzle_sprites.is_empty():
+			_fail("%s painted probe has no SpriteBase3D under Model" % weapon[0])
+			painted_muzzle_view.free()
+			return
+		var muzzle_sprite := muzzle_sprites[0] as SpriteBase3D
 		var painted_muzzle: Vector3 = get_node("Main").call("_attacker_muzzle_position", painted_muzzle_view, "building")
 		var plane_offset := absf((painted_muzzle - muzzle_sprite.global_position).dot(muzzle_sprite.global_basis.z))
 		if plane_offset > 0.001:
@@ -3144,7 +3150,13 @@ func _run() -> void:
 		_fail("building view did not recompute holder counter-scale on root transform change: %s" % rescaled_error)
 		rescaled_view.free()
 		return
-	var rescaled_sprite: SpriteBase3D = (rescaled_view.get_node("Model") as Node3D).find_children("*", "SpriteBase3D", true, false)[0]
+	var rescaled_model := rescaled_view.get_node_or_null("Model") as Node3D
+	var rescaled_sprites := rescaled_model.find_children("*", "SpriteBase3D", true, false) if rescaled_model != null else []
+	if rescaled_sprites.is_empty():
+		_fail("rescaled Research Center has no SpriteBase3D under Model")
+		rescaled_view.free()
+		return
+	var rescaled_sprite := rescaled_sprites[0] as SpriteBase3D
 	if not rescaled_sprite.global_basis.z.is_equal_approx(camera.global_basis.z):
 		_fail("painted sprite pitch %s does not match Camera3D pitch %s" % [rescaled_sprite.global_basis.z, camera.global_basis.z])
 		rescaled_view.free()
@@ -3676,8 +3688,29 @@ func _run() -> void:
 			or str(GrusBridge.session_snapshot().get("phase", "")) != "Playing":
 		_fail("Esc did not clear the armed order before pausing")
 		return
-	# Stop tile executes immediately through the existing stop path. The
-	# verdict is pinned to the stop dispatch itself: the settled feedback
+	# Stop tile executes immediately through the existing stop path — but
+	# only a live order proves the tile can interrupt one: the worker settled
+	# idle above, so a dead tile could queue Stop, be accepted, and still
+	# pass the settle check on a no-op. Issue a fresh Move through real
+	# input, confirm its acceptance and goal, then require the tile to
+	# clear that order before the worker reaches its assigned goal.
+	var tile_move_revision := int(GrusBridge.command_feedback_revision())
+	var tile_move_target := Vector3(36.5, 0.0, 44.5)
+	var tile_move_cell := Vector2i(floori(tile_move_target.x), floori(tile_move_target.z))
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(tile_move_target), MOUSE_BUTTON_RIGHT)
+	if str(command_status.text) != "Move command queued":
+		_fail("the Stop tile probe's setup move did not queue: %s" % command_status.text)
+		return
+	if not await _wait_until(_accepted_since.bind(tile_move_revision), 10.0,
+			"the Stop tile probe's setup move was never accepted by the sim"):
+		return
+	var tile_task: Dictionary = GrusBridge.unit_task_snapshot(stop_worker_id)
+	if int(tile_task.get("move_goal_x", -1)) != tile_move_cell.x \
+			or int(tile_task.get("move_goal_y", -1)) != tile_move_cell.y \
+			or _unit_idle(unit_two):
+		_fail("the Stop tile probe has no live march to interrupt: %s" % str(tile_task))
+		return
+	# The verdict is pinned to the stop dispatch itself: the settled feedback
 	# must be an acceptance (not just any later revision bump) and unit two
 	# must converge to the stationary gate — ordinary arrival at an old
 	# goal must never read as this probe's pass.
@@ -3694,6 +3727,15 @@ func _run() -> void:
 		return
 	if not await _wait_until(_unit_idle.bind(unit_two), 5.0,
 			"unit 2 never settled after the Stop dispatch"):
+		return
+	# Cleared means cleared: no leftover goal, and the worker ended short of
+	# it — an arrival would clear both too, but the pre-press live-march
+	# check plus the shortfall here reject a march the tile never stopped.
+	if int(GrusBridge.unit_task_snapshot(stop_worker_id).get("move_goal_x", -1)) != -1:
+		_fail("the Stop tile left a move goal on the worker")
+		return
+	if unit_two.global_position.distance_to(tile_move_target) < 0.4:
+		_fail("the Stop tile worker reached its goal — the tile interrupted no live march")
 		return
 	# Losing the selection clears a modal order instead of leaving it armed.
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
@@ -4024,11 +4066,20 @@ func _run() -> void:
 	# still trips the excess.
 	var worst_excess := 0.0
 	var max_subtick_step := 0.0
+	var worst_snap_step := 0.0
 	for i in range(step_deltas.size()):
 		worst_excess = maxf(worst_excess,
 			step_deltas[i] - (cadence_distance * step_elapsed_s[i] + cadence_distance * 0.05) * 1.25)
-		if step_elapsed_s[i] <= 0.032:
+		if step_elapsed_s[i] <= 0.045:
 			max_subtick_step = maxf(max_subtick_step, step_deltas[i])
+			# A non-interpolated view delivers the whole 20 Hz tick (speed ×
+			# 0.05 s) inside one rendered frame — a step no smoothly lerped
+			# view can produce on that interval. The bound scales with the
+			# interval so a slow-but-legit 44 ms frame (~0.26 at speed 6)
+			# never reads as a snap the way the old fixed 0.25 did, while a
+			# snapped 0.30 still trips it at every sub-tick cadence.
+			if step_deltas[i] > maxf(0.25, cadence_distance * step_elapsed_s[i] * 1.1):
+				worst_snap_step = maxf(worst_snap_step, step_deltas[i])
 	if worst_excess > 0.25 or visual_changes < 2:
 		_fail("20 Hz presentation is not interpolated: worst step excess %.3f across %d visual changes" % [worst_excess, visual_changes])
 		return
@@ -4037,18 +4088,19 @@ func _run() -> void:
 	# includes a full 20 Hz tick of travel, so a view that snaps the whole
 	# tick displacement (speed 6 → 0.30 units per tick, no lerp) always slips
 	# under it. Require most sub-tick frames to move when mean_frame_s < 0.045
-	# and reject full-tick jumps (> 0.25) on sub-tick intervals (<= 32 ms);
-	# multi-tick software rendering (mean_frame_s >= 0.045) stays on the
+	# and reject full-tick jumps on any sub-tick interval up to 45 ms —
+	# the old 32 ms filter let a 25 FPS (40 ms) snap-only trace pass.
+	# Multi-tick software rendering (mean_frame_s >= 0.045) stays on the
 	# wall-clock pacing bound above.
 	var window_elapsed_s := float(Time.get_ticks_msec() - cadence_started_ms) / 1000.0
 	var mean_frame_s := window_elapsed_s / maxf(1.0, float(frames_observed))
-	print("GRUS_CADENCE_MOTION frames=%d changes=%d mean_frame_s=%.4f worst_excess=%.3f max_subtick_step=%.3f" % [
-		frames_observed, visual_changes, mean_frame_s, worst_excess, max_subtick_step])
+	print("GRUS_CADENCE_MOTION frames=%d changes=%d mean_frame_s=%.4f worst_excess=%.3f max_subtick_step=%.3f worst_snap_step=%.3f" % [
+		frames_observed, visual_changes, mean_frame_s, worst_excess, max_subtick_step, worst_snap_step])
 	if (mean_frame_s < 0.025 and visual_changes * 5 < frames_observed * 3) \
 			or (mean_frame_s >= 0.025 and mean_frame_s < 0.045 \
-				and (visual_changes * 5 < frames_observed * 4 or max_subtick_step > 0.25)):
-		_fail("20 Hz view snaps between ticks without interpolation: %d of %d rendered frames showed motion (mean frame %.4fs, max sub-tick step %.3f)" % [
-			visual_changes, frames_observed, mean_frame_s, max_subtick_step])
+				and (visual_changes * 5 < frames_observed * 4 or worst_snap_step > 0.0)):
+		_fail("20 Hz view snaps between ticks without interpolation: %d of %d rendered frames showed motion (mean frame %.4fs, max sub-tick step %.3f, worst snap step %.3f)" % [
+			visual_changes, frames_observed, mean_frame_s, max_subtick_step, worst_snap_step])
 		return
 
 	# A human scout — worker 4, untouched by the choreography above — reveals
@@ -5485,6 +5537,15 @@ func _run() -> void:
 			if transit_view == null:
 				break
 			var transit_z := transit_view.global_position.z
+			# The scan ends with the transit itself: once the worker crosses
+			# the beam band's far edge (or its accepted route ends early) no
+			# beam-cover pixel remains reachable this direction — sampling
+			# the parked or passing worker to the deadline would only starve
+			# the other direction's own march.
+			if (beam_goal.y < gate_center.y and transit_z <= gate_center.y - 0.55) \
+					or (beam_goal.y > gate_center.y and transit_z >= gate_center.y + 0.1) \
+					or _unit_idle(transit_view):
+				break
 			if transit_z > gate_center.y - 0.55 and transit_z < gate_center.y + 0.1:
 				var transit_model := transit_view.get_node_or_null("Model") as Node3D
 				if transit_model != null:
