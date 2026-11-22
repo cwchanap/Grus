@@ -8,3 +8,9 @@ godot/bin/*
 test_output/
 dist/
 build/
+
+# Disposable verification output. Put new local runs under verification-output/
+# or an evidence folder's generated/ directory; keep curated evidence outside it.
+/verification-output/
+/docs/superpowers/evidence/**/generated/
+/docs/superpowers/evidence/**/logs/*.log
