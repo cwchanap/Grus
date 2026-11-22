@@ -382,9 +382,12 @@ static func fog_clear_color_error(fog: Node) -> String:
 ## Representation-aware model identity (HPA-697): painted kinds render their
 ## preloaded painted PNG through a Sprite3D under the Model, completed
 ## Wall/Gate keep their GLBs, and every incomplete kind — including
-## Wall/Gate — shows the shared construction-site sprite. Returns "" when
-## the view matches its representation, else the failure message.
+## Wall/Gate — shows the shared construction-site sprite. A missing view
+## is an error, never a crash. Returns "" when the view matches its
+## representation, else the failure message.
 static func building_model_error(view: Node3D, kind: String, complete: bool) -> String:
+	if view == null:
+		return "%s view is missing" % kind
 	var model := view.get_node_or_null("Model") as Node3D
 	if model == null:
 		return "%s view has no Model" % kind
@@ -395,9 +398,11 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 		expected = "%s.glb" % kind.to_snake_case()
 	else:
 		expected = "painted/%s.png" % kind.to_snake_case()
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	# Sprite3D only: AnimatedSprite3D has no texture property, so widening
+	# the query to SpriteBase3D would script-error instead of diagnosing.
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if not sprites.is_empty():
-		var sprite := sprites[0] as SpriteBase3D
+		var sprite := sprites[0] as Sprite3D
 		# A matching texture under a hidden node is not rendered art: every
 		# ancestor through Model must be visible. The building root's own
 		# visibility stays the caller's call — the fog pass owns it, and
@@ -412,9 +417,14 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 		if not path.ends_with(expected):
 			return "%s sprite texture %s does not end with %s" % [kind, path, expected]
 		return ""
-	if not model.scene_file_path.ends_with(expected):
-		return "%s model %s does not end with %s" % [kind, model.scene_file_path, expected]
-	return ""
+	# Only the completed Wall/Gate GLBs may prove representation through the
+	# instanced scene path: a sprite-less painted or site model must fail,
+	# never pass on a scene_file_path that merely names the expected file.
+	if complete and (kind == "Wall" or kind == "Gate"):
+		if not model.scene_file_path.ends_with(expected):
+			return "%s model %s does not end with %s" % [kind, model.scene_file_path, expected]
+		return ""
+	return "%s view carries no Sprite3D under Model" % kind
 
 ## The live-view geometry contract behind `building_view_transform`: the
 ## bridge scales the view to the catalogue footprint and centers it, and
@@ -424,6 +434,8 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 ## sizes come from `catalogue_snapshot`, never a copied table. Returns ""
 ## on success, else the failure message.
 static func view_art_error(view: Node3D) -> String:
+	if view == null:
+		return "view is missing"
 	var kind := str(view.get_meta("building_kind", ""))
 	var spec: Dictionary = GrusBridge.catalogue_snapshot().get("buildings", {}).get(kind, {})
 	var spec_width := float(spec.get("width", 0))

@@ -473,7 +473,8 @@ func _pan_camera(relative: Vector2) -> void:
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
 	var all_building_hit := _building_hit_at(screen_position, 0)
-	var nearest := _unit_pick_at(screen_position, 1, all_building_hit)
+	var unit_pick := _unit_pick_view(screen_position, 1, all_building_hit)
+	var nearest := unit_pick.get("view") as Node3D
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
 	if nearest != null and not _building_beats_unit(all_building_hit, nearest, ray_origin, ray_direction):
@@ -486,7 +487,9 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 		_apply_selection()
 		return
 	var building := _select_building_from_hit(screen_position, all_building_hit, 1)
-	if building != null:
+	# An enemy body covering the click hides a friendly building behind it —
+	# left-clicking through that cover selects nothing, not the building.
+	if building != null and not bool(unit_pick.get("covered", false)):
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
 		_apply_selection()
@@ -718,7 +721,10 @@ func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: D
 			occluded = _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction)
 		if not occluded:
 			if team_filter != 0 and int(mesh_view.get_meta("team_id", -1)) != team_filter:
-				return {"view": null, "direct": false}
+				# A wrong-team body still covers the click: callers must
+				# suppress whatever it hides (a nearer opaque building hit
+				# would already have taken the occluded branch above).
+				return {"view": null, "direct": false, "covered": true}
 			return {"view": mesh_view, "direct": true}
 	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false}
 
@@ -804,6 +810,11 @@ func _enemy_pick_at(screen_position: Vector2) -> Dictionary:
 	var building_direct := enemy_building != null \
 		and float(all_building_hit.get("depth", INF)) < INF
 	if unit == null:
+		# A friendly body covering the click hides every enemy building
+		# behind it — no attack through the cover. A nearer opaque hit
+		# would have occluded the unit inside _unit_pick_view already.
+		if bool(unit_pick.get("covered", false)):
+			return {"view": null, "direct": false}
 		return {"view": enemy_building, "direct": building_direct}
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
