@@ -1,5 +1,7 @@
 # Frostline HUD readability pass — rendered evidence
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/readability-2026-11-13) is available at the pre-cleanup commit.
+
 These are unretouched 1280 × 720 viewport PNGs from the implementation head `d9f9957` on `hpa-698-frostline-hud`, captured on 2026-11-13 with Godot 4.7.1's OpenGL 4.1 Metal compatibility renderer on Apple M1 Pro. Each capture uses the opt-in `SmokeHelpers.capture_frame` and the existing smoke journey; timestamps below are source-file modification times in UTC, not copy times. The PNG files themselves do not embed the source commit.
 
 | Frame | Source / provenance | Captured UTC | SHA-256 |

@@ -1,5 +1,7 @@
 # HPA-698 Frostline HUD — final-head evidence
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud) is available at the pre-cleanup commit.
+
 **Latest visual comparison follow-up:** see [the 2026-11-15 composition captures](visual-comparison-2026-11-15/README.md): compact top-rail wave card with visible full direction names and a session-gated warning row, enlarged room-kind icons, a bounded two-line drawer header and a quieter empty selection card.
 
 **Latest opening access and audio shutdown:** see [the 2026-11-15 access captures and verification](access-shutdown-2026-11-15/README.md).

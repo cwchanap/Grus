@@ -1,5 +1,7 @@
 # HPA-291 frozen-city structure models — verification evidence
 
+> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs) is available at the pre-cleanup commit.
+
 Local verification on 2026-11-07, macOS / Apple M1 Pro (macOS 26), Godot
 4.7.1.stable.official (`gl_compatibility`, OpenGL 4.1 Metal), Rust 1.95.0
 (`aarch64-apple-darwin`, the only installed target) and Blender 5.2.1 LTS at
@@ -232,13 +234,13 @@ Walls/Gates exempt); completed CoalFurnace → supply 27 → 1.000 and warm.
   frames — pathing to a gather source, not a wall collision.
 
 ![Construction in progress](hpa-291-construction-in-progress.png)
-![Construction close-up — supplemental below-min zoom](hpa-291-construction-in-progress-detail.png)
+[Construction close-up — supplemental below-min zoom (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-construction-in-progress-detail.png)
 ![Cold deficit city](hpa-291-city-cold-deficit.png)
-![Cold deficit detail](hpa-291-city-cold-deficit-detail.png)
+[Cold deficit detail (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-city-cold-deficit-detail.png)
 ![Completed warm city](hpa-291-city-complete-warm.png)
-![Warm recovery detail](hpa-291-city-warm-recovery-detail.png)
-![Wall-Gate-Wall horizontal](hpa-291-wall-gate-wall-horizontal.png)
-![Wall-Gate-Wall horizontal detail](hpa-291-wall-gate-wall-horizontal-detail.png)
-![Wall-Gate-Wall vertical](hpa-291-wall-gate-wall-vertical.png)
-![Wall-Gate-Wall vertical detail](hpa-291-wall-gate-wall-vertical-detail.png)
-![City wide context](hpa-291-city-wide-context.png)
+[Warm recovery detail (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-city-warm-recovery-detail.png)
+[Wall-Gate-Wall horizontal (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-wall-gate-wall-horizontal.png)
+[Wall-Gate-Wall horizontal detail (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-wall-gate-wall-horizontal-detail.png)
+[Wall-Gate-Wall vertical (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-wall-gate-wall-vertical.png)
+[Wall-Gate-Wall vertical detail (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-wall-gate-wall-vertical-detail.png)
+[City wide context (historical capture)](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/hpa-291-city-wide-context.png)
