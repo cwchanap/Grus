@@ -1,0 +1,8 @@
+# Generated HUD captures. Keep the curated reviewer examples.
+**/*.png
+!/command-status-2026-11-15/command-status-before-after-label-4x.png
+!/framing-2026-11-15/framing-default.png
+!/framing-2026-11-15/framing-zoomout.png
+!/hpa-698-result-defeat-1280x720.png
+!/hpa-698-start-1280x720.png
+!/hpa-698-warm-match-1280x720.png
