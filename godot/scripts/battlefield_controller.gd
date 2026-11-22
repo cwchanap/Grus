@@ -690,8 +690,11 @@ func _ground_target(screen_position: Vector2):
 ## Unit pick eligibility is the unit's own silhouette first: a click on the
 ## visible body (torso, head) selects the unit even beyond the feet-projection
 ## radius, which stays only as the affordance for near-miss clicks on empty
-## ground. When a foreground building occludes the mesh-hit unit, fall back
-## to `_nearest_view` so a visible unit within 20 px beside the building is
+## ground. The silhouette search runs across teams before the caller's team
+## rule — a visible body of the other team covers the click, so neither the
+## occluded unit's mesh nor the 20 px fallback may pick through it. When a
+## foreground building occludes the mesh-hit unit, fall back to
+## `_nearest_view` so a visible unit within 20 px beside the building is
 ## still considered before giving the click to the building.
 func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Node3D:
 	return _unit_pick_view(screen_position, team_filter, building_hit).get("view") as Node3D
@@ -699,10 +702,13 @@ func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dic
 ## `_unit_pick_at` plus pick provenance: `direct` is true only for a real
 ## Model mesh hit that survived the foreground-building check, false for the
 ## 20 px feet-radius fallback — so a caller weighing the pick against an
-## actionable worker order can tell a body click from a near miss.
+## actionable worker order can tell a body click from a near miss. A click
+## covered by a foreground unit of another team yields neither.
 func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Dictionary:
-	var mesh_view := _unit_mesh_hit_at(screen_position, team_filter).get("view") as Node3D
+	var mesh_view := _unit_mesh_hit_at(screen_position).get("view") as Node3D
 	if mesh_view != null:
+		if team_filter != 0 and int(mesh_view.get_meta("team_id", -1)) != team_filter:
+			return {"view": null, "direct": false}
 		if building_hit.is_empty():
 			return {"view": mesh_view, "direct": true}
 		var ray_origin := camera.project_ray_origin(screen_position)
@@ -711,7 +717,10 @@ func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: D
 			return {"view": mesh_view, "direct": true}
 	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false}
 
-func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
+## The frontmost visible unit body on the pick ray across every team — the
+## team rule is the caller's, because a click covered by another team's mesh
+## is covered ground, not a pick of whatever sits behind it.
+func _unit_mesh_hit_at(screen_position: Vector2) -> Dictionary:
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
 	var nearest_hit_view: Node3D = null
@@ -720,8 +729,6 @@ func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary
 		var view := node as Node3D
 		if view == null or not view.is_visible_in_tree() \
 				or camera.is_position_behind(view.global_position):
-			continue
-		if team_filter != 0 and int(view.get_meta("team_id", -1)) != team_filter:
 			continue
 		var model := view.get_node_or_null("Model") as Node3D
 		if model == null:

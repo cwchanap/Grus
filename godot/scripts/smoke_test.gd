@@ -1799,7 +1799,7 @@ func _assert_presentation_overlap_pick(main: Node, camera: Camera3D) -> bool:
 	if camera.unproject_position(roof_enemy.global_position).distance_to(point) <= 20.0:
 		_fail("the friendly-roof probe's enemy feet are inside the 20 px fallback radius")
 		ok = false
-	elif main.call("_unit_mesh_hit_at", point, 2).get("view") != roof_enemy:
+	elif main.call("_unit_mesh_hit_at", point).get("view") != roof_enemy:
 		_fail("the friendly-roof probe's enemy mesh does not cover the click point")
 		ok = false
 	else:
@@ -1818,6 +1818,106 @@ func _assert_presentation_overlap_pick(main: Node, camera: Camera3D) -> bool:
 		ok = false
 	for view in views:
 		view.free()
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	main.call("_index_views")
+	return ok
+
+## A synthetic unit view carrying a real Model mesh so `_unit_mesh_hit_at`
+## can cover a click point with it — the same trick the overlap harness uses
+## for buildings. `kind` is only needed when the view must read as a
+## combatant to `_selected_worker_ids`.
+func _cover_probe_unit(unit_id: int, team: int, kind: String) -> Node3D:
+	var unit := Node3D.new()
+	unit.set_meta("unit_id", unit_id)
+	unit.set_meta("team_id", team)
+	if not kind.is_empty():
+		unit.set_meta("unit_kind", kind)
+	var model := Node3D.new()
+	model.name = "Model"
+	var mesh := MeshInstance3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3(0.5, 1.0, 0.5)
+	mesh.mesh = box
+	model.add_child(mesh)
+	unit.add_child(model)
+	add_child(unit)
+	unit.add_to_group("unit_views")
+	return unit
+
+## The unit pick must compare foreground geometry across teams before the
+## team rule: a visible body of the other team covers the click, so neither
+## the occluded unit's mesh nor the 20 px fallback may pick through it. Two
+## synthetic unit views cover the same HUD-clear pixel in both depth orders;
+## verdicts run white-box and through real pushed input — a left-click must
+## never select the covered friendly, and a combat-unit right-click on the
+## covered alien must fall through to a ground move ("Move command queued"),
+## never "Attack command queued". Runs during Playing so the right-click
+## reaches `_issue_context_command`; the fake Guard id is rejected by the
+## sim a tick later, which is why the verdict is the label, not feedback.
+func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: Vector2) -> bool:
+	if str(main.get("_armed_order")) != "" or str(main.get("_placement_kind")) != "":
+		_fail("the cross-team cover probe needs no armed order or placement: order=%s placement=%s" % [
+			str(main.get("_armed_order")), str(main.get("_placement_kind"))])
+		return false
+	var point := _clear_click_point(viewport_size, main)
+	if point == Vector2.INF:
+		_fail("no HUD-clear, pick-free pixel exists for the cross-team cover probe")
+		return false
+	if main.call("_unit_mesh_hit_at", point).get("view") != null:
+		_fail("a real unit mesh already covers the cross-team cover probe point")
+		return false
+	var origin := camera.project_ray_origin(point)
+	var direction := camera.project_ray_normal(point)
+	var enemy := _cover_probe_unit(9211, 2, "")
+	var friendly := _cover_probe_unit(9210, 1, "Guard")
+	var ok := true
+	# Depth order 1: enemy mesh in front of the friendly mesh. The click is
+	# covered ground — a real left-click must select nothing rather than
+	# reach through the alien body to the occluded friendly.
+	enemy.global_position = origin + direction * 4.5
+	friendly.global_position = origin + direction * 7.0
+	main.call("_index_views")
+	if (main.call("_unit_pick_at", point, 1) as Node3D) != null:
+		_fail("cross-team cover: the team-1 pick reached through the foreground enemy mesh")
+		ok = false
+	if (main.call("_nearest_enemy_view", point) as Node3D) != enemy:
+		_fail("cross-team cover: the foreground enemy mesh lost its own pick")
+		ok = false
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_LEFT)
+	if not (main.selected_ids as Array).is_empty() or int(main.selected_building_id) != -1:
+		_fail("cross-team cover: a real left-click selected through the foreground enemy body (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	# Depth order 2: friendly mesh in front of the enemy mesh. Left-click
+	# selects the visible friendly directly; the same pixel's right-click —
+	# with that Guard the selection — must not attack the occluded alien.
+	friendly.global_position = origin + direction * 4.5
+	enemy.global_position = origin + direction * 7.0
+	main.call("_index_views")
+	if (main.call("_unit_pick_at", point, 1) as Node3D) != friendly:
+		_fail("cross-team cover: the foreground friendly mesh lost its own pick")
+		ok = false
+	if (main.call("_nearest_enemy_view", point) as Node3D) != null:
+		_fail("cross-team cover: the enemy pick reached through the foreground friendly mesh")
+		ok = false
+	main.selected_ids.clear()
+	main.selected_building_id = -1
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_LEFT)
+	if (main.selected_ids as Array) != [9210]:
+		_fail("cross-team cover: a real left-click did not select the visible friendly unit (units=%s building=%s)" % [
+			str(main.selected_ids), str(main.selected_building_id)])
+		ok = false
+	var status := get_node("Main/HUD/CommandStatus") as Label
+	status.text = "<no command issued>"
+	SmokeHelpers.push_mouse_click(get_tree(), point, MOUSE_BUTTON_RIGHT)
+	if str(status.text) != "Move command queued":
+		_fail("cross-team cover: a combat-unit right-click on the occluded alien did not fall through to a move: %s" % status.text)
+		ok = false
+	enemy.free()
+	friendly.free()
 	main.selected_ids.clear()
 	main.selected_building_id = -1
 	main.call("_index_views")
@@ -3297,6 +3397,7 @@ func _run() -> void:
 	var stop_target := Vector3(40.5, 0.0, 44.5)
 	var stop_cell := Vector2i(floori(stop_target.x), floori(stop_target.z))
 	var stop_worker_id := int(unit_two.get_meta("unit_id", -1))
+	var setup_move_revision := int(GrusBridge.command_feedback_revision())
 	_mouse_click(camera.unproject_position(stop_target), MOUSE_BUTTON_RIGHT)
 	var stop_start := unit_two.global_position
 	for _frame in range(8):
@@ -3325,6 +3426,13 @@ func _run() -> void:
 	if _unit_idle(unit_two):
 		_fail("the stop probe worker was idle before S — no live order to interrupt")
 		return
+	# Queued is not accepted, and the Stop accept below is attributable only
+	# once the Move's own verdict has settled: the pre-press baseline must
+	# sit past every earlier command's feedback.
+	if not await _wait_until(_accepted_since.bind(setup_move_revision), 10.0,
+			"the stop probe's setup move was never accepted by the sim"):
+		return
+	var stop_feedback := int(GrusBridge.command_feedback_revision())
 	# A live march only proves S had something to interrupt; the label
 	# verdict is the one signal a dead key cannot fake — a no-op press
 	# leaves the right-click's "Move command queued" standing, and neither
@@ -3341,6 +3449,14 @@ func _run() -> void:
 	get_tree().root.push_input(stop_release)
 	if str(command_status.text) != "Stop command queued":
 		_fail("the stop probe's S press did not dispatch through _issue_stop: %s" % command_status.text)
+		return
+	# Dispatch is not application either: a queued-but-rejected Stop would
+	# still clear the label check while the march ran on and arrival cleared
+	# the order. The Move's accept already settled above and nothing else
+	# was dispatched since, so the first accepted revision past the baseline
+	# is this Stop's own sim verdict.
+	if not await _wait_until(_accepted_since.bind(stop_feedback), 10.0,
+			"the stop probe's queued Stop was never accepted by the sim"):
 		return
 	for _frame in range(2):
 		await get_tree().physics_frame
@@ -3381,6 +3497,9 @@ func _run() -> void:
 	# the goal means the march completed — the key interrupted nothing.
 	if unit_two.global_position.distance_to(stop_target) < 0.4:
 		_fail("the stopped worker reached its target — S interrupted no live march")
+		return
+
+	if not _assert_cross_team_unit_cover(controller, camera, viewport_size):
 		return
 
 	# HPA-698 modal orders: one controller-owned _armed_order string, armed by
@@ -3429,7 +3548,9 @@ func _run() -> void:
 		_fail("no HUD-clear visible resource for the armed-order fallback probe")
 		return
 	var move_button: Button = order_buttons["MoveButton"]
-	_mouse_click(camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
+	# push_input dispatches the select synchronously — a queued press can lag
+	# the frame boundary and leave the order tile reading "Select units first".
+	SmokeHelpers.push_mouse_click(get_tree(), camera.unproject_position(unit_two.global_position), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
 	SmokeHelpers.push_mouse_click(get_tree(), move_button.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
