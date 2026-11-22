@@ -1,9 +1,0 @@
-Initialize godot-rust (API v4.5.stable.official, runtime v4.7.1.stable.official, safeguards strict)
-Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
-
-[godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
-SMOKE_OPENING_SAFE_SOURCES id=1 Food screen=(553.3333, 305.2593) clear=129.3 | id=2 Food screen=(700.0, 305.2593) clear=94.7 | id=3 Scrap screen=(526.6667, 413.1283) clear=96.9 | id=4 Scrap screen=(726.6667, 413.1283) clear=9.3 | id=5 Scrap screen=(633.3333, 445.489) clear=64.5 | id=6 Coal screen=(633.3333, 294.4724) clear=105.5
-SMOKE_STRUCTURE_AUDIT source_bytes=editor
-RENDERED_FOCUS_SKIP keyboard-focused Wall (headless viewport has no readable pixels)
-GRUS_CADENCE_MOTION frames=132 changes=126 mean_frame_s=0.0076 worst_excess=0.000 max_subtick_step=0.170 worst_snap_step=0.000
-GRUS_GODOT_SMOKE_OK units=4 controls=input-derived camera=pan-zoomed framing=54_zoomout_72 unreachable=feedback cadence=20hz interpolation=worst_excess_0.000 fog=scout_reveal_hide explored_persist=true markers=fog_gated recenter=command_free pre_wave=true winter_art=gltf_exact_cover_input_gather structures=painted_catalogue_hookup gate_corridor=clear wall_gate=edge_contact wall_gate_run=edge_contact push_contract=cached_once silhouette_pick=opaque_sprite_rc radius_steal=rect_scoped unstyled_fallback=center_radius overlap_pick=depth_scoped_right_click presentation_overlap=labelled_probe
