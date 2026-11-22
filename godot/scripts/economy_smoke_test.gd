@@ -623,12 +623,13 @@ func _select_unoccluded_unit(unit_id: int, timeout_s: float) -> bool:
 		var idle_workers: PackedInt32Array = GrusBridge.economy_snapshot() \
 				.get("idle_worker_ids", PackedInt32Array())
 		if task == "Gathering" or (task == "Idle" and idle_workers.has(unit_id)):
-			var position := unit.global_position
-			var screen := _camera.unproject_position(position)
-			var unit_depth: float = (position + Vector3(0.0, 0.15, 0.0) \
-					- _camera.project_ray_origin(screen)).dot(_camera.project_ray_normal(screen))
-			var hit: Dictionary = get_node("Main").call("_building_hit_at", screen, 1)
-			if float(hit.get("depth", INF)) >= unit_depth:
+			var main_node := get_node("Main")
+			var screen := _camera.unproject_position(unit.global_position)
+			var origin: Vector3 = _camera.project_ray_origin(screen)
+			var direction: Vector3 = _camera.project_ray_normal(screen)
+			var hit: Dictionary = main_node.call("_building_hit_at", screen, 0)
+			if (main_node.call("_unit_pick_at", screen, 1, hit) as Node3D) == unit \
+					and not bool(main_node.call("_building_beats_unit", hit, unit, origin, direction)):
 				var march := Engine.time_scale
 				if not GrusBridge.set_sim_speed(1.0):
 					_fail("could not slow the sim for the clear-sample click")

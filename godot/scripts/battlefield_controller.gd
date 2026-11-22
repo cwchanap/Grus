@@ -11,6 +11,13 @@ const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
 const MAX_CAMERA_SIZE := 120.0
 const ZOOM_STEP := 6.0
+## Normalized (u, v) muzzle coordinates on painted combat-tower sprites
+## (top-down texture space, matching BuildingView.sprite_local_from_pixel).
+const PAINTED_MUZZLE_UV := {
+	"GunTurret": Vector2(0.40, 0.50),
+	"FlameTower": Vector2(0.68, 0.44),
+	"CrystalLance": Vector2(0.50, 0.14),
+}
 
 @onready var camera: Camera3D = $Camera3D
 @onready var command_status: Label = $HUD/CommandStatus
@@ -40,12 +47,6 @@ const ZOOM_STEP := 6.0
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
-# The (kind, id) tuple the most recent direct attack handed to
-# GrusBridge.attack_units; written by _dispatch_attack from the arguments
-# it receives, so the smoke read-back observes the actual dispatch
-# boundary rather than the call site's locals. Sim receipts cannot pin a
-# Worker's attack target (NotCombatant precedes resolution).
-var last_dispatched_attack := {}
 var _control_groups: Dictionary = {}
 var _feedback_revision := -1
 var _left_press_position := Vector2.ZERO
@@ -269,8 +270,21 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
 	var height := 0.8
 	if attacker_kind == "building":
-		# Heights follow the weapons authored in scripts/build_winter_assets.py.
-		match str(attacker.get_meta("building_kind", "")):
+		var building_kind := str(attacker.get_meta("building_kind", ""))
+		# Painted combat towers anchor their muzzle on the sprite plane via
+		# sprite_local_from_pixel so tracers never originate behind the quad;
+		# unstyled views fall back to world-Y offsets.
+		if PAINTED_MUZZLE_UV.has(building_kind):
+			var model := attacker.get_node_or_null("Model") as Node3D
+			if model != null:
+				var sprites := model.find_children("*", "SpriteBase3D", true, false)
+				if not sprites.is_empty():
+					var sprite := sprites[0] as SpriteBase3D
+					if sprite != null and sprite.texture != null:
+						var uv: Vector2 = PAINTED_MUZZLE_UV[building_kind]
+						var pixel: Vector2 = uv * sprite.texture.get_size()
+						return sprite.global_transform * BuildingView.sprite_local_from_pixel(sprite, pixel)
+		match building_kind:
 			"GunTurret":
 				height = 0.62
 			"FlameTower":
@@ -458,11 +472,11 @@ func _pan_camera(relative: Vector2) -> void:
 	camera.position.z -= relative.y * world_per_pixel
 
 func _select_at(screen_position: Vector2, additive: bool) -> void:
-	var nearest := _unit_pick_at(screen_position, 1)
-	var building_hit := _building_hit_at(screen_position, 1)
+	var all_building_hit := _building_hit_at(screen_position, 0)
+	var nearest := _unit_pick_at(screen_position, 1, all_building_hit)
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
-	if nearest != null and not _building_beats_unit(building_hit, nearest, ray_origin, ray_direction):
+	if nearest != null and not _building_beats_unit(all_building_hit, nearest, ray_origin, ray_direction):
 		if not additive:
 			selected_ids.clear()
 		selected_building_id = -1
@@ -471,7 +485,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 			selected_ids.append(id)
 		_apply_selection()
 		return
-	var building: Node3D = building_hit.get("view") as Node3D
+	var building := _select_building_from_hit(screen_position, all_building_hit, 1)
 	if building != null:
 		selected_ids.clear()
 		selected_building_id = int(building.get_meta("building_id", -1))
@@ -505,7 +519,8 @@ func _apply_selection() -> void:
 	for unit in _friendly_units():
 		var id := int(unit.get_meta("unit_id", -1))
 		var selected := selected_ids.has(id)
-		unit.call("set_selected", selected)
+		if unit.has_method("set_selected"):
+			unit.call("set_selected", selected)
 		if selected:
 			live_selected.append(id)
 	selected_ids = live_selected
@@ -542,6 +557,22 @@ func _issue_context_command(screen_position: Vector2) -> void:
 		_armed_order = ""
 		_dispatch_armed_order(armed, screen_position)
 		return
+	# A right-click on an enemy unit/building attacks it with the whole
+	# selection; the sim rejects noncombatants per unit. Run this before
+	# worker gather/resume picks so an alien standing in front of a friendly
+	# construction site is targeted rather than resuming the site behind it,
+	# while an enemy hidden behind the site's opaque sprite still falls
+	# through to resume/gather.
+	if not selected_ids.is_empty():
+		var enemy := _nearest_enemy_view(screen_position)
+		if enemy != null:
+			var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
+			var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
+			if GrusBridge.attack_units(PackedInt32Array(selected_ids), target_kind, target_id):
+				command_status.text = "Attack command queued"
+			else:
+				command_status.text = "Attack command rejected"
+			return
 	var workers := _selected_worker_ids()
 	if not workers.is_empty():
 		var resource_id := _gatherable_resource_id(screen_position)
@@ -557,30 +588,12 @@ func _issue_context_command(screen_position: Vector2) -> void:
 				else:
 					command_status.text = "Construction resume rejected"
 				return
-	# A right-click on an enemy unit/building attacks it with the whole
-	# selection; the sim rejects noncombatants per unit.
-	var enemy := _nearest_enemy_view(screen_position)
-	if enemy != null and not selected_ids.is_empty():
-		var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
-		var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
-		if _dispatch_attack(target_kind, target_id):
-			command_status.text = "Attack command queued"
-		else:
-			command_status.text = "Attack command rejected"
-		return
 	if _producer_kinds.has(_selected_producer_kind()):
 		var target = _ground_target(screen_position)
 		if target != null:
 			_issue_rally(target)
 			return
 	_issue_move(screen_position)
-
-## Spy seam for the direct-attack dispatch: records the (kind, id) it
-## receives, then forwards both unchanged to GrusBridge.attack_units, so
-## the last-dispatch record can never disagree with the actual invocation.
-func _dispatch_attack(kind: String, target_id: int) -> bool:
-	last_dispatched_attack = {"kind": kind, "id": target_id}
-	return GrusBridge.attack_units(PackedInt32Array(selected_ids), kind, target_id)
 
 ## The one modal-order dispatch table. Each branch reuses the existing bridge
 ## operation and never falls through to a generic contextual pick.
@@ -665,13 +678,19 @@ func _ground_target(screen_position: Vector2):
 ## Unit pick eligibility is the unit's own silhouette first: a click on the
 ## visible body (torso, head) selects the unit even beyond the feet-projection
 ## radius, which stays only as the affordance for near-miss clicks on empty
-## ground. Depth arbitration with buildings then reuses the same mesh hit
-## through _building_beats_unit.
-func _unit_pick_at(screen_position: Vector2, team_filter: int) -> Node3D:
+## ground. When a foreground building occludes the mesh-hit unit, fall back
+## to `_nearest_view` so a visible unit within 20 px beside the building is
+## still considered before giving the click to the building.
+func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Node3D:
 	var mesh_view := _unit_mesh_hit_at(screen_position, team_filter).get("view") as Node3D
 	if mesh_view != null:
-		return mesh_view
-	return _nearest_view("unit_views", screen_position, team_filter)
+		if building_hit.is_empty():
+			return mesh_view
+		var ray_origin := camera.project_ray_origin(screen_position)
+		var ray_direction := camera.project_ray_normal(screen_position)
+		if not _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction):
+			return mesh_view
+	return _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit)
 
 func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
 	var ray_origin := camera.project_ray_origin(screen_position)
@@ -696,9 +715,12 @@ func _unit_mesh_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary
 			nearest_hit_depth = depth
 	return {"view": nearest_hit_view, "depth": nearest_hit_depth}
 
-func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, radius := CLICK_RADIUS) -> Node3D:
+func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, radius := CLICK_RADIUS, occluding_hit: Dictionary = {}) -> Node3D:
 	var nearest: Node3D = null
 	var nearest_distance := radius
+	var check_occlusion := not occluding_hit.is_empty()
+	var ray_origin := camera.project_ray_origin(screen_position) if check_occlusion else Vector3.ZERO
+	var ray_direction := camera.project_ray_normal(screen_position) if check_occlusion else Vector3.ZERO
 	for node in get_tree().get_nodes_in_group(group):
 		if not node.is_visible_in_tree():
 			# Fog is a gameplay contract, not a rendering detail: a hidden view
@@ -711,23 +733,39 @@ func _nearest_view(group: String, screen_position: Vector2, team_filter := 0, ra
 			continue
 		var distance := _view_distance(view, screen_position)
 		if distance <= nearest_distance:
+			if check_occlusion and _building_beats_unit(occluding_hit, view, ray_origin, ray_direction):
+				continue
 			nearest = view
 			nearest_distance = distance
 	return nearest
 
+## Resolve the building for `team_filter` after occlusion by any team's
+## opaque foreground silhouette: a real foreground hit blocks buildings
+## behind it (even of `team_filter`) and suppresses fallback-only hits,
+## while a fallback-only hit leaves the team-filtered 20 px fallback eligible.
+func _select_building_from_hit(screen_position: Vector2, all_building_hit: Dictionary, team_filter: int) -> Node3D:
+	if float(all_building_hit.get("depth", INF)) < INF:
+		var hit_view := all_building_hit.get("view") as Node3D
+		if hit_view != null and int(hit_view.get_meta("team_id", -1)) == team_filter:
+			return hit_view
+		return null
+	return _building_at(screen_position, team_filter)
+
 ## Compare the nearest eligible enemy with the silhouette-picked building:
 ## an overlapping enemy loses to a real opaque building hit in front of its
 ## body reference — of either team, because a friendly roof hides the body
-## pixels the mesh picker accepts — while only an enemy building can be the
-## returned attack target. Fallback-only building hits never outrank a unit.
+## pixels the mesh picker accepts — while only an unoccluded enemy building
+## can be the returned attack target. Fallback-only building hits never
+## outrank a unit and never pierce an opaque foreground roof.
 func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
-	var unit := _unit_pick_at(screen_position, 2)
-	var enemy_building := _building_hit_at(screen_position, 2).get("view") as Node3D
+	var all_building_hit := _building_hit_at(screen_position, 0)
+	var unit := _unit_pick_at(screen_position, 2, all_building_hit)
+	var enemy_building := _select_building_from_hit(screen_position, all_building_hit, 2)
 	if unit == null:
 		return enemy_building
 	var ray_origin := camera.project_ray_origin(screen_position)
 	var ray_direction := camera.project_ray_normal(screen_position)
-	if _building_beats_unit(_building_hit_at(screen_position, 0), unit, ray_origin, ray_direction):
+	if _building_beats_unit(all_building_hit, unit, ray_origin, ray_direction):
 		return enemy_building
 	return unit
 
@@ -1031,8 +1069,10 @@ func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 		bounds = local if first else bounds.merge(local)
 		first = false
 	if bounds.size.length() < 0.001:
-		# No art yet (kind meta arrives a frame late): fall back to the cell.
-		bounds = AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
+		# No art yet (kind meta arrives a frame late, or Sprite3D's deferred
+		# _im_update has not computed its AABB yet): fall back to the cell
+		# without caching so real art bounds replace it on the next query.
+		return AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
 	if art_root != null:
 		art_root.set_meta("_cached_art_bounds", bounds)
 	return bounds
