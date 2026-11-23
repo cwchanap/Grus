@@ -5381,10 +5381,22 @@ func _run() -> void:
 	if fallback_workers.is_empty():
 		_fail("no Team-1 worker remains for the fallback-vs-unit click leg")
 		return
+	# Commit only to cells whose arrival can keep the worker inside the
+	# fallback pixel: the 0.45-unit arrival tolerance is ~6 px at this
+	# framing, so a cell projecting beyond CLICK_RADIUS - 2.0 - 6px could
+	# be committed by the hop helper only to fail the post-hop check.
+	var fallback_px_per_unit := viewport_size.y / maxf(camera.size, 0.001)
+	var fallback_margin_px: float = main.CLICK_RADIUS - 2.0 - 0.45 * fallback_px_per_unit
 	var fallback_cells: Array[Vector2] = []
 	for offset in [Vector2.ZERO, Vector2(1, 0), Vector2(-1, 0), Vector2(0, 1), Vector2(0, -1),
 			Vector2(2, 0), Vector2(-2, 0), Vector2(0, 2), Vector2(0, -2)]:
-		fallback_cells.append(Vector2(floori(fallback_ground.x) + 0.5, floori(fallback_ground.z) + 0.5) + offset)
+		var cell: Vector2 = Vector2(floori(fallback_ground.x) + 0.5, floori(fallback_ground.z) + 0.5) + offset
+		var arrival_screen: Vector2 = camera.unproject_position(Vector3(cell.x, 0.0, cell.y))
+		if arrival_screen.distance_to(fallback_screen) <= fallback_margin_px:
+			fallback_cells.append(cell)
+	if fallback_cells.is_empty():
+		_fail("no fallback cell projects inside the pick margin at this framing")
+		return
 	var fallback_worker: Node3D = fallback_workers[0]
 	if await _hop_worker_to_first_cell(fallback_worker, fallback_cells, 0.45, "fallback-vs-unit") == Vector2.INF:
 		return
@@ -5680,6 +5692,28 @@ func _run() -> void:
 		return
 	if anchor_building_depth <= anchor_unit_depth:
 		_fail("the Gate plinth hit is no longer strictly behind the Worker's +0.15 body anchor (plinth=%.3f anchor=%.3f)" % [anchor_building_depth, anchor_unit_depth])
+		return
+	# The +0.15 rule only decides a pick whose ray misses the unit mesh —
+	# the centred click can resolve through the mesh path instead. Feed
+	# the real plinth hit to the controller's comparison along a ray that
+	# provably misses the Worker mesh, so the mesh-miss branch and the
+	# real anchor constant are what get exercised — not a test-local copy.
+	var anchor_rule_checked := false
+	for offset in [Vector2(6, 0), Vector2(-6, 0), Vector2(0, 6), Vector2(0, -6),
+			Vector2(9, 0), Vector2(-9, 0), Vector2(0, 9), Vector2(0, -9),
+			Vector2(12, 0), Vector2(-12, 0), Vector2(15, 0), Vector2(-15, 0)]:
+		var anchor_probe_screen: Vector2 = anchor_screen + offset
+		if (main.call("_unit_mesh_hit_at", anchor_probe_screen).get("view") as Node3D) != null:
+			continue
+		var anchor_probe_origin: Vector3 = camera.project_ray_origin(anchor_probe_screen)
+		var anchor_probe_direction: Vector3 = camera.project_ray_normal(anchor_probe_screen)
+		if bool(main.call("_building_beats_unit", anchor_hit, gate_worker, anchor_probe_origin, anchor_probe_direction)):
+			_fail("the Gate plinth outranks the Worker's body anchor on a mesh-miss pick inside its corridor")
+			return
+		anchor_rule_checked = true
+		break
+	if not anchor_rule_checked:
+		_fail("no mesh-miss ray beside the Worker exercised the controller's +0.15 body-anchor rule")
 		return
 	_mouse_click(camera.unproject_position(gate_worker.global_position), MOUSE_BUTTON_LEFT)
 	if not await _wait_until(func():
