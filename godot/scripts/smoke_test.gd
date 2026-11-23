@@ -3164,11 +3164,14 @@ func _run() -> void:
 		return
 	var swap_controller := get_node("Main") as Node3D
 	var view_script: Script = site_view.get_script()
-	var ray_depth := func(sprite: SpriteBase3D, pixel: Vector2) -> float:
+	var ray_for_pixel := func(sprite: SpriteBase3D, pixel: Vector2) -> Array:
 		var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, pixel)
 		var screen := camera.unproject_position(world)
+		return [camera.project_ray_origin(screen), camera.project_ray_normal(screen)]
+	var ray_depth := func(sprite: SpriteBase3D, pixel: Vector2) -> float:
+		var ray: Array = ray_for_pixel.call(sprite, pixel)
 		return float(swap_controller.call("_model_ray_hit_depth", sprite.get_parent(),
-				camera.project_ray_origin(screen), camera.project_ray_normal(screen)))
+				ray[0], ray[1]))
 	# Both stages must answer the camera ray BOTH ways: an opaque texel hits
 	# and an in-bounds transparent texel misses, each miss sampled from that
 	# stage's own texture — a finished sprite that turned its whole quad
@@ -3189,7 +3192,17 @@ func _run() -> void:
 			return "%s sprite exposes no transparent texel for the alpha-miss probe" % stage
 		# Sample the texel's center: a ray at a corner texel's edge could miss
 		# the quad outright and pass without exercising the alpha mask.
-		if float(ray_depth.call(sprite, transparent + Vector2(0.5, 0.5))) >= 0.0:
+		var miss_ray: Array = ray_for_pixel.call(sprite, transparent + Vector2(0.5, 0.5))
+		# A quad miss also returns -1.0, so first prove the same camera ray
+		# crosses the unmasked quad — then only the alpha mask can explain
+		# the picker's miss.
+		var inverse := sprite.global_transform.affine_inverse()
+		var quad_hit: Variant = sprite.generate_triangle_mesh().intersect_ray(
+				inverse * miss_ray[0], (inverse.basis * miss_ray[1]).normalized())
+		if quad_hit.is_empty():
+			return "the transparent %s-sprite probe ray missed the unmasked quad" % stage
+		if float(swap_controller.call("_model_ray_hit_depth", sprite.get_parent(),
+				miss_ray[0], miss_ray[1])) >= 0.0:
 			return "camera-ray picking counted a transparent %s-sprite pixel" % stage
 		return ""
 	var site_sprite: SpriteBase3D = site_model.find_children("*", "SpriteBase3D", true, false)[0]
