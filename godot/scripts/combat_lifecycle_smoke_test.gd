@@ -905,6 +905,14 @@ func _run() -> void:
 	if not bool(strike["seen"]):
 		_fail("the accepted attack never struck the picked alien as a Guard-targeted unit %d" % target_id)
 		return
+	if not await _wait_until(func(): return bool(strike["done"]), 5.0,
+			"the strike observer never stopped draining"):
+		return
+	# The observer forwards its drained events straight into the cosmetics
+	# dispatch, so its strikes alone could satisfy the final blip check even
+	# if the controller's own per-frame drain never ran. Snapshot here: any
+	# later generic_blip must have arrived through _refresh_session.
+	var observer_forwarded_blips := _blip_cue_count()
 	if not await _wait_until(
 			func(): return int(GrusBridge.economy_snapshot().get("crystals", -1)) > crystals_before,
 			15.0, "Guard combat never killed an alien or credited Crystals"):
@@ -1332,8 +1340,8 @@ func _run() -> void:
 	if float(GrusBridge.research_snapshot().get("points", 0.0)) <= 0.0:
 		_fail("research never banked points during the defeat journey: %s" % [GrusBridge.research_snapshot()])
 		return
-	if _blip_cue_count() < 1:
-		_fail("real combat events never incremented the blip cue counter: %s" % [_fx.get("cue_counts")])
+	if _blip_cue_count() <= observer_forwarded_blips:
+		_fail("no combat event reached the blip cue through the controller's own per-frame drain: %s" % [_fx.get("cue_counts")])
 		return
 	# The Result-phase Restart button is actually visible here, so a real
 	# click exercises the full production path — hit test, pressed signal

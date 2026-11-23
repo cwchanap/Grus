@@ -3187,7 +3187,9 @@ func _run() -> void:
 				break
 		if transparent == Vector2.INF:
 			return "%s sprite exposes no transparent texel for the alpha-miss probe" % stage
-		if float(ray_depth.call(sprite, transparent)) >= 0.0:
+		# Sample the texel's center: a ray at a corner texel's edge could miss
+		# the quad outright and pass without exercising the alpha mask.
+		if float(ray_depth.call(sprite, transparent + Vector2(0.5, 0.5))) >= 0.0:
 			return "camera-ray picking counted a transparent %s-sprite pixel" % stage
 		return ""
 	var site_sprite: SpriteBase3D = site_model.find_children("*", "SpriteBase3D", true, false)[0]
