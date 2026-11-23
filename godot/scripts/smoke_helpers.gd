@@ -423,7 +423,14 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 	if complete and (kind == "Wall" or kind == "Gate"):
 		if not model.scene_file_path.ends_with(expected):
 			return "%s model %s does not end with %s" % [kind, model.scene_file_path, expected]
-		return ""
+		# The scene path alone cannot prove geometry survived attachment:
+		# at least one rendered mesh must live under the live Model —
+		# the view root's own visibility stays the caller's call.
+		for node in model.find_children("*", "MeshInstance3D", true, false):
+			var art := BuildingView.art_geometry(node)
+			if art != null and BuildingView.art_rendered(art, model):
+				return ""
+		return "%s model %s carries no rendered mesh" % [kind, model.scene_file_path]
 	return "%s view carries no Sprite3D under Model" % kind
 
 ## The live-view geometry contract behind `building_view_transform`: the

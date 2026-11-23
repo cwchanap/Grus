@@ -1260,9 +1260,9 @@ func _roof_pick_point(view: Node3D, camera: Camera3D, viewport_size: Vector2, ma
 	# Painted kinds sample opaque artwork texels through the live sprite
 	# transform instead of GLB roof faces; retained Wall/Gate GLBs keep the
 	# mesh triangle scan below.
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if not sprites.is_empty():
-		return _sprite_pick_point(view, sprites[0] as SpriteBase3D, camera, viewport_size, main)
+		return _sprite_pick_point(view, sprites[0] as Sprite3D, camera, viewport_size, main)
 	var roof_faces: Array[Array] = []
 	for node in model.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := node as MeshInstance3D
@@ -1316,7 +1316,7 @@ func _roof_pick_point(view: Node3D, camera: Camera3D, viewport_size: Vector2, ma
 ## roof path's guards — inside the viewport, beyond the legacy center
 ## radius, no unit on the point, and the alpha-aware building picker must
 ## resolve the point to this view. Farthest valid point wins.
-func _sprite_pick_point(view: Node3D, sprite: SpriteBase3D, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
+func _sprite_pick_point(view: Node3D, sprite: Sprite3D, camera: Camera3D, viewport_size: Vector2, main: Node) -> Vector2:
 	var view_script: Script = view.get_script()
 	var mask: BitMap = view_script.alpha_mask(sprite.texture)
 	if mask == null:
@@ -1355,10 +1355,10 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 	# Painted kinds: opaque texel samples on the live sprite plane carry the
 	# same rect/HUD/unit/margin guards; retained Wall/Gate GLBs keep the
 	# upward roof-face interior-point scan below.
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if not sprites.is_empty():
 		var view_script: Script = view.get_script()
-		var sprite := sprites[0] as SpriteBase3D
+		var sprite := sprites[0] as Sprite3D
 		var mask: BitMap = view_script.alpha_mask(sprite.texture)
 		if mask == null:
 			return Vector2.INF
@@ -1447,10 +1447,10 @@ func _overlap_pick_point(view: Node3D, unit: Node3D, want_unit_first: bool, came
 	var model := view.get_node_or_null("Model") as Node3D
 	if model == null:
 		return Vector2.INF
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if sprites.is_empty():
 		return Vector2.INF
-	var sprite := sprites[0] as SpriteBase3D
+	var sprite := sprites[0] as Sprite3D
 	var view_script: Script = view.get_script()
 	var mask: BitMap = view_script.alpha_mask(sprite.texture)
 	if mask == null:
@@ -3017,7 +3017,7 @@ func _run() -> void:
 			_fail("the lance probe view failed its %s stage: %s" % ["finished" if bool(staged_complete) else "site", stage_error])
 			lance_probe.free()
 			return
-		var stage_sprite: SpriteBase3D = (lance_probe.get_node("Model") as Node3D).find_children("*", "SpriteBase3D", true, false)[0]
+		var stage_sprite: Sprite3D = (lance_probe.get_node("Model") as Node3D).find_children("*", "Sprite3D", true, false)[0]
 		var stage_top: Vector2 = probe_view_script.opaque_top_pixels(stage_sprite.texture)
 		if stage_top == Vector2.INF:
 			_fail("the lance probe %s texture exposes no opaque pixel for the bar seat" % ["finished" if bool(staged_complete) else "site"])
@@ -3176,7 +3176,7 @@ func _run() -> void:
 	# and an in-bounds transparent texel misses, each miss sampled from that
 	# stage's own texture — a finished sprite that turned its whole quad
 	# opaque would pass a hit-only check.
-	var sprite_pick_error := func(sprite: SpriteBase3D, stage: String) -> String:
+	var sprite_pick_error := func(sprite: Sprite3D, stage: String) -> String:
 		var top: Vector2 = view_script.opaque_top_pixels(sprite.texture)
 		if top == Vector2.INF:
 			return "%s sprite has no opaque art top" % stage
@@ -3205,7 +3205,7 @@ func _run() -> void:
 				miss_ray[0], miss_ray[1])) >= 0.0:
 			return "camera-ray picking counted a transparent %s-sprite pixel" % stage
 		return ""
-	var site_sprite: SpriteBase3D = site_model.find_children("*", "SpriteBase3D", true, false)[0]
+	var site_sprite: Sprite3D = site_model.find_children("*", "Sprite3D", true, false)[0]
 	var site_pick_error: String = sprite_pick_error.call(site_sprite, "site")
 	if not site_pick_error.is_empty():
 		_fail(site_pick_error)
@@ -3216,7 +3216,7 @@ func _run() -> void:
 	if finished_model == null or finished_model == site_model or not finished_error.is_empty():
 		_fail("a post-styling set_state did not swap the site sprite for the Depot sprite: %s" % finished_error)
 		return
-	var finished_sprite: SpriteBase3D = finished_model.find_children("*", "SpriteBase3D", true, false)[0]
+	var finished_sprite: Sprite3D = finished_model.find_children("*", "Sprite3D", true, false)[0]
 	var finished_pick_error: String = sprite_pick_error.call(finished_sprite, "finished Depot")
 	if not finished_pick_error.is_empty():
 		_fail(finished_pick_error)
@@ -3250,9 +3250,23 @@ func _run() -> void:
 	add_child(rescaled_view)
 	await get_tree().process_frame
 	rescaled_view.set_state(true, false)
+	# Let the painted sprite draw once at 1x1, then grow the footprint and
+	# query bounds inside the stale window (the layout notification and
+	# the sprite AABB both update in deferred flushes): the pre-resize
+	# quad is a legitimate answer here, but it must never be persisted —
+	# a cached stale silhouette would outlive the resize until the next
+	# footprint change.
+	await get_tree().process_frame
 	rescaled_view.scale = Vector3(4.0, 1.0, 4.0)
-	# Querying _view_art_bounds on a freshly attached Sprite3D before
-	# _im_update runs must not permanently cache the 1x1 fallback.
+	var rescaled_model_probe := rescaled_view.get_node("Model") as Node3D
+	get_node("Main").call("_view_art_bounds", rescaled_view, rescaled_model_probe)
+	if not await _wait_until(func():
+			return (get_node("Main").call("_view_art_bounds", rescaled_view, rescaled_model_probe) as AABB).size.y >= 2.0,
+			5.0, "a pre-redraw bounds query froze the 1x1 sprite AABB in the Model cache"):
+		rescaled_view.free()
+		return
+	# Querying _view_art_bounds on a freshly attached Sprite3D before its
+	# first redraw must not permanently cache undersized bounds.
 	var uncached_probe := building_view_scene.instantiate() as Node3D
 	uncached_probe.set_meta("building_kind", "ResearchCenter")
 	uncached_probe.scale = Vector3(4.0, 1.0, 4.0)
@@ -4183,6 +4197,7 @@ func _run() -> void:
 	if not GrusBridge.move_units(PackedInt32Array([3]), Vector2(36.5, 44.5)):
 		_fail("20 Hz cadence probe move was rejected")
 		return
+	var cadence_tick_start := int(GrusBridge.sim_tick())
 	var cadence_started_ms := Time.get_ticks_msec()
 	var previous_visual := unit_three.global_position
 	var previous_visual_ms := cadence_started_ms
@@ -4210,6 +4225,12 @@ func _run() -> void:
 	if cadence_distance < 4.0 or cadence_distance > 8.0:
 		_fail("authoritative simulation is not running near 20 Hz: speed-6 unit moved %.2f units in one second" % cadence_distance)
 		return
+	# Speed reference per applied tick, not per wall second: at a 44 ms
+	# frame cadence a ~1.0 s sample can contain 21 applied ticks, so raw
+	# cadence_distance over-reads the speed by a whole boundary tick —
+	# enough to lift the snap threshold above a real full-tick 0.30 jump.
+	var cadence_ticks := maxf(1.0, float(int(GrusBridge.sim_tick()) - cadence_tick_start))
+	var cadence_speed := cadence_distance / (cadence_ticks * 0.05)
 	# Interpolated presentation must track real time: each visual step covers
 	# ~the measured speed × wall-clock Δt, plus at most one 20 Hz tick of
 	# quantization and 25% tolerance. An absolute step bound reads as a
@@ -4222,7 +4243,7 @@ func _run() -> void:
 	var worst_snap_step := 0.0
 	for i in range(step_deltas.size()):
 		worst_excess = maxf(worst_excess,
-			step_deltas[i] - (cadence_distance * step_elapsed_s[i] + cadence_distance * 0.05) * 1.25)
+			step_deltas[i] - (cadence_speed * step_elapsed_s[i] + cadence_speed * 0.05) * 1.25)
 		if step_elapsed_s[i] <= 0.045:
 			max_subtick_step = maxf(max_subtick_step, step_deltas[i])
 			# A non-interpolated view delivers the whole 20 Hz tick (speed ×
@@ -4231,7 +4252,7 @@ func _run() -> void:
 			# interval so a slow-but-legit 44 ms frame (~0.26 at speed 6)
 			# never reads as a snap the way the old fixed 0.25 did, while a
 			# snapped 0.30 still trips it at every sub-tick cadence.
-			if step_deltas[i] > maxf(0.25, cadence_distance * step_elapsed_s[i] * 1.1):
+			if step_deltas[i] > maxf(0.25, cadence_speed * step_elapsed_s[i] * 1.1):
 				worst_snap_step = maxf(worst_snap_step, step_deltas[i])
 	if worst_excess > 0.25 or visual_changes < 2:
 		_fail("20 Hz presentation is not interpolated: worst step excess %.3f across %d visual changes" % [worst_excess, visual_changes])

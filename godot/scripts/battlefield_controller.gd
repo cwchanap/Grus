@@ -1118,10 +1118,17 @@ func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 		return art_root.get_meta("_cached_art_bounds") as AABB
 	var bounds := AABB()
 	var first := true
+	var deferred_art := false
 	for node in (art_root if art_root != null else view).find_children("*", "GeometryInstance3D", true, false):
 		var art: GeometryInstance3D = BuildingView.art_geometry(node)
 		if art == null or not BuildingView.art_rendered(art, art_root if art_root != null else view):
 			continue
+		# Sprite layout and AABB both update inside deferred flushes: a
+		# query between a footprint change and the next redraw returns the
+		# pre-resize quad, so sprite bounds are recomputed every call —
+		# caching would freeze the stale silhouette until the next resize.
+		if art is SpriteBase3D:
+			deferred_art = true
 		var local: AABB = view.global_transform.affine_inverse() * art.global_transform * art.get_aabb()
 		bounds = local if first else bounds.merge(local)
 		first = false
@@ -1130,7 +1137,7 @@ func _view_art_bounds(view: Node3D, art_root: Node3D = null) -> AABB:
 		# _im_update has not computed its AABB yet): fall back to the cell
 		# without caching so real art bounds replace it on the next query.
 		return AABB(Vector3(-0.5, 0.0, -0.5), Vector3(1.0, 1.0, 1.0))
-	if art_root != null:
+	if art_root != null and not deferred_art:
 		art_root.set_meta("_cached_art_bounds", bounds)
 	return bounds
 

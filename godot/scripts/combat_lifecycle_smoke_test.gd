@@ -151,13 +151,19 @@ func _key_tap(keycode: int) -> void:
 ## bounded at any fps: box["seen"] records the match, box["done"] the exit.
 func _observe_guard_strike(guard_ids: PackedInt32Array, target_id: int, box: Dictionary) -> void:
 	var deadline := Time.get_ticks_msec() + 15000
+	# The first drain still runs before the right-click is dispatched:
+	# strikes the earlier attack-move order already queued are forwarded
+	# for cosmetics but must not count as this click's verdict.
+	var collecting := false
 	while Time.get_ticks_msec() < deadline and not bool(box["seen"]):
 		for event in GrusBridge.drain_combat_events():
 			_main.call("_dispatch_combat_event", event)
-			if int(event.get("attacker", -1)) in guard_ids \
+			if collecting \
+					and int(event.get("attacker", -1)) in guard_ids \
 					and str(event.get("target_kind", "")) == "unit" \
 					and int(event.get("target_id", -1)) == target_id:
 				box["seen"] = true
+		collecting = true
 		await get_tree().process_frame
 	box["done"] = true
 
