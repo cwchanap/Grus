@@ -4,4 +4,4 @@ Godot Engine v4.7.1.stable.official.a13da4feb - https://godotengine.org
 [godot-bevy] plugins -- transform_sync:on assets:on collisions:off input:off audio:off packed_scene:on debugger:off. Missing one you expected? Add it, or use GodotDefaultPlugins.
 GRUS_ECONOMY_PLACEMENT_WATCH_PROBE_OK
 GRUS_ECONOMY_OPENING_CLEARANCE northwest_scout=15.33 Depot_placement=9.25
-GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=40 scrap=55 coal=88 cap=20 units=7 buildings=8 unaffordable_reject=8 elapsed_ms=28844
+GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery zero_demand=wall_gate_furnace bounds=catalogue_grounded food=40 scrap=55 coal=88 cap=20 units=7 buildings=8 unaffordable_reject=8 elapsed_ms=28686
