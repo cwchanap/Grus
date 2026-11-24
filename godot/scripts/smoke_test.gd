@@ -1654,24 +1654,33 @@ func _assert_overlapping_building_pick(main: Node, camera: Camera3D, viewport_si
 
 ## Pure cadence-interpolation verdict over a sampled frame trace. Returns a
 ## Dictionary {error, worst_excess, max_subtick_step, worst_snap_step} so both
-## the live 20 Hz motion window and synthetic 46/16 ms snap traces run through
+## the live 20 Hz motion window and synthetic snap-only traces run through
 ## the exact same threshold math.
 func _cadence_interpolation_metrics(step_deltas: Array[float], step_elapsed_s: Array[float],
 		cadence_speed: float, frames_observed: int, visual_changes: int, mean_frame_s: float) -> Dictionary:
 	var worst_excess := 0.0
 	var max_subtick_step := 0.0
 	var worst_snap_step := 0.0
+	var tick_step := cadence_speed * 0.05
 	for i in range(step_deltas.size()):
 		worst_excess = maxf(worst_excess,
-			step_deltas[i] - (cadence_speed * step_elapsed_s[i] + cadence_speed * 0.05) * 1.25)
-		if step_elapsed_s[i] < 0.048:
+			step_deltas[i] - (cadence_speed * step_elapsed_s[i] + tick_step) * 1.25)
+		if step_elapsed_s[i] < 0.05:
 			max_subtick_step = maxf(max_subtick_step, step_deltas[i])
-			# A non-interpolated view delivers the whole 20 Hz tick (speed ×
-			# 0.05 s) inside one rendered frame — a step no smoothly lerped
-			# view can produce on that sub-tick interval. Scaling by 1.05
-			# leaves headroom for smooth motion up to ~47 ms (0.276 at 46 ms →
-			# 0.2898 bound) while rejecting a 0.30 full-tick snap at 46 ms.
-			if step_deltas[i] > maxf(0.25, cadence_speed * step_elapsed_s[i] * 1.05):
+			# A non-interpolated view delivers the whole 20 Hz tick inside
+			# one rendered frame — a step no smoothly lerped view can produce
+			# on a sub-tick interval. The elapsed-scaled bound (1.05 headroom)
+			# separates the two while it still can (0.276 smooth vs 0.30 snap
+			# at 46 ms), but near the tick period the gap closes: at 48 ms
+			# smooth is 0.288, the scaled bound is 0.3024, and a full-tick
+			# 0.30 snap slips through. A sub-tick frame that still delivers
+			# ~the whole tick therefore flags on the second clause instead;
+			# its elapsed-scaled 1.02 conjunct keeps ~2% timing-jitter margin
+			# on smooth motion. Frames inside the last ~1 ms before the tick
+			# boundary cannot be told apart by step size and stay uncovered.
+			if step_deltas[i] > maxf(0.25, cadence_speed * step_elapsed_s[i] * 1.05) \
+					or (step_deltas[i] >= tick_step * 0.98
+						and step_deltas[i] > cadence_speed * step_elapsed_s[i] * 1.02):
 				worst_snap_step = maxf(worst_snap_step, step_deltas[i])
 	var error := ""
 	if worst_excess > 0.25 or visual_changes < 2:
@@ -4453,6 +4462,30 @@ func _run() -> void:
 	var smooth_verdict := _cadence_interpolation_metrics(smooth_deltas, smooth_elapsed, 6.0, 25, 25, 0.040)
 	if not str(smooth_verdict.get("error", "")).is_empty():
 		_fail("cadence check rejected a smooth 46/16 ms interpolated trace: %s" % str(smooth_verdict.get("error", "")))
+		return
+	# The same trap one band lower: twenty 0.30 snaps on 48 ms frames plus
+	# five held 8 ms frames keeps the 0.040 s mean and exactly 80% motion
+	# while each snap frame is still sub-tick. It must fail; smooth 0.288
+	# steps at 48 ms (0.048 on the 8 ms frames) must still pass.
+	var snap48_deltas: Array[float] = []
+	var snap48_elapsed: Array[float] = []
+	var smooth48_deltas: Array[float] = []
+	var smooth48_elapsed: Array[float] = []
+	for _k in range(20):
+		snap48_deltas.append(0.30)
+		snap48_elapsed.append(0.048)
+		smooth48_deltas.append(0.288)
+		smooth48_elapsed.append(0.048)
+	for _k in range(5):
+		smooth48_deltas.append(0.048)
+		smooth48_elapsed.append(0.008)
+	var snap48_verdict := _cadence_interpolation_metrics(snap48_deltas, snap48_elapsed, 6.0, 25, 20, 0.040)
+	if str(snap48_verdict.get("error", "")).is_empty():
+		_fail("cadence check failed to reject a mixed 48/8 ms snap-only trace")
+		return
+	var smooth48_verdict := _cadence_interpolation_metrics(smooth48_deltas, smooth48_elapsed, 6.0, 25, 25, 0.040)
+	if not str(smooth48_verdict.get("error", "")).is_empty():
+		_fail("cadence check rejected a smooth 48/8 ms interpolated trace: %s" % str(smooth48_verdict.get("error", "")))
 		return
 
 	# A human scout — worker 4, untouched by the choreography above — reveals
