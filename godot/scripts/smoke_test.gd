@@ -3253,8 +3253,14 @@ func _run() -> void:
 	# and its painted quad pitch matches the live Camera3D pitch.
 	var rescaled_view := building_view_scene.instantiate() as Node3D
 	rescaled_view.set_meta("building_kind", "ResearchCenter")
-	rescaled_view.position = Vector3(12.0, 0.0, 12.0)
+	# On-screen beside the city — the lance probe's anchor scan already
+	# proved this ground free, framed and HUD-clear — and explicitly
+	# visible: _building_hit_at skips off-screen and invisible views, and
+	# the bridge's fog-driven visibility pass never reaches standalone
+	# probe views (the lance probe mirrors the explored case the same way).
+	rescaled_view.position = Vector3(float(lance_anchor.x) + 1.0, 0.0, float(lance_anchor.y) + 1.0)
 	add_child(rescaled_view)
+	rescaled_view.visible = true
 	await get_tree().process_frame
 	rescaled_view.set_state(true, false)
 	# Let the painted sprite draw once at 1x1, then grow the footprint and
@@ -3264,6 +3270,11 @@ func _run() -> void:
 	# a cached stale silhouette would outlive the resize until the next
 	# footprint change.
 	await get_tree().process_frame
+	# The post-redraw pick below lands on new art OUTSIDE this pre-resize
+	# rectangle — the exact click a frozen stale silhouette cache drops at
+	# _projected_art_rect before the alpha test ever runs.
+	var pre_resize_rect: Rect2 = get_node("Main").call("_projected_art_rect",
+			rescaled_view, rescaled_view.get_node("Model"))
 	rescaled_view.scale = Vector3(4.0, 1.0, 4.0)
 	var rescaled_model_probe := rescaled_view.get_node("Model") as Node3D
 	get_node("Main").call("_view_art_bounds", rescaled_view, rescaled_model_probe)
@@ -3309,6 +3320,37 @@ func _run() -> void:
 	var rescaled_sprite := rescaled_sprites[0] as SpriteBase3D
 	if not rescaled_sprite.global_basis.z.is_equal_approx(camera.global_basis.z):
 		_fail("painted sprite pitch %s does not match Camera3D pitch %s" % [rescaled_sprite.global_basis.z, camera.global_basis.z])
+		rescaled_view.free()
+		return
+	# The pick path itself must reach the post-redraw silhouette: scan the
+	# new opaque art for a screen point OUTSIDE the pre-resize rectangle —
+	# a stale frozen _view_art_bounds cache drops that click at
+	# _projected_art_rect before _model_ray_hit_depth's alpha test runs.
+	var rescaled_sprite3d := rescaled_sprite as Sprite3D
+	var rescaled_mask: BitMap = null
+	if rescaled_sprite3d != null:
+		rescaled_mask = view_script.alpha_mask(rescaled_sprite3d.texture)
+	var outside_pick := Vector2.INF
+	if rescaled_mask != null:
+		var rescaled_mask_size := rescaled_mask.get_size()
+		for row in range(0, int(rescaled_mask_size.y), 8):
+			for col in range(0, int(rescaled_mask_size.x), 8):
+				if not rescaled_mask.get_bitv(Vector2i(col, row)):
+					continue
+				var candidate: Vector2 = camera.unproject_position(rescaled_sprite3d.global_transform *
+						view_script.sprite_local_from_pixel(rescaled_sprite3d, Vector2(col, row) + Vector2(0.5, 0.5)))
+				if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
+						or pre_resize_rect.has_point(candidate):
+					continue
+				var rescaled_hit: Dictionary = get_node("Main").call("_building_hit_at", candidate, 0)
+				if (rescaled_hit.get("view") as Node3D) == rescaled_view \
+						and not is_inf(float(rescaled_hit.get("depth", INF))):
+					outside_pick = candidate
+					break
+			if outside_pick != Vector2.INF:
+				break
+	if outside_pick == Vector2.INF:
+		_fail("no post-redraw pick on new art outside the pre-resize rect returned the rescaled view")
 		rescaled_view.free()
 		return
 	rescaled_view.free()
