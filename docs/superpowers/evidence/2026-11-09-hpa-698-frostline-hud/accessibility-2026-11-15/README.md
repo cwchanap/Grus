@@ -1,6 +1,6 @@
 # Frostline HUD accessibility follow-up — evidence
 
-> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/accessibility-2026-11-15) is available at the pre-cleanup commit.
+> Evidence retention: this checkout keeps none of these captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/accessibility-2026-11-15) is available at the pre-cleanup commit.
 
 Unretouched 1280 × 720 captures from implementation head `de47663`, after adding alternatives to non-Start rich-text icons and accessible names to the live production queue. Captured on 2026-11-15 with Godot 4.7.1 and OpenGL 4.1 Metal compatibility renderer on Apple M1 Pro. Source-file modification times are UTC; PNGs do not embed their source commit.
 
