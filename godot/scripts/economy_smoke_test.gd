@@ -568,7 +568,8 @@ func _overlay_is(view: Node3D, cold: bool) -> bool:
 			return false
 		var want: Color = (tint as Color) if cold else Color.WHITE
 		for node in sprites:
-			if (node as SpriteBase3D).modulate != want:
+			var sprite := node as SpriteBase3D
+			if not sprite.is_visible_in_tree() or sprite.modulate != want:
 				return false
 		return true
 	# Cold tints only a painted sprite: a mesh fallback can never satisfy the
@@ -1019,12 +1020,17 @@ func _place_building(builder: Node3D, button: Button, anchor: Vector2i) -> void:
 			var refusal: Dictionary = get_node("Main").get("_last_placement_refusal")
 			if int(refusal.get("generation", -1)) == armed_generation:
 				refusal_text = str(refusal.get("text", ""))
+			var ticket_verdict := {}
+			var recorded_verdict: Dictionary = get_node("Main").get("_last_placement_verdict")
+			if int(recorded_verdict.get("generation", -1)) == armed_generation \
+					and str(recorded_verdict.get("kind", "")) == kind:
+				ticket_verdict = recorded_verdict
 			last_watch = _placement_watch_error(
 				baseline, _placement_view_ids(kind),
 				pending_request, saw_request,
 				int(get_node("Main").get("_placement_generation")), armed_generation,
 				str(get_node("Main").get("_placement_kind")), _controller_status_text(),
-				refusal_text, not stay_armed)
+				refusal_text, not stay_armed, ticket_verdict)
 			if _placement_watch_action(last_watch) != "keep-waiting":
 				break
 			await get_tree().process_frame
@@ -1106,7 +1112,7 @@ func _placement_view_ids(kind: String) -> PackedInt32Array:
 func _placement_watch_error(baseline: PackedInt32Array, view_ids: PackedInt32Array,
 		request_pending: bool, request_resolved: bool, generation_now: int,
 		armed_generation: int, armed_kind_now: String, status_text: String,
-		refusal_text: String, require_disarm: bool) -> String:
+		refusal_text: String, require_disarm: bool, ticket_verdict: Dictionary = {}) -> String:
 	for id in view_ids:
 		if not baseline.has(id):
 			if require_disarm:
@@ -1123,6 +1129,10 @@ func _placement_watch_error(baseline: PackedInt32Array, view_ids: PackedInt32Arr
 			return ""
 	if request_pending:
 		return "pending-verdict"
+	if not ticket_verdict.is_empty():
+		if not bool(ticket_verdict.get("accepted", false)):
+			return "rejected:%s" % str(ticket_verdict.get("feedback", "Placement rejected"))
+		return "pending-view"
 	if request_resolved and generation_now != armed_generation:
 		# The controller consumed this ticket's completed result and
 		# cancelled the tool: accepted; the view may still be syncing.
@@ -1333,6 +1343,19 @@ func _run() -> void:
 	if _placement_watch_error(watch_baseline, PackedInt32Array([4242, 777]),
 			false, true, 8, 7, "Gate", "Command accepted", "", false) != "pending-rearm":
 		_fail("placement watch settled a Gate re-armed under a new generation")
+		return
+	# Recorded completed ticket verdicts survive shared-status overwrites
+	# after consumption: a rejected ticket retries, an accepted ticket waits
+	# for the new view.
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, true, 7, 7, "Depot", "Destination unreachable for 1 unit(s)", "", true,
+			{"id": 9, "generation": 7, "kind": "Depot", "accepted": false, "feedback": "Command rejected (Occupied)"}) != "rejected:Command rejected (Occupied)":
+		_fail("placement watch lost a consumed rejected ticket verdict to unrelated feedback")
+		return
+	if _placement_watch_error(watch_baseline, PackedInt32Array([4242]),
+			false, true, 8, 7, "", "Destination unreachable for 1 unit(s)", "", true,
+			{"id": 9, "generation": 7, "kind": "Depot", "accepted": true, "feedback": "Command accepted"}) != "pending-view":
+		_fail("placement watch did not keep waiting on a consumed accepted ticket before view sync")
 		return
 	# The retry mapping itself: only a demonstrated rejection/no-dispatch
 	# retries; every pending class keeps waiting; settle returns.

@@ -424,6 +424,13 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 		if sprite.billboard != BaseMaterial3D.BILLBOARD_DISABLED:
 			return "%s painted sprite billboard=%d (expected BILLBOARD_DISABLED)" % [
 				kind, sprite.billboard]
+		# A painted or construction-site Model must carry no visible MeshInstance3D
+		# descendants: a leftover GLB mesh would intercept renders/clicks behind
+		# transparent sprite pixels. Hidden descendants remain ignored.
+		for node in model.find_children("*", "MeshInstance3D", true, false):
+			var art := BuildingView.art_geometry(node)
+			if art != null and BuildingView.art_rendered(art, model):
+				return "%s painted/site model carries unexpected rendered mesh %s" % [kind, node.name]
 		return ""
 	# Only the completed Wall/Gate GLBs may prove representation through the
 	# instanced scene path: a sprite-less painted or site model must fail,

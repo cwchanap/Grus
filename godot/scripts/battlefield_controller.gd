@@ -60,6 +60,11 @@ var _pending_placement_requests: Array[Dictionary] = []
 ## pre-dispatch refusal is this placement's own verdict and must survive
 ## that mirror until the next arm.
 var _last_placement_refusal := {}
+## Latest completed placement ticket verdict ({id, generation, kind, accepted,
+## feedback}), retained across _consume_placement_results so an unrelated route
+## failure overwriting `command_status` never hides a rejected ticket from
+## downstream observers.
+var _last_placement_verdict := {}
 var _idle_cursor := 0
 var _session_phase := ""
 var _session_winner := -2
@@ -185,19 +190,30 @@ func _consume_placement_results() -> bool:
 		if not bool(result.get("complete", false)):
 			unresolved.append(request)
 			continue
-		if int(request.get("generation", -1)) != _placement_generation \
-				or str(request.get("kind", "")) != _placement_kind:
+		var request_id := int(request.get("id", -1))
+		var request_generation := int(request.get("generation", -1))
+		var request_kind := str(request.get("kind", ""))
+		var accepted := bool(result.get("accepted", false))
+		var feedback := str(result.get("feedback", "Placement rejected"))
+		_last_placement_verdict = {
+			"id": request_id,
+			"generation": request_generation,
+			"kind": request_kind,
+			"accepted": accepted,
+			"feedback": feedback,
+		}
+		if request_generation != _placement_generation \
+				or request_kind != _placement_kind:
 			# A dropped result must mask only its own echo: the shared channel
 			# keeps the last command's text per tick, so identical text is this
 			# stale acceptance while a different text is unrelated feedback
 			# (a move/route rejection) that still applies.
-			if str(result.get("feedback", "")) == str(GrusBridge.command_feedback()):
+			if feedback == str(GrusBridge.command_feedback()):
 				handled_feedback = true
 			continue
 		handled_feedback = true
-		command_status.text = str(result.get("feedback", "Placement rejected"))
-		if bool(result.get("accepted", false)) \
-				and _placement_kind != "Wall" and _placement_kind != "Gate":
+		command_status.text = feedback
+		if accepted and _placement_kind != "Wall" and _placement_kind != "Gate":
 			_cancel_placement()
 	_pending_placement_requests = unresolved
 	return handled_feedback
@@ -570,20 +586,40 @@ func _issue_context_command(screen_position: Vector2) -> void:
 	# and an enemy hidden behind the site's opaque sprite still falls
 	# through.
 	var workers := _selected_worker_ids()
+	var resource: Node3D = null
 	var resource_id := -1
 	var resumable: Node3D = null
+	var all_building_hit: Dictionary = {}
 	if not workers.is_empty():
-		resource_id = _gatherable_resource_id(screen_position)
+		resource = _resource_at(screen_position)
+		if resource != null:
+			resource_id = int(resource.get_meta("resource_id", -1))
 		if resource_id <= 0:
-			var site := _building_at(screen_position)
+			all_building_hit = _building_hit_at(screen_position, 0)
+			var site := all_building_hit.get("view") as Node3D
 			if site != null and int(site.get_meta("team_id", -1)) == 1 \
 					and not _building_complete(int(site.get_meta("building_id", -1))):
 				resumable = site
 	if workers.size() != selected_ids.size():
-		var enemy_pick := _enemy_pick_at(screen_position)
+		var enemy_pick := _enemy_pick_at(screen_position, all_building_hit)
 		var enemy := enemy_pick.get("view") as Node3D
-		if enemy != null and (bool(enemy_pick.get("direct", false)) \
-				or (resource_id <= 0 and resumable == null)):
+		var enemy_wins := false
+		if enemy != null:
+			if bool(enemy_pick.get("direct", false)):
+				enemy_wins = true
+				# A visible resource nearer on the click ray than the enemy
+				# behind it keeps Gather priority for mixed selections; an
+				# enemy in front of the resource still takes Attack.
+				if resource_id > 0 and resource != null:
+					var ray_origin := camera.project_ray_origin(screen_position)
+					var ray_direction := camera.project_ray_normal(screen_position)
+					var resource_depth := _model_ray_hit_depth(resource, ray_origin, ray_direction)
+					var enemy_depth := float(enemy_pick.get("depth", INF))
+					if resource_depth >= 0.0 and resource_depth < enemy_depth:
+						enemy_wins = false
+			elif resource_id <= 0 and resumable == null:
+				enemy_wins = true
+		if enemy_wins:
 			var target_kind := "unit" if enemy.is_in_group("unit_views") else "building"
 			var target_id := int(enemy.get_meta("unit_id", enemy.get_meta("building_id", -1)))
 			if GrusBridge.attack_units(PackedInt32Array(selected_ids), target_kind, target_id):
@@ -721,9 +757,9 @@ func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: D
 				# A wrong-team body still covers the click: callers must
 				# suppress whatever it hides (a nearer opaque building hit
 				# would already have taken the occluded branch above).
-				return {"view": null, "direct": false, "covered": true}
-			return {"view": mesh_view, "direct": true}
-	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false}
+				return {"view": null, "direct": false, "covered": true, "depth": INF}
+			return {"view": mesh_view, "direct": true, "depth": mesh_depth}
+	return {"view": _nearest_view("unit_views", screen_position, team_filter, CLICK_RADIUS, building_hit), "direct": false, "depth": INF}
 
 ## The frontmost visible unit body on the pick ray across every team — the
 ## team rule is the caller's, because a click covered by another team's mesh
@@ -783,6 +819,9 @@ func _select_building_from_hit(screen_position: Vector2, all_building_hit: Dicti
 		if hit_view != null and int(hit_view.get_meta("team_id", -1)) == team_filter:
 			return hit_view
 		return null
+	if all_building_hit.has("fallback_by_team"):
+		var fallbacks: Dictionary = all_building_hit.get("fallback_by_team", {})
+		return fallbacks.get(team_filter, null) as Node3D
 	return _building_at(screen_position, team_filter)
 
 ## Compare the nearest eligible enemy with the silhouette-picked building:
@@ -799,21 +838,21 @@ func _nearest_enemy_view(screen_position: Vector2) -> Node3D:
 ## silhouette hit — an unoccluded unit mesh or a real enemy-building face —
 ## while the 20 px fallback reports false so a gather/resume click can
 ## refuse to yield to a near miss.
-func _enemy_pick_at(screen_position: Vector2) -> Dictionary:
-	var all_building_hit := _building_hit_at(screen_position, 0)
+func _enemy_pick_at(screen_position: Vector2, precomputed_building_hit: Dictionary = {}) -> Dictionary:
+	var all_building_hit := precomputed_building_hit if not precomputed_building_hit.is_empty() else _building_hit_at(screen_position, 0)
 	var unit_pick := _unit_pick_view(screen_position, 2, all_building_hit)
 	var unit := unit_pick.get("view") as Node3D
 	var enemy_building := _select_building_from_hit(screen_position, all_building_hit, 2)
-	var building_direct := enemy_building != null \
-		and float(all_building_hit.get("depth", INF)) < INF
+	var building_depth := float(all_building_hit.get("depth", INF))
+	var building_direct := enemy_building != null and building_depth < INF
 	if unit == null:
 		# A friendly body covering the click hides every enemy building
 		# behind it — no attack through the cover. A nearer opaque hit
 		# would have occluded the unit inside _unit_pick_view already.
 		if bool(unit_pick.get("covered", false)):
-			return {"view": null, "direct": false}
-		return {"view": enemy_building, "direct": building_direct}
-	return {"view": unit, "direct": bool(unit_pick.get("direct", false))}
+			return {"view": null, "direct": false, "depth": INF}
+		return {"view": enemy_building, "direct": building_direct, "depth": building_depth if building_direct else INF}
+	return {"view": unit, "direct": bool(unit_pick.get("direct", false)), "depth": float(unit_pick.get("depth", INF))}
 
 ## A building only steals an overlapping unit's pick on a real opaque
 ## silhouette hit strictly in front of the unit's visible geometry: when the
@@ -853,18 +892,24 @@ func _building_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
 	var nearest_hit_depth := INF
 	var fallback: Node3D = null
 	var fallback_distance := CLICK_RADIUS
+	var fallback_by_team := {}
+	var fallback_dist_by_team := {}
 	for node in get_tree().get_nodes_in_group("building_views"):
 		var view := node as Node3D
 		if view == null or not view.is_visible_in_tree() \
 				or camera.is_position_behind(view.global_position):
 			continue
-		if team_filter != 0 and int(view.get_meta("team_id", -1)) != team_filter:
+		var view_team := int(view.get_meta("team_id", -1))
+		if team_filter != 0 and view_team != team_filter:
 			continue
 		var center_px := camera.unproject_position(view.global_position)
 		var distance := center_px.distance_to(screen_position)
 		if distance <= fallback_distance:
 			fallback = view
 			fallback_distance = distance
+		if team_filter == 0 and distance <= float(fallback_dist_by_team.get(view_team, CLICK_RADIUS)):
+			fallback_by_team[view_team] = view
+			fallback_dist_by_team[view_team] = distance
 		var model := view.get_node_or_null("Model") as Node3D
 		if model == null:
 			continue
@@ -877,7 +922,10 @@ func _building_hit_at(screen_position: Vector2, team_filter := 0) -> Dictionary:
 			nearest_hit_depth = depth
 	if nearest_hit_view != null:
 		return {"view": nearest_hit_view, "depth": nearest_hit_depth}
-	return {"view": fallback, "depth": INF}
+	var result := {"view": fallback, "depth": INF}
+	if team_filter == 0:
+		result["fallback_by_team"] = fallback_by_team
+	return result
 
 func _building_at(screen_position: Vector2, team_filter := 0) -> Node3D:
 	return _building_hit_at(screen_position, team_filter).get("view") as Node3D
@@ -1042,6 +1090,7 @@ func _restart_match() -> void:
 	_ug_drawer.reset()
 	_pending_placement_requests.clear()
 	_last_placement_refusal = {}
+	_last_placement_verdict = {}
 	_cancel_placement()
 	_fx.clear_all()
 
@@ -1270,6 +1319,7 @@ func _try_placement(screen_position: Vector2) -> void:
 	var kind := _placement_kind
 	if GrusBridge.place_building_request(builder, kind, anchor_x, anchor_y, request_id):
 		_last_placement_refusal = {}
+		_last_placement_verdict = {}
 		_pending_placement_requests.append({
 			"id": request_id,
 			"generation": _placement_generation,

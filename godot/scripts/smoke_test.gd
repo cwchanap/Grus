@@ -1652,6 +1652,43 @@ func _assert_overlapping_building_pick(main: Node, camera: Camera3D, viewport_si
 		_fail("overlapping building silhouettes did not pick the foreground model")
 	return ok
 
+## Pure cadence-interpolation verdict over a sampled frame trace. Returns a
+## Dictionary {error, worst_excess, max_subtick_step, worst_snap_step} so both
+## the live 20 Hz motion window and synthetic 46/16 ms snap traces run through
+## the exact same threshold math.
+func _cadence_interpolation_metrics(step_deltas: Array[float], step_elapsed_s: Array[float],
+		cadence_speed: float, frames_observed: int, visual_changes: int, mean_frame_s: float) -> Dictionary:
+	var worst_excess := 0.0
+	var max_subtick_step := 0.0
+	var worst_snap_step := 0.0
+	for i in range(step_deltas.size()):
+		worst_excess = maxf(worst_excess,
+			step_deltas[i] - (cadence_speed * step_elapsed_s[i] + cadence_speed * 0.05) * 1.25)
+		if step_elapsed_s[i] < 0.048:
+			max_subtick_step = maxf(max_subtick_step, step_deltas[i])
+			# A non-interpolated view delivers the whole 20 Hz tick (speed ×
+			# 0.05 s) inside one rendered frame — a step no smoothly lerped
+			# view can produce on that sub-tick interval. Scaling by 1.05
+			# leaves headroom for smooth motion up to ~47 ms (0.276 at 46 ms →
+			# 0.2898 bound) while rejecting a 0.30 full-tick snap at 46 ms.
+			if step_deltas[i] > maxf(0.25, cadence_speed * step_elapsed_s[i] * 1.05):
+				worst_snap_step = maxf(worst_snap_step, step_deltas[i])
+	var error := ""
+	if worst_excess > 0.25 or visual_changes < 2:
+		error = "20 Hz presentation is not interpolated: worst step excess %.3f across %d visual changes" % [
+			worst_excess, visual_changes]
+	elif (mean_frame_s < 0.025 and visual_changes * 5 < frames_observed * 3) \
+			or (mean_frame_s >= 0.025 and mean_frame_s < 0.045 \
+				and (visual_changes * 5 < frames_observed * 4 or worst_snap_step > 0.0)):
+		error = "20 Hz view snaps between ticks without interpolation: %d of %d rendered frames showed motion (mean frame %.4fs, max sub-tick step %.3f, worst snap step %.3f)" % [
+			visual_changes, frames_observed, mean_frame_s, max_subtick_step, worst_snap_step]
+	return {
+		"error": error,
+		"worst_excess": worst_excess,
+		"max_subtick_step": max_subtick_step,
+		"worst_snap_step": worst_snap_step,
+	}
+
 ## Labelled white-box presentation test for unit/building depth picking:
 ## the game has no foreign buildings and pre-wave runs have no aliens, so
 ## synthetic views pin the controller's depth-arbitration, occlusion,
@@ -3163,6 +3200,7 @@ func _run() -> void:
 	site_view.scale = Vector3(depot_width, 1.0, depot_depth)
 	site_view.position = Vector3(4.5, 0.0, 4.5)
 	add_child(site_view)
+	site_view.visible = true
 	await get_tree().process_frame
 	var site_model := site_view.get_node_or_null("Model") as Node3D
 	var site_style_error := SmokeHelpers.building_model_error(site_view, "Depot", false)
@@ -3174,7 +3212,7 @@ func _run() -> void:
 	var ray_for_pixel := func(sprite: SpriteBase3D, pixel: Vector2) -> Array:
 		var world: Vector3 = sprite.global_transform * view_script.sprite_local_from_pixel(sprite, pixel)
 		var screen := camera.unproject_position(world)
-		return [camera.project_ray_origin(screen), camera.project_ray_normal(screen)]
+		return [camera.project_ray_origin(screen), camera.project_ray_normal(screen), screen]
 	var ray_depth := func(sprite: SpriteBase3D, pixel: Vector2) -> float:
 		var ray: Array = ray_for_pixel.call(sprite, pixel)
 		return float(swap_controller.call("_model_ray_hit_depth", sprite.get_parent(),
@@ -3217,6 +3255,15 @@ func _run() -> void:
 	if not site_pick_error.is_empty():
 		_fail(site_pick_error)
 		return
+	# Prime the outer _building_hit_at picker while the site Model is active:
+	# an opaque site pixel must hit site_view at finite depth, and a pixel
+	# transparent in the site sprite must miss before completion.
+	var site_top: Vector2 = view_script.opaque_top_pixels(site_sprite.texture)
+	var site_opaque_ray: Array = ray_for_pixel.call(site_sprite, site_top + Vector2(0.0, 0.5))
+	var site_outer_hit: Dictionary = swap_controller.call("_building_hit_at", site_opaque_ray[2], 0)
+	if site_outer_hit.get("view") != site_view or is_inf(float(site_outer_hit.get("depth", INF))):
+		_fail("outer _building_hit_at missed the active site sprite: %s" % str(site_outer_hit))
+		return
 	site_view.set_state(true, false)
 	var finished_model := site_view.get_node_or_null("Model") as Node3D
 	var finished_error := SmokeHelpers.building_model_error(site_view, "Depot", true)
@@ -3227,6 +3274,31 @@ func _run() -> void:
 	var finished_pick_error: String = sprite_pick_error.call(finished_sprite, "finished Depot")
 	if not finished_pick_error.is_empty():
 		_fail(finished_pick_error)
+		return
+	# Find a pixel that transitioned from site-transparent to finished Depot
+	# opaque (both sprites share the 512x512 quad AABB, so Depot art lies
+	# within the quad while differing in opaque coverage) and verify
+	# _building_hit_at hits finished Depot art after the swap.
+	var exposed_pixel := Vector2.INF
+	var depot_mask: BitMap = view_script.alpha_mask(finished_sprite.texture)
+	var site_mask: BitMap = view_script.alpha_mask(site_sprite.texture)
+	if depot_mask != null and site_mask != null:
+		var dsize := depot_mask.get_size()
+		for row in range(0, int(dsize.y), 2):
+			for col in range(0, int(dsize.x), 2):
+				var p := Vector2i(col, row)
+				if depot_mask.get_bitv(p) and not site_mask.get_bitv(p):
+					exposed_pixel = Vector2(col, row) + Vector2(0.5, 0.5)
+					break
+			if exposed_pixel != Vector2.INF:
+				break
+	if exposed_pixel == Vector2.INF:
+		_fail("no Depot opaque pixel differs from the construction-site sprite mask")
+		return
+	var exposed_ray: Array = ray_for_pixel.call(finished_sprite, exposed_pixel)
+	var finished_outer_hit: Dictionary = swap_controller.call("_building_hit_at", exposed_ray[2], 0)
+	if finished_outer_hit.get("view") != site_view or is_inf(float(finished_outer_hit.get("depth", INF))):
+		_fail("outer _building_hit_at rejected newly exposed Depot art after Model swap: %s" % str(finished_outer_hit))
 		return
 	site_view.set_state(true, false)
 	if site_view.get_node("Model") != finished_model:
@@ -3570,6 +3642,71 @@ func _run() -> void:
 				if int(probe_task.get("source", -1)) != resource_id:
 					_fail("the alien-adjacent gather click tasked worker %d with %s" % [probe_worker_id, probe_task])
 					return
+			# Mixed-selection depth arbitration against a direct enemy mesh:
+			# find a HUD-clear point hitting this resource's mesh, then test
+			# both depth orders with Worker + Guard selected.
+			var res_mesh_click := Vector2.INF
+			var res_depth := -1.0
+			for dy in range(-24, 25, 4):
+				for dx in range(-24, 25, 4):
+					var cand := center_px + Vector2(float(dx), float(dy))
+					if not Rect2(Vector2.ZERO, viewport_size).has_point(cand) \
+							or hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(cand)):
+						continue
+					var d := float(controller.call("_model_ray_hit_depth", resource,
+							camera.project_ray_origin(cand), camera.project_ray_normal(cand)))
+					if d >= 0.0:
+						res_mesh_click = cand
+						res_depth = d
+						break
+				if res_mesh_click != Vector2.INF:
+					break
+			if res_mesh_click == Vector2.INF:
+				_fail("no HUD-clear ray hit the resource mesh for the depth-arbitration gather probe")
+				return
+			var res_origin := camera.project_ray_origin(res_mesh_click)
+			var res_dir := camera.project_ray_normal(res_mesh_click)
+			var depth_alien := _cover_probe_unit(9302, 2, "")
+			var depth_guard := _cover_probe_unit(9213, 1, "Guard")
+			depth_guard.visible = false
+			controller.call("_index_views")
+			var depth_workers_only: Array[int] = controller.selected_ids.duplicate()
+			controller.selected_ids.append(9213)
+			# Behind resource: resource_depth < enemy_depth -> Gather wins.
+			depth_alien.global_position = res_origin + res_dir * (res_depth + 1.5)
+			var behind_pick: Dictionary = controller.call("_enemy_pick_at", res_mesh_click)
+			if (behind_pick.get("view") as Node3D) != depth_alien or not bool(behind_pick.get("direct", false)):
+				depth_alien.free()
+				depth_guard.free()
+				controller.selected_ids = depth_workers_only
+				_fail("behind-resource alien was not a direct enemy pick: %s" % behind_pick)
+				return
+			command_status.text = "<no command issued>"
+			var behind_feedback := int(GrusBridge.command_feedback_revision())
+			SmokeHelpers.push_mouse_click(get_tree(), res_mesh_click, MOUSE_BUTTON_RIGHT)
+			if command_status.text != "Gather command queued":
+				depth_alien.free()
+				depth_guard.free()
+				controller.selected_ids = depth_workers_only
+				_fail("an enemy behind a visible resource stole a mixed-selection gather click: %s" % command_status.text)
+				return
+			if not await _wait_until(_accepted_since.bind(behind_feedback), 10.0,
+					"the resource-ahead-of-enemy gather click was not accepted by the sim"):
+				depth_alien.free()
+				depth_guard.free()
+				controller.selected_ids = depth_workers_only
+				return
+			# In front of resource: enemy_depth < resource_depth -> Attack wins.
+			depth_alien.global_position = res_origin + res_dir * maxf(1.0, res_depth - 1.5)
+			command_status.text = "<no command issued>"
+			SmokeHelpers.push_mouse_click(get_tree(), res_mesh_click, MOUSE_BUTTON_RIGHT)
+			var front_status := command_status.text
+			depth_alien.free()
+			depth_guard.free()
+			controller.selected_ids = depth_workers_only
+			if front_status != "Attack command queued":
+				_fail("an enemy in front of a resource did not take Attack over Gather: %s" % front_status)
+				return
 	for kind in resource_models:
 		if not gathered.has(kind):
 			_fail("no %s resource art accepted a targeted gather pick" % kind)
@@ -4280,50 +4417,42 @@ func _run() -> void:
 	# enough to lift the snap threshold above a real full-tick 0.30 jump.
 	var cadence_ticks := maxf(1.0, float(int(GrusBridge.sim_tick()) - cadence_tick_start))
 	var cadence_speed := cadence_distance / (cadence_ticks * 0.05)
-	# Interpolated presentation must track real time: each visual step covers
-	# ~the measured speed × wall-clock Δt, plus at most one 20 Hz tick of
-	# quantization and 25% tolerance. An absolute step bound reads as a
-	# fault on slow (software-rendered) hosts even though pacing is correct
-	# there (the old fixed 0.25 failed 12 of 13 saturated-host runs per the
-	# original comment), while a frozen-then-jumping or sim-leading view
-	# still trips the excess.
-	var worst_excess := 0.0
-	var max_subtick_step := 0.0
-	var worst_snap_step := 0.0
-	for i in range(step_deltas.size()):
-		worst_excess = maxf(worst_excess,
-			step_deltas[i] - (cadence_speed * step_elapsed_s[i] + cadence_speed * 0.05) * 1.25)
-		if step_elapsed_s[i] <= 0.045:
-			max_subtick_step = maxf(max_subtick_step, step_deltas[i])
-			# A non-interpolated view delivers the whole 20 Hz tick (speed ×
-			# 0.05 s) inside one rendered frame — a step no smoothly lerped
-			# view can produce on that interval. The bound scales with the
-			# interval so a slow-but-legit 44 ms frame (~0.26 at speed 6)
-			# never reads as a snap the way the old fixed 0.25 did, while a
-			# snapped 0.30 still trips it at every sub-tick cadence.
-			if step_deltas[i] > maxf(0.25, cadence_speed * step_elapsed_s[i] * 1.1):
-				worst_snap_step = maxf(worst_snap_step, step_deltas[i])
-	if worst_excess > 0.25 or visual_changes < 2:
-		_fail("20 Hz presentation is not interpolated: worst step excess %.3f across %d visual changes" % [worst_excess, visual_changes])
-		return
-
-	# Pacing alone cannot reject interpolation loss: its per-step allowance
-	# includes a full 20 Hz tick of travel, so a view that snaps the whole
-	# tick displacement (speed 6 → 0.30 units per tick, no lerp) always slips
-	# under it. Require most sub-tick frames to move when mean_frame_s < 0.045
-	# and reject full-tick jumps on any sub-tick interval up to 45 ms —
-	# the old 32 ms filter let a 25 FPS (40 ms) snap-only trace pass.
-	# Multi-tick software rendering (mean_frame_s >= 0.045) stays on the
-	# wall-clock pacing bound above.
 	var window_elapsed_s := float(Time.get_ticks_msec() - cadence_started_ms) / 1000.0
 	var mean_frame_s := window_elapsed_s / maxf(1.0, float(frames_observed))
+	var metrics := _cadence_interpolation_metrics(
+		step_deltas, step_elapsed_s, cadence_speed, frames_observed, visual_changes, mean_frame_s)
+	var worst_excess := float(metrics.get("worst_excess", 0.0))
+	var max_subtick_step := float(metrics.get("max_subtick_step", 0.0))
+	var worst_snap_step := float(metrics.get("worst_snap_step", 0.0))
 	print("GRUS_CADENCE_MOTION frames=%d changes=%d mean_frame_s=%.4f worst_excess=%.3f max_subtick_step=%.3f worst_snap_step=%.3f" % [
 		frames_observed, visual_changes, mean_frame_s, worst_excess, max_subtick_step, worst_snap_step])
-	if (mean_frame_s < 0.025 and visual_changes * 5 < frames_observed * 3) \
-			or (mean_frame_s >= 0.025 and mean_frame_s < 0.045 \
-				and (visual_changes * 5 < frames_observed * 4 or worst_snap_step > 0.0)):
-		_fail("20 Hz view snaps between ticks without interpolation: %d of %d rendered frames showed motion (mean frame %.4fs, max sub-tick step %.3f, worst snap step %.3f)" % [
-			visual_changes, frames_observed, mean_frame_s, max_subtick_step, worst_snap_step])
+	var cadence_error := str(metrics.get("error", ""))
+	if not cadence_error.is_empty():
+		_fail(cadence_error)
+		return
+	# Cover the mixed 46/16 ms cadence regression: 20 snap-only 0.30 jumps on
+	# 46 ms frames plus 5 held 16 ms frames yields 80% motion and 0.040 s mean,
+	# which must fail, while smooth interpolated steps at that same 46/16 ms
+	# cadence (0.276 / 0.096) must pass.
+	var snap_deltas: Array[float] = []
+	var snap_elapsed: Array[float] = []
+	var smooth_deltas: Array[float] = []
+	var smooth_elapsed: Array[float] = []
+	for _k in range(20):
+		snap_deltas.append(0.30)
+		snap_elapsed.append(0.046)
+		smooth_deltas.append(0.276)
+		smooth_elapsed.append(0.046)
+	for _k in range(5):
+		smooth_deltas.append(0.096)
+		smooth_elapsed.append(0.016)
+	var snap_verdict := _cadence_interpolation_metrics(snap_deltas, snap_elapsed, 6.0, 25, 20, 0.040)
+	if str(snap_verdict.get("error", "")).is_empty():
+		_fail("cadence check failed to reject a mixed 46/16 ms snap-only trace")
+		return
+	var smooth_verdict := _cadence_interpolation_metrics(smooth_deltas, smooth_elapsed, 6.0, 25, 25, 0.040)
+	if not str(smooth_verdict.get("error", "")).is_empty():
+		_fail("cadence check rejected a smooth 46/16 ms interpolated trace: %s" % str(smooth_verdict.get("error", "")))
 		return
 
 	# A human scout — worker 4, untouched by the choreography above — reveals
@@ -5116,6 +5245,13 @@ func _run() -> void:
 		return
 	var corner_unit_screen := camera.unproject_position(corner_worker.global_position)
 	var corner_hud_rects := SmokeHelpers.hud_rects(get_node("Main/HUD"))
+	var rc_sprites := rc_model.find_children("*", "Sprite3D", true, false)
+	if rc_sprites.is_empty():
+		_fail("Research Center Model carries no Sprite3D for the transparent-corner quad check")
+		return
+	var rc_sprite := rc_sprites[0] as Sprite3D
+	var rc_quad_tris := rc_sprite.generate_triangle_mesh()
+	var rc_quad_inv := rc_sprite.global_transform.affine_inverse()
 	var corner_click := Vector2.INF
 	for dy in range(-16, 17, 4):
 		for dx in range(-16, 17, 4):
@@ -5130,8 +5266,15 @@ func _run() -> void:
 				continue
 			if not rc_art_rect.has_point(candidate):
 				continue
-			if float(main.call("_model_ray_hit_depth", rc_model,
-					camera.project_ray_origin(candidate), camera.project_ray_normal(candidate))) >= 0.0:
+			var cand_origin := camera.project_ray_origin(candidate)
+			var cand_dir := camera.project_ray_normal(candidate)
+			# Ensure the ray crosses the unmasked sprite quad so only alpha
+			# masking explains why _model_ray_hit_depth misses.
+			var quad_hit: Variant = rc_quad_tris.intersect_ray(
+					rc_quad_inv * cand_origin, (rc_quad_inv.basis * cand_dir).normalized())
+			if quad_hit.is_empty():
+				continue
+			if float(main.call("_model_ray_hit_depth", rc_model, cand_origin, cand_dir)) >= 0.0:
 				continue
 			if (main.call("_unit_pick_at", candidate, 1, probe_hit) as Node3D) != corner_worker:
 				continue
@@ -5847,40 +5990,26 @@ func _run() -> void:
 								beam_pick = _beam_overlap_pick(verify_view, verify_model,
 										camera, main, gate_view)
 						if not beam_pick.is_empty():
-							_mouse_click(beam_pick[0], MOUSE_BUTTON_LEFT)
 							beam_click = beam_pick[0]
 							beam_gate_depth = float(beam_pick[1])
 							beam_unit_depth = float(beam_pick[2])
+							# Dispatch synchronously through the viewport input
+							# path and read the verdict before yielding so march
+							# drift cannot carry the Worker out of the sampled
+							# overlap into the 20 px fallback.
+							SmokeHelpers.push_mouse_click(get_tree(), beam_click, MOUSE_BUTTON_LEFT)
+							if gate_worker_id in (main.selected_ids as Array) \
+									and int(main.selected_building_id) == -1:
+								beam_verdict = true
+								break
+							if int(main.selected_building_id) == gate_id:
+								_fail("the Gate's rear beam stole the upper-body click from the corridor Worker (beam=%.3f worker=%.3f units=%s building=%s)" % [
+									beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
+								return
+							_fail("the beam-overlap click selected neither the corridor Worker nor the Gate (beam=%.3f worker=%.3f units=%s building=%s)" % [
+								beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
+							return
 			await get_tree().physics_frame
-			if beam_gate_depth >= 0.0:
-				# Three verdicts: the Worker wins (fixed rule), the Gate's
-				# beam steals (the bug this leg exists to catch), or nothing
-				# resolves — the march carried the mesh off the sampled pixel
-				# before the click landed, a stale sample to retry, never a
-				# verdict.
-				var verdict_deadline := mini(beam_deadline, Time.get_ticks_msec() + 2000)
-				while Time.get_ticks_msec() < verdict_deadline:
-					if gate_worker_id in (main.selected_ids as Array) \
-							or int(main.selected_building_id) != -1:
-						break
-					await get_tree().physics_frame
-				if gate_worker_id in (main.selected_ids as Array):
-					beam_verdict = true
-				elif int(main.selected_building_id) == gate_id:
-					# A Gate selection is a rear-beam steal only while the
-					# Worker mesh still covers the sampled pixel: when the
-					# march carried it off before the buffered click landed,
-					# the beam's win is the stale-sample case above — retry,
-					# never a verdict.
-					var cover_view := _unit_view(gate_worker_id)
-					if cover_view != null \
-							and (main.call("_unit_mesh_hit_at", beam_click).get("view") as Node3D) == cover_view:
-						_fail("the Gate's rear beam stole the upper-body click from the corridor Worker (beam=%.3f worker=%.3f units=%s building=%s)" % [
-							beam_gate_depth, beam_unit_depth, str(main.selected_ids), str(main.selected_building_id)])
-						return
-					beam_gate_depth = -1.0
-				else:
-					beam_gate_depth = -1.0
 	if not GrusBridge.stop_units(PackedInt32Array([gate_worker_id])):
 		_fail("the beam-overlap stop was not queued")
 		return
