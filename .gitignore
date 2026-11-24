@@ -14,3 +14,4 @@ build/
 /verification-output/
 /docs/superpowers/evidence/**/generated/
 /docs/superpowers/evidence/**/logs/*.log
+/docs/superpowers/evidence/**/mcp-captures/
