@@ -277,9 +277,9 @@ func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vecto
 		if PAINTED_MUZZLE_UV.has(building_kind):
 			var model := attacker.get_node_or_null("Model") as Node3D
 			if model != null:
-				var sprites := model.find_children("*", "SpriteBase3D", true, false)
+				var sprites := model.find_children("*", "Sprite3D", true, false)
 				if not sprites.is_empty():
-					var sprite := sprites[0] as SpriteBase3D
+					var sprite := sprites[0] as Sprite3D
 					if sprite != null and sprite.texture != null:
 						var uv: Vector2 = PAINTED_MUZZLE_UV[building_kind]
 						var pixel: Vector2 = uv * sprite.texture.get_size()
@@ -475,9 +475,7 @@ func _select_at(screen_position: Vector2, additive: bool) -> void:
 	var all_building_hit := _building_hit_at(screen_position, 0)
 	var unit_pick := _unit_pick_view(screen_position, 1, all_building_hit)
 	var nearest := unit_pick.get("view") as Node3D
-	var ray_origin := camera.project_ray_origin(screen_position)
-	var ray_direction := camera.project_ray_normal(screen_position)
-	if nearest != null and not _building_beats_unit(all_building_hit, nearest, ray_origin, ray_direction):
+	if nearest != null:
 		if not additive:
 			selected_ids.clear()
 		selected_building_id = -1
@@ -712,13 +710,12 @@ func _unit_pick_at(screen_position: Vector2, team_filter: int, building_hit: Dic
 ## building-hidden body of another team blocks neither — the occlusion
 ## check runs before the team rule.
 func _unit_pick_view(screen_position: Vector2, team_filter: int, building_hit: Dictionary = {}) -> Dictionary:
-	var mesh_view := _unit_mesh_hit_at(screen_position).get("view") as Node3D
+	var mesh_hit := _unit_mesh_hit_at(screen_position)
+	var mesh_view := mesh_hit.get("view") as Node3D
 	if mesh_view != null:
-		var occluded := false
-		if not building_hit.is_empty():
-			var ray_origin := camera.project_ray_origin(screen_position)
-			var ray_direction := camera.project_ray_normal(screen_position)
-			occluded = _building_beats_unit(building_hit, mesh_view, ray_origin, ray_direction)
+		var building_depth := float(building_hit.get("depth", INF))
+		var mesh_depth := float(mesh_hit.get("depth", INF))
+		var occluded := building_depth < INF and building_depth < mesh_depth
 		if not occluded:
 			if team_filter != 0 and int(mesh_view.get_meta("team_id", -1)) != team_filter:
 				# A wrong-team body still covers the click: callers must
@@ -815,10 +812,6 @@ func _enemy_pick_at(screen_position: Vector2) -> Dictionary:
 		# would have occluded the unit inside _unit_pick_view already.
 		if bool(unit_pick.get("covered", false)):
 			return {"view": null, "direct": false}
-		return {"view": enemy_building, "direct": building_direct}
-	var ray_origin := camera.project_ray_origin(screen_position)
-	var ray_direction := camera.project_ray_normal(screen_position)
-	if _building_beats_unit(all_building_hit, unit, ray_origin, ray_direction):
 		return {"view": enemy_building, "direct": building_direct}
 	return {"view": unit, "direct": bool(unit_pick.get("direct", false))}
 
@@ -1048,6 +1041,7 @@ func _restart_match() -> void:
 	_armed_order = ""
 	_ug_drawer.reset()
 	_pending_placement_requests.clear()
+	_last_placement_refusal = {}
 	_cancel_placement()
 	_fx.clear_all()
 
@@ -1275,6 +1269,7 @@ func _try_placement(screen_position: Vector2) -> void:
 	var request_id := int(GrusBridge.next_placement_request_id())
 	var kind := _placement_kind
 	if GrusBridge.place_building_request(builder, kind, anchor_x, anchor_y, request_id):
+		_last_placement_refusal = {}
 		_pending_placement_requests.append({
 			"id": request_id,
 			"generation": _placement_generation,

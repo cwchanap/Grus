@@ -1333,7 +1333,7 @@ func _sprite_pick_point(view: Node3D, sprite: Sprite3D, camera: Camera3D, viewpo
 			var candidate := camera.unproject_position(world)
 			if not Rect2(Vector2.ZERO, viewport_size).has_point(candidate) \
 					or screen_center.distance_to(candidate) <= main.CLICK_RADIUS + 5.0 \
-					or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null \
+					or (main.call("_unit_pick_at", candidate, 1) as Node3D) != null \
 					or (main.call("_building_at", candidate, 1) as Node3D) != view:
 				continue
 			var distance := screen_center.distance_to(candidate)
@@ -1375,7 +1375,7 @@ func _radius_steal_pick_point(view: Node3D, neighbor: Node3D, camera: Camera3D, 
 						or not view_rect.has_point(candidate) \
 						or neighbor_rect.has_point(candidate) \
 						or hud_rects.any(func(rect: Rect2) -> bool: return rect.has_point(candidate)) \
-						or (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != null:
+						or (main.call("_unit_pick_at", candidate, 1) as Node3D) != null:
 					continue
 				var neighbor_distance := neighbor_screen.distance_to(candidate)
 				if neighbor_distance > main.CLICK_RADIUS:
@@ -2090,16 +2090,23 @@ func _run() -> void:
 		painted_muzzle_view.set_state(true, false)
 		await get_tree().process_frame
 		var muzzle_model := painted_muzzle_view.get_node_or_null("Model") as Node3D
-		var muzzle_sprites := muzzle_model.find_children("*", "SpriteBase3D", true, false) if muzzle_model != null else []
+		var muzzle_sprites := muzzle_model.find_children("*", "Sprite3D", true, false) if muzzle_model != null else []
 		if muzzle_sprites.is_empty():
-			_fail("%s painted probe has no SpriteBase3D under Model" % weapon[0])
+			_fail("%s painted probe has no Sprite3D under Model" % weapon[0])
 			painted_muzzle_view.free()
 			return
-		var muzzle_sprite := muzzle_sprites[0] as SpriteBase3D
+		var muzzle_sprite := muzzle_sprites[0] as Sprite3D
 		var painted_muzzle: Vector3 = get_node("Main").call("_attacker_muzzle_position", painted_muzzle_view, "building")
 		var plane_offset := absf((painted_muzzle - muzzle_sprite.global_position).dot(muzzle_sprite.global_basis.z))
 		if plane_offset > 0.001:
 			_fail("%s painted tracer muzzle sits %.4f units off the sprite plane" % [weapon[0], plane_offset])
+			painted_muzzle_view.free()
+			return
+		var muzzle_view_script: Script = painted_muzzle_view.get_script()
+		var muzzle_local: Vector3 = muzzle_sprite.global_transform.affine_inverse() * painted_muzzle
+		var muzzle_pixel: Vector2 = muzzle_view_script.sprite_pixel_from_local(muzzle_sprite, muzzle_local)
+		if muzzle_pixel == Vector2.INF or not muzzle_view_script.pixel_opaque(muzzle_sprite.texture, muzzle_pixel):
+			_fail("%s painted tracer muzzle pixel %s lies outside opaque sprite art" % [weapon[0], str(muzzle_pixel)])
 			painted_muzzle_view.free()
 			return
 		painted_muzzle_view.free()
@@ -5084,7 +5091,7 @@ func _run() -> void:
 			if float(main.call("_model_ray_hit_depth", rc_model,
 					camera.project_ray_origin(candidate), camera.project_ray_normal(candidate))) >= 0.0:
 				continue
-			if (main.call("_nearest_view", "unit_views", candidate, 1) as Node3D) != corner_worker:
+			if (main.call("_unit_pick_at", candidate, 1, probe_hit) as Node3D) != corner_worker:
 				continue
 			corner_click = candidate
 			break

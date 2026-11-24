@@ -416,6 +416,14 @@ static func building_model_error(view: Node3D, kind: String, complete: bool) -> 
 		var path: String = texture.resource_path if texture != null else ""
 		if not path.ends_with(expected):
 			return "%s sprite texture %s does not end with %s" % [kind, path, expected]
+		if sprite.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			return "%s painted sprite cast_shadow=%d (expected SHADOW_CASTING_SETTING_OFF)" % [
+				kind, sprite.cast_shadow]
+		if sprite.shaded:
+			return "%s painted sprite must have shaded=false" % kind
+		if sprite.billboard != BaseMaterial3D.BILLBOARD_DISABLED:
+			return "%s painted sprite billboard=%d (expected BILLBOARD_DISABLED)" % [
+				kind, sprite.billboard]
 		return ""
 	# Only the completed Wall/Gate GLBs may prove representation through the
 	# instanced scene path: a sprite-less painted or site model must fail,

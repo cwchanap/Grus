@@ -83,11 +83,14 @@ static func art_rendered(art: GeometryInstance3D, model: Node) -> bool:
 		ancestor = ancestor.get_parent()
 	return true
 
-## Thresholded opaque mask for a texture, cached per texture resource.
+## Thresholded opaque mask for a texture, cached per file-backed texture
+## resource (anonymous runtime ImageTextures stay uncached so transient test
+## textures are not pinned until process exit).
 static func alpha_mask(texture: Texture2D) -> BitMap:
 	if texture == null:
 		return null
-	if _alpha_masks.has(texture):
+	var cacheable := not texture.resource_path.is_empty()
+	if cacheable and _alpha_masks.has(texture):
 		return _alpha_masks[texture]
 	var image := texture.get_image()
 	if image == null:
@@ -96,7 +99,8 @@ static func alpha_mask(texture: Texture2D) -> BitMap:
 		image.decompress()
 	var mask := BitMap.new()
 	mask.create_from_image_alpha(image, ALPHA_THRESHOLD)
-	_alpha_masks[texture] = mask
+	if cacheable:
+		_alpha_masks[texture] = mask
 	return mask
 
 ## Topmost opaque row's horizontal center, in texture pixel coordinates
@@ -106,7 +110,8 @@ static func alpha_mask(texture: Texture2D) -> BitMap:
 static func opaque_top_pixels(texture: Texture2D) -> Vector2:
 	if texture == null:
 		return Vector2.INF
-	if _opaque_tops.has(texture):
+	var cacheable := not texture.resource_path.is_empty()
+	if cacheable and _opaque_tops.has(texture):
 		return _opaque_tops[texture]
 	var top := Vector2.INF
 	var mask := alpha_mask(texture)
@@ -123,7 +128,8 @@ static func opaque_top_pixels(texture: Texture2D) -> Vector2:
 			if first >= 0:
 				top = Vector2((first + last) * 0.5, row)
 				break
-	_opaque_tops[texture] = top
+	if cacheable:
+		_opaque_tops[texture] = top
 	return top
 
 ## Sprite-local 3D point of a texture pixel (coordinates as returned by
@@ -155,7 +161,12 @@ static func pixel_opaque(texture: Texture2D, pixel: Vector2) -> bool:
 	var mask := alpha_mask(texture)
 	if mask == null:
 		return false
-	return mask.get_bitv(Vector2i(int(pixel.x), int(pixel.y)))
+	var col := int(pixel.x)
+	var row := int(pixel.y)
+	var size := mask.get_size()
+	if col < 0 or row < 0 or col >= size.x or row >= size.y:
+		return false
+	return mask.get_bitv(Vector2i(col, row))
 
 func _process(_delta: float) -> void:
 	if not has_meta("building_kind"):
@@ -247,7 +258,7 @@ func _notification(what: int) -> void:
 	var model := get_node_or_null("Model") as Node3D
 	if model == null:
 		return
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if sprites.is_empty():
 		return
 	var sprite := sprites[0] as Sprite3D
@@ -320,9 +331,9 @@ func _seat_health_bar() -> void:
 	var model := get_node_or_null("Model") as Node3D
 	if model == null:
 		return
-	var sprites := model.find_children("*", "SpriteBase3D", true, false)
+	var sprites := model.find_children("*", "Sprite3D", true, false)
 	if not sprites.is_empty():
-		var sprite := sprites[0] as SpriteBase3D
+		var sprite := sprites[0] as Sprite3D
 		var top := opaque_top_pixels(sprite.texture)
 		if top == Vector2.INF:
 			return
