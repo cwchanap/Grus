@@ -17,7 +17,8 @@ Unretouched 1280 × 720 viewport captures from implementation head `7a66955`, ta
 | `underground-long-name.png` | **Synthetic presentation-only L4** long-name/construction probe | 19:59:31 | `cf2c631c6f32308917de04b4164d9a456b2cdbfb3ae3ce94a7e0b3638726a9c5` |
 
 These frames predate the follow-up that edged the battlefield command hint with
-a dark outline; `command-tiles-armed.png` here is the retained before frame. See
+a dark outline; [`command-tiles-armed.png`](https://github.com/cwchanap/Grus/blob/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/framing-2026-11-15/command-tiles-armed.png)
+is the before frame, kept at the pre-cleanup commit. See
 [the command-hint contrast fix](../command-status-2026-11-15/README.md).
 
 ## Comparison and tradeoffs

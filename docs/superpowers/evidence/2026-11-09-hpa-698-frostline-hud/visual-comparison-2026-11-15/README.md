@@ -1,6 +1,6 @@
 # Frostline visual comparison follow-up
 
-> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/visual-comparison-2026-11-15) is available at the pre-cleanup commit.
+> Evidence retention: this checkout keeps none of these captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/visual-comparison-2026-11-15) is available at the pre-cleanup commit.
 
 Unretouched 1280 × 720 captures from the follow-up branch head. The final
 captures were taken from the working tree committed as `2639dc1` (fix round 2)

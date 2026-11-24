@@ -1,6 +1,6 @@
 # Opening target access and audio shutdown
 
-> Evidence retention: this checkout keeps a representative subset of the captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/access-shutdown-2026-11-15) is available at the pre-cleanup commit.
+> Evidence retention: this checkout keeps none of these captures. Filenames and results below describe the original capture set. The [complete original evidence](https://github.com/cwchanap/Grus/tree/31b1c91469745dd33126d61986a645b2b3679fea/docs/superpowers/evidence/2026-11-09-hpa-698-frostline-hud/access-shutdown-2026-11-15) is available at the pre-cleanup commit.
 
 Unretouched 1280 × 720 captures from implementation head `0d522d9`, taken 2026-11-15 using Godot 4.7.1, OpenGL 4.1 Metal compatibility renderer on Apple M1 Pro. Times are source-file modification times in UTC; images do not embed a commit.
 
