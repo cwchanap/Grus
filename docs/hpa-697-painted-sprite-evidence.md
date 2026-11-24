@@ -45,7 +45,7 @@ DISPLAY=:99 GRUS_CAPTURE_DIR=<dir> /home/opc/opt/godot/Godot_v4.7.1-stable_linux
 
 | Journey | Exit | Captures | Marker |
 | --- | --- | --- | --- |
-| smoke_test.tscn | **0** | 17 × 1280×720 incl. `lance-in-world-probe.png` / `overlap-behind-zoomout.png` (§9) | `GRUS_GODOT_SMOKE_OK …` (fix-wave green run; log retained as `logs/smoke_test-windowed-fixwave.log` — the two new stills come from this run; the pre-§9 stills come from the earlier capture round on the `b3498a9` script revision — `smoke_test.gd` has since changed through §15, log not retained) |
+| smoke_test.tscn | **0** | 17 × 1280×720 incl. `lance-in-world-probe.png` / `overlap-behind-zoomout.png` (§9) | `GRUS_GODOT_SMOKE_OK …` (fix-wave green run; log committed as `logs/smoke_test-windowed-fixwave.log`, removed by this trim — the two new stills come from this run; the pre-§9 stills come from the earlier capture round on the `b3498a9` script revision — `smoke_test.gd` has since changed through §15, log not retained) |
 | combat_lifecycle_smoke_test.tscn | **0** | 8 × 1280×720 incl. `damaged-building.png` | `GRUS_COMBAT_LIFECYCLE_SMOKE_OK …` (earlier capture round at `b3498a9`; script later updated at `5baaf96`–`c59b341`, log not retained) |
 | economy_smoke_test.tscn | **0** | 5 × 1280×720 incl. **`economy-cold.png` / `economy-warm.png`** | `GRUS_ECONOMY_SMOKE_OK bunkhouse_model=site_to_sprite overlays=cold_warm_recovery …` (`logs/economy_smoke_test-windowed.log`, run at `edca3f9`) |
 | defenses_smoke_test.tscn | **0** | — (journey has no capture hooks; none required by the brief) | `GRUS_DEFENSE_SMOKE_OK wall_ring=28 … gate_human_traversal=true …` (`logs/defenses_smoke_test-windowed.log`, run at `1df85c5`; script later updated at `7cea935`) |
@@ -73,7 +73,7 @@ From the green windowed `smoke_test` / `combat_lifecycle` runs above:
 | `radius-steal-framing.png` | opaque-roof pick beside a styled Wall (radius-steal probe framing) |
 | `mcp-inspection-sheet.png` | three-panel inspection input: (A) HPA-697 Linear mockup, (B) journey start frame, (C) construction-site frame |
 
-`GRUS_CAPTURE` log lines for every journey still above record `1280x720`; all frames come from the real Compatibility renderer (never `--headless`) — the one exception is `mcp-inspection-sheet.png`, the three-panel composition (mockup plus two journey frames), which has no capture line of its own. The smoke/combat stills come from the earlier green windowed runs at each script's `b3498a9` revision (both scripts have since changed in the review waves through §15); the economy cold/warm stills come from the `edca3f9` windowed run whose complete log is committed under `logs/`; the two fix-wave stills come from the `77d5cf5` windowed run named in §9.
+`GRUS_CAPTURE` log lines for every journey still above record `1280x720`; all frames come from the real Compatibility renderer (never `--headless`) — the one exception is `mcp-inspection-sheet.png`, the three-panel composition (mockup plus two journey frames), which has no capture line of its own. The smoke/combat stills come from the earlier green windowed runs at each script's `b3498a9` revision (both scripts have since changed in the review waves through §15); the economy cold/warm stills come from the `edca3f9` windowed run whose complete log was committed under `logs/` (removed by this trim); the two fix-wave stills come from the `77d5cf5` windowed run named in §9.
 
 ### Original run-log inventory (`docs/superpowers/evidence/hpa-697-step4/logs/`)
 
