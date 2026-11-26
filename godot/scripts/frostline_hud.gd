@@ -15,6 +15,9 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 @onready var wave_clock: TextureRect = $WaveRing/ClockIcon
 @onready var incoming_glow: Control = $IncomingGlow
 @onready var research_panel: Panel = $ResearchPanel
+@onready var rc_alert: Panel = $RcAlert
+@onready var rc_alert_label: Label = $RcAlert/RcAlertLabel
+@onready var rc_health_bar: ProgressBar = $RcAlert/RcHealthBar
 @onready var research_bar: ProgressBar = $ResearchPanel/ResearchBar
 @onready var research_label: Label = $ResearchPanel/ResearchLabel
 @onready var research_markers: RichTextLabel = $ResearchPanel/ResearchMarkers
@@ -685,6 +688,28 @@ func refresh_wave(wave: Dictionary) -> void:
 		wave_number,
 	]
 	_render_result_stats()
+
+## Research Center health chip: the Research Center is the only lose condition,
+## so once it is damaged its health stays on screen and a fresh hit flips the
+## wording to an alert. `health_ratio` is the live view's ratio (negative when
+## there is no living Research Center); `under_attack` is the controller's
+## short post-hit window. Hidden at full health, outside the in-match HUD and
+## on Result, which hides the wave card first.
+func refresh_rc_alert(health_ratio: float, under_attack: bool) -> void:
+	var show_chip := wave_panel.visible and health_ratio >= 0.0 \
+			and (under_attack or health_ratio < 0.999)
+	rc_alert.visible = show_chip
+	if not show_chip:
+		return
+	var percent := int(ceilf(health_ratio * 100.0))
+	rc_alert_label.text = "Research Center %s · %d%%" % [
+		"under attack!" if under_attack else "damaged", percent]
+	rc_health_bar.value = health_ratio
+
+## A friendly building took a hit: ping its cell on the minimap.
+func friendly_building_hit(cell: Vector2) -> void:
+	if _minimap != null and _minimap.has_method("ping_friendly_hit"):
+		_minimap.ping_friendly_hit(cell)
 
 ## The shaped width of one plain wave line in the readout's own font. Used only
 ## to choose the exact or compact index display, never to assert layout.

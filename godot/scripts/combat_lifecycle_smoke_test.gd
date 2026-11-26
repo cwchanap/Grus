@@ -218,6 +218,13 @@ func _session_label() -> Label:
 ## The compact Pause card must follow the live root viewport, not only the
 ## viewport it was entered with: centered in the named size, fully on screen,
 ## and containing a visible, enabled Resume. Returns "" when it holds.
+## The viewport the expand stretch aspect produces for a window size: the base
+## layout grows along the one axis the window is longer than 16:9 on.
+func _stretched_viewport(window_size: Vector2i) -> Vector2i:
+	var base := Vector2(TEST_VIEWPORT_SIZE)
+	var scale := minf(float(window_size.x) / base.x, float(window_size.y) / base.y)
+	return Vector2i((Vector2(window_size) / scale).round())
+
 func _paused_resize_error(target: Vector2i) -> String:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Paused":
 		return "resize probe left Paused"
@@ -991,10 +998,14 @@ func _run() -> void:
 	# locking window size, including when returning to the required 1280 x 720
 	# target, and must stay a usable composition throughout. Gameplay remains
 	# paused; only the root viewport size changes.
+	# The project stretches the 1280 x 720 layout with the expand aspect, so a
+	# 16:9 window keeps the base viewport and only other aspects grow it: the
+	# targets are a 16:10 and a 4:3 window, then back to the base size.
 	var resize_targets: Array[Vector2i] = [
-		Vector2i(1600, 900), Vector2i(960, 540), TEST_VIEWPORT_SIZE]
-	for resize_size in resize_targets:
-		get_tree().root.size = resize_size
+		Vector2i(1600, 1000), Vector2i(960, 720), TEST_VIEWPORT_SIZE]
+	for window_size in resize_targets:
+		var resize_size := _stretched_viewport(window_size)
+		get_tree().root.size = window_size
 		if not await _wait_until(
 				func(): return get_viewport().get_visible_rect().size == Vector2(resize_size),
 				5.0, "root viewport did not resize to %s" % resize_size):
@@ -1085,8 +1096,25 @@ func _run() -> void:
 		if not damaged_capture.is_empty():
 			_fail(damaged_capture)
 			return
+	# The Research Center is the only lose condition: its health chip appears
+	# once it is damaged, names the alert while the hit is fresh, mirrors the
+	# live health ratio, and is gone with the in-match HUD on Result.
+	var rc_alert := _main.get_node("HUD/RcAlert") as Panel
+	var rc_alert_label := _main.get_node("HUD/RcAlert/RcAlertLabel") as Label
+	var rc_health_bar := _main.get_node("HUD/RcAlert/RcHealthBar") as ProgressBar
+	if not await _wait_until(func(): return rc_alert.visible, 45.0,
+			"damaged Research Center never raised its HUD health chip"):
+		return
+	if not rc_alert_label.text.begins_with("Research Center ") \
+			or rc_health_bar.value <= 0.0 or rc_health_bar.value >= 0.999:
+		_fail("Research Center chip is not a damaged-health readout: '%s' %s" % [
+			rc_alert_label.text, rc_health_bar.value])
+		return
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
+		return
+	if rc_alert.visible:
+		_fail("Research Center chip stayed visible on the Result screen")
 		return
 	# Entering Result closes the drawer even though it was open before the
 	# outcome, and Tab cannot reopen it there.

@@ -17,6 +17,7 @@ const ZOOM_STEP := 6.0
 ## used: S (stop) and A (attack-move) are unit orders.
 const PAN_SPEED := 0.9
 const EDGE_PAN_MARGIN := 3.0
+const RC_ALERT_SECONDS := 5.0
 ## Normalized (u, v) muzzle coordinates on painted combat-tower sprites
 ## (top-down texture space, matching BuildingView.sprite_local_from_pixel).
 const PAINTED_MUZZLE_UV := {
@@ -75,6 +76,8 @@ var _idle_cursor := 0
 var _session_phase := ""
 var _session_winner := -2
 var _research_center_view: Node3D = null
+## Real-time end of the "under attack" window after the Research Center is hit.
+var _rc_alert_until_msec := 0
 const QUIT_FALLBACK_SECONDS := 1.0
 
 var _unit_kinds: Dictionary = {}
@@ -276,6 +279,7 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 			var attacker_kind := str(event.get("attacker_kind", ""))
 			_fx.spawn_tracer(_attacker_muzzle_position(attacker, attacker_kind), hit)
 	_fx.spawn_hit(hit)
+	_note_friendly_building_hit(event)
 	if bool(event.get("killed", false)):
 		_fx.spawn_death(hit)
 		if str(event.get("target_kind", "")) == "unit":
@@ -289,6 +293,20 @@ func _dispatch_combat_event(event: Dictionary) -> void:
 		_fx.play_cue("gun_turret_fire")
 	elif attacker_id > 0:
 		_fx.play_hit_cue()
+
+## A friendly building took damage: ping the minimap, and open the Research
+## Center alert window when it was the Research Center (the only lose
+## condition). The sim keeps combat authority; this reads the event payload.
+func _note_friendly_building_hit(event: Dictionary) -> void:
+	if str(event.get("target_kind", "")) != "building":
+		return
+	var target_id := int(event.get("target_id", -1))
+	var view := _building_view(target_id)
+	if view == null or int(view.get_meta("team_id", -1)) != 1:
+		return
+	_hud.friendly_building_hit(Vector2(float(event.get("x", 0.0)), float(event.get("y", 0.0))))
+	if target_id == _research_center_id():
+		_rc_alert_until_msec = Time.get_ticks_msec() + int(RC_ALERT_SECONDS * 1000.0)
 
 func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
 	var height := 0.8
@@ -375,6 +393,10 @@ func _refresh_hud() -> void:
 	_hud.refresh_orders(_armed_order, _playing())
 	_hud.refresh_build_placement(_placement_kind)
 	_hud.refresh_research_controls(research, _playing(), _research_center_id() > 0)
+	var core_health := -1.0
+	if _research_center_id() > 0 and _research_center_view.has_method("health_ratio"):
+		core_health = float(_research_center_view.call("health_ratio"))
+	_hud.refresh_rc_alert(core_health, Time.get_ticks_msec() < _rc_alert_until_msec)
 
 ## Tab and Esc-while-open route through `_input` (not `_unhandled_input`)
 ## and mark the event handled: `ui_focus_next` would otherwise consume Tab
@@ -1135,6 +1157,7 @@ func _restart_match() -> void:
 	_selected_building_snap = {}
 	_selected_building_snap_id = -1
 	_research_center_view = null
+	_rc_alert_until_msec = 0
 	_unit_views = {}
 	_building_views = {}
 	_friendly_unit_views = []

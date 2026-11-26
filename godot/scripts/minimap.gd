@@ -19,6 +19,11 @@ const ENEMY_COLOR := Color(1.0, 0.35, 0.3)
 const RESOURCE_COLOR := Color(0.95, 0.8, 0.3)
 const CAMERA_COLOR := Color(1, 1, 1, 0.85)
 const WAVE_PING_COLOR := Color(1.0, 0.82, 0.32, 0.9)
+const HIT_PING_COLOR := Color(1.0, 0.45, 0.3, 0.95)
+## A friendly building hit pings for this long; hits within MERGE_CELLS of a
+## live ping refresh it instead of stacking a new ring.
+const HIT_PING_SECONDS := 4.0
+const HIT_PING_MERGE_CELLS := 6.0
 
 ## Live marker counts for smoke/telemetry reads.
 var friendly_marker_count := 0
@@ -33,6 +38,7 @@ var _friendly_points := PackedVector2Array()
 var _enemy_points := PackedVector2Array()
 var _resource_points := PackedVector2Array()
 var _wave_snapshot: Dictionary = {}
+var _hit_pings: Array[Dictionary] = []
 
 @onready var _camera: Camera3D = get_node("../../Camera3D")
 
@@ -45,6 +51,15 @@ func _ready() -> void:
 ## pings and HUD text share one read — they can never disagree.
 func set_wave_snapshot(wave: Dictionary) -> void:
 	_wave_snapshot = wave
+
+## Presentation only: a friendly building was hit at this map cell.
+func ping_friendly_hit(cell: Vector2) -> void:
+	var until := Time.get_ticks_msec() + int(HIT_PING_SECONDS * 1000.0)
+	for ping in _hit_pings:
+		if (ping["cell"] as Vector2).distance_to(cell) <= HIT_PING_MERGE_CELLS:
+			ping["until"] = until
+			return
+	_hit_pings.append({"cell": cell, "until": until})
 
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.visibility_revision())
@@ -142,6 +157,12 @@ func _draw() -> void:
 		var local := _cell_to_local(point)
 		draw_circle(local, 1.6 * unit, WAVE_PING_COLOR)
 		draw_arc(local, 5.0 * unit, 0.0, TAU, 20, WAVE_PING_COLOR, 1.0)
+	var now := Time.get_ticks_msec()
+	_hit_pings = _hit_pings.filter(func(ping): return int(ping["until"]) > now)
+	for ping in _hit_pings:
+		var local := _cell_to_local(ping["cell"])
+		var pulse := fmod(float(now) / 1000.0, 1.0)
+		draw_arc(local, (3.0 + 5.0 * pulse) * unit, 0.0, TAU, 20, HIT_PING_COLOR, 1.5)
 	var corners := _camera_ground_corners()
 	if corners.size() == 4:
 		var local_corners := PackedVector2Array()
