@@ -270,7 +270,7 @@ pub fn step_waves(world: &mut World, map: &mut GridMap, seconds: f32) {
 
 /// The budget one launch spends: `wave_budget(wave)`, or floor(base × 3 / 2)
 /// once live research has reached `RESEARCH_WAVE_BOOST_PERCENT` (75% →
-/// 6,750 points). The check reads the accumulator fresh at every launch —
+/// 18,000 points). The check reads the accumulator fresh at every launch —
 /// no stored escalation flag — so staying above the threshold never stacks
 /// the multiplier and a wave committed before the crossing keeps its
 /// roster. Widened u128 arithmetic saturates to `u64::MAX` instead of

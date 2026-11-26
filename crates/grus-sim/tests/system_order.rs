@@ -1245,7 +1245,7 @@ fn a_wave_launched_before_this_ticks_research_gain_stays_unboosted() {
         phase: MatchPhase::Playing,
     });
 
-    // A fraction under the 75% mark (6,750 points): this tick's warm
+    // A fraction under the 75% mark (18,000 points): this tick's warm
     // +0.1 gain crosses it — but only in the research step, after the
     // wave step already launched the due wave on the base budget.
     world.resource_mut::<ResearchState>().points =

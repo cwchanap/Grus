@@ -5,18 +5,18 @@
 use bevy::prelude::World;
 use grus_sim::{
     Building, BuildingId, BuildingIndex, BuildingKind, CARRY_LIMIT, Carry, Dropoff, GridMap,
-    GridPos, MapFixture, PlayerCommand, ResourceId, ResourceIndex, SIM_STEP_SECONDS, TeamEconomy,
-    TeamId, UnitId, UnitIndex, WorkerTask, apply_player_command, seed_skirmish, step_construction,
-    step_economy, step_movement,
+    GridPos, MapFixture, PlayerCommand, ResourceId, ResourceIndex, ResourceKind, SIM_STEP_SECONDS,
+    TeamEconomy, TeamId, UnitId, UnitIndex, WorkerTask, apply_player_command, resource_amount,
+    seed_skirmish, step_construction, step_economy, step_movement,
 };
 
 const TEAM: TeamId = TeamId(1);
 /// Authored team-1 salvage ruin (a safe Scrap source on the central city's
 /// gather ring).
 const SALVAGE: ResourceId = ResourceId(3);
-/// Stockpile after placing the Depot and delivering the whole 400-scrap
-/// salvage: 300 starting - 75 depot cost + 400 harvested.
-const FINAL_SCRAP: u32 = 300 - 75 + 400;
+/// Stockpile after placing the Depot and delivering the whole salvage:
+/// 300 starting - 75 depot cost + the catalogue's Scrap node amount.
+const FINAL_SCRAP: u32 = 300 - 75 + resource_amount(ResourceKind::Scrap);
 
 fn scrap(world: &World) -> u32 {
     world.resource::<TeamEconomy>().0[&TEAM].stockpile.scrap

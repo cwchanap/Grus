@@ -463,7 +463,7 @@ fn furnace_burn_rate_and_efficiency_floor_are_named_constants() {
 
 #[test]
 fn research_tuning_is_catalogued_as_named_constants() {
-    assert_eq!(RESEARCH_TARGET_POINTS, 9_000);
+    assert_eq!(RESEARCH_TARGET_POINTS, 24_000);
     assert_eq!(RESEARCH_BASE_PER_SECOND, 2.0);
     assert_eq!(
         ANALYZE_COST,

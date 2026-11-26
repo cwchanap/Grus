@@ -401,7 +401,7 @@ fn ten_gather_ticks_transfer_one_whole_food() {
             .get::<ResourceSource>(source_entity)
             .unwrap()
             .remaining,
-        599
+        crate::catalog::resource_amount(ResourceKind::Food) - 1
     );
 }
 
