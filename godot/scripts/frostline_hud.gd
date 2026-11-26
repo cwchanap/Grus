@@ -142,6 +142,8 @@ var _result_phase := false
 ## Pause owns a compact, centered card; Start and Result keep the scene's full
 ## composition. The untouched rects are captured once so every non-Paused
 ## phase restores them exactly.
+## The authored layout size; project.godot stretches larger windows from it.
+const DESIGN_VIEWPORT := Vector2(1280, 720)
 const PAUSE_CARD_SIZE := Vector2(360, 208)
 var _start_card_rect := Rect2()
 var _start_label_rect := Rect2()
@@ -723,6 +725,10 @@ func friendly_building_hit(cell: Vector2) -> void:
 	if _minimap != null and _minimap.has_method("ping_friendly_hit"):
 		_minimap.ping_friendly_hit(cell)
 
+func clear_minimap_pings() -> void:
+	if _minimap != null and _minimap.has_method("clear_pings"):
+		_minimap.clear_pings()
+
 ## The shaped width of one plain wave line in the readout's own font. Used only
 ## to choose the exact or compact index display, never to assert layout.
 func _wave_line_width(text: String) -> float:
@@ -1042,6 +1048,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	var result := phase == "Result"
 	_result_phase = result
 	_apply_pause_card(paused)
+	_follow_result_viewport()
 	session_panel.visible = not playing
 	session_backdrop.visible = not playing
 	# Result is a full-screen outcome composition: hide the in-match HUD so the
@@ -1145,11 +1152,28 @@ func _follow_pause_viewport() -> void:
 	if session_panel.position != target:
 		session_panel.position = target
 
+## Restart and Quit are children of the session panel at 1280 × 720 positions,
+## while the Result bar is anchored bottom-centre. A larger window moves the
+## bar, so the panel carries the buttons along by the same amount; every other
+## phase keeps the captured Start-card position.
+func _follow_result_viewport() -> void:
+	if _pause_layout:
+		return
+	var target := _start_card_rect.position
+	if _result_phase:
+		var extra := get_viewport().get_visible_rect().size - DESIGN_VIEWPORT
+		target += Vector2(floorf(extra.x * 0.5), extra.y)
+	if session_panel.position != target:
+		session_panel.position = target
+
 ## A live window/viewport resize keeps the session phase, so the controller's
-## phase-change refresh never re-runs: only an open Pause card must follow it.
+## phase-change refresh never re-runs: an open Pause card and the Result
+## buttons must follow it.
 func _on_viewport_resized() -> void:
 	if _pause_layout:
 		_follow_pause_viewport()
+	else:
+		_follow_result_viewport()
 
 ## Every inline icon is an accessible image, never a bare glyph: the pinned
 ## RichTextLabel parser uses the tag's `alt` as that ROLE_IMAGE's name, and

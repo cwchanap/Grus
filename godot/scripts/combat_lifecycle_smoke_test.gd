@@ -1266,6 +1266,10 @@ func _run() -> void:
 		_fail("Result statistics do not keep their own space inside the bar: stats=%s restart=%s quit=%s" % [
 			result_stats.get_global_rect(), restart_rect, quit_rect])
 		return
+	if result_stats.get_content_height() > int(result_stats.size.y):
+		_fail("Result statistics wrap past their rect (content %d px in a %d px label)" % [
+			result_stats.get_content_height(), int(result_stats.size.y)])
+		return
 	var result_research: Dictionary = GrusBridge.research_snapshot()
 	var result_economy: Dictionary = GrusBridge.economy_snapshot()
 	var result_wave: Dictionary = GrusBridge.wave_snapshot()
