@@ -1,6 +1,6 @@
 //! Cross-module economy flow driven only through the public simulation API:
 //! gather → Research Center deposit → Depot delivery → full depletion →
-//! final deposit and Idle.
+//! final deposit and a walk to the next Scrap source.
 
 use bevy::prelude::World;
 use grus_sim::{
@@ -139,7 +139,8 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         "a delivery never reached the Depot"
     );
 
-    // 4. Fully deplete the salvage; the worker delivers its final load and idles.
+    // 4. Fully deplete the salvage; the worker delivers its final load and
+    //    walks on to another Scrap source instead of idling.
     drive(&mut world, &mut map, 60000, |world| {
         world.resource::<ResourceIndex>().entity(SALVAGE).is_none()
     });
@@ -148,7 +149,10 @@ fn workers_gather_deposit_and_deplete_through_public_apis() {
         "depleted salvage cell must be unblocked"
     );
     drive(&mut world, &mut map, 4000, |world| {
-        world.get::<WorkerTask>(worker_entity) == Some(&WorkerTask::Idle)
+        matches!(
+            world.get::<WorkerTask>(worker_entity),
+            Some(WorkerTask::ToSource { source, .. }) if *source != SALVAGE
+        )
     });
     assert_eq!(world.get::<Carry>(worker_entity), Some(&Carry::Empty));
     // Conservation: every harvested unit was deposited exactly once.

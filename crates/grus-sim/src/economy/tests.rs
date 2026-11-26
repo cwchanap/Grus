@@ -431,7 +431,7 @@ fn rejected_gather_preserves_the_previous_task_and_route() {
 }
 
 #[test]
-fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
+fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_moves_on() {
     let (mut world, mut map) = skirmish_world();
 
     let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
@@ -491,14 +491,18 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
         })
     );
 
+    // The final load is delivered, then the worker walks on to another scrap
+    // source instead of idling.
     for _ in 0..400 {
         step_movement(&mut world, &map, SIM_STEP_SECONDS);
         step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
-        if world.get::<WorkerTask>(worker) == Some(&WorkerTask::Idle) {
+        if matches!(
+            world.get::<WorkerTask>(worker),
+            Some(WorkerTask::ToSource { .. })
+        ) {
             break;
         }
     }
-    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
     assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
     let state = &world.resource::<TeamEconomy>().0[&TeamId(1)];
     assert_eq!(
@@ -510,6 +514,76 @@ fn depleted_source_despawns_unblocks_and_the_worker_deposits_then_idles() {
             crystals: 0,
         }
     );
+    let Some(WorkerTask::ToSource { source, .. }) = world.get::<WorkerTask>(worker).cloned() else {
+        panic!("the worker should move on to the next source");
+    };
+    assert_ne!(source, ResourceId(50));
+    let next = world
+        .resource::<ResourceIndex>()
+        .entity(source)
+        .expect("the next source is live");
+    assert_eq!(
+        world.get::<ResourceSource>(next).unwrap().kind,
+        ResourceKind::Scrap,
+        "a worker only moves on to the kind that ran dry"
+    );
+}
+
+#[test]
+fn worker_idles_when_no_other_source_of_the_kind_remains() {
+    let (mut world, mut map) = skirmish_world();
+
+    // Drop every scrap source but one tiny node next to the worker.
+    let others: Vec<(ResourceId, Entity)> = world
+        .resource::<ResourceIndex>()
+        .iter()
+        .map(|(id, entity)| (*id, *entity))
+        .filter(|(_, entity)| {
+            world
+                .get::<ResourceSource>(*entity)
+                .is_some_and(|source| source.kind == ResourceKind::Scrap)
+        })
+        .collect();
+    for (id, entity) in others {
+        for cell in world.get::<Footprint>(entity).unwrap().cells() {
+            map.set_blocked(cell, false);
+        }
+        world.resource_mut::<ResourceIndex>().remove(id);
+        world.despawn(entity);
+    }
+    let worker = world.resource::<UnitIndex>().entity(UnitId(1)).unwrap();
+    spawn_resource_source(
+        &mut world,
+        &mut map,
+        ResourceId(50),
+        ResourceKind::Scrap,
+        GridPos::new(13, 43),
+        2,
+    );
+    world
+        .entity_mut(worker)
+        .insert(SimPosition::new(map.cell_center(GridPos::new(13, 42))));
+    let outcome = apply_player_command(
+        &mut world,
+        &mut map,
+        gather_command(TeamId(1), vec![UnitId(1)], ResourceId(50)),
+    );
+    assert_eq!(outcome.accepted_units, vec![UnitId(1)]);
+
+    for _ in 0..2000 {
+        step_movement(&mut world, &map, SIM_STEP_SECONDS);
+        step_economy(&mut world, &mut map, SIM_STEP_SECONDS);
+        if world
+            .resource::<ResourceIndex>()
+            .entity(ResourceId(50))
+            .is_none()
+            && world.get::<WorkerTask>(worker) == Some(&WorkerTask::Idle)
+        {
+            break;
+        }
+    }
+    assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
+    assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
 }
 
 #[test]
