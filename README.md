@@ -161,7 +161,7 @@ godot --path godot
 
 `just run` does all of the above.
 
-On a clean clone the GDExtension is not registered until the editor has scanned the project once (`godot --headless --path godot --editor --quit-after 120`), which writes `godot/.godot/extension_list.cfg`. The library in `godot/bin/` must be re-copied after every rebuild — a stale binary fails at startup (for example a false duplicate-`UnitId` panic) rather than silently.
+The `--import` step also registers the GDExtension on a clean clone (it writes `godot/.godot/extension_list.cfg`); run it every time, since a registered extension does not mean the assets were imported. The library in `godot/bin/` must be re-copied after every rebuild — a stale binary fails at startup (for example a false duplicate-`UnitId` panic) rather than silently.
 
 ### Verification
 
