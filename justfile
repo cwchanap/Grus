@@ -13,5 +13,7 @@ run *args:
     cargo build -p grus-godot
     mkdir -p godot/bin
     cp target/debug/{{ lib }} godot/bin/{{ lib }}
-    [ -f godot/.godot/extension_list.cfg ] || godot --headless --path godot --editor --quit-after 120
+    if [ "{{ os() }}" = macos ]; then codesign --force --sign - godot/bin/{{ lib }}; fi
+    # Always import: a registered extension does not mean assets were imported (missing fonts/textures otherwise).
+    godot --headless --path godot --import
     godot --path godot "$@"
