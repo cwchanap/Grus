@@ -463,13 +463,13 @@ fn boosted_budget(wave: u64) -> u64 {
 }
 
 /// The launch budget reads live research against the catalogue-derived
-/// 6,750-point mark: a missing `ResearchState` and any total strictly
+/// 18,000-point mark: a missing `ResearchState` and any total strictly
 /// below spend `wave_budget(wave)` unchanged; exactly at the threshold —
 /// and anywhere above — spends floor(base × 3 / 2).
 #[test]
 fn launch_budget_flips_exactly_at_75_percent_research() {
     let threshold = unlock_points(RESEARCH_WAVE_BOOST_PERCENT);
-    assert_eq!(threshold, 6_750);
+    assert_eq!(threshold, 18_000);
 
     // The neutral missing-resource read is zero — never boosted.
     let mut world = World::new();
@@ -494,7 +494,7 @@ fn launch_budget_flips_exactly_at_75_percent_research() {
 
 /// A launch committed before the crossing keeps the plain roster; the
 /// FIRST launch after research reaches 75% spends the boosted budget —
-/// wave 1 at 6,749.5 buys 10 swarmers, wave 2 at 6,750 buys 18.
+/// wave 1 just under the mark buys 10 swarmers, wave 2 at the mark buys 18.
 #[test]
 fn first_launch_after_crossing_75_percent_uses_the_boosted_budget() {
     let (mut world, mut map) = seeded_world();

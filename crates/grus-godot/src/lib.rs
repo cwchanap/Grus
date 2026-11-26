@@ -2285,6 +2285,7 @@ fn wave_snapshot_dict(world: &World) -> VarDictionary {
         i64::try_from(state.next_wave).unwrap_or(i64::MAX),
     );
     dict.set("seconds_remaining", state.remaining_seconds());
+    // Simulated seconds since Start: the Result bar's match time.
     // The full duration of the interval currently counting down: the initial
     // preparation for wave 1, then the regular wave interval. Both come from
     // the Rust wave constants, never a GDScript copy.
@@ -3577,7 +3578,7 @@ mod tests {
 
     /// The per-kind `unlock_points` the catalogue serializes derives only
     /// from `BuildingSpec::research_unlock_percent` through the shared
-    /// `research::unlock_points` helper — 25% of 9,000 for Flame Tower, 50%
+    /// `research::unlock_points` helper — 25% of 24,000 for Flame Tower, 50%
     /// for Crystal Lance, 0 (always available) for every other kind. No
     /// bridge-side point table may drift from the sim's milestone rule.
     #[test]
@@ -3592,8 +3593,8 @@ mod tests {
         );
         for kind in BuildingKind::ALL {
             let expected = match kind {
-                BuildingKind::FlameTower => 2_250,
-                BuildingKind::CrystalLance => 4_500,
+                BuildingKind::FlameTower => 6_000,
+                BuildingKind::CrystalLance => 12_000,
                 _ => 0,
             };
             assert_eq!(
@@ -3605,7 +3606,7 @@ mod tests {
     }
 
     /// The engine-free triple behind `research_snapshot`: a fresh fixture
-    /// reads zero banked points at the full warm rate — ETA 9,000/2 = 4,500
+    /// reads zero banked points at the full warm rate — ETA 24,000/2 = 12,000
     /// simulated seconds — and a live heat deficit slows the rate and
     /// stretches the ETA by the same `surface_efficiency` the advancement
     /// step consumes, so HUD estimate and progression can never diverge.
@@ -3624,7 +3625,7 @@ mod tests {
         let (points, rate, eta) = research_fields(&world);
         assert_eq!(points, 0.0);
         assert_eq!(rate, RESEARCH_BASE_PER_SECOND);
-        assert_eq!(eta, 4_500.0);
+        assert_eq!(eta, 12_000.0);
 
         // Banked progress shortens the ETA by the same live rate the tick
         // advances.
@@ -3632,7 +3633,7 @@ mod tests {
         let (points, rate, eta) = research_fields(&world);
         assert_eq!(points, 100.0);
         assert_eq!(rate, RESEARCH_BASE_PER_SECOND);
-        assert_eq!(eta, (9_000.0 - 100.0) / RESEARCH_BASE_PER_SECOND);
+        assert_eq!(eta, (24_000.0 - 100.0) / RESEARCH_BASE_PER_SECOND);
 
         // A 15/16 heat deficit scales the rate and the ETA identically.
         world.insert_resource(HeatState {
@@ -3647,7 +3648,7 @@ mod tests {
             "cold surface must scale the reported rate, got {rate}"
         );
         assert!(
-            (eta - 8_900.0 / expected_rate).abs() < 1e-9,
+            (eta - 23_900.0 / expected_rate).abs() < 1e-9,
             "the ETA must stretch with the same rate, got {eta}"
         );
     }
@@ -3667,7 +3668,7 @@ mod tests {
             world.insert_resource(MatchSession { phase });
             let (points, rate, eta) = research_fields(&world);
             assert!(
-                points == 0.0 && rate > 0.0 && eta == 4_500.0,
+                points == 0.0 && rate > 0.0 && eta == 12_000.0,
                 "{phase:?} must still read numeric/stable fields, got ({points}, {rate}, {eta})"
             );
         }
@@ -3675,9 +3676,9 @@ mod tests {
         world.insert_resource(MatchSession {
             phase: MatchPhase::Playing,
         });
-        add_research(&mut world, 9_000.0);
+        add_research(&mut world, 24_000.0);
         let (points, _, eta) = research_fields(&world);
-        assert_eq!(points, 9_000.0);
+        assert_eq!(points, 24_000.0);
         assert_eq!(eta, 0.0, "a finished match reports ETA 0");
     }
 

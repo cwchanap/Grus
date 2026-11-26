@@ -234,7 +234,7 @@ pub const MIN_SURFACE_EFFICIENCY: f32 = 0.25;
 /// cooldowns.
 pub const RESEARCH_BASE_PER_SECOND: f64 = 2.0;
 /// The research point total that resolves Team-1 Victory.
-pub const RESEARCH_TARGET_POINTS: u32 = 9_000;
+pub const RESEARCH_TARGET_POINTS: u32 = 24_000;
 /// One Analyze conversion on the Research Center: 10 Crystals from the
 /// shared Team-1 stockpile. A `Cost` const must list every field —
 /// `Default` cannot initialize a const.
@@ -705,12 +705,12 @@ pub fn excavation_cost_and_seconds(level: u32) -> (Cost, u32) {
     )
 }
 
-/// Finite resource node amount for a standalone source: ration cache 600
-/// Food, salvage ruin 400 Scrap, coal seam 600 Coal.
+/// Finite resource node amount for a standalone source: ration cache 1,500
+/// Food, salvage ruin 1,000 Scrap, coal seam 1,500 Coal.
 pub const fn resource_amount(kind: ResourceKind) -> u32 {
     match kind {
-        ResourceKind::Scrap => 400,
-        ResourceKind::Food | ResourceKind::Coal => 600,
+        ResourceKind::Scrap => 1_000,
+        ResourceKind::Food | ResourceKind::Coal => 1_500,
     }
 }
 

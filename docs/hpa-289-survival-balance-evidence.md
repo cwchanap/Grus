@@ -467,3 +467,49 @@ The 1920×1080 software-GL fortress benchmark emitted its full marker:
 200 starting units, 146 end buildings and a 10.50 s sample over 18 frames
 using Mesa llvmpipe. This is a CI contract check, not the unrun 60-second
 hardware-rendered acceptance benchmark. The owner playtest remains unrun.
+
+## 13. Balance pass 2 — longer matches, longer-lasting nodes (2026-11-26)
+
+The second UAT found the win landing at 23–29 simulated minutes (target
+38–45) and every resource node on the map empty by about 13 minutes. This
+pass changes two catalogue constants and nothing else on the balance side:
+
+| Constant | Before | After |
+|---|---|---|
+| `RESEARCH_TARGET_POINTS` | 9,000 | 24,000 |
+| Scrap node (`resource_amount`) | 400 | 1,000 |
+| Food and Coal node (`resource_amount`) | 600 | 1,500 |
+
+`ANALYZE_RESEARCH_GAIN` stays at 90. Unlock and wave-growth thresholds are
+percentages of the target, so they move with it (25% = 6,000, 50% = 12,000,
+75% = 18,000). Workers now also move on to the next source of the same kind
+when theirs runs dry, so the larger nodes are actually worked.
+
+Measured with the headless scripted UAT bot (20× sim speed, the same wall
+plan every run, `UAT_WALLS=1`). The bot is not a player: it follows a fixed
+build plan and hoards its stockpile once the plan is spent. "Default" presses
+Analyze when it has spare Crystals; "always" presses it whenever it can.
+
+| Target | Variant | Result | Simulated time | Last wave / peak aliens |
+|---|---|---|---|---|
+| 9,000 (before) | default | Victory | 23.6 min | 12 / 55 |
+| 9,000 (before) | always | Victory | 23.1 min | 11 / 51 |
+| 22,000 (tried) | default | Victory | 37.4 min | 20 / 109 |
+| 22,000 (tried) | always | Victory | 37.8 min | 20 / 109 |
+| **24,000 (shipped)** | always | Victory | **38.5 min** | 21 / 132 |
+| **24,000 (shipped)** | default | **Defeat** | 42.3 min | 23 / 147 |
+
+The shipped default run lost the Research Center 44 simulated seconds before
+the win, at 23,804 of 24,000 points. It had exhausted its build plan with
+about 5,400 Scrap unspent and had no workers left, so this reads as a bot
+limit rather than a hard wall, but it is the honest edge of the current
+numbers: waves 21–23 at 130–150 aliens are a lot for a fixed defense.
+If the owner playtest finds the last minutes too harsh, lowering
+`RESEARCH_TARGET_POINTS` is a one-constant change (22,000 won at 37.4 min,
+just under the window).
+
+With the larger nodes the last Scrap source ran dry at about 17.6 minutes in
+the default run (was about 9.6), and Coal and Food last the whole match.
+
+Not covered here: the owner playtest and the 60-second hardware-rendered
+benchmark remain unrun.

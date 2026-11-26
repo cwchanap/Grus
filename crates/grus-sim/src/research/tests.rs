@@ -149,7 +149,7 @@ fn add_research_clamps_at_the_target_and_resolves_victory() {
     });
 
     add_research(&mut world, f64::from(RESEARCH_TARGET_POINTS) - 10.0);
-    assert_eq!(points(&world), 8_990.0);
+    assert_eq!(points(&world), f64::from(RESEARCH_TARGET_POINTS) - 10.0);
     assert_eq!(world.resource::<MatchSession>().phase, MatchPhase::Playing);
 
     // The final grant overshoots and lands exactly on the cap.
@@ -223,15 +223,15 @@ fn passive_step_crossing_the_target_resolves_victory() {
 }
 
 /// Thresholds derive from `RESEARCH_TARGET_POINTS × percent / 100` in the
-/// one helper — 25% → 2,250, 50% → 4,500, 75% → 6,750, 100% → 9,000 — and
+/// one helper — 25% → 6,000, 50% → 12,000, 75% → 18,000, 100% → 24,000 — and
 /// every catalogue kind is always-available except the advanced towers:
 /// FlameTower at 25%, CrystalLance at 50%.
 #[test]
 fn unlock_thresholds_derive_from_the_catalogue_percent() {
     assert_eq!(unlock_points(0), 0);
-    assert_eq!(unlock_points(25), 2_250);
-    assert_eq!(unlock_points(50), 4_500);
-    assert_eq!(unlock_points(75), 6_750);
+    assert_eq!(unlock_points(25), 6_000);
+    assert_eq!(unlock_points(50), 12_000);
+    assert_eq!(unlock_points(75), 18_000);
     assert_eq!(unlock_points(100), RESEARCH_TARGET_POINTS);
 
     let (world, _map) = battlefield();
@@ -520,7 +520,7 @@ fn repeated_analyze_spends_and_banks_each_time() {
 }
 
 /// One Analyze carries the point total across each milestone threshold —
-/// 25% (2,250), 50% (4,500) and 75% (6,750) — seeded just below so the
+/// 25% (6,000), 50% (12,000) and 75% (18,000) — seeded just below so the
 /// single +90 grant is what crosses the derived boundary.
 #[test]
 fn analyze_crosses_each_milestone_threshold() {

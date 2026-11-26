@@ -14,7 +14,7 @@ The first recorded desktop target is **Linux x86_64** with **Godot 4.7.1** and t
 
 ## HPA-471 economy skirmish
 
-The runtime fixture has one human start: four Workers around one Research Center, 18 finite resource sources (ration caches/salvage ruins/coal seams, plus northwest/southeast expansion nodes), and starting stockpiles of 200 Food / 300 Scrap / 150 Coal / 0 Crystals. Aliens enter from the four fixture-authored map edges during the survival match; the eastern deposits are human expansion opportunities. Crystals are a stockpile/cost field earned by killing aliens — there are no crystal map nodes or gathering routes.
+The runtime fixture has one human start: four Workers around one Research Center, 18 finite resource sources (1,500-Food ration caches, 1,000-Scrap salvage ruins and 1,500-Coal seams, plus northwest/southeast expansion nodes). A worker whose source runs dry delivers its load and walks on to the nearest explored source of the same kind it can reach, and only idles when none is left, and starting stockpiles of 200 Food / 300 Scrap / 150 Coal / 0 Crystals. Aliens enter from the four fixture-authored map edges during the survival match; the eastern deposits are human expansion opportunities. Crystals are a stockpile/cost field earned by killing aliens — there are no crystal map nodes or gathering routes.
 
 ## HPA-448 central-city relayout (historical layout before HPA-449)
 
@@ -61,7 +61,7 @@ Systems tick in a fixed order (waves → underground → heat → combat → mov
 
 Combat runs in `grus-sim` on the same fixed tick: melee/ranged range and cooldowns, attack-move acquisition with pursuit, and building attacks that path to the nearest walkable perimeter and range-check against `Footprint::closest_point`. Godot stays presentational: contextual right-click attacks on enemy units/buildings, `A`-armed attack-move, health bars and role markers on unit/building views, and transient tracer/hit/death effects with a generated audio blip — all driven by Playing-gated `CombatEvents` drained from the bridge.
 
-The match lifecycle is simulated-side: the skirmish boots into **Start** (gameplay orders reject with `SessionLocked`), the Start button moves to **Playing**, and `Esc` or the Pause button toggles **Paused** (sim and cosmetics freeze; interpolation collapses `previous = current` so nothing oscillates). In HPA-449, aliens destroying the sole Research Center settles **Result/Defeat**; since HPA-188, reaching the 9,000-point research target settles **Result/Victory** for Team 1 through the same session path. Later gameplay mutation is rejected. Restart/Quit belong to Result: Restart reseeds one fresh match — no duplicate nodes, stale ids, leftover selection/control groups, or lingering effects; Quit exits the app. Workers, buildings, and construction sites die with full economy/occupancy/queue cleanup.
+The match lifecycle is simulated-side: the skirmish boots into **Start** (gameplay orders reject with `SessionLocked`), the Start button moves to **Playing**, and `Esc` or the Pause button toggles **Paused** (sim and cosmetics freeze; interpolation collapses `previous = current` so nothing oscillates). In HPA-449, aliens destroying the sole Research Center settles **Result/Defeat**; since HPA-188, reaching the 24,000-point research target settles **Result/Victory** for Team 1 through the same session path. Later gameplay mutation is rejected. Restart/Quit belong to Result: Restart reseeds one fresh match — no duplicate nodes, stale ids, leftover selection/control groups, or lingering effects; Quit exits the app. Workers, buildings, and construction sites die with full economy/occupancy/queue cleanup.
 
 Fog of war is owned by HPA-473 (next section). HPA-445 removed the economic AI and HPA-449 removed the passive Team-2 base; the wave director now spawns actual alien attackers. Fog still controls which live aliens and markers are visible.
 
@@ -100,7 +100,7 @@ Completed Team-1 buildings demand heat; the Research Center supplies **+15** whi
 
 ## HPA-188 research, advanced towers and Victory
 
-The survival match is winnable: while **Playing**, Team 1 banks monotonic **research points** toward a **9,000-point** target. Passive research accrues at **2 points per simulated second × surface efficiency + 1 point/s per completed Lab**, so a cold base slows only the surface term (like training and turret cooldowns), never the underground Lab contribution. The top-centre research card shows points, floor-percent and a live **ETA = remaining ÷ live rate** — an estimate that follows the heat-scaled rate, never a fixed countdown. Research freezes in Start/Paused/Result and resets to zero on restart.
+The survival match is winnable: while **Playing**, Team 1 banks monotonic **research points** toward a **24,000-point** target. Passive research accrues at **2 points per simulated second × surface efficiency + 1 point/s per completed Lab**, so a cold base slows only the surface term (like training and turret cooldowns), never the underground Lab contribution. The top-centre research card shows points, floor-percent and a live **ETA = remaining ÷ live rate** — an estimate that follows the heat-scaled rate, never a fixed countdown. Research freezes in Start/Paused/Result and resets to zero on restart.
 
 The **Analyze** button in that card is enabled while Playing whenever the owned, completed Research Center exists — no selection is needed. Each press queues an immediate conversion of **10 Crystals into +90 points** through the ordinary command/feedback path — never a production queue. Affordability is not pre-checked in the UI, so an unaffordable press surfaces `Command rejected (InsufficientResources)` (reject code 8) with the stockpile and points untouched.
 
@@ -108,14 +108,14 @@ Milestones derive from the monotonic total — no stored unlock flags:
 
 | Research | Effect |
 | --- | --- |
-| 25% (2,250) | **Flame Tower** buildable (2×2, 120 Scrap + 60 Coal, 25 s, range 3, +10 vs Swarmer, heat demand 3) |
-| 50% (4,500) | **Crystal Lance** buildable (2×2, 150 Scrap + 40 Crystals, 30 s, range 10, +15 vs Brute, heat demand 4) |
-| 75% (6,750) | Every *subsequently launched* wave gets a 1.5× threat budget; already-committed rosters are unchanged |
-| 100% (9,000) | Team-1 **Victory** through the existing MatchSession Result overlay |
+| 25% (6,000) | **Flame Tower** buildable (2×2, 120 Scrap + 60 Coal, 25 s, range 3, +10 vs Swarmer, heat demand 3) |
+| 50% (12,000) | **Crystal Lance** buildable (2×2, 150 Scrap + 40 Crystals, 30 s, range 10, +15 vs Brute, heat demand 4) |
+| 75% (18,000) | Every *subsequently launched* wave gets a 1.5× threat budget; already-committed rosters are unchanged |
+| 100% (24,000) | Team-1 **Victory** through the existing MatchSession Result overlay |
 
 Locked build buttons render their catalogue-derived `Unlocks at N research` threshold and disable while the live total is below it; sim placement validation stays authoritative either way. Victory and the alien-destruction Defeat share one rule: the first settled Result wins — a lethal hit on the Research Center in the same tick as the target's reach still defeats.
 
-The Godot boundary is covered inside the existing smokes: the bridge smoke pins the research HUD geometry, the exact `research_snapshot` surface (numeric finite `points`/`rate_per_second`/`eta_seconds`), catalogue-bound tower locks/tooltips and a real-input Analyze leg; the combat lifecycle smoke exercises the fresh **zero-Crystal** Analyze press through real viewport input (typed reject 8, no spend, no +90 jump), live bar/ETA progress at 20×, and the real `_restart_match` path returning research to zero. Full 9,000-point Victory, exact milestone thresholds and the 75% wave escalation are pure-Rust `grus-sim` contracts — a natural run is ~4,500 simulated seconds, far beyond a 45–90 s CI smoke.
+The Godot boundary is covered inside the existing smokes: the bridge smoke pins the research HUD geometry, the exact `research_snapshot` surface (numeric finite `points`/`rate_per_second`/`eta_seconds`), catalogue-bound tower locks/tooltips and a real-input Analyze leg; the combat lifecycle smoke exercises the fresh **zero-Crystal** Analyze press through real viewport input (typed reject 8, no spend, no +90 jump), live bar/ETA progress at 20×, and the real `_restart_match` path returning research to zero. Full 24,000-point Victory, exact milestone thresholds and the 75% wave escalation are pure-Rust `grus-sim` contracts — a natural run is ~38–45 simulated minutes, far beyond a 45–90 s CI smoke.
 
 ## HPA-288 underground levels and rooms
 
@@ -212,6 +212,7 @@ The full reference:
 - Train buttons: queue Worker on a selected Research Center, or Guard/Rifleman on a selected Barracks
 - Analyze button (top-centre research card): enabled while Playing whenever the owned Research Center is alive — no selection required — converts 10 Crystals into +90 research points; the sim's typed reject shows in the status line when Crystals are short
 - Idle button (top right): selects and navigates to the next idle worker
+- Underground button (above the minimap): the same toggle as `Tab`
 
 HUD controls consume their mouse events so UI interaction does not leak into world commands.
 
