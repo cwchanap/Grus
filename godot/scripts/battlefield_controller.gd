@@ -59,6 +59,7 @@ var _control_groups: Dictionary = {}
 var _feedback_revision := -1
 var _left_press_position := Vector2.ZERO
 var _left_pressed := false
+var _scrolled_last_frame := false
 var _placement_kind := ""
 var _placement_generation := 0
 var _pending_placement_requests: Array[Dictionary] = []
@@ -151,7 +152,14 @@ func _exit_tree() -> void:
 		tree.auto_accept_quit = _previous_auto_accept_quit
 
 func _process(delta: float) -> void:
-	_scroll_camera(delta)
+	var scrolled := _scroll_camera(delta)
+	# The placement ghost follows the pointer's ground point, which moves with
+	# the camera even when the pointer is still. The camera's projection only
+	# catches up on the frame after it moves, so refresh once more after the
+	# last scrolling frame.
+	if _placement_kind != "" and (scrolled or _scrolled_last_frame):
+		_update_placement_preview(get_viewport().get_mouse_position())
+	_scrolled_last_frame = scrolled
 	_index_views()
 	var placement_feedback_handled := _consume_placement_results()
 	var revision := int(GrusBridge.command_feedback_revision())
@@ -516,24 +524,27 @@ func _handle_key(event: InputEventKey) -> void:
 ## only counts while the window is focused, the pointer is inside the viewport
 ## and no drag is in progress. A headless display server reports the pointer
 ## parked at (0, 0), so it never edge-scrolls and smokes keep a still camera.
-func _scroll_camera(delta: float) -> void:
+## Returns whether the camera moved this frame.
+func _scroll_camera(delta: float) -> bool:
 	if _shutting_down:
-		return
+		return false
 	var direction := Vector2.ZERO
 	direction.x = float(Input.is_physical_key_pressed(KEY_RIGHT)) \
 			- float(Input.is_physical_key_pressed(KEY_LEFT))
 	direction.y = float(Input.is_physical_key_pressed(KEY_DOWN)) \
 			- float(Input.is_physical_key_pressed(KEY_UP))
 	if direction == Vector2.ZERO and not _left_pressed \
+			and not Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE) \
 			and DisplayServer.get_name() != "headless" and DisplayServer.window_is_focused():
 		direction = _edge_direction(get_viewport().get_mouse_position())
 	if direction == Vector2.ZERO:
-		return
+		return false
 	var step := camera.size * PAN_SPEED * delta
 	camera.position.x += direction.x * step
 	camera.position.z += direction.y * step
 	_clamp_camera_to_map()
 	camera.reset_physics_interpolation()
+	return true
 
 ## Keep the ground point under the viewport center on the map, so a resting
 ## edge or a held key cannot scroll the battlefield out of view.
@@ -1173,6 +1184,7 @@ func _restart_match() -> void:
 	_last_placement_verdict = {}
 	_cancel_placement()
 	_fx.clear_all()
+	_hud.clear_minimap_pings()
 
 func _selected_worker_ids() -> Array[int]:
 	var workers: Array[int] = []

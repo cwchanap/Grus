@@ -61,6 +61,10 @@ func ping_friendly_hit(cell: Vector2) -> void:
 			return
 	_hit_pings.append({"cell": cell, "until": until})
 
+## A restarted match must not show the last match's attack locations.
+func clear_pings() -> void:
+	_hit_pings.clear()
+
 func _process(_delta: float) -> void:
 	var revision := int(GrusBridge.visibility_revision())
 	if revision != _revision:

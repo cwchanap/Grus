@@ -111,6 +111,35 @@ func _run() -> void:
 	if str(_main._placement_kind) != "Gate":
 		_fail("successful Gate placement did not keep placement armed")
 		return
+	# Panning with an arrow key while placement is armed must re-aim the ghost at
+	# the pointer's new ground point, or a click would build away from it.
+	var pan_camera: Camera3D = _main.camera
+	var pan_home := pan_camera.position
+	var pan_key := InputEventKey.new()
+	pan_key.keycode = KEY_RIGHT
+	pan_key.physical_keycode = KEY_RIGHT
+	pan_key.pressed = true
+	Input.parse_input_event(pan_key)
+	for _frame in range(6):
+		await get_tree().process_frame
+	pan_key.pressed = false
+	Input.parse_input_event(pan_key)
+	for _frame in range(3):
+		await get_tree().process_frame
+	var pan_moved := pan_camera.position.distance_to(pan_home)
+	var pan_preview_position: Vector3 = _main._preview_box.position
+	var pan_preview_visible: bool = _main._preview_box.visible
+	_main._update_placement_preview(_main.get_viewport().get_mouse_position())
+	var pan_stale: bool = _main._preview_box.position != pan_preview_position \
+			or _main._preview_box.visible != pan_preview_visible
+	pan_camera.position = pan_home
+	pan_camera.reset_physics_interpolation()
+	if pan_moved < 1.0:
+		_fail("arrow-key pan did not move the camera while placement was armed (moved %.2f)" % pan_moved)
+		return
+	if pan_stale:
+		_fail("placement ghost was not refreshed after the camera panned with a still pointer")
+		return
 	var placement_revision := int(GrusBridge.command_feedback_revision())
 	await _click_cell(_gate_cell + Vector2i(0, -3), MOUSE_BUTTON_RIGHT)
 	if str(_main._placement_kind) != "" \
