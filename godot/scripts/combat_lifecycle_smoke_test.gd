@@ -1113,8 +1113,10 @@ func _run() -> void:
 	if not await _wait_until(func(): return str(GrusBridge.session_snapshot().get("phase", "")) == "Result", 45.0,
 			"surviving aliens never destroyed the sole Research Center"):
 		return
-	if rc_alert.visible:
-		_fail("Research Center chip stayed visible on the Result screen")
+	# The controller hides the chip in _process, which can lag the physics-frame
+	# poll that saw the phase flip, so wait for it like the drawer below.
+	if not await _wait_until(func(): return not rc_alert.visible, 5.0,
+			"Research Center chip stayed visible on the Result screen"):
 		return
 	# Entering Result closes the drawer even though it was open before the
 	# outcome, and Tab cannot reopen it there.

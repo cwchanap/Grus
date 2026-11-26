@@ -582,6 +582,20 @@ fn worker_idles_when_no_other_source_of_the_kind_remains() {
             break;
         }
     }
+    assert!(
+        world
+            .resource::<ResourceIndex>()
+            .entity(ResourceId(50))
+            .is_none(),
+        "the only source must actually be harvested out"
+    );
+    assert_eq!(
+        world.resource::<TeamEconomy>().0[&TeamId(1)]
+            .stockpile
+            .scrap,
+        302,
+        "the final load reached the stockpile"
+    );
     assert_eq!(world.get::<WorkerTask>(worker), Some(&WorkerTask::Idle));
     assert_eq!(world.get::<Carry>(worker), Some(&Carry::Empty));
 }
