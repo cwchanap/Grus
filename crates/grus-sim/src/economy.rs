@@ -51,25 +51,42 @@ pub struct ResourceSource {
     pub remaining: u32,
 }
 
-/// Stable lookup from `ResourceId` to its entity, mirroring `UnitIndex`.
+/// Stable lookup from `ResourceId` to its entity, mirroring `UnitIndex`. It
+/// also remembers the kind of every source that ran dry, so a worker whose
+/// source vanished knows what to look for next. The whole index is dropped
+/// with the fixture, which clears that memory.
 #[derive(Debug, Default, Resource)]
-pub struct ResourceIndex(HashMap<ResourceId, Entity>);
+pub struct ResourceIndex {
+    sources: HashMap<ResourceId, Entity>,
+    depleted: HashMap<ResourceId, ResourceKind>,
+}
 
 impl ResourceIndex {
     pub fn entity(&self, id: ResourceId) -> Option<Entity> {
-        self.0.get(&id).copied()
+        self.sources.get(&id).copied()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&ResourceId, &Entity)> {
-        self.0.iter()
+        self.sources.iter()
     }
 
     pub(crate) fn insert(&mut self, id: ResourceId, entity: Entity) {
-        self.0.insert(id, entity);
+        self.sources.insert(id, entity);
     }
 
+    #[cfg(test)]
     pub(crate) fn remove(&mut self, id: ResourceId) {
-        self.0.remove(&id);
+        self.sources.remove(&id);
+    }
+
+    /// Removes a source that ran dry and remembers its kind.
+    fn remove_depleted(&mut self, id: ResourceId, kind: ResourceKind) {
+        self.sources.remove(&id);
+        self.depleted.insert(id, kind);
+    }
+
+    fn depleted_kind(&self, id: ResourceId) -> Option<ResourceKind> {
+        self.depleted.get(&id).copied()
     }
 }
 
@@ -622,17 +639,17 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
         let exists = world
             .get_resource::<ResourceIndex>()
             .is_some_and(|index| index.entity(source).is_some());
-        if exists {
-            world
-                .entity_mut(entity)
-                .insert(WorkerTask::Gathering { source });
-        } else {
-            world.entity_mut(entity).insert(WorkerTask::Idle);
-        }
         // Arrival is cell-based while the order completes at the cell
         // centre; drop the finished leg so the worker does not keep walking
         // to the waypoint past its slot.
         world.entity_mut(entity).remove::<MoveOrder>();
+        if exists {
+            world
+                .entity_mut(entity)
+                .insert(WorkerTask::Gathering { source });
+        } else if !move_on_to_next_source(world, map, entity, source) {
+            world.entity_mut(entity).insert(WorkerTask::Idle);
+        }
     }
 
     for (entity, source) in dropoff_arrivals {
@@ -656,9 +673,15 @@ pub fn step_economy(world: &mut World, map: &mut GridMap, seconds: f32) {
                 }
             }
             Err(reason) => {
-                // The route back is impossible: full cleanup with typed
+                // A source that ran dry sends the worker to the next one;
+                // any other impossible route is a full cleanup with typed
                 // feedback instead of idling raw and retrying every tick.
-                idle_worker_on_route_failure(world, entity, reason);
+                let source_gone = world
+                    .get_resource::<ResourceIndex>()
+                    .is_some_and(|index| index.entity(source).is_none());
+                if !(source_gone && move_on_to_next_source(world, map, entity, source)) {
+                    idle_worker_on_route_failure(world, entity, reason);
+                }
             }
         }
     }
@@ -792,11 +815,87 @@ fn leave_gathering(
 ) {
     world.entity_mut(worker).insert(GatherProgress::default());
     if carry.amount_or_zero() == 0 {
-        world.entity_mut(worker).insert(WorkerTask::Idle);
         world.entity_mut(worker).remove::<MoveOrder>();
+        if !move_on_to_next_source(world, map, worker, source) {
+            world.entity_mut(worker).insert(WorkerTask::Idle);
+        }
         return;
     }
     reroute_dropoff_worker(world, map, worker, source);
+}
+
+/// A worker whose source ran dry walks on to the nearest explored source of
+/// the same kind that it can reach, instead of idling. Runs once per decision
+/// point (deposit after depletion, arrival at a vanished source, an
+/// empty-handed gatherer losing its source) — never per tick. Returns false,
+/// changing nothing, when the depleted kind is unknown or no other source
+/// qualifies; the caller then idles the worker as before.
+fn move_on_to_next_source(
+    world: &mut World,
+    map: &GridMap,
+    worker: Entity,
+    depleted: ResourceId,
+) -> bool {
+    let Some(kind) = world
+        .get_resource::<ResourceIndex>()
+        .and_then(|index| index.depleted_kind(depleted))
+    else {
+        return false;
+    };
+    let (Some(team), Some(position)) = (
+        world.get::<Unit>(worker).map(|unit| unit.team),
+        world.get::<SimPosition>(worker).map(|state| state.current),
+    ) else {
+        return false;
+    };
+    let start = map.world_to_cell(position);
+
+    let mut candidates: Vec<(f32, ResourceId, Footprint)> = Vec::new();
+    if let Some(index) = world.get_resource::<ResourceIndex>() {
+        for (id, entity) in index.iter() {
+            let (Some(source), Some(footprint)) = (
+                world.get::<ResourceSource>(*entity),
+                world.get::<Footprint>(*entity).copied(),
+            ) else {
+                continue;
+            };
+            if source.kind != kind || source.remaining == 0 || !explored_by(world, team, footprint)
+            {
+                continue;
+            }
+            let Some(&cell) = footprint.cells().first() else {
+                continue;
+            };
+            let distance = map.cell_center(cell).distance_squared(position);
+            candidates.push((distance, *id, footprint));
+        }
+    }
+    candidates.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+
+    let used = seed_used_excluding(world, map, worker);
+    let keys: HashSet<GridPos> = used.keys().copied().collect();
+    for (_, source, footprint) in candidates {
+        let slots = approach_slots(map, footprint, &keys, footprint.perimeter_cells().len());
+        let Ok((slot, route)) = pick_reachable_slot(map, team, start, &slots) else {
+            continue;
+        };
+        world.entity_mut(worker).insert((
+            WorkerTask::ToSource { source, slot },
+            GatherProgress::default(),
+        ));
+        world.entity_mut(worker).remove::<MoveOrder>();
+        if !route.is_empty() {
+            world.entity_mut(worker).insert(MoveOrder {
+                waypoints: route,
+                next: 0,
+                goal: slot,
+                map_revision: map.revision(),
+                last_failed_replan: None,
+            });
+        }
+        return true;
+    }
+    false
 }
 
 /// Routes a worker that just deposited back to its requested source, if the
@@ -860,12 +959,12 @@ fn deplete_source(world: &mut World, map: &mut GridMap, source_entity: Entity) {
     let Some(source) = world.get::<ResourceSource>(source_entity) else {
         return;
     };
-    let id = source.id;
+    let (id, kind) = (source.id, source.kind);
     for cell in footprint.cells() {
         map.set_blocked(cell, false);
     }
     if let Some(mut index) = world.get_resource_mut::<ResourceIndex>() {
-        index.remove(id);
+        index.remove_depleted(id, kind);
     }
     world.despawn(source_entity);
 }
