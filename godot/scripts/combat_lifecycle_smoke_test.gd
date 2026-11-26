@@ -248,23 +248,37 @@ func _stretched_viewport(window_size: Vector2i) -> Vector2i:
 	return Vector2i((Vector2(window_size) / scale).round())
 
 ## The Result bar must stay a bottom bar inside the live viewport with both
-## actions inside it, clear of the statistics and of each other. Returns ""
-## when it holds.
+## actions usable inside it, clear of the statistics and of each other, and the
+## banner must stay centered over it. Returns "" when it holds.
 func _result_resize_error(target: Vector2i) -> String:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Result":
 		return "resize probe left Result"
 	var view := Rect2(Vector2.ZERO, Vector2(target))
 	var bar := (_main.get_node("HUD/ResultBar") as Control).get_global_rect()
 	var stats := (_main.get_node("HUD/ResultBar/ResultStats") as Control).get_global_rect()
-	var restart := _button("HUD/SessionPanel/RestartButton").get_global_rect()
-	var quit := _button("HUD/SessionPanel/QuitButton").get_global_rect()
+	var restart_button := _button("HUD/SessionPanel/RestartButton")
+	var quit_button := _button("HUD/SessionPanel/QuitButton")
+	var restart := restart_button.get_global_rect()
+	var quit := quit_button.get_global_rect()
+	var banner := (_main.get_node("HUD/SessionBackdrop/ResultBanner") as Control).get_global_rect()
+	var title := (_main.get_node("HUD/SessionBackdrop/ResultTitle") as Control).get_global_rect()
 	if not view.encloses(bar) or bar.position.y < float(target.y) * 0.75:
 		return "Result bar is not a bottom bar in the %s viewport: bar=%s" % [target, bar]
+	if not restart_button.is_visible_in_tree() or not quit_button.is_visible_in_tree() \
+			or restart_button.disabled or quit_button.disabled:
+		return "Result actions are hidden or disabled in the %s viewport" % [target]
 	if not bar.encloses(restart) or not bar.encloses(quit) \
 			or restart.intersects(quit) \
 			or restart.intersects(stats) or quit.intersects(stats):
 		return "Result actions left the bar or overlap in the %s viewport: restart=%s quit=%s stats=%s bar=%s" % [
 			target, restart, quit, stats, bar]
+	# The banner composition shares the bar's horizontal center, with its title
+	# still on the banner cloth.
+	if absf(banner.get_center().x - bar.get_center().x) > 1.0 \
+			or absf(banner.get_center().x - view.get_center().x) > 1.0 \
+			or not banner.encloses(title) or not view.encloses(banner):
+		return "Result banner is not centered with the bar in the %s viewport: banner=%s title=%s bar=%s" % [
+			target, banner, title, bar]
 	return ""
 
 func _paused_resize_error(target: Vector2i) -> String:

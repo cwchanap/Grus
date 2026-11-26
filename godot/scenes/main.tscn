@@ -956,22 +956,30 @@ color = Color(0.02, 0.03, 0.05, 0.5)
 
 [node name="ResultBanner" type="TextureRect" parent="HUD/SessionBackdrop"]
 visible = false
-layout_mode = 0
-offset_left = 290.0
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -350.0
 offset_top = 40.0
-offset_right = 990.0
+offset_right = 350.0
 offset_bottom = 507.0
+grow_horizontal = 2
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
 
 [node name="ResultTitle" type="Label" parent="HUD/SessionBackdrop"]
 visible = false
-layout_mode = 0
-offset_left = 360.0
+layout_mode = 1
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -280.0
 offset_top = 170.0
-offset_right = 920.0
+offset_right = 280.0
 offset_bottom = 286.0
+grow_horizontal = 2
 mouse_filter = 2
 theme_type_variation = &"Header"
 theme_override_colors/font_color = Color(1, 0.97, 0.9, 1)
