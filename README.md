@@ -206,6 +206,7 @@ The full reference:
 - `1` through `9`: recall a control group
 - Mouse wheel: zoom
 - Middle drag: pan the camera
+- Arrow keys, or resting the mouse on a window edge: pan the camera (WASD stays free for unit orders); the view stays on the map
 - Minimap (bottom left): left-click recenters the camera on that map cell (view only — no commands, no reveal)
 - Build buttons (bottom panel): arm placement for Bunkhouse/Depot/Barracks/Gun Turret/Coal Furnace plus the research-gated Flame Tower (25%) and Crystal Lance (50%); Wall and Gate placement stays armed for consecutive left-clicks. Locked towers show their unlock threshold in the tooltip and enable when banked research reaches it. The ground preview renders green when valid and red when blocked; right-click or `Esc` cancels placement without issuing a world command.
 - Train buttons: queue Worker on a selected Research Center, or Guard/Rifleman on a selected Barracks
