@@ -5,12 +5,18 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 ## art-geometry predicate — the one cache used by both health-bar seating
 ## and camera-ray silhouette picking.
 const BuildingView := preload("res://scripts/building_view.gd")
+const MinimapView := preload("res://scripts/minimap.gd")
 
 const CLICK_RADIUS := 20.0
 const DRAG_THRESHOLD := 6.0
 const MIN_CAMERA_SIZE := 24.0
 const MAX_CAMERA_SIZE := 120.0
 const ZOOM_STEP := 6.0
+## Arrow keys and the screen edge pan at this many camera heights per second,
+## so the apparent speed stays constant at every zoom level. WASD is not
+## used: S (stop) and A (attack-move) are unit orders.
+const PAN_SPEED := 0.9
+const EDGE_PAN_MARGIN := 3.0
 ## Normalized (u, v) muzzle coordinates on painted combat-tower sprites
 ## (top-down texture space, matching BuildingView.sprite_local_from_pixel).
 const PAINTED_MUZZLE_UV := {
@@ -139,7 +145,8 @@ func _exit_tree() -> void:
 	if tree != null:
 		tree.auto_accept_quit = _previous_auto_accept_quit
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_scroll_camera(delta)
 	_index_views()
 	var placement_feedback_handled := _consume_placement_results()
 	var revision := int(GrusBridge.command_feedback_revision())
@@ -480,6 +487,54 @@ func _handle_key(event: InputEventKey) -> void:
 		selected_ids.append(int(id))
 	selected_building_id = -1
 	_apply_selection()
+
+## Arrow keys and a mouse resting on the window edge pan the camera. The edge
+## only counts while the window is focused, the pointer is inside the viewport
+## and no drag is in progress. A headless display server reports the pointer
+## parked at (0, 0), so it never edge-scrolls and smokes keep a still camera.
+func _scroll_camera(delta: float) -> void:
+	if _shutting_down:
+		return
+	var direction := Vector2.ZERO
+	direction.x = float(Input.is_physical_key_pressed(KEY_RIGHT)) \
+			- float(Input.is_physical_key_pressed(KEY_LEFT))
+	direction.y = float(Input.is_physical_key_pressed(KEY_DOWN)) \
+			- float(Input.is_physical_key_pressed(KEY_UP))
+	if direction == Vector2.ZERO and not _left_pressed \
+			and DisplayServer.get_name() != "headless" and DisplayServer.window_is_focused():
+		direction = _edge_direction(get_viewport().get_mouse_position())
+	if direction == Vector2.ZERO:
+		return
+	var step := camera.size * PAN_SPEED * delta
+	camera.position.x += direction.x * step
+	camera.position.z += direction.y * step
+	_clamp_camera_to_map()
+	camera.reset_physics_interpolation()
+
+## Keep the ground point under the viewport center on the map, so a resting
+## edge or a held key cannot scroll the battlefield out of view.
+func _clamp_camera_to_map() -> void:
+	var forward := -camera.global_transform.basis.z.normalized()
+	if absf(forward.y) < 0.0001:
+		return
+	var hit := camera.global_position + forward * (-camera.global_position.y / forward.y)
+	camera.position.x += clampf(hit.x, 0.0, float(MinimapView.MAP_WIDTH)) - hit.x
+	camera.position.z += clampf(hit.z, 0.0, float(MinimapView.MAP_HEIGHT)) - hit.z
+
+func _edge_direction(mouse: Vector2) -> Vector2:
+	var rect := get_viewport().get_visible_rect()
+	if not rect.has_point(mouse):
+		return Vector2.ZERO
+	var direction := Vector2.ZERO
+	if mouse.x <= rect.position.x + EDGE_PAN_MARGIN:
+		direction.x = -1.0
+	elif mouse.x >= rect.end.x - EDGE_PAN_MARGIN:
+		direction.x = 1.0
+	if mouse.y <= rect.position.y + EDGE_PAN_MARGIN:
+		direction.y = -1.0
+	elif mouse.y >= rect.end.y - EDGE_PAN_MARGIN:
+		direction.y = 1.0
+	return direction
 
 func _pan_camera(relative: Vector2) -> void:
 	var viewport_height := maxf(get_viewport().get_visible_rect().size.y, 1.0)
