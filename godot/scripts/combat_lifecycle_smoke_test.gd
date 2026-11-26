@@ -140,6 +140,28 @@ func _key_tap(keycode: int) -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+## Holds the physical Right arrow for several frames and reports how far the
+## main camera drifted, then restores it. The press is buffered, so the key is
+## held past a few frames and a few more are awaited after release.
+func _pan_drift() -> float:
+	var camera: Camera3D = _main.camera
+	var home := camera.position
+	var key := InputEventKey.new()
+	key.keycode = KEY_RIGHT
+	key.physical_keycode = KEY_RIGHT
+	key.pressed = true
+	Input.parse_input_event(key)
+	for _frame in 6:
+		await get_tree().process_frame
+	key.pressed = false
+	Input.parse_input_event(key)
+	for _frame in 3:
+		await get_tree().process_frame
+	var drift := camera.position.distance_to(home)
+	camera.position = home
+	camera.reset_physics_interpolation()
+	return drift
+
 ## Drains matching Guard→target combat events on every process_frame —
 ## which fires before the controller's per-frame cosmetics drain inside
 ## _process — starting before the attack click and running through its
@@ -224,6 +246,26 @@ func _stretched_viewport(window_size: Vector2i) -> Vector2i:
 	var base := Vector2(TEST_VIEWPORT_SIZE)
 	var scale := minf(float(window_size.x) / base.x, float(window_size.y) / base.y)
 	return Vector2i((Vector2(window_size) / scale).round())
+
+## The Result bar must stay a bottom bar inside the live viewport with both
+## actions inside it, clear of the statistics and of each other. Returns ""
+## when it holds.
+func _result_resize_error(target: Vector2i) -> String:
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Result":
+		return "resize probe left Result"
+	var view := Rect2(Vector2.ZERO, Vector2(target))
+	var bar := (_main.get_node("HUD/ResultBar") as Control).get_global_rect()
+	var stats := (_main.get_node("HUD/ResultBar/ResultStats") as Control).get_global_rect()
+	var restart := _button("HUD/SessionPanel/RestartButton").get_global_rect()
+	var quit := _button("HUD/SessionPanel/QuitButton").get_global_rect()
+	if not view.encloses(bar) or bar.position.y < float(target.y) * 0.75:
+		return "Result bar is not a bottom bar in the %s viewport: bar=%s" % [target, bar]
+	if not bar.encloses(restart) or not bar.encloses(quit) \
+			or restart.intersects(quit) \
+			or restart.intersects(stats) or quit.intersects(stats):
+		return "Result actions left the bar or overlap in the %s viewport: restart=%s quit=%s stats=%s bar=%s" % [
+			target, restart, quit, stats, bar]
+	return ""
 
 func _paused_resize_error(target: Vector2i) -> String:
 	if str(GrusBridge.session_snapshot().get("phase", "")) != "Paused":
@@ -662,6 +704,12 @@ func _run() -> void:
 		return
 	if not _assert_input_gated("Start"):
 		return
+	# The Start card hides the battlefield, so a held pan key must leave the
+	# authored opening camera exactly where it was.
+	var start_drift: float = await _pan_drift()
+	if start_drift > 0.001:
+		_fail("pan key drifted the opening camera during Start (moved %.3f)" % start_drift)
+		return
 	var start_capture := await SmokeHelpers.capture_frame(get_tree(), "combat-start")
 	if not start_capture.is_empty():
 		_fail(start_capture)
@@ -693,6 +741,10 @@ func _run() -> void:
 		return
 	if int((_fx.get("cue_counts") as Dictionary).get("winter_wind", 0)) < 1:
 		_fail("Playing did not start the pilot wind cue")
+		return
+	var playing_drift: float = await _pan_drift()
+	if playing_drift < 1.0:
+		_fail("pan key did not move the camera while Playing (moved %.3f)" % playing_drift)
 		return
 
 	# HPA-188: the fresh match's exact zero-Crystal stockpile makes this the
@@ -1301,6 +1353,28 @@ func _run() -> void:
 	if not result_alt_error.is_empty():
 		_fail(result_alt_error)
 		return
+	# Result owns the screen too: a held pan key must not move the camera.
+	var result_drift: float = await _pan_drift()
+	if result_drift > 0.001:
+		_fail("pan key drifted the camera during Result (moved %.3f)" % result_drift)
+		return
+	# Live resize while Result is open: the bar and the buttons that ride on it
+	# must follow the viewport (a 4:3 and a wide window), then return to
+	# the base size for the legs below.
+	var result_resize_targets: Array[Vector2i] = [
+		Vector2i(960, 720), Vector2i(1800, 720), TEST_VIEWPORT_SIZE]
+	for window_size in result_resize_targets:
+		var resize_size := _stretched_viewport(window_size)
+		get_tree().root.size = window_size
+		if not await _wait_until(
+				func(): return get_viewport().get_visible_rect().size == Vector2(resize_size),
+				5.0, "root viewport did not resize to %s" % resize_size):
+			return
+		if not await _wait_until(
+				func(): return _result_resize_error(resize_size).is_empty(), 5.0,
+				"Result bar did not follow the live %s viewport: %s" % [
+					resize_size, _result_resize_error(resize_size)]):
+			return
 	# The outcome composition replaces the in-match HUD; no live gameplay
 	# control may sit exposed behind or beside the Result bar.
 	for path in ["HUD/EconomyPanel", "HUD/ResearchPanel", "HUD/SelectionPanel",
