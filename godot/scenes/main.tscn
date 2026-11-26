@@ -26,6 +26,34 @@ resource_local_to_scene = true
 transparency = 1
 albedo_color = Color(0.3, 0.85, 0.3, 0.4)
 
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rc_alert"]
+bg_color = Color(0.17, 0.08, 0.09, 0.92)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.85, 0.39, 0.29, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+shadow_color = Color(0.85, 0.39, 0.29, 0.45)
+shadow_size = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rc_fill"]
+bg_color = Color(0.88, 0.35, 0.24, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_rc_back"]
+bg_color = Color(0.1, 0.06, 0.06, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_heat_fill"]
 bg_color = Color(0.94, 0.58, 0.22, 0.95)
 corner_radius_top_left = 4
@@ -302,6 +330,42 @@ offset_right = 368.0
 offset_bottom = 78.0
 disabled = true
 text = "Analyze"
+
+[node name="RcAlert" type="Panel" parent="HUD"]
+visible = false
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -180.0
+offset_top = 182.0
+offset_right = 200.0
+offset_bottom = 216.0
+grow_horizontal = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_rc_alert")
+
+[node name="RcAlertLabel" type="Label" parent="HUD/RcAlert"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 2.0
+offset_right = 370.0
+offset_bottom = 26.0
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 0.7, 0.63, 1)
+theme_override_font_sizes/font_size = 16
+text = "Research Center under attack!"
+
+[node name="RcHealthBar" type="ProgressBar" parent="HUD/RcAlert"]
+layout_mode = 0
+offset_left = 10.0
+offset_top = 25.0
+offset_right = 370.0
+offset_bottom = 30.0
+mouse_filter = 2
+max_value = 1.0
+value = 1.0
+show_percentage = false
+theme_override_styles/background = SubResource("StyleBoxFlat_rc_back")
+theme_override_styles/fill = SubResource("StyleBoxFlat_rc_fill")
 
 [node name="EconomyPanel" type="Panel" parent="HUD"]
 anchor_right = 1.0
