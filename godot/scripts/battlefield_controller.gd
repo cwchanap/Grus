@@ -526,7 +526,10 @@ func _handle_key(event: InputEventKey) -> void:
 ## parked at (0, 0), so it never edge-scrolls and smokes keep a still camera.
 ## Returns whether the camera moved this frame.
 func _scroll_camera(delta: float) -> bool:
-	if _shutting_down:
+	# Start and Result cover the battlefield with a full-screen composition, so
+	# a held key or a pointer resting at an edge must not drift the opening view
+	# out from under it. Paused keeps panning for deliberate inspection.
+	if _shutting_down or (_session_phase != "Playing" and _session_phase != "Paused"):
 		return false
 	var direction := Vector2.ZERO
 	direction.x = float(Input.is_physical_key_pressed(KEY_RIGHT)) \
@@ -539,10 +542,15 @@ func _scroll_camera(delta: float) -> bool:
 		direction = _edge_direction(get_viewport().get_mouse_position())
 	if direction == Vector2.ZERO:
 		return false
+	var before := camera.position
 	var step := camera.size * PAN_SPEED * delta
 	camera.position.x += direction.x * step
 	camera.position.z += direction.y * step
 	_clamp_camera_to_map()
+	# Pinned at the map edge the clamp cancels the whole step: report no
+	# movement so the placement ghost is not revalidated every frame.
+	if camera.position.is_equal_approx(before):
+		return false
 	camera.reset_physics_interpolation()
 	return true
 
