@@ -43,6 +43,7 @@ const PAINTED_MUZZLE_UV := {
 @onready var restart_button: Button = $HUD/SessionPanel/RestartButton
 @onready var quit_button: Button = $HUD/SessionPanel/QuitButton
 @onready var pause_button: Button = $HUD/PauseButton
+@onready var underground_button: Button = $HUD/UndergroundButton
 ## The drawer script on the existing panel owns its visual arming state and
 ## emits `room_requested`; Tab/Esc, the Playing gate, dispatch and the
 ## command status stay here.
@@ -140,6 +141,7 @@ func _ready() -> void:
 	start_button.pressed.connect(_on_start_pressed)
 	resume_button.pressed.connect(_on_resume_pressed)
 	pause_button.pressed.connect(_on_pause_pressed)
+	underground_button.pressed.connect(_toggle_underground_panel)
 	restart_button.pressed.connect(_on_restart_pressed)
 	quit_button.pressed.connect(_on_quit_pressed)
 
@@ -1292,7 +1294,7 @@ func _on_build_pressed(kind: String) -> void:
 	_armed_order = ""
 	_placement_generation += 1
 	_placement_kind = kind
-	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % kind
+	command_status.text = "Placing %s — left-click to place, right-click or Esc to cancel" % HudHelpers.display_name(kind)
 
 ## A real order-tile click arms the one modal order after checking its
 ## context — clicking the armed tile again disarms it; Stop runs

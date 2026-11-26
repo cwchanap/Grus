@@ -593,9 +593,9 @@ func _restart_settled() -> bool:
 	return ids.size() == 4 and ids.has(1) and ids.has(2) and ids.has(3) and ids.has(4)
 
 func _snapshot_has_safe_surface(snapshot: Dictionary) -> bool:
-	if snapshot.size() != 6:
+	if snapshot.size() != 7:
 		return false
-	for key in ["wave", "next_wave", "seconds_remaining", "incoming_zones", "live_aliens", "timer_total_seconds"]:
+	for key in ["wave", "next_wave", "seconds_remaining", "elapsed_seconds", "incoming_zones", "live_aliens", "timer_total_seconds"]:
 		if not snapshot.has(key):
 			return false
 	var total: Variant = snapshot.get("timer_total_seconds")
@@ -1270,7 +1270,9 @@ func _run() -> void:
 	var result_economy: Dictionary = GrusBridge.economy_snapshot()
 	var result_wave: Dictionary = GrusBridge.wave_snapshot()
 	var result_target := int((GrusBridge.catalogue_snapshot().get("research", {}) as Dictionary).get("target_points", 0))
+	var result_elapsed := int(float(result_wave.get("elapsed_seconds", -1.0)))
 	for expected in [
+			"Time %d:%02d" % [result_elapsed / 60, result_elapsed % 60],
 			"Wave %d" % int(result_wave.get("wave", 0)),
 			"Research %s/%s" % [
 				HudHelpers.format_int(floori(float(result_research.get("points", 0.0)))),

@@ -319,8 +319,8 @@ func _assert_action_icon_paths(main: Node3D) -> bool:
 			# Icon-only tiles still name their catalogue action: the tooltip
 			# leads with the real building/unit and the accessible name repeats
 			# the Build/Train verb, so hovering and assistive tech identify it.
-			if not button.tooltip_text.begins_with("%s\n" % kind) \
-					or button.accessibility_name != "%s %s" % [spec[3], kind]:
+			if not button.tooltip_text.begins_with("%s\n" % kind.capitalize()) \
+					or button.accessibility_name != "%s %s" % [spec[3], kind.capitalize()]:
 				_fail("%s does not name %s %s: tooltip=%s accessibility=%s" % [
 					button.name, spec[3], kind, button.tooltip_text, button.accessibility_name])
 				return false
@@ -2602,7 +2602,7 @@ func _run() -> void:
 		return
 	# Explicitly labelled presentation-only boundary probes across the bounded
 	# research domain: 4-digit near-target/target values, the longest legitimate
-	# cold-base ETA (9,000 points / 0.5 s), and 0/1/2/3 reached milestones. No
+	# cold-base ETA (the whole target / 0.5 points per second), and 0/1/2/3 reached milestones. No
 	# command, spend, sim or Rust value changes. Main._process pauses so the
 	# real-render capture sees the probe; the live refresh restores it below.
 	var research_hud := get_node("Main/HUD")
@@ -2617,13 +2617,13 @@ func _run() -> void:
 		{"name": "near-target", "points": float(research_target - 1),
 			"eta": 2.0, "reached": 3},
 		{"name": "target", "points": float(research_target), "eta": 0.0, "reached": 3},
-		{"name": "longest cold-base ETA", "points": 0.0, "eta": 18000.0, "reached": 0},
+		{"name": "longest cold-base ETA", "points": 0.0, "eta": float(research_target) / 0.5, "reached": 0},
 		{"name": "Flame reached", "points": float(flame_points),
-			"eta": 13500.0, "reached": 1},
+			"eta": float(research_target - flame_points) / 0.5, "reached": 1},
 		{"name": "Flame+Lance reached", "points": float(lance_points),
-			"eta": 9000.0, "reached": 2},
+			"eta": float(research_target - lance_points) / 0.5, "reached": 2},
 		{"name": "all reached", "points": float(wave_points),
-			"eta": 4500.0, "reached": 3, "capture": true},
+			"eta": float(research_target - wave_points) / 0.5, "reached": 3, "capture": true},
 	]
 	var research_main := get_node("Main") as Node3D
 	var live_research: Dictionary = GrusBridge.research_snapshot()
@@ -4847,10 +4847,10 @@ func _run() -> void:
 		_fail("catalogue research block is incomplete: %s" % [research_catalogue])
 		return
 	# The wave-growth marker is the Rust `unlock_points(75%)` milestone:
-	# 6,750 of the 9,000-point victory target, between the two tower
+	# 18,000 of the 24,000-point victory target, past the two tower
 	# unlocks.
 	var wave_growth_points := int(research_catalogue.get("wave_growth_points", 0))
-	if wave_growth_points != 6750:
+	if wave_growth_points != 18000:
 		_fail("catalogue wave_growth_points is not the Rust wave-boost milestone: %s" % [research_catalogue])
 		return
 	if not analyze_button.text.contains(str(int(analyze_cost.get("crystals", -1)))) \

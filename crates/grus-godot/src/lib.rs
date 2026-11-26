@@ -2286,6 +2286,7 @@ fn wave_snapshot_dict(world: &World) -> VarDictionary {
     );
     dict.set("seconds_remaining", state.remaining_seconds());
     // Simulated seconds since Start: the Result bar's match time.
+    dict.set("elapsed_seconds", state.elapsed);
     // The full duration of the interval currently counting down: the initial
     // preparation for wave 1, then the regular wave interval. Both come from
     // the Rust wave constants, never a GDScript copy.

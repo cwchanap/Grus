@@ -13,6 +13,10 @@ const CURRENCY_SHORT := {
 
 static var _icon_cache: Dictionary = {}
 
+## The player-facing name for a catalogue kind id ("GunTurret" -> "Gun Turret").
+static func display_name(kind: String) -> String:
+	return kind.capitalize()
+
 static func icon_for_kind(group: String, kind: String) -> Texture2D:
 	var path := "res://assets/ui/icons/%s/%s.png" % [group, kind.to_snake_case()]
 	if not _icon_cache.has(path):
