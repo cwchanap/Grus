@@ -245,6 +245,21 @@ mouse_filter = 2
 expand_mode = 1
 stretch_mode = 5
 
+[node name="WaveNumber" type="Label" parent="HUD/WaveRing"]
+visible = false
+layout_mode = 0
+offset_left = 4.0
+offset_top = 4.0
+offset_right = 52.0
+offset_bottom = 52.0
+mouse_filter = 2
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+text = "1"
+horizontal_alignment = 1
+vertical_alignment = 1
+
 [node name="WaveLabel" type="RichTextLabel" parent="HUD"]
 offset_left = 84.0
 offset_top = 64.0
@@ -565,12 +580,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "Move"
 horizontal_alignment = 1
 
@@ -589,12 +606,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "Stop"
 horizontal_alignment = 1
 
@@ -613,12 +632,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "A-Move"
 horizontal_alignment = 1
 
@@ -637,12 +658,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "Gather"
 horizontal_alignment = 1
 
@@ -661,12 +684,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "Rally"
 horizontal_alignment = 1
 
@@ -684,12 +709,14 @@ anchors_preset = 12
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -17.0
-offset_bottom = -3.0
+offset_top = -16.0
+offset_bottom = -2.0
 grow_horizontal = 2
 grow_vertical = 0
 mouse_filter = 2
-theme_override_font_sizes/font_size = 10
+theme_override_colors/font_outline_color = Color(0.02, 0.03, 0.05, 0.95)
+theme_override_constants/outline_size = 5
+theme_override_font_sizes/font_size = 11
 text = "Cancel"
 horizontal_alignment = 1
 
@@ -862,6 +889,18 @@ horizontal_scroll_mode = 0
 [node name="LevelsBox" type="VBoxContainer" parent="HUD/UndergroundPanel/ScrollContainer"]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="UndergroundButton" type="Button" parent="HUD"]
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 2.0
+offset_top = -206.0
+offset_right = 206.0
+offset_bottom = -176.0
+grow_vertical = 0
+focus_mode = 0
+tooltip_text = "Underground rooms and excavation (Tab)"
+text = "Underground  [Tab]"
 
 [node name="MinimapFrame" type="Panel" parent="HUD"]
 anchor_top = 1.0

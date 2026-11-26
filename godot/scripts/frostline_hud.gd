@@ -13,6 +13,7 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 @onready var wave_warning: RichTextLabel = $WaveWarning
 @onready var wave_ring: Control = $WaveRing
 @onready var wave_clock: TextureRect = $WaveRing/ClockIcon
+@onready var wave_number_label: Label = $WaveRing/WaveNumber
 @onready var incoming_glow: Control = $IncomingGlow
 @onready var research_panel: Panel = $ResearchPanel
 @onready var rc_alert: Panel = $RcAlert
@@ -62,6 +63,7 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 @onready var resume_button: Button = $SessionPanel/ResumeButton
 @onready var restart_button: Button = $SessionPanel/RestartButton
 @onready var quit_button: Button = $SessionPanel/QuitButton
+@onready var underground_button: Button = $UndergroundButton
 @onready var pause_button: Button = $PauseButton
 @onready var _build_grid: Container = $CommandPanel/BuildGrid
 @onready var _train_grid: Container = $CommandPanel/TrainGrid
@@ -132,6 +134,7 @@ var _result_wave_text := ""
 var _result_research_text := ""
 var _result_population_text := ""
 var _result_crystals_text := ""
+var _result_time_text := ""
 ## Settled Result phase flag from refresh_session: per-frame refreshers that
 ## re-assert visibility (the frost overlay) gate on it so the outcome
 ## composition stays uncovered.
@@ -311,8 +314,8 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 			button.add_theme_constant_override("icon_max_width", 44)
 		button.set_meta("cost", entry)
 		_set_tile_cost(button, entry)
-		button.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
-		button.accessibility_name = "Build %s" % kind
+		button.tooltip_text = "%s\n%s" % [HudHelpers.display_name(kind), _building_tooltip(kind, entry)]
+		button.accessibility_name = "Build %s" % HudHelpers.display_name(kind)
 		# The catalogue-derived research threshold rides the button meta; the
 		# per-frame lock refresh compares it against the live point total.
 		var unlock_points := int(entry.get("unlock_points", 0))
@@ -331,8 +334,8 @@ func _build_common_tiles(buildings: Dictionary, units: Dictionary) -> void:
 		button.set_meta("cost", entry)
 		button.set_meta("producer", str(entry.get("producer", "")))
 		_set_tile_cost(button, entry)
-		button.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
-		button.accessibility_name = "Train %s" % kind
+		button.tooltip_text = "%s\n%s" % [HudHelpers.display_name(kind), _unit_tooltip(entry)]
+		button.accessibility_name = "Train %s" % HudHelpers.display_name(kind)
 		_add_counter_icon(button, entry)
 
 ## The HPA-695 action-tile scene draws its catalogue price under the icon;
@@ -637,6 +640,13 @@ func refresh_wave(wave: Dictionary) -> void:
 		(incoming_glow.get_node(direction) as TextureRect).visible = \
 			incoming_names.has(direction)
 	var wave_number := int(wave.get("wave", 0))
+	# The medallion shows the clock through preparation and the current wave
+	# number once waves run; an index too wide for the ring keeps the clock.
+	var show_number := wave_number > 0 and wave_number < 1000
+	wave_number_label.visible = show_number
+	wave_clock.visible = not show_number
+	if show_number:
+		wave_number_label.text = str(wave_number)
 	var next_wave := int(wave.get("next_wave", 1))
 	var live_aliens := int(wave.get("live_aliens", 0))
 	# Wave indices are projected as i64; the compact card cannot show every
@@ -687,6 +697,8 @@ func refresh_wave(wave: Dictionary) -> void:
 		_inline_icon("status", "WaveCountdown", 26),
 		wave_number,
 	]
+	var elapsed := int(float(wave.get("elapsed_seconds", 0.0)))
+	_result_time_text = "Time %d:%02d" % [elapsed / 60, elapsed % 60]
 	_render_result_stats()
 
 ## Research Center health chip: the Research Center is the only lose condition,
@@ -776,7 +788,7 @@ func refresh_research_controls(research: Dictionary, playing: bool, core_availab
 			"#8fd18f" if reached else "#c3ced6",
 			marker["label"], marker["icon"], "✓ " if reached else "",
 			marker["short"], int(marker["points"])])
-	_set_bbcode(research_markers, "  ".join(marker_parts))
+	_set_bbcode(research_markers, " ".join(marker_parts))
 	# Analyze is enabled while Playing whenever the live Team-1 Research
 	# Center view exists — selection-independent; affordability is
 	# deliberately NOT checked here, because Rust reports
@@ -807,13 +819,13 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		var id := selected_ids[0]
 		var kind := str(unit_kinds.get(id, ""))
 		var entry: Dictionary = _unit_entries.get(kind, {})
-		selection_name.text = "%s #%d" % [kind if kind != "" else "Unit", id]
+		selection_name.text = "%s #%d" % [HudHelpers.display_name(kind) if kind != "" else "Unit", id]
 		portrait_icon.texture = HudHelpers.icon_for_kind("units", kind)
 		_render_health(unit_health, int(entry.get("max_health", 0)))
 		if entry.is_empty():
-			selection_panel.tooltip_text = "%s (Enemy)" % kind if kind != "" else "Enemy unit"
+			selection_panel.tooltip_text = "%s (Enemy)" % HudHelpers.display_name(kind) if kind != "" else "Enemy unit"
 		else:
-			selection_panel.tooltip_text = "%s\n%s" % [kind, _unit_tooltip(entry)]
+			selection_panel.tooltip_text = "%s\n%s" % [HudHelpers.display_name(kind), _unit_tooltip(entry)]
 		var status := _task_text(unit_task)
 		selection_label.text = status if status != "" else "Ready"
 		_set_train_producer("")
@@ -842,7 +854,7 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		_hide_queue()
 		portrait_icon.texture = null
 		selection_panel.tooltip_text = ""
-		selection_name.text = "%s ×%d" % [common if common != "" else "Units", selected_ids.size()]
+		selection_name.text = "%s ×%d" % [HudHelpers.display_name(common) if common != "" else "Units", selected_ids.size()]
 		selection_label.text = "Multiple units selected"
 		_set_train_producer("")
 		return
@@ -853,11 +865,11 @@ func refresh_selection(selected_ids: Array[int], selected_building_id: int, buil
 		var friendly := int(building.get("team_id", -1)) == 1
 		var can_train := complete and friendly
 		_set_train_producer(kind if can_train else "")
-		selection_name.text = "%s #%d (team %d)" % [
-			kind, selected_building_id, int(building.get("team_id", 0))]
+		selection_name.text = HudHelpers.display_name(kind) if friendly \
+				else "Enemy %s" % HudHelpers.display_name(kind)
 		portrait_icon.texture = HudHelpers.icon_for_kind("buildings", kind)
 		_render_health(building_health, int(entry.get("max_health", 0)))
-		selection_panel.tooltip_text = "%s\n%s" % [kind, _building_tooltip(kind, entry)]
+		selection_panel.tooltip_text = "%s\n%s" % [HudHelpers.display_name(kind), _building_tooltip(kind, entry)]
 		var lines := PackedStringArray()
 		if complete:
 			lines.append("Construction complete")
@@ -961,18 +973,18 @@ func _render_queue(building: Dictionary) -> void:
 			var remaining := float(building.get("queue_remaining", 0.0))
 			if remaining < 0.0:
 				time.text = "—"
-				panel.accessibility_name = "Training %s — stalled" % kind
+				panel.accessibility_name = "Training %s — stalled" % HudHelpers.display_name(kind)
 			else:
 				var seconds := maxi(ceili(remaining), 0)
 				time.text = "%ds" % seconds
-				panel.accessibility_name = "Training %s — %ds remaining" % [kind, seconds]
+				panel.accessibility_name = "Training %s — %ds remaining" % [HudHelpers.display_name(kind), seconds]
 			icon.modulate = Color(1, 1, 1, 1)
 			progress_bar.max_value = 100.0
 			progress_bar.value = clampf(progress * 100.0, 0.0, 100.0)
 			progress_bar.visible = true
 		else:
 			time.text = ""
-			panel.accessibility_name = "Queued %s" % kind
+			panel.accessibility_name = "Queued %s" % HudHelpers.display_name(kind)
 			icon.modulate = Color(0.75, 0.82, 0.88, 0.95)
 			progress_bar.visible = false
 	_queue_overflow.visible = queue.size() > QUEUE_SOCKET_COUNT
@@ -1006,7 +1018,7 @@ func _render_result_stats() -> void:
 	if not result_bar.visible:
 		return
 	var parts := PackedStringArray()
-	for text in [_result_wave_text, _result_research_text,
+	for text in [_result_time_text, _result_wave_text, _result_research_text,
 			_result_population_text, _result_crystals_text]:
 		if text != "":
 			parts.append(text)
@@ -1036,7 +1048,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 	# bottom bar never obscures or exposes live controls behind the art.
 	for node in [wave_panel, wave_ring, wave_label, wave_warning, incoming_glow, research_panel,
 			economy_panel, selection_panel, command_panel, command_status,
-			minimap_frame, _minimap, frost_overlay]:
+			minimap_frame, _minimap, frost_overlay, underground_button]:
 		node.visible = not result
 	pause_button.visible = playing
 	start_art.visible = start
