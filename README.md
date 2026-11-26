@@ -154,8 +154,12 @@ mkdir -p godot/bin
 # Linux/CI loads the .so, macOS loads the dylib — copy the one for your platform:
 cp target/debug/libgrus_godot.so godot/bin/libgrus_godot.so
 cp target/debug/libgrus_godot.dylib godot/bin/libgrus_godot.dylib  # macOS
+codesign --force --sign - godot/bin/libgrus_godot.dylib            # macOS: copying can invalidate the ad-hoc signature
+godot --headless --path godot --import                             # import assets (fast when cached)
 godot --path godot
 ```
+
+`just run` does all of the above.
 
 On a clean clone the GDExtension is not registered until the editor has scanned the project once (`godot --headless --path godot --editor --quit-after 120`), which writes `godot/.godot/extension_list.cfg`. The library in `godot/bin/` must be re-copied after every rebuild — a stale binary fails at startup (for example a false duplicate-`UnitId` panic) rather than silently.
 
