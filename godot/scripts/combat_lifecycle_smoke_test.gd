@@ -16,9 +16,11 @@ const REJECT_SESSION_LOCKED := 17
 const ALIEN_KINDS := ["Swarmer", "Spitter", "Brute", "Behemoth"]
 const HudHelpers := preload("res://scripts/hud_helpers.gd")
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+const UnitView := preload("res://scripts/unit_view.gd")
 
 var _main: Node3D
 var _fx: Node3D
+var _actions_before_journey := 0
 var _minimap: Control
 
 func _ready() -> void:
@@ -677,6 +679,7 @@ func _run() -> void:
 	_main = get_node("Main") as Node3D
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
+	_actions_before_journey = UnitView.actions_played
 
 	if not _cue_telemetry_leg():
 		return
@@ -1472,6 +1475,15 @@ func _run() -> void:
 		return
 	if _blip_cue_count() <= observer_forwarded_blips:
 		_fail("no combat event reached the blip cue through the controller's own per-frame drain: %s" % [_fx.get("cue_counts")])
+		return
+	# HPA-1198 painted-unit motion rides the same drain: each unit attack
+	# shows the attacker's action pose, and a visible unit's death topples
+	# its sprite through the death effect.
+	if UnitView.actions_played <= _actions_before_journey:
+		_fail("no combat event put an attacking unit into its painted action pose")
+		return
+	if int(_fx.get("corpses_spawned")) < 1:
+		_fail("no unit death toppled a painted corpse through the death effect")
 		return
 	# The Result-phase Restart button is actually visible here, so a real
 	# click exercises the full production path — hit test, pressed signal

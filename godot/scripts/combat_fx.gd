@@ -17,7 +17,17 @@ const CUES := {
 	"winter_wind": {"stream": preload("res://assets/audio/ambience/winter_wind_loop.ogg"), "volume_db": -25.0, "max_polyphony": 1, "loop": true},
 }
 
+## Unit corpses: topple over the feet, then fade out.
+const CORPSE_TOPPLE_SECONDS := 0.35
+const CORPSE_FADE_SECONDS := 0.6
+const DEATH_TINT := Color(0.85, 0.7, 0.7, 1.0)
+## Freed-unit snapshots older than this many frames never met a kill event.
+const FREED_UNIT_FRAMES := 10
+
 var cue_counts: Dictionary = {}
+## Unit corpses spawned since the last clear_all (smoke telemetry).
+var corpses_spawned := 0
+var _freed_units: Dictionary = {}
 var _live: Array[Node] = []
 var _players: Dictionary = {}
 var _last_cue_ms: Dictionary = {}
@@ -88,8 +98,67 @@ func spawn_tracer(from: Vector3, to: Vector3) -> void:
 func spawn_hit(position: Vector3) -> void:
 	_flash(position, Color(1.0, 0.8, 0.2), 0.25, 0.12)
 
-func spawn_death(position: Vector3) -> void:
+## A kill despawns the unit in the fixed tick, and Godot frees its view at
+## the end of that physics step — before the frame's event drain. Each
+## visible painted unit view therefore hands its last presentation here as it
+## is freed (unit_view.gd), keyed by unit id, and the kill event's death
+## effect topples it. Views freed without a kill (restart, fog) just expire.
+func remember_freed_unit(unit_id: int, sprite: Sprite3D, base: Texture2D) -> void:
+	_freed_units[unit_id] = {
+		"texture": base,
+		"pixel_size": sprite.pixel_size,
+		"offset": sprite.offset,
+		"flip_h": sprite.flip_h,
+		"transform": sprite.global_transform,
+		"frame": Engine.get_process_frames(),
+	}
+
+## The death burst, plus — when `unit_id` names a painted unit view freed
+## this frame — its corpse: the base pose toppling over its feet, then fading.
+func spawn_death(position: Vector3, unit_id := -1) -> void:
 	_flash(position, Color(0.9, 0.2, 0.15), 0.9, 0.3)
+	if _freed_units.has(unit_id):
+		_spawn_corpse(_freed_units[unit_id])
+		_freed_units.erase(unit_id)
+
+func _process(_delta: float) -> void:
+	if _freed_units.is_empty():
+		return
+	var now := Engine.get_process_frames()
+	for unit_id in _freed_units.keys():
+		if now - int(_freed_units[unit_id]["frame"]) > FREED_UNIT_FRAMES:
+			_freed_units.erase(unit_id)
+
+func _spawn_corpse(snapshot: Dictionary) -> void:
+	var corpse := Sprite3D.new()
+	corpse.texture = snapshot["texture"]
+	corpse.pixel_size = snapshot["pixel_size"]
+	corpse.centered = false
+	corpse.offset = snapshot["offset"]
+	corpse.flip_h = snapshot["flip_h"]
+	corpse.billboard = BaseMaterial3D.BILLBOARD_DISABLED
+	corpse.shaded = false
+	corpse.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+	corpse.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	corpse.modulate = DEATH_TINT
+	add_child(corpse)
+	corpse.global_transform = snapshot["transform"]
+	_live.append(corpse)
+	corpses_spawned += 1
+	# Topple away from the facing direction, then fade. Real time like the
+	# other transients, so 20x smoke runs still free it promptly.
+	var fall := deg_to_rad(80.0) * (-1.0 if corpse.flip_h else 1.0)
+	var tween := corpse.create_tween().set_ignore_time_scale(true)
+	tween.tween_property(corpse, "rotation:z", corpse.rotation.z + fall, CORPSE_TOPPLE_SECONDS) \
+			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(corpse, "modulate:a", 0.0, CORPSE_FADE_SECONDS)
+	var ref: WeakRef = weakref(corpse)
+	tween.finished.connect(func() -> void:
+		var node: Variant = ref.get_ref()
+		if node != null:
+			_live.erase(node)
+			node.queue_free()
+	)
 
 func effect_count() -> int:
 	return _live.size()
@@ -103,6 +172,8 @@ func clear_all() -> void:
 		(_players[cue_id] as AudioStreamPlayer).stop()
 	cue_counts.clear()
 	_last_cue_ms.clear()
+	corpses_spawned = 0
+	_freed_units.clear()
 
 ## Best-effort audio quiesce before quitting. Godot exposes no acknowledgement
 ## that a stopped playback was reclaimed: the mixer thread only queues it for

@@ -6,6 +6,7 @@ extends "res://scripts/combat_lifecycle_smoke_test.gd"
 const STAGE5_ALIEN_KINDS := ["Swarmer", "Spitter", "Brute", "Behemoth"]
 const UNIT_MODEL_KINDS := ["Worker", "Guard", "Rifleman"] + STAGE5_ALIEN_KINDS
 const UNIT_VIEW_SCENE := preload("res://scenes/unit_view.tscn")
+const BuildingView := preload("res://scripts/building_view.gd")
 
 var _stage5_passed := false
 var _wave_ring: Control
@@ -257,9 +258,14 @@ func _run() -> void:
 	call_deferred("_verify_warning_presentation", main)
 	await super._run()
 
+## HPA-1198 painted unit contract, probed on all seven kinds through the
+## real unit_view scene: one unshaded, depth-tested, shadowless Sprite3D in
+## the kind's painted base pose (imported with mipmaps), the figure sized by
+## the SIZES table, the action pose with a facing flip on play_action, a red
+## hurt flash on a health drop, flip-aware texel picking, and a toppling
+## corpse handed to CombatFx on death. The real wave journey below still
+## uses bridge-authored unit metadata.
 func _probe_alien_roles() -> bool:
-	# Presentation probes exercise all seven imported unit models;
-	# the real wave journey below still uses bridge-authored unit metadata.
 	var probes: Array[Node3D] = []
 	for index in UNIT_MODEL_KINDS.size():
 		var probe := UNIT_VIEW_SCENE.instantiate() as Node3D
@@ -269,31 +275,104 @@ func _probe_alien_roles() -> bool:
 		probe.set_meta("team_id", 1 if index < 3 else 2)
 		probe.set_meta("unit_kind", UNIT_MODEL_KINDS[index])
 		add_child(probe)
+		probe.global_position = Vector3(10.0 + 4.0 * index, 0.0, 10.0)
 		probes.append(probe)
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var meshes := {}
+	var error := ""
+	var textures := {}
 	for index in probes.size():
-		var probe := probes[index]
-		var model := probe.get_node_or_null("Model")
-		var parts := model.find_children("*", "MeshInstance3D", true, false) if model != null else []
-		var mesh: Mesh = parts[0].mesh if parts.size() == 1 else null
-		var material := parts[0].get_active_material(0) as StandardMaterial3D if mesh != null else null
-		if mesh == null or meshes.has(mesh) or material == null \
-				or material.albedo_texture == null \
-				or material.texture_filter != BaseMaterial3D.TEXTURE_FILTER_NEAREST \
-				or probe.get_node("Body").visible:
-			for old_probe in probes:
-				old_probe.queue_free()
-			_stage5_fail("unit role %s did not load a distinct textured model" % UNIT_MODEL_KINDS[index])
-			return false
-		meshes[mesh] = true
+		error = _painted_unit_error(probes[index], str(UNIT_MODEL_KINDS[index]), textures)
+		if not error.is_empty():
+			break
+	if error.is_empty():
+		error = _painted_unit_corpse_error(probes.pop_front())
 	for probe in probes:
 		probe.queue_free()
 	await get_tree().process_frame
 	await get_tree().process_frame
+	if not error.is_empty():
+		_stage5_fail(error)
+		return false
 	return true
+
+func _painted_unit_error(probe: Node3D, kind: String, textures: Dictionary) -> String:
+	var model := probe.get_node_or_null("Model") as Node3D
+	var sprites := model.find_children("*", "Sprite3D", true, false) if model != null else []
+	if sprites.size() != 1 or not model.find_children("*", "MeshInstance3D", true, false).is_empty():
+		return "unit %s did not attach exactly one painted sprite" % kind
+	var sprite := sprites[0] as Sprite3D
+	var base_path := "res://assets/units/painted/%s.png" % kind.to_snake_case()
+	if sprite.texture == null or sprite.texture.resource_path != base_path or textures.has(sprite.texture):
+		return "unit %s does not show its own painted base pose %s" % [kind, base_path]
+	textures[sprite.texture] = true
+	if sprite.shaded or sprite.no_depth_test or sprite.billboard != BaseMaterial3D.BILLBOARD_DISABLED \
+			or sprite.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+		return "unit %s sprite breaks the painted presentation rules" % kind
+	for path in [base_path, base_path.replace(".png", "_action.png")]:
+		var image := (load(path) as Texture2D).get_image()
+		if image == null or not image.has_mipmaps() or image.is_compressed():
+			return "unit sprite %s is not imported lossless with mipmaps" % path
+	var size: Array = UnitView.SIZES[kind]
+	var top: Vector2 = BuildingView.opaque_top_pixels(sprite.texture)
+	var figure: float = sprite.pixel_size * (sprite.texture.get_height() * (1.0 - UnitView.FEET_FROM_BOTTOM) - top.y)
+	if absf(figure - float(size[0])) > 0.01 or not (probe.get_node("SelectionRing") as Node3D).scale.is_equal_approx(Vector3.ONE * float(size[1])):
+		return "unit %s figure %.3f / ring do not match SIZES %s" % [kind, figure, size]
+	# Action pose facing left of the unit, then flip-aware texel picking: an
+	# opaque texel maps to the mirrored sprite-local point and back.
+	probe.call("play_action", probe.global_position.x - 3.0)
+	var action_path := base_path.replace(".png", "_action.png")
+	if sprite.texture.resource_path != action_path or not sprite.flip_h or not bool(probe.call("facing_left")):
+		return "unit %s play_action did not show %s facing the target" % [kind, action_path]
+	# Sample the middle of the first opaque run on a mid-body row, so the
+	# round trip never straddles a run edge.
+	var mask: BitMap = BuildingView.alpha_mask(sprite.texture)
+	var row := int(mask.get_size().y * 0.6)
+	var run_start := -1
+	var run_end := -1
+	for col in mask.get_size().x:
+		if mask.get_bitv(Vector2i(col, row)):
+			run_end = col
+			if run_start < 0:
+				run_start = col
+		elif run_start >= 0:
+			break
+	if run_start < 0:
+		return "unit %s action pose has no opaque texel on its middle row" % kind
+	var pixel := Vector2(floorf((run_start + run_end) * 0.5) + 0.5, row + 0.5)
+	var local: Vector3 = BuildingView.sprite_local_from_pixel(sprite, pixel)
+	var expected_x := sprite.pixel_size * (sprite.get_item_rect().position.x + sprite.get_item_rect().size.x - pixel.x)
+	if not is_equal_approx(local.x, expected_x) \
+			or BuildingView.sprite_pixel_from_local(sprite, local).distance_to(pixel) > 0.01 \
+			or not BuildingView.pixel_opaque(sprite.texture, BuildingView.sprite_pixel_from_local(sprite, local)):
+		return "unit %s flipped sprite does not mirror its texel picking" % kind
+	probe.call("set_health_ratio", 0.5)
+	if not (probe.get_node("HealthBar") as Node3D).visible or sprite.modulate.is_equal_approx(Color.WHITE):
+		return "unit %s health drop did not show the bar and a hurt flash" % kind
+	return ""
+
+## A kill frees the unit view before the event drain: the freed view hands
+## its presentation to CombatFx, and the kill's death effect topples a copy
+## of its base pose with the same facing. Consumes (frees) `probe`.
+func _painted_unit_corpse_error(probe: Node3D) -> String:
+	var fx := get_node("Main/CombatFx")
+	var before := int(fx.get("corpses_spawned"))
+	var effects := int(fx.call("effect_count"))
+	var position := probe.global_position
+	var facing_left := bool(probe.call("facing_left"))
+	var base_path := "res://assets/units/painted/%s.png" % str(probe.get_meta("unit_kind")).to_snake_case()
+	var id := int(probe.get_meta("unit_id"))
+	probe.free()
+	fx.call("spawn_death", position, id)
+	if int(fx.get("corpses_spawned")) != before + 1 or int(fx.call("effect_count")) != effects + 2:
+		return "death effect did not topple the freed unit's corpse beside the burst"
+	var corpse: Sprite3D = null
+	for node in fx.find_children("*", "Sprite3D", true, false):
+		corpse = node as Sprite3D
+	if corpse == null or corpse.texture.resource_path != base_path or corpse.flip_h != facing_left:
+		return "death corpse does not copy the unit's base pose and facing"
+	return ""
 
 func _verify_warning_presentation(main: Node3D) -> void:
 	var warning_box := {"snapshot": {}}

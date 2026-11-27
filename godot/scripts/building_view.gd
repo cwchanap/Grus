@@ -133,11 +133,13 @@ static func opaque_top_pixels(texture: Texture2D) -> Vector2:
 	return top
 
 ## Sprite-local 3D point of a texture pixel (coordinates as returned by
-## opaque_top_pixels; image rows run top-down, sprite-local +y is up).
+## opaque_top_pixels; image rows run top-down, sprite-local +y is up). A
+## horizontally flipped sprite (painted units facing left) mirrors columns.
 static func sprite_local_from_pixel(sprite: SpriteBase3D, pixel: Vector2) -> Vector3:
 	var rect := sprite.get_item_rect()
+	var col := rect.size.x - pixel.x if sprite.flip_h else pixel.x
 	return Vector3(
-		sprite.pixel_size * (rect.position.x + pixel.x),
+		sprite.pixel_size * (rect.position.x + col),
 		sprite.pixel_size * (rect.position.y + rect.size.y - pixel.y),
 		0.0)
 
@@ -148,6 +150,8 @@ static func sprite_pixel_from_local(sprite: SpriteBase3D, local: Vector3) -> Vec
 		return Vector2.INF
 	var rect := sprite.get_item_rect()
 	var col := local.x / sprite.pixel_size - rect.position.x
+	if sprite.flip_h:
+		col = rect.size.x - col
 	var row := rect.size.y - (local.y / sprite.pixel_size - rect.position.y)
 	if col < 0.0 or row < 0.0 or col >= rect.size.x or row >= rect.size.y:
 		return Vector2.INF

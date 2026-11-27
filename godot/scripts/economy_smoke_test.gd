@@ -57,6 +57,7 @@ const STAGING_SELECT_ATTEMPTS := 4
 const STAGING_MISS_OFFSET := Vector2(120.0, 0.0)
 
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+const UnitView := preload("res://scripts/unit_view.gd")
 
 func _visible_text(control: Control) -> String:
 	if control is RichTextLabel:
@@ -67,6 +68,9 @@ func _rich_text_has_icon(control: Control, resource_path: String) -> bool:
 	return control is RichTextLabel and (control as RichTextLabel).text.contains(resource_path)
 
 var _camera: Camera3D
+## HPA-1198: set once any real Worker view reports the Rust-pushed working
+## state (gathering or constructing), sampled every rendered frame.
+var _saw_worker_working := false
 ## The authored opening framing, captured at boot so the HPA-698 clearance
 ## probes prove they ran on the default view (no earlier zoom or pan).
 var _authored_camera_transform := Transform3D()
@@ -1178,8 +1182,19 @@ func _single_ringed_idle_worker() -> bool:
 	var idle: PackedInt32Array = GrusBridge.economy_snapshot().get("idle_worker_ids", PackedInt32Array())
 	return idle.has(ringed[0])
 
+func _note_worker_working() -> void:
+	if _saw_worker_working:
+		return
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if str(node.get_meta("unit_kind", "")) == "Worker" and node.has_method("is_working") \
+				and bool(node.call("is_working")):
+			_saw_worker_working = true
+			return
+
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
+	get_tree().process_frame.connect(_note_worker_working)
+	var actions_before := UnitView.actions_played
 	# Test-only injection knobs. They alter only real-input coordinates or add
 	# a real rejected UI command; they never write selection or gameplay.
 	_staging_click_miss_remaining = OS.get_environment(
@@ -2634,6 +2649,13 @@ func _run() -> void:
 		return
 	if not GrusBridge.set_sim_speed(1.0):
 		_fail("failed to restore Bevy virtual time")
+		return
+
+	# HPA-1198: the Rust work-state push reached a real gathering/building
+	# Worker view, whose swing cycle showed its painted action pose.
+	if not _saw_worker_working or UnitView.actions_played <= actions_before:
+		_fail("no real Worker view swung its painted action pose while working (working=%s actions=%d)" % [
+			_saw_worker_working, UnitView.actions_played - actions_before])
 		return
 
 	var end: Dictionary = GrusBridge.economy_snapshot()
