@@ -1209,7 +1209,7 @@ func _session_phase_is(phase: String) -> bool:
 ## Pause through the real HUD button while Workers gather. Every Worker view
 ## must stop working and start no new swing over a stretch of fast frames
 ## (20x scales delta past a whole swing cycle per frame). Then Resume through
-## the real button and the work cycle must come back.
+## the real button and the work cycle, a fresh swing included, must come back.
 func _pause_freezes_worker_swings() -> bool:
 	if not await _wait_until(_any_worker_working, 30.0, "no Worker view was working before the pause leg"):
 		return false
@@ -1228,7 +1228,10 @@ func _pause_freezes_worker_swings() -> bool:
 	await _click_button(get_node("Main/HUD/SessionPanel/ResumeButton") as Button)
 	if not await _wait_until(_session_phase_is.bind("Playing"), 5.0, "the real Resume click never returned to Playing"):
 		return false
-	return await _wait_until(_any_worker_working, 30.0, "Worker views did not resume working after Resume")
+	if not await _wait_until(_any_worker_working, 30.0, "Worker views did not resume working after Resume"):
+		return false
+	return await _wait_until(func(): return UnitView.actions_played > actions, 30.0,
+			"resumed Worker views never played a new swing")
 
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
