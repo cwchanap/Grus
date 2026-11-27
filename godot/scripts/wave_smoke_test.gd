@@ -288,6 +288,8 @@ func _probe_alien_roles() -> bool:
 			break
 	if error.is_empty():
 		error = _painted_unit_corpse_error(probes.pop_front())
+	if error.is_empty():
+		error = await _painted_unit_occlusion_error()
 	for probe in probes:
 		probe.queue_free()
 	await get_tree().process_frame
@@ -355,6 +357,70 @@ func _painted_unit_error(probe: Node3D, kind: String, textures: Dictionary) -> S
 	probe.call("set_health_ratio", 0.5)
 	if not (probe.get_node("HealthBar") as Node3D).visible or sprite.modulate.is_equal_approx(Color.WHITE):
 		return "unit %s health drop did not show the bar and a hurt flash" % kind
+	return ""
+
+## Depth order against the real 1×1 structures. A painted unit just in front
+## of a completed Wall or Gate covers it, and one just behind it, or behind a
+## 1×1 construction site, stays hidden wherever the structure overlaps it.
+## The test casts real camera rays through the unit's opaque texels and reads
+## depth from the controller's own picking ray test (the planes the renderer
+## depth-tests), so click priority follows the drawn order too.
+func _painted_unit_occlusion_error() -> String:
+	var main := get_node("Main")
+	var camera := get_viewport().get_camera_3d()
+	var structure_scene := load("res://scenes/building_view.tscn") as PackedScene
+	for structure in [["Wall", true], ["Gate", true], ["Wall", false]]:
+		var view := structure_scene.instantiate() as Node3D
+		view.set_meta("building_kind", structure[0])
+		view.position = Vector3(60.5, 0.0, 20.5)
+		add_child(view)
+		view.call("set_state", structure[1], false)
+		await get_tree().process_frame
+		var structure_model := view.get_node_or_null("Model") as Node3D
+		var label := "%s %s" % [structure[0], "complete" if structure[1] else "site"]
+		# Just outside the cell's back (-z) or front (+z) edge.
+		for side in ([-0.6, 0.6] if structure[1] else [-0.6]):
+			var overlaps := 0
+			for index in UNIT_MODEL_KINDS.size():
+				var kind := str(UNIT_MODEL_KINDS[index])
+				var probe := UNIT_VIEW_SCENE.instantiate() as Node3D
+				probe.set_meta("unit_id", 950 + index)
+				probe.set_meta("team_id", 1)
+				probe.set_meta("unit_kind", kind)
+				add_child(probe)
+				probe.global_position = view.position + Vector3(0.0, 0.0, side)
+				await get_tree().process_frame
+				await get_tree().process_frame
+				var sprite: Sprite3D = probe.call("sprite")
+				var unit_model := probe.get_node_or_null("Model") as Node3D
+				var wrong := ""
+				for py in range(0, sprite.texture.get_height(), 16):
+					for px in range(0, sprite.texture.get_width(), 16):
+						var pixel := Vector2(px + 0.5, py + 0.5)
+						if structure_model == null or sprite == null \
+								or not BuildingView.pixel_opaque(sprite.texture, pixel):
+							continue
+						var screen := camera.unproject_position(
+								sprite.global_transform * BuildingView.sprite_local_from_pixel(sprite, pixel))
+						var origin := camera.project_ray_origin(screen)
+						var direction := camera.project_ray_normal(screen)
+						var unit_depth := float(main.call("_model_ray_hit_depth", unit_model, origin, direction))
+						var structure_depth := float(main.call("_model_ray_hit_depth", structure_model, origin, direction))
+						if unit_depth < 0.0 or structure_depth < 0.0:
+							continue
+						overlaps += 1
+						if (unit_depth < structure_depth) != (side > 0.0) and wrong.is_empty():
+							wrong = "unit %s %s the %s at texel %s (unit %.3f, structure %.3f)" % [
+								kind, "behind draws over" if side < 0.0 else "in front is hidden by",
+								label, pixel, unit_depth, structure_depth]
+				probe.free()
+				if not wrong.is_empty():
+					view.free()
+					return wrong
+			if overlaps < 5:
+				view.free()
+				return "%s occlusion probe at z%+.1f found only %d overlapping texels" % [label, side, overlaps]
+		view.free()
 	return ""
 
 ## A kill frees the unit view before the event drain: the freed view hands

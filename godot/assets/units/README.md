@@ -9,6 +9,6 @@ Import settings match the painted buildings: lossless, mipmaps on (512 px figure
 Presentation rules:
 
 - The sprite pitches to face the fixed camera, keeps real depth testing, is unshaded and casts no 3D shadow (the baked shadow is the contact shadow).
-- Each kind is sized by its painted figure, not its canvas: `unit_view.gd`'s `SIZES` table sets the figure height in world units on the camera-facing plane, plus the selection ring and health bar scale. One world unit is 20 px at 1920×1080 default zoom.
+- Each kind is sized by its painted figure, not its canvas: `unit_view.gd`'s `SIZES` table sets the figure height in on-screen world units (the upright sprite is stretched by 1/cos of the camera pitch so it projects to exactly that height), plus the selection ring and health bar scale. One world unit is 20 px at 1920×1080 default zoom.
 - Motion is code only: a left/right flip by heading, a small walk bob and waddle, the action pose on each attack event and each Worker swing, a short red flash when hurt, and a topple-and-fade corpse spawned by `combat_fx.gd` on death.
 - Picking tests the sprite's opaque texels through the shared alpha cache in `building_view.gd`, including flipped sprites.
