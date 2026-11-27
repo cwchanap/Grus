@@ -16,9 +16,9 @@ use grus_sim::{
     CommandResult, EntryZone, Footprint, GridMap, GridPos, Health, HeatState, LastRouteReject,
     MapFixture, MatchPhase, MatchSession, MoveOrder, PlayerCommand, ProductionJob, ProductionKind,
     ProductionQueue, RESEARCH_BASE_PER_SECOND, RESEARCH_TARGET_POINTS, RESEARCH_WAVE_BOOST_PERCENT,
-    RUINS, RallyPoint, RejectReason, ResourceId, ResourceSource, SIM_STEP_SECONDS, SimPosition,
-    TeamEconomy, TeamId, Underground, Unit, UnitCommand, UnitCommandKind, UnitId, UnitIndex,
-    UnitKind, VisibilityMap, WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS, WaveState,
+    RUINS, RallyPoint, RejectReason, ResourceId, ResourceIndex, ResourceSource, SIM_STEP_SECONDS,
+    SimPosition, TeamEconomy, TeamId, Underground, Unit, UnitCommand, UnitCommandKind, UnitId,
+    UnitIndex, UnitKind, VisibilityMap, WAVE_INTERVAL_SECONDS, WAVE_PREPARATION_SECONDS, WaveState,
     WorkerTask, active_phase, apply_player_command, benchmark_building_count, clear_match_world,
     explored_by, extend_with_benchmark_workload, gameplay_active, idle_worker_ids, live_alien_ids,
     population_cap, population_used, produces, refresh_visibility, research_points, research_rate,
@@ -91,6 +91,14 @@ struct ViewMetaInitialized;
 struct BuildingLastViewState {
     complete: bool,
     cold: bool,
+}
+
+/// Last work state dispatched to a Worker view: the world x of the source or
+/// construction site it is working on, `None` while not working. Absent
+/// until its first successful dispatch.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+struct WorkerLastViewState {
+    target_x: Option<f32>,
 }
 
 #[derive(Component)]
@@ -1400,6 +1408,7 @@ fn build_app(app: &mut App) {
                 sync_interpolated_unit_transforms,
                 update_health_bars,
                 update_building_view_states,
+                update_worker_view_states,
             ),
         )
         .add_systems(
@@ -2087,6 +2096,59 @@ fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) -> bool {
     true
 }
 
+/// The world x a Worker faces while it works: the footprint center of the
+/// source it gathers or the site it constructs. `None` for every other task
+/// (walking, carrying, idle) and for a target that no longer exists.
+fn worker_view_state(world: &World, task: &WorkerTask) -> WorkerLastViewState {
+    let target = match *task {
+        WorkerTask::Gathering { source } => world
+            .get_resource::<ResourceIndex>()
+            .and_then(|index| index.entity(source)),
+        WorkerTask::Constructing { building } => world
+            .get_resource::<BuildingIndex>()
+            .and_then(|index| index.entity(building)),
+        _ => None,
+    };
+    WorkerLastViewState {
+        target_x: target
+            .and_then(|entity| world.get::<Footprint>(entity))
+            .map(|footprint| footprint.center().x),
+    }
+}
+
+/// Projects each Worker's task onto its view as `set_working(working,
+/// target_x)` so the painted Worker swings its action pose while gathering
+/// or constructing. Value-gated like `update_building_view_states`: steady
+/// workers skip the dynamic call entirely.
+fn update_worker_view_states(world: &mut World) {
+    let mut query = world.query::<(
+        Entity,
+        &WorkerTask,
+        &GodotNodeHandle,
+        Option<&WorkerLastViewState>,
+    )>();
+    let batch: Vec<(Entity, WorkerLastViewState, GodotNodeHandle)> = query
+        .iter(world)
+        .filter_map(|(entity, task, handle, last_state)| {
+            let state = worker_view_state(world, task);
+            (last_state != Some(&state)).then_some((entity, state, *handle))
+        })
+        .collect();
+    for (entity, state, handle) in batch {
+        let Some(mut node) = node_from_handle(handle) else {
+            continue;
+        };
+        node.call(
+            "set_working",
+            &[
+                state.target_x.is_some().to_variant(),
+                state.target_x.unwrap_or(0.0).to_variant(),
+            ],
+        );
+        world.entity_mut(entity).insert(state);
+    }
+}
+
 fn reset_fixture_world(world: &mut World) {
     clear_gameplay_world(world);
     seed_match_world(world);
@@ -2417,8 +2479,8 @@ mod tests {
     use grus_sim::step_heat;
     use grus_sim::{
         AttackCooldown, CombatEvent, CombatTarget, ConstructionState, Excavation, IdAllocator,
-        MatchResult, MoveOrder, RESEARCH_BASE_PER_SECOND, ResearchState, ResourceIndex, Room,
-        UndergroundLevel, WorkerTask, add_research, sorted_unit_ids, spawn_unit,
+        MatchResult, MoveOrder, RESEARCH_BASE_PER_SECOND, ResearchState, Room, UndergroundLevel,
+        WorkerTask, add_research, sorted_unit_ids, spawn_unit,
     };
 
     use super::*;
@@ -2914,6 +2976,53 @@ mod tests {
         refresh_visibility(&mut world, &map);
         assert!(visible_to(&world, TeamId(1), alien_cell));
         assert!(world.get::<Unit>(alien).is_some());
+    }
+
+    /// HPA-1198 Worker swing state: gathering faces the source and
+    /// constructing faces the site, both by footprint center x; walking,
+    /// carrying and idle tasks are not working, and neither is a task whose
+    /// target no longer exists.
+    #[test]
+    fn worker_view_state_faces_the_gathered_source_or_built_site() {
+        let fixture = MapFixture::battlefield();
+        let mut map = fixture.map.clone();
+        let mut world = World::new();
+        seed_skirmish(&mut world, &mut map, &fixture);
+
+        let (&source, &source_entity) = world.resource::<ResourceIndex>().iter().next().unwrap();
+        let source_x = world.get::<Footprint>(source_entity).unwrap().center().x;
+        let site_x = {
+            let rc = world
+                .resource::<BuildingIndex>()
+                .entity(BuildingId(1))
+                .unwrap();
+            world.get::<Footprint>(rc).unwrap().center().x
+        };
+
+        let gathering = worker_view_state(&world, &WorkerTask::Gathering { source });
+        assert_eq!(gathering.target_x, Some(source_x));
+        let building = worker_view_state(
+            &world,
+            &WorkerTask::Constructing {
+                building: BuildingId(1),
+            },
+        );
+        assert_eq!(building.target_x, Some(site_x));
+        for task in [
+            WorkerTask::Idle,
+            WorkerTask::ToSource {
+                source,
+                slot: GridPos::new(0, 0),
+            },
+            WorkerTask::Gathering {
+                source: ResourceId(9_999),
+            },
+            WorkerTask::Constructing {
+                building: BuildingId(9_999),
+            },
+        ] {
+            assert_eq!(worker_view_state(&world, &task).target_x, None, "{task:?}");
+        }
     }
 
     /// The enemy branch of the building fog gate: with the Team-2 base gone,

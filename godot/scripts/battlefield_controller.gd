@@ -275,30 +275,34 @@ func _playing() -> bool:
 	return not _shutting_down and _session_phase == "Playing"
 
 ## Cosmetics only: reads the event payload, never touches combat state.
+## A unit attacker strikes in its action pose facing the hit before any
+## tracer leaves its (action-pose) muzzle; a killed unit's death effect
+## topples the corpse its freed view handed to CombatFx.
 func _dispatch_combat_event(event: Dictionary) -> void:
 	var hit := Vector3(float(event.get("x", 0.0)), 1.0, float(event.get("y", 0.0)))
-	if bool(event.get("ranged", false)):
-		var attacker: Node3D = null
-		var attacker_id := int(event.get("attacker", -1))
-		match str(event.get("attacker_kind", "")):
-			"unit":
-				attacker = _unit_view(attacker_id)
-			"building":
-				attacker = _building_view(attacker_id)
-		if attacker != null:
-			var attacker_kind := str(event.get("attacker_kind", ""))
-			_fx.spawn_tracer(_attacker_muzzle_position(attacker, attacker_kind), hit)
+	var attacker: Node3D = null
+	var attacker_id := int(event.get("attacker", -1))
+	var attacker_kind := str(event.get("attacker_kind", ""))
+	match attacker_kind:
+		"unit":
+			attacker = _unit_view(attacker_id)
+			if attacker != null and attacker.has_method("play_action"):
+				attacker.call("play_action", hit.x)
+		"building":
+			attacker = _building_view(attacker_id)
+	if bool(event.get("ranged", false)) and attacker != null:
+		_fx.spawn_tracer(_attacker_muzzle_position(attacker, attacker_kind), hit)
 	_fx.spawn_hit(hit)
 	_note_friendly_building_hit(event)
 	if bool(event.get("killed", false)):
-		_fx.spawn_death(hit)
-		if str(event.get("target_kind", "")) == "unit":
+		var unit_target := str(event.get("target_kind", "")) == "unit"
+		_fx.spawn_death(hit, int(event.get("target_id", -1)) if unit_target else -1)
+		if unit_target:
 			var target_id := int(event.get("target_id", -1))
 			var target_kind := str(_unit_kinds.get(target_id, _previous_unit_kinds.get(target_id, "")))
 			if target_kind == "Swarmer":
 				_fx.play_cue("swarmer_death")
-	var attacker_id := int(event.get("attacker", 0))
-	if str(event.get("attacker_kind", "")) == "building" \
+	if attacker_kind == "building" \
 			and str(_building_kinds.get(attacker_id, "")) == "GunTurret":
 		_fx.play_cue("gun_turret_fire")
 	elif attacker_id > 0:
@@ -319,6 +323,8 @@ func _note_friendly_building_hit(event: Dictionary) -> void:
 		_rc_alert_until_msec = Time.get_ticks_msec() + int(RC_ALERT_SECONDS * 1000.0)
 
 func _attacker_muzzle_position(attacker: Node3D, attacker_kind: String) -> Vector3:
+	if attacker_kind == "unit" and attacker.has_method("muzzle_position"):
+		return attacker.call("muzzle_position")
 	var height := 0.8
 	if attacker_kind == "building":
 		var building_kind := str(attacker.get_meta("building_kind", ""))

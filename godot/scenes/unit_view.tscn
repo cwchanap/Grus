@@ -1,16 +1,6 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="Script" path="res://scripts/unit_view.gd" id="1_script"]
-
-[sub_resource type="CylinderMesh" id="CylinderMesh_body"]
-top_radius = 0.32
-bottom_radius = 0.42
-height = 1.0
-
-[sub_resource type="StandardMaterial3D" id="Material_body"]
-resource_local_to_scene = true
-albedo_color = Color(0.65, 0.68, 0.72, 1)
-roughness = 0.75
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_ring"]
 top_radius = 0.62
@@ -31,11 +21,6 @@ shading_mode = 0
 [node name="UnitView" type="Node3D"]
 visible = false
 script = ExtResource("1_script")
-
-[node name="Body" type="MeshInstance3D" parent="."]
-position = Vector3(0, 0.5, 0)
-mesh = SubResource("CylinderMesh_body")
-material_override = SubResource("Material_body")
 
 [node name="SelectionRing" type="MeshInstance3D" parent="."]
 position = Vector3(0, 0.02, 0)
