@@ -125,6 +125,8 @@ func _try_attach() -> void:
 	_model = Node3D.new()
 	_model.name = "Model"
 	_sprite = Sprite3D.new()
+	# A facing set before attach (an early set_working) must survive.
+	_sprite.flip_h = _facing_left
 	_sprite.texture = base
 	_sprite.billboard = BaseMaterial3D.BILLBOARD_DISABLED
 	_sprite.shaded = false
@@ -132,9 +134,10 @@ func _try_attach() -> void:
 	_sprite.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_sprite.centered = false
 	_sprite.pixel_size = _figure_height / _figure_pixels(base)
-	# Bottom edge on the ground, canvas center on the unit: the feet and the
-	# baked shadow then sit on the unit's position.
-	_sprite.offset = Vector2(-0.5 * base.get_width(), 0.0)
+	# Feet row (FEET_FROM_BOTTOM above the canvas bottom) on the ground and
+	# canvas center on the unit: the feet and the baked shadow then sit on
+	# the unit's position.
+	_sprite.offset = Vector2(-0.5 * base.get_width(), -FEET_FROM_BOTTOM * base.get_height())
 	_sprite.rotation_degrees = Vector3(-_sprite_pitch_degrees(), 0.0, 0.0)
 	var depth := DEPTH_BIAS + float(posmod(unit_id(), 64)) * DEPTH_TIEBREAK_STEP
 	_sprite.position = Vector3(0.0, GROUND_LIFT, 0.0) + _sprite.transform.basis.z * depth
