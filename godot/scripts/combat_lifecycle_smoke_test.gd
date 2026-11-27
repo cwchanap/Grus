@@ -1560,13 +1560,17 @@ func _run() -> void:
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
 
-## HPA-1198: sampled at the top of each frame, so an action pose seen here on
-## a non-working unit is an attack pose the previous frame actually drew.
+## HPA-1198: sampled at the top of each frame, so a visible action pose seen
+## here on a combatant is an attack pose the previous frame actually drew.
+## Workers are noncombatants, so their (possibly lingering) work swing never
+## counts.
 func _note_attack_pose() -> void:
 	if _saw_attack_pose:
 		return
 	for node in get_tree().get_nodes_in_group("unit_views"):
-		if node.has_method("showing_action") and bool(node.call("showing_action")) \
-				and not bool(node.call("is_working")):
+		if str(node.get_meta("unit_kind", "")) == "Worker" or not node.has_method("showing_action"):
+			continue
+		var sprite: Sprite3D = node.call("sprite")
+		if sprite != null and sprite.is_visible_in_tree() and bool(node.call("showing_action")):
 			_saw_attack_pose = true
 			return

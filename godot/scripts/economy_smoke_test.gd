@@ -1192,7 +1192,8 @@ func _note_worker_working() -> void:
 		if str(node.get_meta("unit_kind", "")) == "Worker" and node.has_method("is_working") \
 				and bool(node.call("is_working")):
 			_saw_worker_working = true
-			if bool(node.call("showing_action")):
+			var sprite: Sprite3D = node.call("sprite")
+			if sprite != null and sprite.is_visible_in_tree() and bool(node.call("showing_action")):
 				_saw_worker_swing = true
 				return
 
