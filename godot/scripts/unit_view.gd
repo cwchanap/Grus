@@ -42,6 +42,10 @@ const GROUND_LIFT := 0.01
 ## of, while painted buildings (whose planes start at their front edge, at
 ## least 2.5 cells ahead of any unit behind them) still hide units behind.
 const DEPTH_BIAS := 1.0
+## Units side by side at the same depth row would be coplanar and z-fight
+## where they overlap; a tiny stable per-unit nudge (at most 0.126) breaks
+## the tie without moving anything on screen.
+const DEPTH_TIEBREAK_STEP := 0.002
 const ACTION_SECONDS := 0.22
 const SWING_SECONDS := 0.75
 const HURT_SECONDS := 0.18
@@ -126,7 +130,8 @@ func _try_attach() -> void:
 	# baked shadow then sit on the unit's position.
 	_sprite.offset = Vector2(-0.5 * base.get_width(), 0.0)
 	_sprite.rotation_degrees = Vector3(-_sprite_pitch_degrees(), 0.0, 0.0)
-	_sprite.position = Vector3(0.0, GROUND_LIFT, 0.0) + _sprite.transform.basis.z * DEPTH_BIAS
+	var depth := DEPTH_BIAS + float(posmod(unit_id(), 64)) * DEPTH_TIEBREAK_STEP
+	_sprite.position = Vector3(0.0, GROUND_LIFT, 0.0) + _sprite.transform.basis.z * depth
 	_model.add_child(_sprite)
 	add_child(_model)
 	selection_ring.scale = Vector3.ONE * _bar_scale
