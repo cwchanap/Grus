@@ -319,6 +319,11 @@ func _painted_unit_error(probe: Node3D, kind: String, textures: Dictionary) -> S
 	var figure: float = sprite.pixel_size * (sprite.texture.get_height() * (1.0 - UnitView.FEET_FROM_BOTTOM) - top.y)
 	if absf(figure - float(size[0])) > 0.01 or not (probe.get_node("SelectionRing") as Node3D).scale.is_equal_approx(Vector3.ONE * float(size[1])):
 		return "unit %s figure %.3f / ring do not match SIZES %s" % [kind, figure, size]
+	# The painted feet row (and baked shadow) sits on the unit's pivot.
+	var feet_pixel := Vector2(0.5 * sprite.texture.get_width(), sprite.texture.get_height() * (1.0 - UnitView.FEET_FROM_BOTTOM))
+	var feet_local: Vector3 = BuildingView.sprite_local_from_pixel(sprite, feet_pixel)
+	if absf(feet_local.x) > 0.001 or absf(feet_local.y) > 0.001:
+		return "unit %s feet row sits at sprite-local %s, not on the unit pivot" % [kind, feet_local]
 	# Action pose facing left of the unit, then flip-aware texel picking: an
 	# opaque texel maps to the mirrored sprite-local point and back.
 	probe.call("play_action", probe.global_position.x - 3.0)
