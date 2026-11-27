@@ -99,10 +99,12 @@ UNITS = {
     "behemoth": (
         "the Behemoth: the biggest, heaviest alien, upright on massive armoured legs, with two huge horns curving "
         "up and outward from its head like a crescent (as in the portrait), heavy armoured arms, spikes, claws and "
-        "glowing cyan eyes. Colours exactly like the portrait: frosted slate-grey chitin plates with snow and frost "
-        "caked on them and small subdued orange stripe markings, faint violet glow in the joints; not black. Also "
-        "attached: the approved Brute sprite art-src/2026-11-26/units/brute.png, the same alien family: match its "
-        "rendering, frost and colours.",
+        "glowing cyan eyes. COLOUR: the HUD portrait is the PRIMARY colour reference. DARK frosted slate-grey "
+        "chitin plates (dark slate, not lavender, not pale, not white, not purple-grey), clearly darker than snow "
+        "so it reads as dark chitin against a snowfield, with snow and frost caked on the plate edges, small "
+        "subdued orange stripe markings, cyan eyes and a faint violet glow in the joints. If the approved Brute "
+        "sprite art-src/2026-11-26/units/brute.png is attached, use it for rendering style and level of detail "
+        "only, never for colour.",
         "standing tall and heavy, legs planted wide, turned to face right in a three-quarter side view: head, horns and body point toward the right edge, we see more of its left side than its front, not facing the viewer",
         "roaring with its maw open and stomping one huge foot down, arms spread wide",
     ),
@@ -133,16 +135,24 @@ PANELS = {
         "Story panel 2: night. The skyline of an ordinary frozen city, a different city from the key art: tall "
         "snow-covered skyscrapers and apartment towers standing against the stormy night sky, seen from a low, "
         "distant viewpoint across a frozen plain. Do NOT show a glass dome, the Research Center, or the walled "
-        "city of the key art. A swarm of dark chitin aliens (like the attached Swarmer and Brute) pours over the "
-        "skyline like a black flood, swarming over the tops of the towers and streaming down their sides, "
-        "hundreds of small glowing cyan and violet eyes, blizzard. A few warm orange windows still lit in the "
-        "towers. Terrifying but readable.",
+        "city of the key art. The alien SWARM must be the obvious subject: a dense dark flood of many small "
+        "chitin aliens (clearly readable as individual spider-like creatures like the attached Swarmer, with "
+        "legs, armoured backs and glowing cyan and violet eyes, never vine-like clusters or foliage), plus a few "
+        "larger ones like the attached Brute. They pour over the tower tops, crawl down the towers' sides and "
+        "stream across the snow in front of the city toward the viewer. The swarm mass fills the upper two "
+        "thirds and thins out toward the bottom, so the lower third stays calm. Blizzard. A few warm orange "
+        "windows still lit in the towers. Terrifying but readable.",
     ),
     3: (
         [KEY_ART],
         "Story panel 3: a dead city skyline at night in a blizzard, seen from far away: frozen skyscrapers, most "
         "windows dark, the last few clusters of warm orange lights going out one by one across the skyline (lit "
-        "on one side, dark on the other), a radio mast with a dying faint red beacon. Cold, silent and lonely.",
+        "on one side, fading to dark on the other). A tall radio mast stands out clearly against the sky with a "
+        "dying red beacon glowing at its tip. Cold, silent and lonely, but NOT murky: match the overall brightness, "
+        "exposure and tonal range of the attached Start key art: moonlit silver-blue storm clouds, bright snow on "
+        "every ledge and rooftop, mid-tone blue-grey towers with readable shapes, and a moonlit blue-grey snow "
+        "plain in the foreground (mid-tone, not near-black). The overall image should be about as bright as the "
+        "key art, not darker.",
     ),
     5: (
         [KEY_ART, "godot/assets/structures/painted/research_center.png",
