@@ -33,6 +33,10 @@ FEET_Y = SIZE - 24  # bottom of the feet; room below for the shadow
 MARGIN = 8
 # Calibration knob: per-image scale multiplier if a raw pose came back at a different body scale.
 SCALE_FIX = {}
+# Calibration knob: per-image x offset (output px) applied at paste time. feet() anchors the lowest 8% band,
+# which for the Brute and Behemoth BASE poses is a forward claw, not the planted stance; these shift the body
+# back over the shadow so it sits where the action pose's body sits (tuned by eye on anchor_check.png).
+OFFSET_FIX = {"brute": -71, "behemoth": -77}
 
 
 def alpha(im):
@@ -82,7 +86,7 @@ def build_unit(kind):
         small = im.convert("RGBa").resize((round(im.width * s), round(im.height * s)), Image.LANCZOS).convert("RGBA")
         # paste (not alpha_composite) accepts negative offsets; onto an empty canvas it is exact
         canvas = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        canvas.paste(small, (round(SIZE / 2 - cx * s), round(FEET_Y - bottom * s)))
+        canvas.paste(small, (round(SIZE / 2 - cx * s) + OFFSET_FIX.get(kind + p, 0), round(FEET_Y - bottom * s)))
         out = base_shadow.copy()
         out.alpha_composite(canvas)
         out.save(UNIT_OUT / f"{kind}{p}.png", optimize=True)
@@ -118,13 +122,14 @@ def verify():
                 "transparent corners": a[[0, 0, -1, -1], [0, -1, 0, -1]].max() == 0,
                 "transparent border": max(a[0].max(), a[-1].max(), a[:, 0].max(), a[:, -1].max()) < 8,
                 "feet near bottom": SIZE - 40 <= bottom <= SIZE - 8,
-                "feet centred": abs(cx - SIZE / 2) <= 12,
+                "feet at anchor": abs(cx - SIZE / 2 - OFFSET_FIX.get(kind + p, 0)) <= 12,
             }
             bad = [k for k, ok in checks.items() if not ok]
             print(f"{'FAIL' if bad else 'ok  '} units/painted/{path.name:22} feet y={bottom} x={cx:.0f} {bad or ''}")
             errors += [f"{path.name}: {k}" for k in bad]
         if kind in anchors and kind + "_action" in anchors:
             (b0, c0), (b1, c1) = anchors[kind], anchors[kind + "_action"]
+            c0, c1 = c0 - OFFSET_FIX.get(kind, 0), c1 - OFFSET_FIX.get(kind + "_action", 0)
             if abs(b0 - b1) > 4 or abs(c0 - c1) > 8:
                 errors.append(f"{kind}: base/action feet anchors differ ({b0},{c0:.0f}) vs ({b1},{c1:.0f})")
     for n in PANELS:
@@ -175,6 +180,33 @@ def unit_sheet():
     sheet.convert("RGB").save(SHEETS / "units.png", optimize=True)
 
 
+def anchor_sheet():
+    """Per unit at ONE canvas scale and origin: base | action | overlay (base orange, action cyan).
+    The vertical line marks the canvas centre, where the baked shadow sits."""
+    cell = 256
+    sheet = Image.new("RGBA", (cell * 3 + 40, cell * len(KINDS) + 40), (34, 42, 56, 255))
+    d = ImageDraw.Draw(sheet)
+    for i, h in enumerate(["base", "action", "overlay: base orange / action cyan"]):
+        d.text((20 + i * cell + 8, 14), h, fill=(220, 230, 240, 255))
+    for r, kind in enumerate(KINDS):
+        y = 40 + r * cell
+        ims = [Image.open(UNIT_OUT / f"{kind}{p}.png").convert("RGBA").resize((cell, cell), Image.LANCZOS)
+               for p in ("", "_action")]
+        tints = []
+        for im, rgb in zip(ims, [(255, 150, 60), (80, 220, 255)]):
+            t = Image.new("RGBA", im.size, rgb + (0,))
+            t.putalpha(im.getchannel("A").point(lambda v: v * 0.6))
+            tints.append(t)
+        for c, im in enumerate([*ims, None]):
+            tile = Image.new("RGBA", (cell, cell), (92, 104, 122, 255))
+            for layer in ([im] if im else tints):
+                tile.alpha_composite(layer)
+            ImageDraw.Draw(tile).line([(cell // 2, 0), (cell // 2, cell)], fill=(255, 255, 255, 110))
+            sheet.alpha_composite(tile, (20 + c * cell, y))
+        d.text((24, y + 6), kind, fill=(255, 170, 90, 255))
+    sheet.convert("RGB").save(SHEETS / "anchor_check.png", optimize=True)
+
+
 def intro_sheet():
     """Panels 1-5 in story order (4 = Start key art, cropped 16:9). Dashed line marks the caption band."""
     w, h = 768, 432
@@ -207,6 +239,7 @@ def main():
     errors = verify()
     if "--verify" not in sys.argv:
         unit_sheet()
+        anchor_sheet()
         intro_sheet()
     print("\n".join(["", *errors, f"{len(errors)} problem(s)"]) if errors else "\nall 18 runtime files OK")
     sys.exit(1 if errors else 0)
