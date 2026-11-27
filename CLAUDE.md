@@ -55,7 +55,7 @@ cargo test -p grus-godot --lib --features e2e --locked -- --test-threads=1
 Godot headless smokes (each is a real end-to-end contract, not a stub):
 
 ```bash
-godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg + research HUD
+godot --headless --path godot res://scenes/smoke_test.tscn           # input/selection/move/HUD/cadence + fog/minimap scout leg + research HUD + story intro
 godot --headless --path godot res://scenes/reset_test.tscn           # fixture reset → 4 units / 1 building / 18 resources
 godot --headless --path godot res://scenes/economy_smoke_test.tscn   # full HPA-471 economy loop at 20x sim speed
 godot --headless --path godot res://scenes/combat_lifecycle_smoke_test.tscn   # HPA-472 combat/session lifecycle at 20x + HPA-188 research boundary leg
@@ -116,6 +116,7 @@ Underground needs no workers or cold/fuel modifier. Credit only resource rooms c
 - **Layout coordinates are single-sourced:** `MapFixture::team_starts()` returns the `TeamStart` table (Research Center anchor, 4 worker cells, Barracks/Depot anchors, `safe_sources: [ResourceId; 6]` per team) and `fixture::RUINS` is the only static-blocker table — `battlefield()` applies it through `set_blocked_rect`, `GrusBridge.obstacle_rects()` exposes the same inclusive rectangles, and `ruins.gd` instantiates one imported ruin prop scaled to each rect. Never copy ruin or start coordinates into tests, `.tscn`, or GDScript — read the table or the live views. Team 1's start is the central city (RC center = map midpoint); team membership and safe-source ids come from the table, never from an `x < 64` style side test.
 - **Two reset modes, do not mix:** `reset_fixture` reseeds the 4-unit/1-building/18-resource survival fixture (runtime + smokes) and resets `WaveState`; `reset_benchmark_fixture` reseeds 50 human defenders plus 150 actual aliens through the shared wave spawn/AttackMove path, keeps one Research Center and inserts **no `MatchSession`** (a missing session reads as Playing), and is used only by `benchmark_200.tscn`. Both share the single human-start `seed_skirmish` path — the mirrored seed / `GRUS_MIRRORED_START` launch mode was removed in HPA-445.
 - **Sim speed** is `Engine.time_scale` (godot-bevy's fixed driver derives its delta from `_physics_process`), not `Time<Virtual>` alone — `set_sim_speed` writes both; the economy smoke runs at 20×.
+- **The story intro auto-plays only in the launched game:** `battlefield_controller.gd` plays it once when `main.tscn` is the current scene, `BEVY_E2E` is unset and `user://intro_seen` is missing. Smoke and benchmark scenes instance `main.tscn` as a child, so they never see it; the main smoke opens it through STORY instead.
 - `setup_fixture` is guarded on `UnitIndex` already existing, so a bridge reset before the first fixed tick does not double-seed.
 
 ## Tests

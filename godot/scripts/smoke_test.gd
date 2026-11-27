@@ -15,6 +15,7 @@ const PRIOR_CAMERA_SIZE := 72.0
 
 const HudHelpers := preload("res://scripts/hud_helpers.gd")
 const SmokeHelpers := preload("res://scripts/smoke_helpers.gd")
+const StoryIntro := preload("res://scripts/story_intro.gd")
 ## RejectReason discriminant values (declaration order in
 ## crates/grus-sim/src/commands.rs); the bridge reports "no rejection" as -1.
 const REJECT_NOT_COMBATANT := 14
@@ -2097,6 +2098,128 @@ func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: 
 	main.call("_index_views")
 	return ok
 
+## HPA-1208 story intro through real input on the Start screen. A smoke scene
+## instances main.tscn under its own root, so the first-launch auto-play must
+## not fire here; STORY opens it. Click and Space walk all five panels (art and
+## caption from the intro's own table, the last hint saying "begin"), and the
+## last click, Esc and SKIP each land back on Start. While it is open no key or
+## click reaches the HUD or the world: Tab does not open the Underground
+## drawer, Esc does not leave Start and the selection is untouched. The winter
+## wind loop starts under the intro and stops again on Start.
+func _assert_story_intro() -> bool:
+	var main := get_node("Main")
+	var intro := get_node_or_null("Main/HUD/StoryIntro") as StoryIntro
+	var story := get_node_or_null("Main/HUD/SessionPanel/StoryButton") as Button
+	var start_button := get_node("Main/HUD/SessionPanel/StartButton") as Button
+	var controls := get_node("Main/HUD/SessionPanel/ControlsLabel") as Control
+	var drawer := get_node("Main/HUD/UndergroundPanel") as Control
+	var fx := get_node("Main/CombatFx")
+	var wind := (fx.get("_players") as Dictionary).get("winter_wind") as AudioStreamPlayer
+	if intro == null or story == null:
+		_fail("Start is missing the STORY button or the story intro overlay")
+		return false
+	if intro.visible or intro.panel_index() != -1:
+		_fail("the story intro auto-played inside a smoke scene")
+		return false
+	var story_rect := story.get_global_rect()
+	if not story.is_visible_in_tree() or story.disabled \
+			or not Rect2(Vector2.ZERO, Vector2(TEST_VIEWPORT_SIZE)).encloses(story_rect) \
+			or story_rect.intersects(start_button.get_global_rect()) \
+			or story_rect.intersects(controls.get_global_rect()) \
+			or story_rect.position.y < start_button.get_global_rect().end.y:
+		_fail("STORY is not a visible action under START on the Start screen: %s" % story_rect)
+		return false
+	var selection_before := (main.selected_ids as Array).duplicate()
+	var winds_before := int((fx.get("cue_counts") as Dictionary).get("winter_wind", 0))
+	var center := Vector2(TEST_VIEWPORT_SIZE) * 0.5
+	SmokeHelpers.push_mouse_click(get_tree(), story_rect.get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if not intro.is_visible_in_tree() or intro.panel_index() != 0:
+		_fail("STORY did not open the intro on its first panel")
+		return false
+	if int((fx.get("cue_counts") as Dictionary).get("winter_wind", 0)) != winds_before + 1 \
+			or wind.stream_paused:
+		_fail("the winter wind loop did not start under the intro")
+		return false
+	_key_tap(KEY_TAB)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if drawer.visible or intro.panel_index() != 0:
+		_fail("Tab leaked through the intro to the Underground drawer")
+		return false
+	var caption := intro.get_node("Caption") as Label
+	var art := intro.get_node("ArtClip/Art") as TextureRect
+	var hint := intro.get_node("Hint") as RichTextLabel
+	for index in StoryIntro.PANELS.size():
+		if index > 0:
+			# Alternate the two real advance inputs: click, Space, click, Space.
+			if index % 2 == 1:
+				SmokeHelpers.push_mouse_click(get_tree(), center, MOUSE_BUTTON_LEFT)
+			else:
+				_key_tap(KEY_SPACE)
+			if not await _wait_until(func(): return intro.panel_index() == index, 2.0,
+					"the intro did not advance to panel %d" % (index + 1)):
+				return false
+		var panel: Dictionary = StoryIntro.PANELS[index]
+		if caption.text != str(panel["caption"]) or art.texture == null \
+				or art.texture.resource_path != str(panel["art"]):
+			_fail("intro panel %d shows the wrong caption or art: %s / %s" % [
+				index + 1, caption.text, art.texture.resource_path if art.texture != null else "none"])
+			return false
+		var last := index == StoryIntro.PANELS.size() - 1
+		if hint.get_parsed_text().contains("begin") != last:
+			_fail("intro panel %d hint is wrong: %s" % [index + 1, hint.get_parsed_text()])
+			return false
+		if (index == 1 or last) and SmokeHelpers.capture_enabled():
+			# Let the caption finish fading in before the evidence frame.
+			await get_tree().create_timer(1.5, true, false, true).timeout
+			var capture := await SmokeHelpers.capture_frame(get_tree(), "intro-panel-%d" % (index + 1))
+			if not capture.is_empty():
+				_fail(capture)
+				return false
+	SmokeHelpers.push_mouse_click(get_tree(), center, MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if intro.visible or str(GrusBridge.session_snapshot().get("phase", "")) != "Start" \
+			or not start_button.is_visible_in_tree():
+		_fail("the last intro click did not land on Start")
+		return false
+	if wind.playing:
+		_fail("the winter wind loop kept playing on Start after the intro")
+		return false
+	SmokeHelpers.push_mouse_click(get_tree(), story_rect.get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	SmokeHelpers.push_mouse_click(get_tree(), center, MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if intro.panel_index() != 1:
+		_fail("STORY did not replay the intro from its first panel")
+		return false
+	_key_tap(KEY_ESCAPE)
+	if not await _wait_until(func(): return not intro.visible, 2.0, "Esc did not close the intro"):
+		return false
+	await get_tree().process_frame
+	if str(GrusBridge.session_snapshot().get("phase", "")) != "Start" or drawer.visible:
+		_fail("Esc on the intro leaked past Start")
+		return false
+	SmokeHelpers.push_mouse_click(get_tree(), story_rect.get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	var skip := intro.get_node("SkipButton") as Button
+	if intro.panel_index() != 0 or not skip.is_visible_in_tree():
+		_fail("STORY did not reopen the intro with its SKIP button")
+		return false
+	SmokeHelpers.push_mouse_click(get_tree(), skip.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	await get_tree().process_frame
+	if intro.visible or not start_button.is_visible_in_tree() or wind.playing:
+		_fail("SKIP did not land on Start")
+		return false
+	if (main.selected_ids as Array) != selection_before:
+		_fail("intro clicks reached world selection: %s" % str(main.selected_ids))
+		return false
+	var story_capture := await SmokeHelpers.capture_frame(get_tree(), "start-story")
+	if not story_capture.is_empty():
+		_fail(story_capture)
+		return false
+	return true
+
 func _run() -> void:
 	var camera := get_node("Main/Camera3D") as Camera3D
 	var default_camera_transform := camera.global_transform
@@ -2421,6 +2544,8 @@ func _run() -> void:
 		if overlay == null or overlay.mouse_filter != Control.MOUSE_FILTER_IGNORE:
 			_fail("decorative overlay %s is missing or intercepts mouse input" % path)
 			return
+	if not await _assert_story_intro():
+		return
 	# The Start overlay keeps the first wave timer frozen until the player
 	# starts the one-base survival match.
 	if not GrusBridge.start_match():

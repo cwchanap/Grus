@@ -60,6 +60,7 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 @onready var frost_overlay: TextureRect = $Atmosphere/FrostOverlay
 @onready var vignette: TextureRect = $Vignette
 @onready var start_button: Button = $SessionPanel/StartButton
+@onready var story_button: Button = $SessionPanel/StoryButton
 @onready var resume_button: Button = $SessionPanel/ResumeButton
 @onready var restart_button: Button = $SessionPanel/RestartButton
 @onready var quit_button: Button = $SessionPanel/QuitButton
@@ -266,6 +267,35 @@ func _ready() -> void:
 	restart_button.text = "RESTART"
 	quit_button.add_theme_font_size_override("font_size", 18)
 	quit_button.text = "QUIT"
+	_style_story_button()
+
+## STORY replays the intro (HPA-1208): a dark steel secondary action with a
+## cyan edge and play mark under the bright START, as in the intro mockup.
+func _style_story_button() -> void:
+	# A Button puts a left icon at the content edge, so equal side margins
+	# centre the mark and the word together.
+	var font_size := 20
+	var label_width := story_button.get_theme_font("font").get_string_size(
+		"STORY", HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var side := floorf(maxf(story_button.size.x - (16.0 + 10.0 + label_width), 0.0) * 0.5)
+	for state in ["normal", "hover", "pressed"]:
+		var plate := StyleBoxFlat.new()
+		plate.bg_color = Color(0.13, 0.16, 0.19) if state == "normal" else Color(0.18, 0.22, 0.26)
+		plate.border_color = Color(0.22, 0.83, 0.9)
+		plate.set_border_width_all(2)
+		plate.set_corner_radius_all(4)
+		plate.shadow_color = Color(0.22, 0.83, 0.9, 0.25)
+		plate.shadow_size = 7
+		plate.content_margin_left = side
+		plate.content_margin_right = side
+		story_button.add_theme_stylebox_override(state, plate)
+	story_button.add_theme_font_size_override("font_size", font_size)
+	story_button.add_theme_constant_override("h_separation", 10)
+	var mark := Image.new()
+	mark.load_svg_from_string('<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">'
+		+ '<path d="M3 2l11 6-11 6z" fill="#38d3e6"/></svg>')
+	story_button.icon = ImageTexture.create_from_image(mark)
+	story_button.text = "STORY"
 
 func _build_order_tiles() -> void:
 	for button in _order_grid.get_children():
@@ -1097,17 +1127,20 @@ func refresh_session(phase: String, winner_team: int) -> void:
 		"Start":
 			session_label.text = "Survive the alien waves\nProtect the Research Center\nReach %s research" % _format_int(_research_target_points)
 			start_button.visible = true
+			story_button.visible = true
 			resume_button.visible = false
 			restart_button.visible = false
 			quit_button.visible = false
 		"Paused":
 			session_label.text = "Paused"
 			start_button.visible = false
+			story_button.visible = false
 			resume_button.visible = true
 			restart_button.visible = false
 			quit_button.visible = false
 		"Result":
 			start_button.visible = false
+			story_button.visible = false
 			resume_button.visible = false
 			restart_button.visible = true
 			quit_button.visible = true

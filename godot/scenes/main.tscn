@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/battlefield.tscn" id="1_battlefield"]
 [ext_resource type="Script" path="res://scripts/battlefield_controller.gd" id="2_controller"]
@@ -17,6 +17,7 @@
 [ext_resource type="Texture2D" path="res://assets/ui/icons/status/wave_countdown.png" id="15_survive"]
 [ext_resource type="Texture2D" path="res://assets/ui/icons/buildings/research_center.png" id="16_protect"]
 [ext_resource type="Texture2D" path="res://assets/ui/icons/status/research_progress.png" id="17_research"]
+[ext_resource type="PackedScene" path="res://scenes/story_intro.tscn" id="18_story_intro"]
 
 [sub_resource type="BoxMesh" id="BoxMesh_placement"]
 size = Vector3(1, 0.4, 1)
@@ -1166,6 +1167,15 @@ offset_right = 380.0
 offset_bottom = 390.0
 text = "Start"
 
+[node name="StoryButton" type="Button" parent="HUD/SessionPanel"]
+layout_mode = 0
+offset_left = 20.0
+offset_top = 402.0
+offset_right = 380.0
+offset_bottom = 450.0
+tooltip_text = "Replay the story intro"
+text = "STORY"
+
 [node name="ResumeButton" type="Button" parent="HUD/SessionPanel"]
 visible = false
 layout_mode = 0
@@ -1204,3 +1214,5 @@ scroll_active = false
 autowrap_mode = 0
 text = "[center][img=18x18 alt=\"Left mouse button\"]res://assets/ui/icons/status/mouse_left.png[/img] Select: left click / drag / Shift   ·   [img=18x18 alt=\"Right mouse button\"]res://assets/ui/icons/status/mouse_right.png[/img] Command: right click   ·   Attack-move: A then right click   ·   Stop: S
 [img=18x18 alt=\"Pause action\"]res://assets/ui/icons/actions/pause.png[/img] Pause: Esc   ·   Underground: Tab   ·   [img=18x18 alt=\"Mouse wheel\"]res://assets/ui/icons/status/mouse_wheel.png[/img] Camera: wheel / middle-drag   ·   Minimap: click to recenter[/center]"
+
+[node name="StoryIntro" parent="HUD" instance=ExtResource("18_story_intro")]
