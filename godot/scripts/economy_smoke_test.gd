@@ -71,6 +71,7 @@ var _camera: Camera3D
 ## HPA-1198: set once any real Worker view reports the Rust-pushed working
 ## state (gathering or constructing), sampled every rendered frame.
 var _saw_worker_working := false
+var _saw_worker_swing := false
 ## The authored opening framing, captured at boot so the HPA-698 clearance
 ## probes prove they ran on the default view (no earlier zoom or pan).
 var _authored_camera_transform := Transform3D()
@@ -1182,14 +1183,18 @@ func _single_ringed_idle_worker() -> bool:
 	var idle: PackedInt32Array = GrusBridge.economy_snapshot().get("idle_worker_ids", PackedInt32Array())
 	return idle.has(ringed[0])
 
+## Sampled at the top of each frame, so a pose seen here was the one the
+## previous frame drew.
 func _note_worker_working() -> void:
-	if _saw_worker_working:
+	if _saw_worker_swing:
 		return
 	for node in get_tree().get_nodes_in_group("unit_views"):
 		if str(node.get_meta("unit_kind", "")) == "Worker" and node.has_method("is_working") \
 				and bool(node.call("is_working")):
 			_saw_worker_working = true
-			return
+			if bool(node.call("showing_action")):
+				_saw_worker_swing = true
+				return
 
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
@@ -2653,9 +2658,9 @@ func _run() -> void:
 
 	# HPA-1198: the Rust work-state push reached a real gathering/building
 	# Worker view, whose swing cycle showed its painted action pose.
-	if not _saw_worker_working or UnitView.actions_played <= actions_before:
-		_fail("no real Worker view swung its painted action pose while working (working=%s actions=%d)" % [
-			_saw_worker_working, UnitView.actions_played - actions_before])
+	if not _saw_worker_swing or UnitView.actions_played <= actions_before:
+		_fail("no real Worker view drew its painted swing pose while working (working=%s swing_drawn=%s actions=%d)" % [
+			_saw_worker_working, _saw_worker_swing, UnitView.actions_played - actions_before])
 		return
 
 	var end: Dictionary = GrusBridge.economy_snapshot()
