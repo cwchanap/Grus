@@ -2098,8 +2098,13 @@ fn set_view_state(handle: GodotNodeHandle, complete: bool, cold: bool) -> bool {
 
 /// The world x a Worker faces while it works: the footprint center of the
 /// source it gathers or the site it constructs. `None` for every other task
-/// (walking, carrying, idle) and for a target that no longer exists.
+/// (walking, carrying, idle), for a target that no longer exists, and while
+/// the session is frozen (Start/Paused/Result), when no work progresses: the
+/// task survives, so Resume pushes the same target again.
 fn worker_view_state(world: &World, task: &WorkerTask) -> WorkerLastViewState {
+    if !gameplay_active(world) {
+        return WorkerLastViewState { target_x: None };
+    }
     let target = match *task {
         WorkerTask::Gathering { source } => world
             .get_resource::<ResourceIndex>()
@@ -3022,6 +3027,22 @@ mod tests {
             },
         ] {
             assert_eq!(worker_view_state(&world, &task).target_x, None, "{task:?}");
+        }
+
+        // A frozen session stops the swing; Resume restores the same target.
+        let task = WorkerTask::Gathering { source };
+        for (phase, expected) in [
+            (MatchPhase::Paused, None),
+            (MatchPhase::Result(MatchResult(TeamId(2))), None),
+            (MatchPhase::Start, None),
+            (MatchPhase::Playing, Some(source_x)),
+        ] {
+            world.insert_resource(MatchSession { phase });
+            assert_eq!(
+                worker_view_state(&world, &task).target_x,
+                expected,
+                "{phase:?}"
+            );
         }
     }
 

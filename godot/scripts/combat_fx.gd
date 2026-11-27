@@ -103,8 +103,9 @@ func spawn_hit(position: Vector3) -> void:
 ## visible painted unit view therefore hands its last presentation here as it
 ## is freed (unit_view.gd), keyed by unit id, and the kill event's death
 ## effect topples it. Views freed without a kill (restart, fog) just expire.
-func remember_freed_unit(unit_id: int, sprite: Sprite3D, base: Texture2D) -> void:
+func remember_freed_unit(unit_id: int, sprite: Sprite3D, base: Texture2D, view_axis: Vector3) -> void:
 	_freed_units[unit_id] = {
+		"view_axis": view_axis,
 		"texture": base,
 		"pixel_size": sprite.pixel_size,
 		"offset": sprite.offset,
@@ -149,7 +150,13 @@ func _spawn_corpse(snapshot: Dictionary) -> void:
 	# other transients, so 20x smoke runs still free it promptly.
 	var fall := deg_to_rad(80.0) * (-1.0 if corpse.flip_h else 1.0)
 	var tween := corpse.create_tween().set_ignore_time_scale(true)
-	tween.tween_property(corpse, "rotation:z", corpse.rotation.z + fall, CORPSE_TOPPLE_SECONDS) \
+	# Roll about the camera view axis through the feet: the upright sprite
+	# then turns rigidly on screen instead of stretching as it falls.
+	var standing: Transform3D = snapshot["transform"]
+	var axis: Vector3 = snapshot["view_axis"]
+	var roll := func(angle: float) -> void:
+		corpse.global_transform = Transform3D(Basis(axis, angle) * standing.basis, standing.origin)
+	tween.tween_method(roll, 0.0, fall, CORPSE_TOPPLE_SECONDS) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tween.tween_property(corpse, "modulate:a", 0.0, CORPSE_FADE_SECONDS)
 	var ref: WeakRef = weakref(corpse)

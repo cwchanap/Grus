@@ -34,18 +34,21 @@ const FEET_FROM_BOTTOM := 24.0 / 512.0
 const MUZZLE_UV := {"Rifleman": Vector2(0.97, 0.34), "Spitter": Vector2(0.97, 0.53)}
 const DEFAULT_SPRITE_PITCH_DEGREES := 54.0
 const GROUND_LIFT := 0.01
-## The sprite leans back like the painted buildings, so its upper body lies
-## behind the feet in depth and a low 3D prop just behind a unit (a Wall,
-## Gate beam or resource) would cut across its legs. Sliding the sprite this
-## far toward the orthographic camera changes only its depth, never its
-## screen position: units then stand in front of props they are in front
-## of, while painted buildings (whose planes start at their front edge, at
-## least 2.5 cells ahead of any unit behind them) still hide units behind.
-const DEPTH_BIAS := 1.0
-## Units side by side at the same depth row would be coplanar and z-fight
-## where they overlap; a tiny stable per-unit nudge (at most 0.126) breaks
-## the tie without moving anything on screen.
-const DEPTH_TIEBREAK_STEP := 0.002
+## The sprite stands upright, stretched by 1/cos(camera pitch). Under the
+## orthographic camera that covers exactly the pixels of a camera-facing
+## sprite, but its depth rises with height like a standing figure, so Walls,
+## Gates, resources and the painted building planes hide or reveal a unit by
+## the side it really stands on. A camera-facing sprite has one depth for
+## the whole figure: no single bias kept it both in front of a Wall it stands
+## before and behind a Wall it stands behind.
+## Sliding the sprite this far toward the camera (screen position unchanged)
+## lifts the baked shadow below the feet row off the ground for most kinds.
+## It stays under the ~0.17 smallest depth margin of a unit just behind a
+## Wall or Gate, so those still hide it.
+const GROUND_CLEARANCE := 0.12
+## Units in one depth row would be coplanar and z-fight where they overlap;
+## a tiny stable per-unit nudge (at most 0.019) breaks the tie.
+const DEPTH_TIEBREAK_STEP := 0.0003
 const ACTION_SECONDS := 0.22
 const SWING_SECONDS := 0.75
 const HURT_SECONDS := 0.18
@@ -68,6 +71,11 @@ var _kind := ""
 var _model: Node3D = null
 var _sprite: Sprite3D = null
 var _figure_height := 1.0
+## Camera back axis at the sprite's pitch: the waddle and the corpse topple
+## roll about it, which turns the figure rigidly on screen.
+var _view_axis := Vector3.BACK
+var _upright := Basis.IDENTITY
+var _sprite_origin := Vector3.ZERO
 var _bar_scale := 1.0
 var _facing_left := false
 var _travel_x := 0.0
@@ -138,9 +146,12 @@ func _try_attach() -> void:
 	# canvas center on the unit: the feet and the baked shadow then sit on
 	# the unit's position.
 	_sprite.offset = Vector2(-0.5 * base.get_width(), -FEET_FROM_BOTTOM * base.get_height())
-	_sprite.rotation_degrees = Vector3(-_sprite_pitch_degrees(), 0.0, 0.0)
-	var depth := DEPTH_BIAS + float(posmod(unit_id(), 64)) * DEPTH_TIEBREAK_STEP
-	_sprite.position = Vector3(0.0, GROUND_LIFT, 0.0) + _sprite.transform.basis.z * depth
+	var pitch := deg_to_rad(_sprite_pitch_degrees())
+	_view_axis = Vector3(0.0, sin(pitch), cos(pitch))
+	_upright = Basis.from_scale(Vector3(1.0, 1.0 / maxf(cos(pitch), 0.05), 1.0))
+	var depth := GROUND_CLEARANCE + float(posmod(unit_id(), 64)) * DEPTH_TIEBREAK_STEP
+	_sprite_origin = Vector3(0.0, GROUND_LIFT, 0.0) + _view_axis * depth
+	_lay_out_sprite(0.0)
 	_model.add_child(_sprite)
 	add_child(_model)
 	selection_ring.scale = Vector3.ONE * _bar_scale
@@ -188,12 +199,16 @@ func _update_heading_and_walk(delta: float) -> void:
 		_walk_time += delta
 		var phase := _walk_time * WALK_CYCLES_PER_SECOND * TAU
 		_model.position.y = absf(sin(phase)) * BOB_FRACTION * _figure_height
-		_sprite.rotation_degrees.z = sin(phase) * WADDLE_DEGREES
+		_lay_out_sprite(deg_to_rad(sin(phase) * WADDLE_DEGREES))
 	elif _walk_time > 0.0:
 		# Settle once on stopping; idle units then write no transforms.
 		_walk_time = 0.0
 		_model.position.y = 0.0
-		_sprite.rotation_degrees.z = 0.0
+		_lay_out_sprite(0.0)
+
+## Upright layout, rolled `roll` radians about the view axis (feet pivot).
+func _lay_out_sprite(roll: float) -> void:
+	_sprite.transform = Transform3D(Basis(_view_axis, roll) * _upright, _sprite_origin)
 
 func _set_facing_left(left: bool) -> void:
 	_facing_left = left
@@ -247,7 +262,7 @@ func _notification(what: int) -> void:
 		return
 	var fx := get_tree().get_first_node_in_group("combat_fx")
 	if fx != null and fx.has_method("remember_freed_unit"):
-		fx.call("remember_freed_unit", unit_id(), _sprite, POSES[_kind][0])
+		fx.call("remember_freed_unit", unit_id(), _sprite, POSES[_kind][0], _view_axis)
 
 ## World-space muzzle for ranged tracers, on the action pose the attack just
 ## switched to; melee kinds and unattached views use the figure's middle.

@@ -41,6 +41,7 @@ The headless smokes cover the same behaviour without screenshots:
 ## Limits
 
 - Software GL at 4–5 FPS, so motion is shown as stills; the bob, flip and corpse tweens are timed in real seconds and look smoother at a normal frame rate.
+- A later review fix makes the sprite upright and stretched by 1/cos of the camera pitch so Walls and Gates hide units behind them. This covers the same screen pixels, so the frames still show what a player sees; only depth order against props changed (checked by the wave smoke's real-ray probe).
 - A later review fix seats each sprite by its feet row (24 px above the canvas bottom, per the art contract) instead of the canvas bottom edge, lowering units by a few pixels (about 2 px for a Worker at 1080p default zoom). These frames predate that fix.
 - No owner playtest yet; sizes were judged at 1920×1080 against the old captures.
 - The benchmark fixture is dense by design, so Brutes and Behemoths overlap heavily at the wall. The depth tie-break cleared the speckling seen there at 1080p; a small faint patch is still visible in the 720p attack frame where several Brutes overlap. Worth a look in the owner playtest.

@@ -1197,6 +1197,39 @@ func _note_worker_working() -> void:
 				_saw_worker_swing = true
 				return
 
+func _any_worker_working() -> bool:
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if str(node.get_meta("unit_kind", "")) == "Worker" and bool(node.call("is_working")):
+			return true
+	return false
+
+func _session_phase_is(phase: String) -> bool:
+	return str(GrusBridge.session_snapshot().get("phase", "")) == phase
+
+## Pause through the real HUD button while Workers gather. Every Worker view
+## must stop working and start no new swing over a stretch of fast frames
+## (20x scales delta past a whole swing cycle per frame). Then Resume through
+## the real button and the work cycle must come back.
+func _pause_freezes_worker_swings() -> bool:
+	if not await _wait_until(_any_worker_working, 30.0, "no Worker view was working before the pause leg"):
+		return false
+	await _click_button(get_node("Main/HUD/PauseButton") as Button)
+	if not await _wait_until(_session_phase_is.bind("Paused"), 5.0, "the real Pause click never reached Paused"):
+		return false
+	if not await _wait_until(func(): return not _any_worker_working(), 5.0,
+			"a Worker view kept working while Paused"):
+		return false
+	var actions := UnitView.actions_played
+	for _frame in 30:
+		await get_tree().process_frame
+	if UnitView.actions_played != actions or _any_worker_working():
+		_fail("Paused Worker views kept swinging (%d new action poses)" % (UnitView.actions_played - actions))
+		return false
+	await _click_button(get_node("Main/HUD/SessionPanel/ResumeButton") as Button)
+	if not await _wait_until(_session_phase_is.bind("Playing"), 5.0, "the real Resume click never returned to Playing"):
+		return false
+	return await _wait_until(_any_worker_working, 30.0, "Worker views did not resume working after Resume")
+
 func _run() -> void:
 	_start_ms = Time.get_ticks_msec()
 	get_tree().process_frame.connect(_note_worker_working)
@@ -1700,6 +1733,10 @@ func _run() -> void:
 	# Steps 2-3: solvent gather targets (deposit-driven) before any spending.
 	if not await _wait_until(_stockpiles_at_least.bind(TARGET_SCRAP, TARGET_FOOD, TARGET_COAL), 150.0,
 			"gatherers never stockpiled %d scrap / %d food / %d coal" % [TARGET_SCRAP, TARGET_FOOD, TARGET_COAL]):
+		return
+
+	# HPA-1198: a frozen session stops Worker swings and Resume brings them back.
+	if not await _pause_freezes_worker_swings():
 		return
 
 	# Retire the food and coal gatherers the moment the thresholds are banked
