@@ -76,6 +76,7 @@ var _walk_time := 0.0
 var _action_left := 0.0
 var _hurt_left := 0.0
 var _working := false
+var _work_target_x := NAN
 var _swing_clock := 0.0
 
 func _ready() -> void:
@@ -90,15 +91,20 @@ func _process(delta: float) -> void:
 		_last_position = global_position
 		return
 	_update_heading_and_walk(delta)
-	if _working:
-		_swing_clock += delta
-		if _swing_clock >= SWING_SECONDS:
-			_swing_clock -= SWING_SECONDS
-			play_action()
+	# Age the current pose before a swing may start a new one, so every pose
+	# is drawn for at least one frame even when a fast sim speed scales
+	# delta past ACTION_SECONDS.
 	if _action_left > 0.0:
 		_action_left -= delta
 		if _action_left <= 0.0:
 			_sprite.texture = POSES[_kind][0]
+	if _working:
+		_swing_clock += delta
+		if _swing_clock >= SWING_SECONDS:
+			_swing_clock = fmod(_swing_clock, SWING_SECONDS)
+			# Re-face the work target each swing: the last steps of the
+			# approach may have flipped the Worker away from it.
+			play_action(_work_target_x)
 	if _hurt_left > 0.0:
 		_hurt_left = maxf(_hurt_left - delta, 0.0)
 		_sprite.modulate = Color.WHITE.lerp(HURT_TINT, _hurt_left / HURT_SECONDS)
@@ -210,6 +216,7 @@ func play_action(target_x: float = NAN) -> void:
 ## `target_x` is the world x of the source or site it works on.
 func set_working(working: bool, target_x: float) -> void:
 	_working = working
+	_work_target_x = target_x if working else NAN
 	_swing_clock = SWING_SECONDS if working else 0.0
 	if working:
 		_face_toward(target_x)

@@ -21,6 +21,7 @@ const UnitView := preload("res://scripts/unit_view.gd")
 var _main: Node3D
 var _fx: Node3D
 var _actions_before_journey := 0
+var _saw_attack_pose := false
 var _minimap: Control
 
 func _ready() -> void:
@@ -680,6 +681,7 @@ func _run() -> void:
 	_fx = _main.get_node("CombatFx") as Node3D
 	_minimap = _main.get_node("HUD/Minimap") as Control
 	_actions_before_journey = UnitView.actions_played
+	get_tree().process_frame.connect(_note_attack_pose)
 
 	if not _cue_telemetry_leg():
 		return
@@ -1479,8 +1481,9 @@ func _run() -> void:
 	# HPA-1198 painted-unit motion rides the same drain: each unit attack
 	# shows the attacker's action pose, and a visible unit's death topples
 	# its sprite through the death effect.
-	if UnitView.actions_played <= _actions_before_journey:
-		_fail("no combat event put an attacking unit into its painted action pose")
+	if UnitView.actions_played <= _actions_before_journey or not _saw_attack_pose:
+		_fail("no combat event drew an attacking unit's painted action pose (requests=%d drawn=%s)" % [
+			UnitView.actions_played - _actions_before_journey, _saw_attack_pose])
 		return
 	if int(_fx.get("corpses_spawned")) < 1:
 		_fail("no unit death toppled a painted corpse through the death effect")
@@ -1556,3 +1559,14 @@ func _run() -> void:
 	GrusBridge.set_sim_speed(1.0)
 	var quit_controller = get_node("Main")
 	await quit_controller.request_quit()
+
+## HPA-1198: sampled at the top of each frame, so an action pose seen here on
+## a non-working unit is an attack pose the previous frame actually drew.
+func _note_attack_pose() -> void:
+	if _saw_attack_pose:
+		return
+	for node in get_tree().get_nodes_in_group("unit_views"):
+		if node.has_method("showing_action") and bool(node.call("showing_action")) \
+				and not bool(node.call("is_working")):
+			_saw_attack_pose = true
+			return
