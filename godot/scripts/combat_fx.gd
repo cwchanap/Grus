@@ -74,7 +74,7 @@ func play_hit_cue() -> void:
 func set_wind_phase(phase: String) -> void:
 	var player := _players["winter_wind"] as AudioStreamPlayer
 	match phase:
-		"Playing":
+		"Playing", "Intro":
 			player.stream_paused = false
 			if not player.playing:
 				player.play()

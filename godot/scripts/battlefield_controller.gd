@@ -6,6 +6,7 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 ## and camera-ray silhouette picking.
 const BuildingView := preload("res://scripts/building_view.gd")
 const MinimapView := preload("res://scripts/minimap.gd")
+const StoryIntro := preload("res://scripts/story_intro.gd")
 
 const CLICK_RADIUS := 20.0
 const DRAG_THRESHOLD := 6.0
@@ -39,6 +40,7 @@ const PAINTED_MUZZLE_UV := {
 @onready var _preview_box: MeshInstance3D = $PlacementPreview
 @onready var _fx: Node3D = $CombatFx
 @onready var start_button: Button = $HUD/SessionPanel/StartButton
+@onready var story_button: Button = $HUD/SessionPanel/StoryButton
 @onready var resume_button: Button = $HUD/SessionPanel/ResumeButton
 @onready var restart_button: Button = $HUD/SessionPanel/RestartButton
 @onready var quit_button: Button = $HUD/SessionPanel/QuitButton
@@ -52,6 +54,9 @@ const PAINTED_MUZZLE_UV := {
 ## pressed signal straight to `_on_excavate_requested` like every other static
 ## Button.
 @onready var _underground_excavate: Button = $HUD/UndergroundPanel/ExcavateButton
+## The HPA-1208 story intro overlay; this controller decides when it plays
+## and keeps the wind loop under it.
+@onready var _intro: StoryIntro = $HUD/StoryIntro
 
 var selected_ids: Array[int] = []
 var selected_building_id := -1
@@ -145,6 +150,9 @@ func _ready() -> void:
 	underground_button.pressed.connect(_toggle_underground_panel)
 	restart_button.pressed.connect(_on_restart_pressed)
 	quit_button.pressed.connect(_on_quit_pressed)
+	story_button.pressed.connect(_on_story_pressed)
+	_intro.closed.connect(_on_intro_closed)
+	_play_intro_on_first_launch()
 
 func _exit_tree() -> void:
 	var tree := get_tree()
@@ -258,7 +266,7 @@ func _refresh_session() -> void:
 		_armed_order = ""
 	var winner_team := int(snap.get("winner_team", -1))
 	if _session_phase != previous_phase:
-		_fx.set_wind_phase(_session_phase)
+		_fx.set_wind_phase(_wind_phase())
 	if _session_phase != previous_phase or winner_team != _session_winner:
 		_session_winner = winner_team
 		_hud.refresh_session(_session_phase, winner_team)
@@ -1115,6 +1123,33 @@ func _on_start_pressed() -> void:
 	if _shutting_down:
 		return
 	GrusBridge.start_match()
+
+## The intro plays by itself once, on the first launch of the real game.
+## Smoke and benchmark scenes instance main.tscn under their own root and the
+## BEVY_E2E boot path stays deterministic, so neither ever sees it. STORY on
+## Start replays it at any time.
+func _play_intro_on_first_launch() -> void:
+	if get_tree().current_scene != self or OS.get_environment("BEVY_E2E") == "1" \
+			or _intro.seen():
+		return
+	_intro.mark_seen()
+	_play_intro()
+
+func _on_story_pressed() -> void:
+	if _shutting_down:
+		return
+	_play_intro()
+
+func _play_intro() -> void:
+	_intro.play()
+	_fx.set_wind_phase(_wind_phase())
+
+func _on_intro_closed() -> void:
+	_fx.set_wind_phase(_wind_phase())
+
+## The winter wind loop plays under the intro as it does in a match.
+func _wind_phase() -> String:
+	return "Intro" if _intro.visible else _session_phase
 
 func _on_pause_pressed() -> void:
 	if _shutting_down:
