@@ -200,6 +200,8 @@ bbcode_enabled = true
 scroll_active = false
 autowrap_mode = 0
 
+[node name="Voice" type="AudioStreamPlayer" parent="."]
+
 [node name="SkipButton" type="Button" parent="."]
 layout_mode = 1
 anchors_preset = 1

@@ -2105,7 +2105,8 @@ func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: 
 ## last click, Esc and SKIP each land back on Start. While it is open no key or
 ## click reaches the HUD or the world: Tab does not open the Underground
 ## drawer, Esc does not leave Start and the selection is untouched. The winter
-## wind loop starts under the intro and stops again on Start. STORY takes no
+## wind loop starts under the intro and stops again on Start. Each panel plays
+## its own voice line, and the voice falls silent on Start. STORY takes no
 ## keyboard focus, so Space on Start afterwards does not replay the intro. The
 ## panel art and the Start key art both drift, under the shared weather.
 func _assert_story_intro() -> bool:
@@ -2162,6 +2163,14 @@ func _assert_story_intro() -> bool:
 					"the intro did not advance to panel %d" % (index + 1)):
 				return false
 		var panel: Dictionary = StoryIntro.PANELS[index]
+		var voice := intro.voice()
+		if voice.stream == null or voice.stream.resource_path != str(panel["voice"]):
+			_fail("intro panel %d holds the wrong voice line: %s" % [
+				index + 1, voice.stream.resource_path if voice.stream != null else "none"])
+			return false
+		if not await _wait_until(func(): return voice.playing, 2.0,
+				"intro panel %d did not play its voice line" % (index + 1)):
+			return false
 		var art := intro.shown_art()
 		if caption.text != str(panel["caption"]) or art.texture == null \
 				or art.texture.resource_path != str(panel["art"]):
@@ -2185,8 +2194,8 @@ func _assert_story_intro() -> bool:
 			or not start_button.is_visible_in_tree():
 		_fail("the last intro click did not land on Start")
 		return false
-	if wind.playing:
-		_fail("the winter wind loop kept playing on Start after the intro")
+	if wind.playing or intro.voice().playing:
+		_fail("the winter wind or the intro voice kept playing on Start after the intro")
 		return false
 	SmokeHelpers.push_mouse_click(get_tree(), story_rect.get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
@@ -2210,8 +2219,9 @@ func _assert_story_intro() -> bool:
 		return false
 	SmokeHelpers.push_mouse_click(get_tree(), skip.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
 	await get_tree().process_frame
-	if intro.visible or not start_button.is_visible_in_tree() or wind.playing:
-		_fail("SKIP did not land on Start")
+	if intro.visible or not start_button.is_visible_in_tree() or wind.playing \
+			or intro.voice().playing:
+		_fail("SKIP did not land on a silent Start")
 		return false
 	_key_tap(KEY_SPACE)
 	await get_tree().process_frame
