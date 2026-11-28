@@ -2105,7 +2105,9 @@ func _assert_cross_team_unit_cover(main: Node, camera: Camera3D, viewport_size: 
 ## last click, Esc and SKIP each land back on Start. While it is open no key or
 ## click reaches the HUD or the world: Tab does not open the Underground
 ## drawer, Esc does not leave Start and the selection is untouched. The winter
-## wind loop starts under the intro and stops again on Start.
+## wind loop starts under the intro and stops again on Start. STORY takes no
+## keyboard focus, so Space on Start afterwards does not replay the intro. The
+## panel art and the Start key art both drift, under the shared weather.
 func _assert_story_intro() -> bool:
 	var main := get_node("Main")
 	var intro := get_node_or_null("Main/HUD/StoryIntro") as StoryIntro
@@ -2148,7 +2150,6 @@ func _assert_story_intro() -> bool:
 		_fail("Tab leaked through the intro to the Underground drawer")
 		return false
 	var caption := intro.get_node("Caption") as Label
-	var art := intro.get_node("ArtClip/Art") as TextureRect
 	var hint := intro.get_node("Hint") as RichTextLabel
 	for index in StoryIntro.PANELS.size():
 		if index > 0:
@@ -2161,6 +2162,7 @@ func _assert_story_intro() -> bool:
 					"the intro did not advance to panel %d" % (index + 1)):
 				return false
 		var panel: Dictionary = StoryIntro.PANELS[index]
+		var art := intro.shown_art()
 		if caption.text != str(panel["caption"]) or art.texture == null \
 				or art.texture.resource_path != str(panel["art"]):
 			_fail("intro panel %d shows the wrong caption or art: %s / %s" % [
@@ -2210,6 +2212,12 @@ func _assert_story_intro() -> bool:
 	await get_tree().process_frame
 	if intro.visible or not start_button.is_visible_in_tree() or wind.playing:
 		_fail("SKIP did not land on Start")
+		return false
+	_key_tap(KEY_SPACE)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	if intro.visible or story.has_focus():
+		_fail("Space on Start replayed the intro: STORY kept keyboard focus")
 		return false
 	if (main.selected_ids as Array) != selection_before:
 		_fail("intro clicks reached world selection: %s" % str(main.selected_ids))
@@ -2420,6 +2428,16 @@ func _run() -> void:
 			or not session_emblem.texture.resource_path.ends_with("screens/emblem.png"):
 		_fail("Start key art or emblem is missing before Start")
 		return
+	# The Start key art drifts (zoomed past the screen so no edge shows) under
+	# visible snow and fog.
+	var start_weather := get_node_or_null("Main/HUD/SessionBackdrop/StartWeather") as Control
+	var drift_from := start_art.scale.x
+	await get_tree().create_timer(0.5, true, false, true).timeout
+	if start_art.scale.x < 1.0 or is_equal_approx(start_art.scale.x, drift_from) \
+			or start_weather == null or not start_weather.is_visible_in_tree():
+		_fail("Start key art is not drifting under the weather: scale %.4f -> %.4f" % [
+			drift_from, start_art.scale.x])
+		return
 	# The mockup Start lockup is emblem-and-wordmark led: both must be larger
 	# than the former 96 px emblem / 60 px title while staying on screen.
 	if session_emblem.get_global_rect().size.x < 128.0 \
@@ -2537,7 +2555,8 @@ func _run() -> void:
 		_fail("Result banner/frost/vignette visibility is wrong at the warm Start screen")
 		return
 	for path in ["Main/HUD/SessionBackdrop", "Main/HUD/SessionBackdrop/StartArt",
-			"Main/HUD/SessionBackdrop/Dim", "Main/HUD/SessionBackdrop/ResultBanner",
+			"Main/HUD/SessionBackdrop/StartWeather", "Main/HUD/SessionBackdrop/StartWeather/Fog",
+			"Main/HUD/SessionBackdrop/StartWeather/Snow", "Main/HUD/SessionBackdrop/Dim", "Main/HUD/SessionBackdrop/ResultBanner",
 			"Main/HUD/Vignette", "Main/HUD/Atmosphere", "Main/HUD/Atmosphere/FrostOverlay",
 			"Main/HUD/IncomingGlow", "Main/HUD/IncomingGlow/North"]:
 		var overlay := get_node_or_null(path) as Control

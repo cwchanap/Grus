@@ -1,7 +1,9 @@
-[gd_scene load_steps=10 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/story_intro.gd" id="1_script"]
 [ext_resource type="FontFile" path="res://assets/fonts/BarlowCondensed-Bold.ttf" id="2_condensed"]
+[ext_resource type="Script" path="res://scripts/backdrop_drift.gd" id="3_drift"]
+[ext_resource type="PackedScene" path="res://scenes/weather.tscn" id="4_weather"]
 
 [sub_resource type="Gradient" id="Gradient_vignette"]
 offsets = PackedFloat32Array(0, 0.45, 0.8, 1)
@@ -96,11 +98,22 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="Art" type="TextureRect" parent="ArtClip"]
+[node name="ArtA" type="TextureRect" parent="ArtClip"]
 layout_mode = 0
 mouse_filter = 2
 expand_mode = 1
 stretch_mode = 6
+script = ExtResource("3_drift")
+
+[node name="ArtB" type="TextureRect" parent="ArtClip"]
+layout_mode = 0
+mouse_filter = 2
+expand_mode = 1
+stretch_mode = 6
+script = ExtResource("3_drift")
+
+[node name="Weather" parent="." instance=ExtResource("4_weather")]
+layout_mode = 1
 
 [node name="Vignette" type="TextureRect" parent="."]
 layout_mode = 1
@@ -112,15 +125,6 @@ grow_vertical = 2
 mouse_filter = 2
 texture = SubResource("GradientTexture2D_vignette")
 expand_mode = 1
-
-[node name="Snow" type="Control" parent="."]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
 
 [node name="CaptionBand" type="TextureRect" parent="."]
 layout_mode = 1

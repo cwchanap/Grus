@@ -27,45 +27,32 @@ const PANELS := [
 	{"art": "res://assets/ui/frostline/intro/panel_5.png",
 		"caption": "Its Research Center is building the one weapon that can end them. Hold the walls. Keep the fires lit. Buy it time."},
 ]
-## Five 5-second panels make the ticket's ~25 s run; the slow pan and zoom
-## runs longer, so it is still moving when a panel changes.
+## Five 5-second panels make the ticket's ~25 s run. Each panel's art drifts
+## on its own (backdrop_drift.gd) and crossfades over the one before it; the
+## first fades in from black.
 const PANEL_SECONDS := 5.0
-const MOTION_SECONDS := 8.0
-const ART_FADE_SECONDS := 0.6
+const CROSSFADE_SECONDS := 1.0
 const CAPTION_FADE_SECONDS := 1.2
-## The art is drawn at least this much larger than the screen, and pans less
-## than that margin, so the zoom never shows an edge.
-const ZOOM_FROM := 1.03
-const ZOOM_TO := 1.09
-const PAN := Vector2(0.012, 0.008)
-const SNOW_FLAKES := 90
 const CYAN := Color(0.22, 0.83, 0.9)
 const DOT_INK := Color(0.78, 0.88, 0.94)
 
-@onready var _art: TextureRect = $ArtClip/Art
-@onready var _snow: Control = $Snow
+@onready var _art_clip: Control = $ArtClip
+## Two drifting art layers that take turns: the next panel fades in on top
+## while the previous one keeps drifting underneath.
+@onready var _arts: Array[TextureRect] = [$ArtClip/ArtA, $ArtClip/ArtB]
 @onready var _caption: Label = $Caption
 @onready var _dots: Control = $Dots
 @onready var _hint: RichTextLabel = $Hint
 @onready var _skip: Button = $SkipButton
 
 var _index := -1
-var _panel_started_ms := 0
-var _played_ms := 0
-## [x, y, radius, fall seconds, alpha] per flake, seeded so every run matches.
-var _flakes: Array[PackedFloat32Array] = []
+var _panel_seconds := 0.0
 
 func _ready() -> void:
 	visible = false
 	set_process(false)
 	_skip.pressed.connect(close)
-	_snow.draw.connect(_draw_snow)
 	_dots.draw.connect(_draw_dots)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
-	for _flake in SNOW_FLAKES:
-		_flakes.append(PackedFloat32Array([rng.randf(), rng.randf(),
-			rng.randf_range(0.5, 1.8), rng.randf_range(6.0, 14.0), rng.randf_range(0.35, 0.85)]))
 
 func seen() -> bool:
 	return FileAccess.file_exists(SEEN_FLAG_PATH)
@@ -77,7 +64,6 @@ func mark_seen() -> void:
 func play() -> void:
 	visible = true
 	set_process(true)
-	_played_ms = Time.get_ticks_msec()
 	_show_panel(0)
 
 func close() -> void:
@@ -86,7 +72,8 @@ func close() -> void:
 	visible = false
 	set_process(false)
 	_index = -1
-	_art.texture = null
+	for art in _arts:
+		art.texture = null
 	closed.emit()
 
 func advance() -> void:
@@ -99,11 +86,19 @@ func advance() -> void:
 func panel_index() -> int:
 	return _index
 
+## The art layer of the shown panel.
+func shown_art() -> TextureRect:
+	return _arts[maxi(_index, 0) % 2]
+
 func _show_panel(index: int) -> void:
 	_index = index
-	_panel_started_ms = Time.get_ticks_msec()
+	_panel_seconds = 0.0
 	var panel: Dictionary = PANELS[index]
-	_art.texture = load(str(panel["art"])) as Texture2D
+	var art := shown_art()
+	art.texture = load(str(panel["art"])) as Texture2D
+	# Alternate the drift so consecutive panels do not slide the same way.
+	art.restart(-1.0 if index % 2 == 0 else 1.0)
+	_art_clip.move_child(art, -1)
 	_caption.text = str(panel["caption"])
 	var last := index == PANELS.size() - 1
 	_hint.text = "[right]Click or Space to %s  [color=#38d3e6]›[/color][/right]" % (
@@ -111,25 +106,17 @@ func _show_panel(index: int) -> void:
 	_dots.queue_redraw()
 	_animate(0.0)
 
-## Real time, not scaled process delta: the smokes raise Engine.time_scale.
-func _process(_delta: float) -> void:
-	var elapsed := (Time.get_ticks_msec() - _panel_started_ms) / 1000.0
+## Unscaled process time: the smokes raise Engine.time_scale.
+func _process(delta: float) -> void:
+	_panel_seconds += delta / Engine.time_scale
+	var elapsed := _panel_seconds
 	if elapsed >= PANEL_SECONDS and _index < PANELS.size() - 1:
 		_show_panel(_index + 1)
 		return
 	_animate(elapsed)
-	_snow.queue_redraw()
 
 func _animate(elapsed: float) -> void:
-	var motion := ease(clampf(elapsed / MOTION_SECONDS, 0.0, 1.0), 0.6)
-	var view := size
-	_art.size = view
-	_art.pivot_offset = view * 0.5
-	_art.scale = Vector2.ONE * lerpf(ZOOM_FROM, ZOOM_TO, motion)
-	# Alternate the drift so consecutive panels do not slide the same way.
-	var pan := Vector2(-PAN.x if _index % 2 == 0 else PAN.x, -PAN.y)
-	_art.position = view * pan * motion
-	_art.modulate.a = clampf(elapsed / ART_FADE_SECONDS, 0.0, 1.0)
+	shown_art().modulate.a = clampf(elapsed / CROSSFADE_SECONDS, 0.0, 1.0)
 	_caption.modulate.a = clampf(elapsed / CAPTION_FADE_SECONDS, 0.0, 1.0)
 
 func _gui_input(event: InputEvent) -> void:
@@ -152,17 +139,6 @@ func _input(event: InputEvent) -> void:
 			close()
 		KEY_SPACE, KEY_ENTER, KEY_KP_ENTER:
 			advance()
-
-func _draw_snow() -> void:
-	var view := _snow.size
-	var unit := view.y / 720.0
-	var seconds := (Time.get_ticks_msec() - _played_ms) / 1000.0
-	var span := view.x * 1.1
-	for flake in _flakes:
-		var fall := fposmod(flake[1] + seconds / flake[3], 1.0)
-		var y := fall * (view.y + 60.0 * unit) - 30.0 * unit
-		var x := fposmod(flake[0] * span - fall * 60.0 * unit, span) - view.x * 0.05
-		_snow.draw_circle(Vector2(x, y), flake[2] * unit, Color(1.0, 1.0, 1.0, flake[4]))
 
 func _draw_dots() -> void:
 	var gap := 22.0

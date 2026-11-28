@@ -52,6 +52,8 @@ const HudHelpers := preload("res://scripts/hud_helpers.gd")
 @onready var research_detail: Label = $SessionPanel/Objectives/Research/Text/Detail
 @onready var session_backdrop: Control = $SessionBackdrop
 @onready var start_art: TextureRect = $SessionBackdrop/StartArt
+## Snow and drifting fog over the Start key art (weather.tscn).
+@onready var start_weather: Control = $SessionBackdrop/StartWeather
 @onready var session_dim: ColorRect = $SessionBackdrop/Dim
 @onready var result_banner: TextureRect = $SessionBackdrop/ResultBanner
 @onready var result_title: Label = $SessionBackdrop/ResultTitle
@@ -1089,6 +1091,7 @@ func refresh_session(phase: String, winner_team: int) -> void:
 		node.visible = not result
 	pause_button.visible = playing
 	start_art.visible = start
+	start_weather.visible = start
 	session_dim.visible = paused or result
 	# Result follows the winner's cloth (warm Defeat, cold Victory); every
 	# other phase restores the neutral Pause wash on the one shared node.
